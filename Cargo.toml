@@ -1,0 +1,8 @@
+[package]
+name = "pscat"
+version = "0.1.0"
+edition = "2024"
+description = "A PostScript interpreter for watching programs draw, live"
+
+[dependencies]
+thiserror = "2"
