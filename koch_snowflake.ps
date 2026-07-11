@@ -1,0 +1,63 @@
+%!PS-Adobe-3.0 EPSF-3.0
+%%BoundingBox: 0 0 500 500
+%%Title: Koch Snowflake
+%%Creator: Claude & a nostalgic LaserWriter fan
+%%EndComments
+
+% --- Koch curve: replaces a straight segment with 4 segments ---
+% turtle-style: currentpoint + angle + length + depth
+
+/deg2rad { 180 div 3.14159265358979 mul } bind def
+
+/koch {
+  % length angle depth
+  3 dict begin
+    /depth exch def
+    /angle exch def
+    /len exch def
+
+    depth 0 eq {
+      angle deg2rad cos len mul
+      angle deg2rad sin len mul
+      rlineto
+    } {
+      /len3 len 3 div def
+      len3 angle depth 1 sub koch
+      len3 angle 60 add depth 1 sub koch
+      len3 angle 60 sub depth 1 sub koch
+      len3 angle depth 1 sub koch
+    } ifelse
+  end
+} def
+
+% draw one side of the snowflake starting at current point, heading 'angle'
+/kochside {
+  % length angle depth
+  koch
+} def
+
+/snowflake {
+  % centerx centery size depth
+  4 dict begin
+    /depth exch def
+    /size exch def
+    /cy exch def
+    /cx exch def
+
+    newpath
+    cx size 0.577 mul sub cy size 0.333 mul sub moveto
+    size 0 depth kochside
+    size 60 depth kochside
+    size 300 depth kochside
+    closepath
+    stroke
+  end
+} def
+
+% --- draw it ---
+2 setlinewidth
+0 0 0.6 setrgbcolor
+250 250 300 4 snowflake
+
+showpage
+%%EOF

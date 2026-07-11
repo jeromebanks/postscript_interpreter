@@ -1,0 +1,46 @@
+%!PS-Adobe-3.0 EPSF-3.0
+%%BoundingBox: 0 0 500 500
+%%Title: Sierpinski Triangle
+%%Creator: Claude & a nostalgic LaserWriter fan
+%%EndComments
+
+% --- Sierpinski triangle, drawn recursively ---
+% Stack discipline: x1 y1 x2 y2 x3 y3 depth sierpinski
+
+/sierpinski {
+  10 dict begin
+    /depth exch def
+    /y3 exch def /x3 exch def
+    /y2 exch def /x2 exch def
+    /y1 exch def /x1 exch def
+
+    depth 0 eq {
+      % base case: fill the triangle
+      newpath
+      x1 y1 moveto
+      x2 y2 lineto
+      x3 y3 lineto
+      closepath
+      fill
+    } {
+      % midpoints of each edge
+      /mx12 x1 x2 add 2 div def
+      /my12 y1 y2 add 2 div def
+      /mx23 x2 x3 add 2 div def
+      /my23 y2 y3 add 2 div def
+      /mx31 x3 x1 add 2 div def
+      /my31 y3 y1 add 2 div def
+
+      x1 y1 mx12 my12 mx31 my31 depth 1 sub sierpinski
+      mx12 my12 x2 y2 mx23 my23 depth 1 sub sierpinski
+      mx31 my31 mx23 my23 x3 y3 depth 1 sub sierpinski
+    } ifelse
+  end
+} def
+
+% --- draw it ---
+0 0 0 setrgbcolor
+50 50 450 50 250 420 5 sierpinski
+
+showpage
+%%EOF

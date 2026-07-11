@@ -1,0 +1,75 @@
+%!PS-Adobe-3.0 EPSF-3.0
+%%BoundingBox: 0 0 500 500
+%%Title: Golden Spiral and Radial Burst
+%%Creator: Claude & a nostalgic LaserWriter fan
+%%EndComments
+
+/phi 1.61803398875 def
+
+% --- recursive golden-rectangle squares with inscribed quarter arcs ---
+% x y size dir depth goldenspiral
+% dir: 0=right,1=up,2=left,3=down  (direction the square "opens" toward)
+
+/goldenspiral {
+  5 dict begin
+    /depth exch def
+    /dir exch def
+    /size exch def
+    /y exch def
+    /x exch def
+
+    depth 0 eq { } {
+      0.85 0.6 0.1 setrgbcolor
+      newpath
+      x y size 0 90 dir 90 mul add arc
+      1 setlinewidth
+      stroke
+
+      newpath
+      x y moveto
+      x size add y lineto
+      x size add y size add lineto
+      x y size add lineto
+      closepath
+      0.9 setgray
+      1 setlinewidth
+      stroke
+
+      /newsize size phi div def
+
+      dir 0 eq {
+        x size add newsize sub y size add newsize sub newsize 1 4 depth 1 sub goldenspiral
+      } {
+      dir 1 eq {
+        x newsize sub y size add newsize sub newsize 2 4 depth 1 sub goldenspiral
+      } {
+      dir 2 eq {
+        x newsize sub y newsize sub newsize 3 4 depth 1 sub goldenspiral
+      } {
+        x size add newsize sub y newsize sub newsize 0 4 depth 1 sub goldenspiral
+      } ifelse } ifelse } ifelse
+    } ifelse
+  end
+} def
+
+125 125 200 0 4 goldenspiral
+
+% --- a radial burst of lines just for fun texture in the corner ---
+gsave
+380 380 translate
+0 1 71 {
+  /i exch def
+  gsave
+    i 5 mul rotate
+    0.2 0.2 0.2 setgray
+    0.5 setlinewidth
+    newpath
+    0 0 moveto
+    60 0 lineto
+    stroke
+  grestore
+} for
+grestore
+
+showpage
+%%EOF
