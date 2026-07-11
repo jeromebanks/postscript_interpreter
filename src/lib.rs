@@ -4,10 +4,12 @@
 //! `INIT.md` for the project vision and staged roadmap.
 
 pub mod error;
+pub mod gfx;
 pub mod interp;
 pub mod lexer;
 pub mod object;
 pub mod ops;
+pub mod window;
 
 pub use error::PsError;
 pub use interp::Interp;

@@ -19,6 +19,8 @@ pub enum PsError {
     UndefinedResult,
     #[error("unmatchedmark")]
     UnmatchedMark,
+    #[error("nocurrentpoint")]
+    NoCurrentPoint,
     #[error("syntaxerror: {0}")]
     Syntax(String),
     #[error("limitcheck")]
@@ -39,6 +41,7 @@ impl PsError {
             PsError::Undefined(_) => "undefined",
             PsError::UndefinedResult => "undefinedresult",
             PsError::UnmatchedMark => "unmatchedmark",
+            PsError::NoCurrentPoint => "nocurrentpoint",
             PsError::Syntax(_) => "syntaxerror",
             PsError::Limitcheck => "limitcheck",
             PsError::Io => "ioerror",

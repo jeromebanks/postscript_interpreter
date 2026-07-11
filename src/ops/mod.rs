@@ -2,6 +2,7 @@
 //! groups them. Each module installs its operators into systemdict.
 
 pub mod arith;
+pub mod graphics;
 pub mod misc;
 pub mod stack;
 
@@ -17,6 +18,7 @@ pub(crate) fn op(dict: &mut Dict, name: &'static str, func: OpFn) {
 pub fn install_all(dict: &mut Dict) {
     stack::install(dict);
     arith::install(dict);
+    graphics::install(dict);
     misc::install(dict);
 
     // Constants: executing a name bound to a literal object pushes the

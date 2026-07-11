@@ -1,0 +1,97 @@
+%!PS-Adobe-3.0 EPSF-3.0
+%%BoundingBox: 0 0 612 792
+%%Title: Stage 2 demo — paths, arcs, curves, transforms, no control flow
+%%Creator: pscat
+%%EndComments
+
+% Stage 2 has no def/if/for yet, so everything here is straight-line
+% PostScript: paths, painting, gsave/grestore, and coordinate transforms.
+% (The fractals in this directory are the Stage 3 payoff.)
+
+% --- background wash: three horizontal bands ---------------------------
+0.93 0.95 0.98 setrgbcolor
+newpath 0 528 moveto 612 528 lineto 612 792 lineto 0 792 lineto closepath fill
+0.88 0.92 0.96 setrgbcolor
+newpath 0 264 moveto 612 264 lineto 612 528 lineto 0 528 lineto closepath fill
+0.83 0.89 0.94 setrgbcolor
+newpath 0 0 moveto 612 0 lineto 612 264 lineto 0 264 lineto closepath fill
+
+% --- sun with a crescent bite (arc + overlay) ---------------------------
+0.98 0.80 0.20 setrgbcolor
+newpath 480 660 60 0 360 arc closepath fill
+0.93 0.95 0.98 setrgbcolor
+newpath 505 685 55 0 360 arc closepath fill
+0.85 0.55 0.10 setrgbcolor
+2 setlinewidth
+newpath 480 660 60 100 340 arc stroke
+
+% --- mandala: one square, stamped eight times at 45° steps -------------
+% (gsave/rotate unrolled by hand — `repeat` arrives in Stage 3)
+0.20 0.25 0.55 setrgbcolor
+1.5 setlinewidth
+gsave
+  306 430 translate
+  newpath -90 -90 moveto 90 -90 lineto 90 90 lineto -90 90 lineto closepath stroke
+  45 rotate
+  newpath -90 -90 moveto 90 -90 lineto 90 90 lineto -90 90 lineto closepath stroke
+  22.5 rotate
+  newpath -90 -90 moveto 90 -90 lineto 90 90 lineto -90 90 lineto closepath stroke
+  22.5 rotate
+  newpath -90 -90 moveto 90 -90 lineto 90 90 lineto -90 90 lineto closepath stroke
+  % inner ring, scaled down
+  0.62 0.62 scale
+  0.75 0.30 0.25 setrgbcolor
+  newpath -90 -90 moveto 90 -90 lineto 90 90 lineto -90 90 lineto closepath stroke
+  45 rotate
+  newpath -90 -90 moveto 90 -90 lineto 90 90 lineto -90 90 lineto closepath stroke
+  % heart of the mandala
+  0.98 0.80 0.20 setrgbcolor
+  newpath 0 0 40 0 360 arc closepath fill
+  0.20 0.25 0.55 setrgbcolor
+  newpath 0 0 40 0 360 arc stroke
+grestore
+
+% --- concentric arc fan, bottom left ------------------------------------
+0.75 0.30 0.25 setrgbcolor
+4 setlinewidth
+1 setlinecap
+newpath 80 120 40 0 90 arc stroke
+newpath 80 120 60 0 90 arc stroke
+newpath 80 120 80 0 90 arc stroke
+newpath 80 120 100 0 90 arc stroke
+0.20 0.25 0.55 setrgbcolor
+newpath 80 120 120 0 90 arc stroke
+newpath 80 120 140 0 90 arc stroke
+
+% --- bézier ribbon across the lower page --------------------------------
+0.15 0.45 0.35 setrgbcolor
+8 setlinewidth
+1 setlinejoin
+newpath
+40 210 moveto
+150 300 250 120 306 210 curveto
+360 295 470 130 572 220 curveto
+stroke
+0.98 0.80 0.20 setrgbcolor
+3 setlinewidth
+newpath
+40 195 moveto
+150 285 250 105 306 195 curveto
+360 280 470 115 572 205 curveto
+stroke
+
+% --- filled star, bottom right (winding-rule fill) -----------------------
+0.75 0.30 0.25 setrgbcolor
+gsave
+  500 110 translate
+  newpath
+  0 60 moveto
+  35 -48 lineto
+  -57 19 lineto
+  57 19 lineto
+  -35 -48 lineto
+  closepath fill
+grestore
+
+showpage
+%%EOF

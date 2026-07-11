@@ -61,11 +61,17 @@ first. This file covers *how* to work, not *what* to build.
 - `NOTES.md` — per-stage summaries, newest first.
 - `src/lexer.rs` — tokenizer; unit tests in-module.
 - `src/object.rs` — `Object`/`Value`/`Dict`/`Num`.
-- `src/interp.rs` — the execution machine (operand/dict/exec stacks).
+- `src/interp.rs` — the execution machine (operand/dict/exec stacks),
+  including the `begin_source`/`step_n` API front ends drive.
+- `src/gfx.rs` — graphics state, paths, tiny-skia rasterization.
+- `src/window.rs` — live winit window stepping the interpreter.
 - `src/ops/` — operator implementations, grouped like the PLRM's operator
-  summary (`stack.rs`, `arith.rs`, `misc.rs`; new groups get new modules).
-- `src/main.rs` — CLI: file / `-e` eval / REPL modes, error reporting.
+  summary (`stack.rs`, `arith.rs`, `graphics.rs`, `misc.rs`; new groups
+  get new modules).
+- `src/main.rs` — CLI: window / `--headless` / `--png` / `-e` eval / REPL
+  modes, error reporting.
 - `tests/eval.rs` — end-to-end tests (PostScript source in, operand-stack
   contents out, compared via `==`-style reprs).
+- `tests/render.rs` — headless pixel tests (source in, canvas pixels out).
 - `examples/*.ps` — sample programs used for manual testing (the Stage 2/3
   demo targets).

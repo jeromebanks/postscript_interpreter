@@ -17,6 +17,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::error::PsError;
+use crate::gfx::{DEFAULT_PAGE, Gfx};
 use crate::lexer::{Lexer, Token};
 use crate::object::{Dict, Num, Object, Value};
 use crate::ops;
@@ -48,13 +49,22 @@ pub struct Interp {
     /// The most recently executed name, for `OffendingCommand` in error
     /// reports.
     last_name: Option<Rc<str>>,
+    pub(crate) gfx: Gfx,
 }
 
 impl Interp {
     pub fn new() -> Self {
+        // The default page size is a nonzero constant; this cannot fail.
+        Self::with_page(DEFAULT_PAGE.0, DEFAULT_PAGE.1).expect("default page size is valid")
+    }
+
+    /// `None` if the page dimensions are unusable (zero or too large for
+    /// a pixmap).
+    pub fn with_page(width: u32, height: u32) -> Option<Self> {
+        let gfx = Gfx::new(width, height)?;
         let mut system = Dict::new();
         ops::install_all(&mut system);
-        Interp {
+        Some(Interp {
             ostack: Vec::new(),
             dstack: vec![
                 Rc::new(RefCell::new(system)),
@@ -66,7 +76,8 @@ impl Interp {
             estack: Vec::new(),
             quit_requested: false,
             last_name: None,
-        }
+            gfx,
+        })
     }
 
     pub fn run_str(&mut self, src: &str) -> Result<(), PsError> {
@@ -74,26 +85,55 @@ impl Interp {
     }
 
     pub fn run_source(&mut self, src: &[u8]) -> Result<(), PsError> {
+        self.begin_source(src);
+        while self.step_n(4096)? {}
+        Ok(())
+    }
+
+    /// Queue a program for execution without running it; drive it with
+    /// [`step_n`](Self::step_n). This is the live-rendering entry point.
+    pub fn begin_source(&mut self, src: &[u8]) {
         self.quit_requested = false;
         self.last_name = None;
         self.estack.push(Frame::Scanner(Lexer::new(src.to_vec())));
-        let result = self.exec_loop();
+    }
+
+    /// Execute up to `budget` objects. `Ok(true)` means work remains. On
+    /// error (or `quit`) the execution stack is cleared — the program is
+    /// aborted — but the operand stack and canvas are left for inspection.
+    pub fn step_n(&mut self, budget: usize) -> Result<bool, PsError> {
+        let result = self.step_n_inner(budget);
         if result.is_err() || self.quit_requested {
-            // Abort whatever was mid-flight; the operand stack is left
-            // as-is so a REPL user can inspect the aftermath.
             self.estack.clear();
         }
         result
     }
 
-    fn exec_loop(&mut self) -> Result<(), PsError> {
-        while !self.quit_requested {
+    fn step_n_inner(&mut self, budget: usize) -> Result<bool, PsError> {
+        for _ in 0..budget {
+            if self.quit_requested {
+                return Ok(false);
+            }
             let Some(obj) = self.next_item()? else {
-                break;
+                return Ok(false);
             };
             self.execute_element(obj)?;
         }
-        Ok(())
+        Ok(!self.estack.is_empty())
+    }
+
+    /// LaserWriter-style error report, e.g.
+    /// `%%[ Error: undefined; OffendingCommand: frobnicate ]%%`.
+    pub fn error_report(&self, err: &PsError) -> String {
+        let kind = match err {
+            PsError::Syntax(detail) => format!("syntaxerror ({detail})"),
+            _ => err.name().to_string(),
+        };
+        let command = match err {
+            PsError::Undefined(name) => name.clone(),
+            _ => self.last_executed_name().unwrap_or("--none--").to_string(),
+        };
+        format!("%%[ Error: {kind}; OffendingCommand: {command} ]%%")
     }
 
     /// Pull the next object to execute off the execution stack, popping
@@ -250,6 +290,18 @@ impl Interp {
             Value::Integer(i) => Ok(i),
             _ => Err(PsError::Typecheck),
         }
+    }
+
+    pub fn pop_f64(&mut self) -> Result<f64, PsError> {
+        Ok(self.pop_num()?.to_f64())
+    }
+
+    pub fn gfx(&self) -> &Gfx {
+        &self.gfx
+    }
+
+    pub fn gfx_mut(&mut self) -> &mut Gfx {
+        &mut self.gfx
     }
 }
 

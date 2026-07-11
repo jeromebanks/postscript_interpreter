@@ -104,38 +104,54 @@ src/
   lexer.rs      byte-oriented tokenizer; unit tests in-module
   object.rs     Object / Value / Dict / Num
   interp.rs     the machine: three stacks, frames, name resolution
+  gfx.rs        graphics state, device-space paths, tiny-skia painting
+  window.rs     winit event loop stepping the interpreter live
   ops/          operators, grouped like the PLRM operator summary
     stack.rs    pop exch dup copy index roll clear count marks ]
     arith.rs    add sub mul div idiv mod neg abs rounding sqrt trig exp ln log
+    graphics.rs paths, painting, gsave/grestore, colors, translate/scale/rotate
     misc.rs     = == stack pstack print quit
 tests/eval.rs   end-to-end: source in, operand-stack contents out
-examples/*.ps   sample programs (Stage 2/3 targets)
+tests/render.rs headless rendering: source in, canvas pixels out
+examples/*.ps   sample programs (stage2_demo.ps runs today; fractals need Stage 3)
 ```
 
-## Live rendering plan (Stage 2 — leanings, not commitments)
+## Live rendering (Stage 2 — implemented)
 
-Current leaning: **single-threaded, step-driven**. The winit event loop
-owns both the interpreter and the canvas; each redraw runs a budget of
-interpreter steps, then presents. No locks, no channels, deterministic,
-and trivially supports pause/single-step/slow-motion — which is the whole
-point of watching programs draw. A threaded interpreter with a shared
-framebuffer stays on the table if step-budget granularity turns out to
-interact badly with long-running single operators, but the machine shape
-supports either.
+**Single-threaded, step-driven**, as planned. The winit event loop owns
+the interpreter (`src/window.rs`); each frame runs a budget of interpreter
+steps (`--speed`, default 100/frame ≈ 6000 objects/sec) and blits the
+canvas via softbuffer. No locks, no channels, deterministic; pause and
+slow-motion are just budget changes. The interpreter's `begin_source` +
+`step_n` API is the seam between the machine and any front end — the
+headless `--png` mode drives the identical machine to completion.
 
-Crates I expect to reach for, chosen but not yet added:
+Crates: **winit** (windowing — the standard choice), **softbuffer** (CPU
+pixel presentation), **tiny-skia** (rasterization — pure Rust and its
+model matches PostScript's needs almost exactly: Bézier paths,
+nonzero/even-odd fills, stroking with joins/caps/miter limits).
+Considered and passed on: `minifb` (less maintained, less control),
+`pixels`/wgpu (GPU pipeline is overkill for CPU 2D), `skia-safe` (huge
+C++ dependency — against the spirit of the project).
 
-- **winit** — windowing. The standard choice; no real competition.
-- **softbuffer** — CPU pixel buffer presentation, pairs with winit.
-- **tiny-skia** — rasterization. Pure Rust, fast, and its model matches
-  PostScript's needs almost exactly: path building, Bézier flattening,
-  nonzero/even-odd fills, stroking with joins/caps/miter limits, and an
-  affine-transform type that will back the CTM. Writing a rasterizer from
-  scratch is a fun future adventure, not a Stage 2 risk worth taking.
+Graphics semantics worth knowing (`src/gfx.rs`):
 
-Considered and passed on: `minifb` (simpler than winit+softbuffer but less
-maintained, less control), `pixels`/wgpu (GPU pipeline is overkill for CPU
-2D), `skia-safe` (huge C++ dependency — against the spirit of the project).
+- **Paths live in device space** — points go through the CTM at
+  construction time, per the PLRM, which is what lets programs transform
+  the coordinate system mid-path. `currentpoint` and the relative
+  operators map back through the inverse CTM.
+- **Arcs** are flattened to ≤90° cubic Béziers in *user* space and the
+  control points transformed, so arcs under rotation/scaling become the
+  correct ellipses.
+- **Stroke width approximation**: PostScript strokes with a user-space
+  pen; we stroke in device space with width scaled by √|det CTM|. Exact
+  for uniform scale/rotation; anisotropic `scale` won't produce
+  elliptical pens. Deliberate, documented, revisit on demand.
+- **`showpage` deviation**: marks the page complete and leaves the image
+  visible instead of erasing for the next page — erasing would defeat
+  watching. Multi-page documents are a future problem.
+- The current path is part of the `gsave`/`grestore` snapshot (that's
+  what makes `gsave fill grestore stroke` work), per the PLRM.
 
 ## Known-hard things being deliberately deferred
 

@@ -7,15 +7,18 @@ time.
 
 ## Status
 
-**Stage 1 (foundation) complete.** The language core exists but graphics
-do not yet: a full PostScript tokenizer (numbers including radix form,
-nested/escaped strings, hex strings, procedures), the object model, and an
-interpreter with the three-stack execution model running the
-stack-manipulation and arithmetic/math operators (`add` through `atan`,
-`dup`/`roll`/`index`/marks, etc.), plus `=`, `==`, `stack`, `pstack`,
-`print`, `quit`. Procedures scan and can be invoked, but `def` and control
-flow are Stage 3. Errors use the standard PostScript error names and never
-panic on program input.
+**Stage 2 (graphics core + live window) complete.** On top of the Stage 1
+language core (tokenizer, object model, three-stack interpreter, stack and
+arithmetic operators), the graphics engine now works: path construction
+(`moveto`/`lineto`/`curveto`/`arc`/`arcn` and relatives, `closepath`,
+`currentpoint`), painting (`fill`, `eofill`, `stroke`, `erasepage`,
+`showpage`), graphics state (`gsave`/`grestore`, `setgray`/`setrgbcolor`,
+line width/cap/join/miter), and coordinate transforms
+(`translate`/`rotate`/`scale`). Programs run in a **live window** so you
+can watch them draw, or headlessly to a PNG. `def` and control flow are
+Stage 3, so recursive programs don't run yet — `examples/stage2_demo.ps`
+shows what straight-line PostScript can do today. Errors use the standard
+PostScript error names and never panic on program input.
 
 See `INIT.md` for the roadmap, `ARCHITECTURE.md` for the design writeup,
 and `NOTES.md` for per-stage summaries.
@@ -25,10 +28,13 @@ and `NOTES.md` for per-stage summaries.
 Requires a stable Rust toolchain.
 
 ```sh
-cargo test              # unit + end-to-end interpreter tests
-cargo run               # interactive REPL (prompt shows stack depth)
-cargo run -- -e '3 4 add ='   # evaluate a snippet
-cargo run -- file.ps    # run a program
+cargo run -- examples/stage2_demo.ps      # watch it draw, live
+cargo run -- --speed 10 file.ps           # slower (steps per frame, default 100)
+cargo run -- --png out.png file.ps        # headless render to PNG
+cargo run -- --page 500x500 file.ps       # canvas size (default 612x792)
+cargo run                                 # interactive REPL
+cargo run -- -e '3 4 add ='               # evaluate a snippet
+cargo test                                # language + pixel-level render tests
 ```
 
 A REPL taste:

@@ -3,6 +3,32 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 2 — Graphics core, live window (2026-07-11)
+
+**Built:** `src/gfx.rs` (graphics state, device-space paths, arc→Bézier
+flattening, tiny-skia fill/stroke, gsave stack); the full Stage 2 operator
+set (`moveto`/`lineto`/`curveto`/`arc`/`arcn` + relatives, `fill`/
+`eofill`/`stroke`, `gsave`/`grestore`, colors, line attributes,
+`translate`/`rotate`/`scale`, `currentpoint`, `showpage`, `erasepage`);
+a public `begin_source`/`step_n` stepping API on the interpreter; a live
+winit+softbuffer window that steps the machine each frame (`--speed`
+knob); headless `--png` output; `--page WxH`. 13 pixel-level render tests
+plus the Stage 1 suite (40 total); demo at `examples/stage2_demo.ps`,
+verified by rendering to PNG and inspecting.
+
+**Tradeoffs:** stroke width scaled by √|det CTM| instead of a true
+user-space pen (exact under uniform scale/rotation, wrong for
+anisotropic `scale`); `showpage` leaves the image up instead of erasing;
+window blit is nearest-neighbor on HiDPI. All noted in `ARCHITECTURE.md`.
+
+**Deferred:** `clip`/`clippath`, `setdash`, `sethsbcolor`,
+matrix-operand forms (`concat`, `setmatrix`, `transform`), multi-page
+semantics, REPL-attached window.
+
+**Next:** Stage 3 — `def`, `if`/`ifelse`, `for`/`repeat`/`loop`,
+`bind`, dict operators (`begin`/`end`, `dict`), comparisons — the set
+the three fractal examples actually need.
+
 ## Stage 1 — Foundation (2026-07-11)
 
 **Built:** Cargo project (`pscat`, lib + bin); byte-oriented lexer with
