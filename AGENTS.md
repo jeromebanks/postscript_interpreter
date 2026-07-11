@@ -55,7 +55,17 @@ first. This file covers *how* to work, not *what* to build.
 
 ## Where things live
 
-(To be filled in / updated by whoever sets up the initial project
-structure — module layout, where tests live, where sample `.ps` programs
-used for manual testing are kept, etc. Keep this section current as the
-structure solidifies so future sessions can orient quickly.)
+- `ARCHITECTURE.md` — the design writeup (object model, execution model,
+  rendering-crate leanings, deliberate deferrals). Read before changing
+  anything structural.
+- `NOTES.md` — per-stage summaries, newest first.
+- `src/lexer.rs` — tokenizer; unit tests in-module.
+- `src/object.rs` — `Object`/`Value`/`Dict`/`Num`.
+- `src/interp.rs` — the execution machine (operand/dict/exec stacks).
+- `src/ops/` — operator implementations, grouped like the PLRM's operator
+  summary (`stack.rs`, `arith.rs`, `misc.rs`; new groups get new modules).
+- `src/main.rs` — CLI: file / `-e` eval / REPL modes, error reporting.
+- `tests/eval.rs` — end-to-end tests (PostScript source in, operand-stack
+  contents out, compared via `==`-style reprs).
+- `examples/*.ps` — sample programs used for manual testing (the Stage 2/3
+  demo targets).
