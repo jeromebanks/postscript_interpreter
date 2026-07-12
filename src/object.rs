@@ -110,6 +110,13 @@ impl Object {
     /// Syntactic form, as the `==` operator prints it: valid PostScript
     /// source where possible (`/name`, `(string)`, `[array]`, `{proc}`).
     pub fn repr(&self) -> String {
+        self.repr_depth(0)
+    }
+
+    /// Depth-capped so pathologically nested arrays (`[[[[...`) print an
+    /// ellipsis instead of overflowing the Rust stack.
+    fn repr_depth(&self, depth: usize) -> String {
+        const MAX_REPR_DEPTH: usize = 32;
         match &self.value {
             Value::Integer(i) => i.to_string(),
             Value::Real(r) => format_real(*r),
@@ -125,7 +132,11 @@ impl Object {
             }
             Value::String(s) => format!("({})", escape_string(&s.borrow())),
             Value::Array(a) => {
-                let inner: Vec<String> = a.borrow().iter().map(Object::repr).collect();
+                if depth >= MAX_REPR_DEPTH {
+                    return "...".to_string();
+                }
+                let inner: Vec<String> =
+                    a.borrow().iter().map(|o| o.repr_depth(depth + 1)).collect();
                 if self.executable {
                     format!("{{{}}}", inner.join(" "))
                 } else {
@@ -141,6 +152,37 @@ impl Object {
 impl fmt::Debug for Object {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.repr())
+    }
+}
+
+/// Deeply nested arrays (10k levels of `[`) would drop recursively — one
+/// Rust stack frame per level — and abort the process. When this is the
+/// last handle to an array, tear it down iteratively instead, reusing the
+/// array's own element vector as the worklist.
+impl Drop for Object {
+    fn drop(&mut self) {
+        let Value::Array(rc) = &self.value else {
+            return;
+        };
+        if Rc::strong_count(rc) != 1 {
+            return;
+        }
+        let Value::Array(rc) = std::mem::replace(&mut self.value, Value::Null) else {
+            return;
+        };
+        let Ok(cell) = Rc::try_unwrap(rc) else {
+            return;
+        };
+        let mut pending = cell.into_inner();
+        while let Some(mut obj) = pending.pop() {
+            if let Value::Array(inner) = &obj.value
+                && Rc::strong_count(inner) == 1
+                && let Value::Array(inner) = std::mem::replace(&mut obj.value, Value::Null)
+                && let Ok(cell) = Rc::try_unwrap(inner)
+            {
+                pending.extend(cell.into_inner());
+            }
+        }
     }
 }
 

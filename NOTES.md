@@ -3,6 +3,66 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 4 — Robustness and polish (2026-07-11)
+
+**Audit result:** one real crash found and fixed. Dropping a deeply
+nested array (10k levels of `[`) overflowed the Rust stack — `Rc` trees
+drop recursively. Fixed with an iterative teardown in `Drop for Object`
+(worklist reuses the array's own element vector; only last-owner array
+drops pay anything). Also: `repr` is now depth-capped (deep nesting
+prints `...` instead of recursing), `--page` is capped at 8000² so a typo
+can't attempt a multi-GB allocation, and the REPL reads multi-line input
+(brace/string-aware continuation prompt) so procedures can actually be
+typed interactively.
+
+**New tests** (61 total, 9 suites):
+- `tests/robustness.rs` — deterministic fuzz (random bytes + random
+  token soup over the whole operator set, step-budgeted so `loop` bombs
+  terminate), pathological nesting, degenerate graphics (singular CTM,
+  1e300 coordinates, negative radius), error-then-recover.
+- `tests/golden.rs` — renders all four examples with pscat *and*
+  Ghostscript, compares 10×10-block downsampled images: any block inked
+  in one render and blank in the other fails (geometry error), mean
+  block difference must stay < 6 (observed ≤ 2.1). Skips with a notice
+  if gs isn't installed.
+
+**Performance** (release, M-series): fib(27) ≈ 830k procedure calls in
+~0.20s; 5M-iteration `for`+`add` in ~0.20s (~50M executed objects/sec);
+depth-8 Sierpinski (6,561 fills) renders in 57ms. Ghostscript does
+fib(27) ~3× faster — its names are interned, ours hash strings per
+lookup. That's the known next lever, still not worth pulling until
+something actually feels slow.
+
+**Implemented today:** scanner (radix/reals/strings/hex/procs, bytes not
+UTF-8), three-stack machine (steppable, tail-call-flat, depth-limited),
+stack/arith/math ops, control flow (`if`/`ifelse`/`for`/`repeat`/`loop`/
+`exit`/`exec`), `def`/`dict`/`begin`/`end`/`load`/`bind`, comparisons/
+boolean/bitwise, paths (`moveto`…`arc`/`arcn`), painting (`fill`/
+`eofill`/`stroke`), graphics state (`gsave`/`grestore`, gray/RGB color,
+line attributes), transforms (`translate`/`rotate`/`scale`), live
+window + headless PNG, PLRM error names throughout, LaserWriter-style
+error reports.
+
+**Not implemented (main gaps):** array/string element ops (`get`/`put`/
+`getinterval`/`forall`/`array`/`string`/`aload`/`astore`), `cvi`/`cvr`/
+`cvs`/`cvx`/`cvn`, `save`/`restore`, `stopped`/`stop`/errordict,
+`clip`, `setdash`, matrix operands (`concat`/`setmatrix`/`transform`),
+`sethsbcolor`/CMYK, text (`show`/fonts), images, `//name`, ASCII85,
+`<<`/`>>` dict literals, multi-page semantics.
+
+**Stage 5 recommendation — "run found PostScript":** the single most
+valuable next chunk is data-structure completeness plus error recovery:
+`get`/`put`/`forall`/`getinterval`/`array`/`string`/`aload`, the `cv*`
+conversions, `<<`/`>>`, `where`/`known`, `stopped`/`stop`, `clip`, and
+matrix operands. That's what stands between pscat and real-world `.ps`
+files from the internet (they lean on arrays/strings/`forall`
+constantly, and on `stopped` for prolog robustness). Fonts/`show` is the
+bigger prize emotionally but is a stage of its own (font formats,
+encoding vectors, glyph caching) and most found art still needs the data
+ops first. Suggested order: Stage 5 = data + error recovery + clip;
+Stage 6 = text with a bundled font (`show`, `stringwidth`, `charpath`);
+Stage 7 = images and filters, which opens EPS previews and scanned art.
+
 ## Stage 3 — Control flow and procedures (2026-07-11)
 
 **Built:** `def`, `dict`/`begin`/`end`/`load`, `if`/`ifelse`/`exec`,

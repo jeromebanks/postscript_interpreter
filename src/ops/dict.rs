@@ -20,8 +20,8 @@ pub fn install(dict: &mut Dict) {
 /// Keys are names; strings convert to names per the PLRM. Other key
 /// types await the dict-key generalization noted in `object.rs`.
 fn pop_key(it: &mut Interp) -> Result<Rc<str>, PsError> {
-    match it.pop()?.value {
-        Value::Name(n) => Ok(n),
+    match &it.pop()?.value {
+        Value::Name(n) => Ok(n.clone()),
         Value::String(s) => Ok(String::from_utf8_lossy(&s.borrow()).into_owned().into()),
         _ => Err(PsError::Typecheck),
     }
@@ -46,9 +46,9 @@ fn make_dict(it: &mut Interp) -> Result<(), PsError> {
 }
 
 fn begin(it: &mut Interp) -> Result<(), PsError> {
-    match it.pop()?.value {
+    match &it.pop()?.value {
         Value::Dict(d) => {
-            it.push_dict(d);
+            it.push_dict(d.clone());
             Ok(())
         }
         _ => Err(PsError::Typecheck),

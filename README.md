@@ -7,8 +7,8 @@ time.
 
 ## Status
 
-**Stage 3 (control flow and procedures) complete.** Real recursive
-PostScript art programs run and draw live: the language core (tokenizer,
+**Stage 4 (robustness & polish) complete.** Real recursive PostScript
+art programs run and draw live: the language core (tokenizer,
 object model, three-stack interpreter, stack/arithmetic operators, `def`,
 dictionaries, `if`/`ifelse`, `for`/`repeat`/`loop`/`exit`, comparisons,
 `bind`), the graphics engine (paths, `arc`/`arcn`, `fill`/`eofill`/
@@ -16,9 +16,12 @@ dictionaries, `if`/`ifelse`, `for`/`repeat`/`loop`/`exit`, comparisons,
 `translate`/`rotate`/`scale`), and a **live window** so you can watch
 programs draw — or headless PNG rendering, which is cross-checked against
 Ghostscript on the example fractals. Errors use the standard PostScript
-error names and never panic on program input; runaway recursion is a
-catchable `execstackoverflow`, and tail-recursive programs run in
-constant execution-stack space.
+error names and never panic on program input (fuzz-tested); runaway
+recursion is a catchable `execstackoverflow`, and tail-recursive
+programs run in constant execution-stack space. The test suite includes
+golden-image comparisons against Ghostscript. The REPL accepts
+multi-line procedure definitions. See `NOTES.md` for the full
+implemented-vs-not inventory and the Stage 5 recommendation.
 
 Try `cargo run -- --page 500x500 examples/sierpinski.ps` and watch the
 triangles appear.

@@ -305,17 +305,18 @@ impl Interp {
                 self.push(obj);
                 return Ok(());
             }
-            match obj.value {
+            match &obj.value {
                 Value::Operator(op) => return (op.func)(self),
-                Value::Array(body) => return self.push_proc_frame(body),
-                Value::Name(ref n) => {
+                Value::Array(body) => return self.push_proc_frame(body.clone()),
+                Value::Name(n) => {
                     hops += 1;
                     if hops > 100 {
                         return Err(PsError::Limitcheck);
                     }
+                    let n = n.clone();
                     self.last_name = Some(n.clone());
                     obj = self
-                        .load(n)
+                        .load(&n)
                         .ok_or_else(|| PsError::Undefined(n.to_string()))?;
                 }
                 _ => {

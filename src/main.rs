@@ -2,8 +2,9 @@ use std::env;
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 
+use pscat::lexer::{Lexer, Token};
 use pscat::window::{WindowOptions, run_windowed};
-use pscat::{Interp, gfx};
+use pscat::{Interp, PsError, gfx};
 
 struct Options {
     file: Option<String>,
@@ -128,10 +129,15 @@ fn parse_args() -> Result<Options, String> {
             }
             "--page" => {
                 let spec = args.next().ok_or("missing WxH after --page")?;
-                let (w, h) = spec
+                let (w, h): (u32, u32) = spec
                     .split_once('x')
                     .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
                     .ok_or_else(|| format!("invalid --page value: {spec} (expected WxH)"))?;
+                // 8000² ≈ a 256 MB canvas — plenty, and it keeps a typo'd
+                // page size from attempting a multi-gigabyte allocation.
+                if !(1..=8000).contains(&w) || !(1..=8000).contains(&h) {
+                    return Err(format!("--page dimensions must be 1..8000, got {spec}"));
+                }
                 options.page = (w, h);
             }
             _ if arg.starts_with('-') => return Err(format!("unknown option: {arg}")),
@@ -165,12 +171,18 @@ fn repl(interp: &mut Interp) -> ExitCode {
     );
     println!("Type PostScript; 'quit' or Ctrl-D exits. The prompt shows operand-stack depth.");
     let stdin = io::stdin();
+    let mut pending = String::new();
     loop {
-        let depth = interp.operand_stack().len();
-        if depth == 0 {
-            print!("PS> ");
+        if pending.is_empty() {
+            let depth = interp.operand_stack().len();
+            if depth == 0 {
+                print!("PS> ");
+            } else {
+                print!("PS<{depth}> ");
+            }
         } else {
-            print!("PS<{depth}> ");
+            // Mid-procedure or mid-string: keep reading.
+            print!("...> ");
         }
         let _ = io::stdout().flush();
 
@@ -181,7 +193,12 @@ fn repl(interp: &mut Interp) -> ExitCode {
                 return ExitCode::SUCCESS;
             }
             Ok(_) => {
-                if let Err(e) = interp.run_str(&line) {
+                pending.push_str(&line);
+                if !source_is_complete(&pending) {
+                    continue;
+                }
+                let source = std::mem::take(&mut pending);
+                if let Err(e) = interp.run_str(&source) {
                     eprintln!("{}", interp.error_report(&e));
                 }
                 if interp.quit_requested() {
@@ -192,6 +209,26 @@ fn repl(interp: &mut Interp) -> ExitCode {
                 eprintln!("pscat: read error: {e}");
                 return ExitCode::FAILURE;
             }
+        }
+    }
+}
+
+/// Whether `src` can be executed as-is, or is mid-procedure / mid-string
+/// and the REPL should keep reading lines. Errors other than "ran off the
+/// end" count as complete — the interpreter will report them properly.
+fn source_is_complete(src: &str) -> bool {
+    let mut lexer = Lexer::new(src.as_bytes().to_vec());
+    let mut brace_depth = 0i64;
+    loop {
+        match lexer.next_token() {
+            Ok(None) => return brace_depth <= 0,
+            Ok(Some(Token::LBrace)) => brace_depth += 1,
+            Ok(Some(Token::RBrace)) => brace_depth -= 1,
+            Ok(Some(_)) => {}
+            // An unterminated string (or hex string) means "keep typing";
+            // anything else is a real syntax error to surface now.
+            Err(PsError::Syntax(m)) if m.starts_with("unterminated") => return false,
+            Err(_) => return true,
         }
     }
 }

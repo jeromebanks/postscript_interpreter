@@ -39,6 +39,13 @@ notice; a conformance-test suite someday might, and can be revisited then.
 language, and real-world files aren't reliably UTF-8. The lexer operates
 on bytes throughout for the same reason.
 
+**Objects tear down iteratively**: `Drop for Object` drains last-owner
+arrays through a worklist instead of letting `Rc` trees drop recursively
+— 10k levels of `[` used to abort the process via Rust stack overflow
+(found by the Stage 4 fuzz tests). Consequence for contributors: you
+can't move out of `obj.value` (E0509); match on `&obj.value` and clone
+the cheap `Rc` handle instead.
+
 **Names are `Rc<str>`** and dictionaries are `HashMap<Rc<str>, Object>`.
 Interning names to integer symbols (making dict lookup a small-int hash or
 array index) is the single most obvious performance lever left unpulled;
