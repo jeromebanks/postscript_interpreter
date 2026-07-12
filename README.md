@@ -26,8 +26,10 @@ implemented-vs-not inventory and the Stage 5 recommendation.
 Try `cargo run -- --page 500x500 examples/sierpinski.ps` and watch the
 triangles appear.
 
-See `INIT.md` for the roadmap, `ARCHITECTURE.md` for the design writeup,
-and `NOTES.md` for per-stage summaries.
+See `INIT.md` for the project vision, `ARCHITECTURE.md` for the design
+writeup, `NOTES.md` for per-stage summaries, and `ROADMAP.md` for the
+staged plan of everything still to come (fonts, images, save/restore,
+PDF export — with per-task model routing).
 
 ## Building & running
 

@@ -12,6 +12,10 @@ first. This file covers *how* to work, not *what* to build.
 - If Stage 1 is done, check for a stage-summary (in commit messages, a
   `NOTES.md`, or similar — use your judgment on where past summaries were
   left) before continuing, so you're not re-deciding settled questions.
+- Stages 5 and beyond are planned in `ROADMAP.md`, including which model
+  tier each task is suited to and an escalation rule for tasks that turn
+  out to touch the object model or execution machine. Follow it unless
+  you have a good reason not to — and record that reason in `NOTES.md`.
 
 ## Toolchain & commands
 
