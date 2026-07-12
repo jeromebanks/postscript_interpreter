@@ -19,7 +19,7 @@ use std::rc::Rc;
 use crate::error::PsError;
 use crate::gfx::{DEFAULT_PAGE, Gfx};
 use crate::lexer::{Lexer, Token};
-use crate::object::{Dict, Num, Object, Value};
+use crate::object::{Dict, Num, Object, PsArray, PsString, Value};
 use crate::ops;
 
 /// Generous enough for any sane program (procedure calls in tail position
@@ -35,22 +35,30 @@ enum Frame {
     /// Tokens being scanned incrementally from program source.
     Scanner(Lexer),
     /// A procedure (executable array) being executed element by element.
-    Proc {
-        body: Rc<RefCell<Vec<Object>>>,
-        pc: usize,
-    },
+    Proc { body: PsArray, pc: usize },
     /// `repeat`: run the body `remaining` more times.
-    Repeat {
-        body: Rc<RefCell<Vec<Object>>>,
-        remaining: i64,
-    },
+    Repeat { body: PsArray, remaining: i64 },
     /// `loop`: run the body until `exit` (or an error) unwinds it.
-    Loop { body: Rc<RefCell<Vec<Object>>> },
+    Loop { body: PsArray },
     /// `for`: push the control value, run the body, advance, repeat.
-    For {
-        body: Rc<RefCell<Vec<Object>>>,
-        control: ForControl,
-    },
+    For { body: PsArray, control: ForControl },
+    /// `forall`: push element(s), run the body, advance.
+    Forall { body: PsArray, src: ForallSrc },
+    /// The boundary a `stopped` context plants: reached normally, it pops
+    /// and pushes `false`; `stop` (or a recoverable error) unwinds to it
+    /// and pushes `true`.
+    StopMark,
+}
+
+pub(crate) enum ForallSrc {
+    /// Elements are fetched live, so mutation mid-loop is visible —
+    /// matching PostScript.
+    Array(PsArray, usize),
+    /// Bytes pushed as integers.
+    Str(PsString, usize),
+    /// Dict pairs are snapshotted when `forall` starts; the PLRM leaves
+    /// order and mid-loop mutation behavior unspecified.
+    Pairs(Vec<(Object, Object)>, usize),
 }
 
 pub(crate) struct ForControl {
@@ -103,6 +111,9 @@ pub struct Interp {
     /// The most recently executed name, for `OffendingCommand` in error
     /// reports.
     last_name: Option<Rc<str>>,
+    /// State for `rand`/`srand`/`rrand`. Deterministic by default —
+    /// reproducible art is a feature here, not a bug.
+    pub(crate) rand_state: i64,
     pub(crate) gfx: Gfx,
 }
 
@@ -118,6 +129,19 @@ impl Interp {
         let gfx = Gfx::new(width, height)?;
         let mut system = Dict::new();
         ops::install_all(&mut system);
+        // Error machinery: $error is where recovered errors are recorded;
+        // errordict exists for programs that expect it (custom handlers
+        // in it are not yet consulted — see NOTES.md).
+        system.put(
+            "errordict".into(),
+            Object::lit(Value::Dict(Rc::new(RefCell::new(Dict::new())))),
+        );
+        let mut error_state = Dict::new();
+        error_state.put("newerror".into(), Object::bool(false));
+        system.put(
+            "$error".into(),
+            Object::lit(Value::Dict(Rc::new(RefCell::new(error_state)))),
+        );
         Some(Interp {
             ostack: Vec::new(),
             dstack: vec![
@@ -130,6 +154,7 @@ impl Interp {
             estack: Vec::new(),
             quit_requested: false,
             last_name: None,
+            rand_state: 1,
             gfx,
         })
     }
@@ -168,12 +193,57 @@ impl Interp {
             if self.quit_requested {
                 return Ok(false);
             }
-            let Some(obj) = self.next_item()? else {
-                return Ok(false);
+            let obj = match self.next_item() {
+                Ok(None) => return Ok(false),
+                Ok(Some(o)) => o,
+                Err(e) => {
+                    self.recover(e)?;
+                    continue;
+                }
             };
-            self.execute_element(obj)?;
+            if let Err(e) = self.execute_element(obj) {
+                self.recover(e)?;
+            }
         }
         Ok(!self.estack.is_empty())
+    }
+
+    /// If a `stopped` context encloses the error, record it in `$error`,
+    /// unwind to the context, and push `true` — errors are catchable.
+    /// Otherwise propagate; the front end reports it.
+    fn recover(&mut self, e: PsError) -> Result<(), PsError> {
+        if !self.estack.iter().any(|f| matches!(f, Frame::StopMark)) {
+            return Err(e);
+        }
+        self.record_error(&e);
+        self.do_stop();
+        self.push(Object::bool(true));
+        Ok(())
+    }
+
+    fn record_error(&mut self, e: &PsError) {
+        let command = match e {
+            PsError::Undefined(n) => Some(Rc::from(n.as_str())),
+            _ => self.last_name.clone(),
+        };
+        let error_dict = match self.load("$error") {
+            Some(obj) => match &obj.value {
+                Value::Dict(d) => Some(d.clone()),
+                _ => None,
+            },
+            None => None,
+        };
+        if let Some(d) = error_dict {
+            let mut d = d.borrow_mut();
+            d.put("newerror".into(), Object::bool(true));
+            d.put(
+                "errorname".into(),
+                Object::lit(Value::Name(e.name().into())),
+            );
+            if let Some(c) = command {
+                d.put("command".into(), Object::exec(Value::Name(c)));
+            }
+        }
     }
 
     /// LaserWriter-style error report, e.g.
@@ -199,8 +269,10 @@ impl Interp {
             Yield(Object),
             PopThenYield(Object),
             Pop,
-            Iterate(Rc<RefCell<Vec<Object>>>),
-            IterateWith(Object, Rc<RefCell<Vec<Object>>>),
+            PopThenPush(Object),
+            Iterate(PsArray),
+            IterateWith(Object, PsArray),
+            IterateWith2(Object, Object, PsArray),
         }
         loop {
             let action = {
@@ -216,23 +288,20 @@ impl Interp {
                         Some(Token::LBrace) => Action::Yield(scan_procedure(lexer, 0)?),
                         Some(tok) => Action::Yield(token_to_object(tok)),
                     },
-                    Frame::Proc { body, pc } => {
-                        let b = body.borrow();
-                        if *pc >= b.len() {
-                            Action::Pop
-                        } else {
-                            let o = b[*pc].clone();
+                    Frame::Proc { body, pc } => match body.get(*pc) {
+                        None => Action::Pop,
+                        Some(o) => {
                             *pc += 1;
                             // Tail call: the frame is finished the moment
                             // it yields its last element, so drop it
                             // before executing.
-                            if *pc >= b.len() {
+                            if *pc >= body.len() {
                                 Action::PopThenYield(o)
                             } else {
                                 Action::Yield(o)
                             }
                         }
-                    }
+                    },
                     Frame::Repeat { body, remaining } => {
                         if *remaining <= 0 {
                             Action::Pop
@@ -251,6 +320,33 @@ impl Interp {
                             Action::IterateWith(v, body.clone())
                         }
                     }
+                    Frame::Forall { body, src } => match src {
+                        ForallSrc::Array(a, i) => match a.get(*i) {
+                            None => Action::Pop,
+                            Some(el) => {
+                                *i += 1;
+                                Action::IterateWith(el, body.clone())
+                            }
+                        },
+                        ForallSrc::Str(s, i) => match s.byte(*i) {
+                            None => Action::Pop,
+                            Some(b) => {
+                                *i += 1;
+                                Action::IterateWith(Object::int(i64::from(b)), body.clone())
+                            }
+                        },
+                        ForallSrc::Pairs(pairs, i) => match pairs.get(*i) {
+                            None => Action::Pop,
+                            Some((k, v)) => {
+                                let (k, v) = (k.clone(), v.clone());
+                                *i += 1;
+                                Action::IterateWith2(k, v, body.clone())
+                            }
+                        },
+                    },
+                    // Reached from above means the stopped procedure ran
+                    // to completion without stopping.
+                    Frame::StopMark => Action::PopThenPush(Object::bool(false)),
                 }
             };
             match action {
@@ -262,9 +358,18 @@ impl Interp {
                 Action::Pop => {
                     self.estack.pop();
                 }
+                Action::PopThenPush(o) => {
+                    self.estack.pop();
+                    self.push(o);
+                }
                 Action::Iterate(body) => self.push_proc_frame(body)?,
                 Action::IterateWith(v, body) => {
                     self.push(v);
+                    self.push_proc_frame(body)?;
+                }
+                Action::IterateWith2(a, b, body) => {
+                    self.push(a);
+                    self.push(b);
                     self.push_proc_frame(body)?;
                 }
             }
@@ -308,6 +413,11 @@ impl Interp {
             match &obj.value {
                 Value::Operator(op) => return (op.func)(self),
                 Value::Array(body) => return self.push_proc_frame(body.clone()),
+                // An executable string runs as source — the `(...) cvx
+                // exec` idiom found code uses constantly.
+                Value::String(s) => {
+                    return self.push_frame(Frame::Scanner(Lexer::new(s.to_vec())));
+                }
                 Value::Name(n) => {
                     hops += 1;
                     if hops > 100 {
@@ -327,8 +437,8 @@ impl Interp {
         }
     }
 
-    fn push_proc_frame(&mut self, body: Rc<RefCell<Vec<Object>>>) -> Result<(), PsError> {
-        if body.borrow().is_empty() {
+    fn push_proc_frame(&mut self, body: PsArray) -> Result<(), PsError> {
+        if body.is_empty() {
             return Ok(());
         }
         if self.estack.len() >= EXEC_STACK_LIMIT {
@@ -352,37 +462,57 @@ impl Interp {
         self.execute_resolved(obj)
     }
 
-    pub(crate) fn begin_repeat(
-        &mut self,
-        body: Rc<RefCell<Vec<Object>>>,
-        count: i64,
-    ) -> Result<(), PsError> {
+    pub(crate) fn begin_repeat(&mut self, body: PsArray, count: i64) -> Result<(), PsError> {
         self.push_frame(Frame::Repeat {
             body,
             remaining: count,
         })
     }
 
-    pub(crate) fn begin_loop(&mut self, body: Rc<RefCell<Vec<Object>>>) -> Result<(), PsError> {
+    pub(crate) fn begin_loop(&mut self, body: PsArray) -> Result<(), PsError> {
         self.push_frame(Frame::Loop { body })
     }
 
-    pub(crate) fn begin_for(
-        &mut self,
-        body: Rc<RefCell<Vec<Object>>>,
-        control: ForControl,
-    ) -> Result<(), PsError> {
+    pub(crate) fn begin_for(&mut self, body: PsArray, control: ForControl) -> Result<(), PsError> {
         self.push_frame(Frame::For { body, control })
     }
 
+    pub(crate) fn begin_forall(&mut self, body: PsArray, src: ForallSrc) -> Result<(), PsError> {
+        self.push_frame(Frame::Forall { body, src })
+    }
+
+    /// Plant the boundary for a `stopped` context.
+    pub(crate) fn begin_stopped(&mut self) -> Result<(), PsError> {
+        self.push_frame(Frame::StopMark)
+    }
+
+    /// Unwind to (and including) the nearest StopMark. Returns whether a
+    /// context existed; with none, the whole program is aborted, which is
+    /// what the PLRM's outermost job-server `stopped` would do.
+    pub(crate) fn do_stop(&mut self) -> bool {
+        while let Some(frame) = self.estack.pop() {
+            if matches!(frame, Frame::StopMark) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// `exit`: unwind to (and including) the innermost loop frame.
-    /// Stops at a source boundary — `exit` can't jump out of the program
-    /// that's executing it, per the PLRM's `invalidexit`.
+    /// Stops at a source boundary or a `stopped` boundary — `exit` can't
+    /// jump out of either, per the PLRM's `invalidexit`.
     pub(crate) fn exit_loop(&mut self) -> Result<(), PsError> {
         loop {
             match self.estack.last() {
-                None | Some(Frame::Scanner(_)) => return Err(PsError::InvalidExit),
-                Some(Frame::Repeat { .. } | Frame::Loop { .. } | Frame::For { .. }) => {
+                None | Some(Frame::Scanner(_) | Frame::StopMark) => {
+                    return Err(PsError::InvalidExit);
+                }
+                Some(
+                    Frame::Repeat { .. }
+                    | Frame::Loop { .. }
+                    | Frame::For { .. }
+                    | Frame::Forall { .. },
+                ) => {
                     self.estack.pop();
                     return Ok(());
                 }
@@ -391,6 +521,37 @@ impl Interp {
                 }
             }
         }
+    }
+
+    // --- dictionary-stack access for the dict operators -----------------
+
+    pub(crate) fn current_dict(&self) -> Rc<RefCell<Dict>> {
+        // The dict stack never drops below systemdict/userdict.
+        self.dstack
+            .last()
+            .cloned()
+            .unwrap_or_else(|| unreachable!("dict stack is never empty"))
+    }
+
+    pub(crate) fn dict_stack_len(&self) -> usize {
+        self.dstack.len()
+    }
+
+    pub(crate) fn clear_dict_stack(&mut self) {
+        self.dstack.truncate(2);
+    }
+
+    /// `where`: the topmost dictionary defining `key`, if any.
+    pub(crate) fn find_defining_dict(
+        &self,
+        key: &Object,
+    ) -> Result<Option<Rc<RefCell<Dict>>>, PsError> {
+        for d in self.dstack.iter().rev() {
+            if d.borrow().known(key)? {
+                return Ok(Some(d.clone()));
+            }
+        }
+        Ok(None)
     }
 
     pub(crate) fn push_dict(&mut self, dict: Rc<RefCell<Dict>>) {

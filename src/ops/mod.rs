@@ -3,6 +3,8 @@
 
 pub mod arith;
 pub mod control;
+pub mod convert;
+pub mod data;
 pub mod dict;
 pub mod graphics;
 pub mod logic;
@@ -22,6 +24,8 @@ pub fn install_all(dict: &mut Dict) {
     stack::install(dict);
     arith::install(dict);
     control::install(dict);
+    convert::install(dict);
+    data::install(dict);
     dict::install(dict);
     graphics::install(dict);
     logic::install(dict);
@@ -35,4 +39,5 @@ pub fn install_all(dict: &mut Dict) {
     dict.put("null".into(), Object::lit(Value::Null));
     dict.put("mark".into(), Object::lit(Value::Mark));
     dict.put("[".into(), Object::lit(Value::Mark));
+    dict.put("<<".into(), Object::lit(Value::Mark));
 }

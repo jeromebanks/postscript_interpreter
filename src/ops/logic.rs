@@ -34,9 +34,9 @@ fn objects_equal(a: &Object, b: &Object) -> bool {
         (Boolean(x), Boolean(y)) => x == y,
         (Mark, Mark) | (Null, Null) => true,
         (Name(x), Name(y)) => x == y,
-        (String(x), String(y)) => Rc::ptr_eq(x, y) || *x.borrow() == *y.borrow(),
-        (Name(n), String(s)) | (String(s), Name(n)) => n.as_bytes() == &s.borrow()[..],
-        (Array(x), Array(y)) => Rc::ptr_eq(x, y),
+        (String(x), String(y)) => x.same_object(y) || *x.borrow_bytes() == *y.borrow_bytes(),
+        (Name(n), String(s)) | (String(s), Name(n)) => n.as_bytes() == &s.borrow_bytes()[..],
+        (Array(x), Array(y)) => x.same_object(y),
         (Dict(x), Dict(y)) => Rc::ptr_eq(x, y),
         (Operator(x), Operator(y)) => std::ptr::fn_addr_eq(x.func, y.func),
         _ => false,
@@ -68,7 +68,7 @@ fn compare(it: &mut Interp) -> Result<Ordering, PsError> {
             let (x, y) = (num_of(&a), num_of(&b));
             x.partial_cmp(&y).ok_or(PsError::UndefinedResult)?
         }
-        (String(x), String(y)) => x.borrow().cmp(&y.borrow()),
+        (String(x), String(y)) => x.borrow_bytes().cmp(&y.borrow_bytes()),
         _ => return Err(PsError::Typecheck),
     };
     Ok(ord)

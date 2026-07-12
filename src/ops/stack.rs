@@ -1,8 +1,6 @@
 //! Operand-stack manipulation operators, plus `]` (which is mark-based
 //! array construction and lives here until there's a real array module).
 
-use std::rc::Rc;
-
 use crate::error::PsError;
 use crate::interp::Interp;
 use crate::object::{Dict, Object, Value};
@@ -12,7 +10,8 @@ pub fn install(dict: &mut Dict) {
     op(dict, "pop", pop);
     op(dict, "exch", exch);
     op(dict, "dup", dup);
-    op(dict, "copy", copy);
+    // "copy" is registered by ops::data, which dispatches the composite
+    // forms and calls copy_n below for the plain stack form.
     op(dict, "index", index);
     op(dict, "roll", roll);
     op(dict, "clear", clear);
@@ -42,8 +41,7 @@ fn dup(it: &mut Interp) -> Result<(), PsError> {
     Ok(())
 }
 
-fn copy(it: &mut Interp) -> Result<(), PsError> {
-    let n = it.pop_int()?;
+pub(crate) fn copy_n(it: &mut Interp, n: i64) -> Result<(), PsError> {
     if n < 0 {
         return Err(PsError::Rangecheck);
     }
@@ -127,8 +125,6 @@ fn endarray(it: &mut Interp) -> Result<(), PsError> {
     let len = it.ostack.len();
     let items: Vec<Object> = it.ostack.drain(len - d..).collect();
     it.ostack.pop(); // the mark itself
-    it.push(Object::lit(Value::Array(Rc::new(std::cell::RefCell::new(
-        items,
-    )))));
+    it.push(Object::array(items));
     Ok(())
 }

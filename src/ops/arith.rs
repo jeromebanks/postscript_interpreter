@@ -30,6 +30,47 @@ pub fn install(dict: &mut Dict) {
     op(dict, "exp", exp);
     op(dict, "ln", ln);
     op(dict, "log", log);
+    op(dict, "rand", rand);
+    op(dict, "srand", srand);
+    op(dict, "rrand", rrand);
+    op(dict, "bitshift", bitshift);
+}
+
+/// The classic LCG; range [0, 2^31), per the PLRM's `rand`.
+fn rand(it: &mut Interp) -> Result<(), PsError> {
+    it.rand_state = (it
+        .rand_state
+        .wrapping_mul(1_103_515_245)
+        .wrapping_add(12_345))
+        & 0x7fff_ffff;
+    it.push(Object::int(it.rand_state));
+    Ok(())
+}
+
+fn srand(it: &mut Interp) -> Result<(), PsError> {
+    it.rand_state = it.pop_int()? & 0x7fff_ffff;
+    Ok(())
+}
+
+fn rrand(it: &mut Interp) -> Result<(), PsError> {
+    it.push(Object::int(it.rand_state));
+    Ok(())
+}
+
+fn bitshift(it: &mut Interp) -> Result<(), PsError> {
+    let shift = it.pop_int()?;
+    let x = it.pop_int()?;
+    let result = if shift >= 64 {
+        0
+    } else if shift <= -64 {
+        x >> 63
+    } else if shift >= 0 {
+        x.wrapping_shl(shift as u32)
+    } else {
+        x >> (-shift) as u32
+    };
+    it.push(Object::int(result));
+    Ok(())
 }
 
 fn pop2(it: &mut Interp) -> Result<(Num, Num), PsError> {

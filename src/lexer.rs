@@ -235,7 +235,8 @@ fn classify_word(word: &[u8]) -> Token {
     parse_number(s).unwrap_or_else(|| Token::Name(s.to_string()))
 }
 
-fn parse_number(s: &str) -> Option<Token> {
+/// Also used by `cvi`/`cvr`, which accept full scanner number syntax.
+pub(crate) fn parse_number(s: &str) -> Option<Token> {
     // Radix numbers: base#digits, base 2..=36. Anything malformed falls
     // through to being a name.
     if let Some((base, digits)) = s.split_once('#') {

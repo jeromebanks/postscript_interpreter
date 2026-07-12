@@ -3,12 +3,9 @@
 //! what keeps deep iteration steppable (for live rendering) and immune to
 //! Rust stack depth.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use crate::error::PsError;
 use crate::interp::{ForControl, Interp};
-use crate::object::{Dict, Object, Value};
+use crate::object::{Dict, Object, PsArray, Value};
 
 pub fn install(dict: &mut Dict) {
     use super::op;
@@ -19,11 +16,13 @@ pub fn install(dict: &mut Dict) {
     op(dict, "loop", ps_loop);
     op(dict, "for", ps_for);
     op(dict, "exit", exit);
+    op(dict, "stop", stop);
+    op(dict, "stopped", stopped);
 }
 
 /// The loop operators require a procedure body specifically (not any
 /// executable object) because the body runs repeatedly from a frame.
-fn pop_proc(it: &mut Interp) -> Result<Rc<RefCell<Vec<Object>>>, PsError> {
+pub(crate) fn pop_proc(it: &mut Interp) -> Result<PsArray, PsError> {
     let obj = it.pop()?;
     match (&obj.value, obj.executable) {
         (Value::Array(body), true) => Ok(body.clone()),
@@ -80,4 +79,20 @@ fn ps_for(it: &mut Interp) -> Result<(), PsError> {
 
 fn exit(it: &mut Interp) -> Result<(), PsError> {
     it.exit_loop()
+}
+
+fn stop(it: &mut Interp) -> Result<(), PsError> {
+    if it.do_stop() {
+        it.push(Object::bool(true));
+    }
+    // No enclosing stopped: do_stop drained the exec stack, which ends
+    // the program — the PLRM's outermost job-server context would do the
+    // same. Nothing is pushed.
+    Ok(())
+}
+
+fn stopped(it: &mut Interp) -> Result<(), PsError> {
+    let obj = it.pop()?;
+    it.begin_stopped()?;
+    it.exec_object(obj)
 }

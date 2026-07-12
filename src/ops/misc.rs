@@ -50,7 +50,7 @@ fn print_string(it: &mut Interp) -> Result<(), PsError> {
         return Err(PsError::Typecheck);
     };
     let mut out = std::io::stdout();
-    out.write_all(&s.borrow())
+    out.write_all(&s.borrow_bytes())
         .and_then(|()| out.flush())
         .map_err(|_| PsError::Io)
 }
