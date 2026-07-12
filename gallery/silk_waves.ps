@@ -1,0 +1,65 @@
+%!PS-Adobe-3.0 EPSF-3.0
+%%BoundingBox: 0 0 700 480
+%%Title: Silk Waves
+%%Creator: Claude, resident artist
+%%EndComments
+
+% Sixty-six horizontal threads, each displaced by two sine waves whose
+% phases drift with the row. The interference makes the surface billow
+% like silk in a slow wind. Every eighth thread is drawn in pale silver,
+% like catching the light.
+
+/box {
+  4 dict begin
+  /hh exch def /ww exch def /yy exch def /xx exch def
+  newpath xx yy moveto ww 0 rlineto 0 hh rlineto ww neg 0 rlineto
+  closepath fill
+  end
+} def
+
+/lerp {
+  3 dict begin
+  /f exch def /b exch def /a exch def
+  a b a sub f mul add
+  end
+} def
+
+% deep ink
+0.040 0.055 0.110 setrgbcolor 0 0 700 480 box
+
+% y-coordinate of thread `row` at horizontal position x
+/wavey { % x row -> y
+  2 dict begin
+  /rw exch def /xx exch def
+  22 rw 6.6 mul add
+  xx 0.62 mul rw 9 mul add sin   14 rw 64 div 9 mul add mul   add
+  xx 1.31 mul rw 13 mul sub sin   7 mul   add
+  end
+} def
+
+1 setlinecap
+1 setlinejoin
+
+0 1 65 {
+  /row exch def
+  /fr row 65 div def
+  row 8 mod 0 eq {
+    % silver accent thread
+    0.93 0.92 0.97 setrgbcolor
+    0.8 setlinewidth
+  } {
+    % teal -> lavender across the field
+    0.14 0.66 fr lerp   0.52 0.44 fr lerp   0.58 0.86 fr lerp   setrgbcolor
+    1.5 setlinewidth
+  } ifelse
+  newpath
+  0 row wavey 0 exch moveto
+  4 4 700 {
+    /xx exch def
+    xx xx row wavey lineto
+  } for
+  stroke
+} for
+
+showpage
+%%EOF

@@ -1,0 +1,91 @@
+%!PS-Adobe-3.0 EPSF-3.0
+%%BoundingBox: 0 0 700 700
+%%Title: Frost Mandala
+%%Creator: Claude, resident artist
+%%EndComments
+
+% A snowflake grammar: every circle spawns six children on its rim,
+% each generation smaller, paler, and rotated eleven degrees onward —
+% so the whole crystal seems to twist as it grows. 1,555 circles from
+% five lines of recursion.
+
+/sethsb {
+  3 dict begin
+  /v exch def /s exch def /h exch def
+  /h h h 360 div floor 360 mul sub def
+  /i h 60 div floor def
+  /f h 60 div i sub def
+  /p v 1 s sub mul def
+  /q v 1 s f mul sub mul def
+  /t v 1 s 1 f sub mul sub mul def
+  i 0 eq { v t p } {
+  i 1 eq { q v p } {
+  i 2 eq { p v t } {
+  i 3 eq { p q v } {
+  i 4 eq { t p v } {
+           v p q } ifelse } ifelse } ifelse } ifelse } ifelse
+  setrgbcolor
+  end
+} def
+
+/box {
+  4 dict begin
+  /hh exch def /ww exch def /yy exch def /xx exch def
+  newpath xx yy moveto ww 0 rlineto 0 hh rlineto ww neg 0 rlineto
+  closepath fill
+  end
+} def
+
+% polar night
+0.016 0.034 0.080 setrgbcolor 0 0 700 700 box
+
+350 350 translate
+
+% r depth flake
+/flake {
+  2 dict begin
+  /depth exch def /r exch def
+  /gen 4 depth sub def          % 0 = the mother circle
+  % deeper generations: paler, thinner, drifting from azure toward white
+  196 gen 8 mul add
+  0.62 gen 0.13 mul sub
+  0.55 gen 0.11 mul add
+  sethsb
+  1.7 gen 0.36 mul sub setlinewidth
+  newpath 0 0 r 0 360 arc stroke
+  depth 0 gt {
+    0 1 5 {
+      /k exch def
+      gsave
+        k 60 mul depth 11 mul add rotate
+        r 0 translate
+        r 0.42 mul depth 1 sub flake
+      grestore
+    } for
+  } if
+  end
+} def
+
+% faint radial guides beneath the crystal
+0.10 0.18 0.32 setrgbcolor
+0.5 setlinewidth
+0 15 345 {
+  gsave
+    rotate
+    newpath 0 0 moveto 335 0 lineto stroke
+  grestore
+} for
+
+152 4 flake
+
+% an inner crystal, counter-rotated half a step, to fill the heart
+gsave 30 rotate 62 3 flake grestore
+
+% a bright heart
+200 0.25 1.0 sethsb
+1.2 setlinewidth
+newpath 0 0 8 0 360 arc stroke
+newpath 0 0 2.6 0 360 arc fill
+
+showpage
+%%EOF

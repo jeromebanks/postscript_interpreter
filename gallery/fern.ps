@@ -1,0 +1,81 @@
+%!PS-Adobe-3.0 EPSF-3.0
+%%BoundingBox: 0 0 620 800
+%%Title: Fern, After Barnsley
+%%Creator: Claude, resident artist
+%%EndComments
+
+% The chaos game: one point, four affine maps chosen at random with the
+% classic Barnsley weights, forty-eight thousand hops. No outline is ever
+% drawn — the fern condenses out of probability. Color deepens with
+% height so the frond tips catch the light.
+
+/seed 8675309 def
+/rand01 {
+  /seed seed 1103515245 mul 12345 add 2147483648 mod def
+  seed 2147483648 div
+} def
+
+/sethsb {
+  3 dict begin
+  /v exch def /s exch def /h exch def
+  /h h h 360 div floor 360 mul sub def
+  /i h 60 div floor def
+  /f h 60 div i sub def
+  /p v 1 s sub mul def
+  /q v 1 s f mul sub mul def
+  /t v 1 s 1 f sub mul sub mul def
+  i 0 eq { v t p } {
+  i 1 eq { q v p } {
+  i 2 eq { p v t } {
+  i 3 eq { p q v } {
+  i 4 eq { t p v } {
+           v p q } ifelse } ifelse } ifelse } ifelse } ifelse
+  setrgbcolor
+  end
+} def
+
+/box {
+  4 dict begin
+  /hh exch def /ww exch def /yy exch def /xx exch def
+  newpath xx yy moveto ww 0 rlineto 0 hh rlineto ww neg 0 rlineto
+  closepath fill
+  end
+} def
+
+% deep moss-black
+0.024 0.043 0.034 setrgbcolor 0 0 620 800 box
+
+/x 0 def
+/y 0 def
+
+48000 {
+  /r rand01 def
+  r 0.01 lt {
+    /nx 0 def
+    /ny y 0.16 mul def
+  } {
+    r 0.86 lt {
+      /nx x 0.85 mul y 0.04 mul add def
+      /ny x -0.04 mul y 0.85 mul add 1.6 add def
+    } {
+      r 0.93 lt {
+        /nx x 0.2 mul y 0.26 mul sub def
+        /ny x 0.23 mul y 0.22 mul add 1.6 add def
+      } {
+        /nx x -0.15 mul y 0.28 mul add def
+        /ny x 0.26 mul y 0.24 mul add 0.44 add def
+      } ifelse
+    } ifelse
+  } ifelse
+  /x nx def
+  /y ny def
+  % hue slides teal-ward with height; brightness lifts toward the tips
+  95 y 4.5 mul add rand01 12 mul add
+  0.80
+  0.30 y 0.055 mul add rand01 0.18 mul add
+  sethsb
+  newpath x 62 mul 285 add y 76 mul 24 add 0.62 0 360 arc fill
+} repeat
+
+showpage
+%%EOF

@@ -47,6 +47,45 @@ The `examples/` directory has three recursive fractals (Sierpinski
 triangle, Koch snowflake, golden spiral) plus a straight-line demo; all
 render identically in pscat and Ghostscript.
 
+## Gallery
+
+`gallery/` holds six generative-art programs written in pure PostScript
+for this interpreter — and *within its current operator set*, which
+means no `rand`, no `sethsbcolor`, no arrays: each piece carries its own
+linear-congruential random generator and HSB→RGB converter as PostScript
+procedures. Everything is deterministic; change a `/seed` and a
+different tree or fern grows.
+
+| Piece | Technique |
+|---|---|
+| `golden_bloom.ps` | Phyllotaxis — 1,300 florets at the golden angle, √-spaced like a sunflower |
+| `cathedral_rose.ps` | Maurer rose — straight chords walking r = sin 6θ in 71° / 97° strides weave lace |
+| `ember_tree.ps` | Recursive branching from an LCG, banded dusk gradient, layered sun glow |
+| `fern.ps` | Barnsley chaos game — 48,000 points over four affine maps, no outline drawn |
+| `silk_waves.ps` | 66 threads displaced by two interfering sine fields |
+| `frost_mandala.ps` | Six-fold circle recursion, 11° twist per generation — 1,555+ circles |
+
+View them one at a time:
+
+```sh
+./gallery/show.sh          # step through the rendered PNGs
+./gallery/show.sh --live   # watch each piece draw itself in a window
+```
+
+<p>
+  <img src="gallery/renders/cathedral_rose.png" width="30%" alt="Cathedral Rose"/>
+  <img src="gallery/renders/golden_bloom.png" width="30%" alt="Golden Bloom"/>
+  <img src="gallery/renders/frost_mandala.png" width="30%" alt="Frost Mandala"/>
+</p>
+<p>
+  <img src="gallery/renders/ember_tree.png" width="30%" alt="Ember Tree"/>
+  <img src="gallery/renders/fern.png" width="30%" alt="Fern, After Barnsley"/>
+  <img src="gallery/renders/silk_waves.png" width="30%" alt="Silk Waves"/>
+</p>
+
+Details, page sizes, and re-render instructions live in
+`gallery/README.md`.
+
 A REPL taste:
 
 ```

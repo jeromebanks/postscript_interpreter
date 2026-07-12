@@ -1,0 +1,67 @@
+%!PS-Adobe-3.0 EPSF-3.0
+%%BoundingBox: 0 0 700 700
+%%Title: Golden Bloom
+%%Creator: Claude, resident artist
+%%EndComments
+
+% Phyllotaxis: 1300 florets placed by the golden angle (137.508 degrees),
+% radius growing with sqrt(i) so every floret claims equal area — the
+% arrangement sunflowers discovered first. Each floret is a dim halo
+% under a bright core, drifting gold -> rose -> violet toward the rim.
+
+% h(0..360) s(0..1) v(0..1) sethsb -> sets current color
+/sethsb {
+  3 dict begin
+  /v exch def /s exch def /h exch def
+  /h h h 360 div floor 360 mul sub def
+  /i h 60 div floor def
+  /f h 60 div i sub def
+  /p v 1 s sub mul def
+  /q v 1 s f mul sub mul def
+  /t v 1 s 1 f sub mul sub mul def
+  i 0 eq { v t p } {
+  i 1 eq { q v p } {
+  i 2 eq { p v t } {
+  i 3 eq { p q v } {
+  i 4 eq { t p v } {
+           v p q } ifelse } ifelse } ifelse } ifelse } ifelse
+  setrgbcolor
+  end
+} def
+
+/box { % x y w h box -> filled rectangle
+  4 dict begin
+  /hh exch def /ww exch def /yy exch def /xx exch def
+  newpath xx yy moveto ww 0 rlineto 0 hh rlineto ww neg 0 rlineto
+  closepath fill
+  end
+} def
+
+% night-garden background
+0.043 0.050 0.102 setrgbcolor 0 0 700 700 box
+
+350 350 translate
+
+/N 1300 def
+0 1 N {
+  /i exch def
+  /fr i N div def
+  /r fr sqrt 322 mul def
+  % hue runs backward through red: gold -> coral -> rose -> violet,
+  % deliberately skipping green (sethsb wraps negative hues)
+  /hu 48 fr 118 mul sub def
+  /sz fr sqrt 4.6 mul 1.1 add def
+  gsave
+    i 137.50776 mul rotate
+    r 0 translate
+    % halo
+    hu 0.88 0.24 fr 0.32 mul add sethsb
+    newpath 0 0 sz 1.9 mul 0 360 arc fill
+    % core
+    hu 0.68 0.68 fr 0.32 mul add sethsb
+    newpath 0 0 sz 0 360 arc fill
+  grestore
+} for
+
+showpage
+%%EOF

@@ -1,0 +1,127 @@
+%!PS-Adobe-3.0 EPSF-3.0
+%%BoundingBox: 0 0 620 820
+%%Title: Ember Tree
+%%Creator: Claude, resident artist
+%%EndComments
+
+% A recursive tree at dusk. PostScript has no rand operator in this
+% interpreter yet, so the tree carries its own linear congruential
+% generator — every branch angle, length, and leaf is drawn from it.
+% Change /seed and the whole tree grows differently.
+
+/seed 20260711 def
+/rand01 { % -> uniform [0,1)
+  /seed seed 1103515245 mul 12345 add 2147483648 mod def
+  seed 2147483648 div
+} def
+
+/sethsb {
+  3 dict begin
+  /v exch def /s exch def /h exch def
+  /h h h 360 div floor 360 mul sub def
+  /i h 60 div floor def
+  /f h 60 div i sub def
+  /p v 1 s sub mul def
+  /q v 1 s f mul sub mul def
+  /t v 1 s 1 f sub mul sub mul def
+  i 0 eq { v t p } {
+  i 1 eq { q v p } {
+  i 2 eq { p v t } {
+  i 3 eq { p q v } {
+  i 4 eq { t p v } {
+           v p q } ifelse } ifelse } ifelse } ifelse } ifelse
+  setrgbcolor
+  end
+} def
+
+/box {
+  4 dict begin
+  /hh exch def /ww exch def /yy exch def /xx exch def
+  newpath xx yy moveto ww 0 rlineto 0 hh rlineto ww neg 0 rlineto
+  closepath fill
+  end
+} def
+
+/lerp { % a b f -> a + (b-a)*f
+  3 dict begin
+  /f exch def /b exch def /a exch def
+  a b a sub f mul add
+  end
+} def
+
+% -- dusk sky: 82 horizontal bands, warm horizon to indigo night --------
+0 1 81 {
+  /bi exch def
+  /fr bi 81 div def
+  0.82 0.09 fr lerp   0.33 0.08 fr lerp   0.20 0.24 fr lerp   setrgbcolor
+  0 bi 10 mul 620 11 box
+} for
+
+% -- the low sun: concentric discs, largest and dimmest first, so the
+% smaller, hotter discs paint over them — a glow without transparency
+gsave
+  185 172 translate
+  36 -1 0 {
+    /gi exch def
+    /fr gi 36 div def
+    /heat 1 fr sub def
+    0.86 heat 0.13 mul add   0.40 heat 0.45 mul add   0.18 heat 0.28 mul add
+    setrgbcolor
+    newpath 0 0 30 fr 104 mul add 0 360 arc fill
+  } for
+grestore
+
+% -- rolling ground silhouette ------------------------------------------
+0.10 0.065 0.09 setrgbcolor
+newpath
+0 0 moveto
+0 96 lineto
+170 132 340 60 620 108 curveto
+620 0 lineto
+closepath fill
+
+% -- the tree -------------------------------------------------------------
+% len width depth branch
+/branch {
+  3 dict begin
+  /depth exch def /w exch def /len exch def
+  depth 0 eq len 4 lt or {
+    % an ember leaf
+    12 rand01 42 mul add   0.88   0.55 rand01 0.45 mul add   sethsb
+    newpath 0 0 1.6 rand01 2.4 mul add 0 360 arc fill
+  } {
+    % limb: dark wood warming faintly toward the tips
+    0.16 0.34 8 depth sub 8 div lerp
+    0.11 0.16 8 depth sub 8 div lerp
+    0.10 0.13 8 depth sub 8 div lerp
+    setrgbcolor
+    w setlinewidth
+    1 setlinecap
+    newpath 0 0 moveto 0 len lineto stroke
+    0 len translate
+    gsave
+      12 rand01 18 mul add rotate
+      len 0.70 rand01 0.10 mul add mul   w 0.68 mul   depth 1 sub branch
+    grestore
+    gsave
+      12 rand01 18 mul add neg rotate
+      len 0.70 rand01 0.10 mul add mul   w 0.68 mul   depth 1 sub branch
+    grestore
+    % occasional third shoot up the middle
+    rand01 0.38 lt {
+      gsave
+        rand01 10 mul 5 sub rotate
+        len 0.58 mul   w 0.6 mul   depth 1 sub branch
+      grestore
+    } if
+  } ifelse
+  end
+} def
+
+gsave
+  318 92 translate
+  118 13 9 branch
+grestore
+
+showpage
+%%EOF

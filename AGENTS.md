@@ -75,3 +75,7 @@ first. This file covers *how* to work, not *what* to build.
 - `tests/render.rs` — headless pixel tests (source in, canvas pixels out).
 - `examples/*.ps` — sample programs used for manual testing (the Stage 2/3
   demo targets).
+- `gallery/` — generative-art PostScript programs with rendered stills in
+  `gallery/renders/` and a slideshow script (`show.sh`); see
+  `gallery/README.md`. Art files stay within the interpreter's current
+  operator set — they double as its most demanding integration tests.

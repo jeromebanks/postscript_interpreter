@@ -1,0 +1,80 @@
+%!PS-Adobe-3.0 EPSF-3.0
+%%BoundingBox: 0 0 700 700
+%%Title: Cathedral Rose
+%%Creator: Claude, resident artist
+%%EndComments
+
+% A Maurer rose: walk the rose curve r = sin(6*theta) in strides of d
+% degrees and connect the stops with straight chords. The chords weave
+% themselves into lace no one drew directly. Two webs at different
+% strides (97 dusty violet, 71 gold) under a bold rose outline, framed
+% in a ring like leaded glass.
+
+/box {
+  4 dict begin
+  /hh exch def /ww exch def /yy exch def /xx exch def
+  newpath xx yy moveto ww 0 rlineto 0 hh rlineto ww neg 0 rlineto
+  closepath fill
+  end
+} def
+
+% midnight violet-black
+0.055 0.030 0.075 setrgbcolor 0 0 700 700 box
+
+350 350 translate
+/R 318 def
+
+% x y of the rose point at angle t (degrees): r = sin(6t) scaled to R
+/rosept { % t -> x y
+  1 dict begin
+  /t exch def
+  /rr t 6 mul sin R mul def
+  rr t cos mul rr t sin mul
+  end
+} def
+
+% -- underlayer web: stride 97, dusty violet ---------------------------
+0.34 0.27 0.46 setrgbcolor
+0.35 setlinewidth
+newpath 0 0 moveto
+1 1 360 {
+  97 mul 360 mod rosept lineto
+} for
+stroke
+
+% -- main web: stride 71, antique gold ---------------------------------
+0.82 0.65 0.36 setrgbcolor
+0.5 setlinewidth
+newpath 0 0 moveto
+1 1 360 {
+  71 mul 360 mod rosept lineto
+} for
+stroke
+
+% -- the rose itself: deep carmine, drawn smoothly ----------------------
+0.76 0.18 0.30 setrgbcolor
+2.2 setlinewidth
+1 setlinejoin
+newpath 0 0 moveto
+0.5 0.5 360 {
+  rosept lineto
+} for
+stroke
+
+% -- leaded-glass frame --------------------------------------------------
+0.82 0.65 0.36 setrgbcolor
+3 setlinewidth
+newpath 0 0 R 16 add 0 360 arc stroke
+1 setlinewidth
+newpath 0 0 R 28 add 0 360 arc stroke
+% tick marks between the rings
+0.6 setlinewidth
+0 6 354 {
+  gsave
+    rotate
+    newpath R 16 add 0 moveto R 28 add 0 lineto stroke
+  grestore
+} for
+
+showpage
+%%EOF
