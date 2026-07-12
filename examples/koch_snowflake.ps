@@ -7,7 +7,9 @@
 % --- Koch curve: replaces a straight segment with 4 segments ---
 % turtle-style: currentpoint + angle + length + depth
 
-/deg2rad { 180 div 3.14159265358979 mul } bind def
+% NOTE: PostScript's sin/cos take DEGREES, so no deg2rad is needed. (An
+% earlier version converted to radians first, which flattened the whole
+% curve — verified against Ghostscript before fixing.)
 
 /koch {
   % length angle depth
@@ -17,8 +19,8 @@
     /len exch def
 
     depth 0 eq {
-      angle deg2rad cos len mul
-      angle deg2rad sin len mul
+      angle cos len mul
+      angle sin len mul
       rlineto
     } {
       /len3 len 3 div def
@@ -44,11 +46,14 @@
     /cy exch def
     /cx exch def
 
+    % start at the bottom-left vertex and traverse clockwise
+    % (headings 60, 300, 180) so the koch bumps, which deflect to the
+    % left of the direction of travel, point outward
     newpath
-    cx size 0.577 mul sub cy size 0.333 mul sub moveto
-    size 0 depth kochside
+    cx size 2 div sub cy size 0.2887 mul sub moveto
     size 60 depth kochside
     size 300 depth kochside
+    size 180 depth kochside
     closepath
     stroke
   end

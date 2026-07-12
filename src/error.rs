@@ -21,6 +21,10 @@ pub enum PsError {
     UnmatchedMark,
     #[error("nocurrentpoint")]
     NoCurrentPoint,
+    #[error("invalidexit")]
+    InvalidExit,
+    #[error("dictstackunderflow")]
+    DictStackUnderflow,
     #[error("syntaxerror: {0}")]
     Syntax(String),
     #[error("limitcheck")]
@@ -42,6 +46,8 @@ impl PsError {
             PsError::UndefinedResult => "undefinedresult",
             PsError::UnmatchedMark => "unmatchedmark",
             PsError::NoCurrentPoint => "nocurrentpoint",
+            PsError::InvalidExit => "invalidexit",
+            PsError::DictStackUnderflow => "dictstackunderflow",
             PsError::Syntax(_) => "syntaxerror",
             PsError::Limitcheck => "limitcheck",
             PsError::Io => "ioerror",

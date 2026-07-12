@@ -39,6 +39,60 @@ enum Frame {
         body: Rc<RefCell<Vec<Object>>>,
         pc: usize,
     },
+    /// `repeat`: run the body `remaining` more times.
+    Repeat {
+        body: Rc<RefCell<Vec<Object>>>,
+        remaining: i64,
+    },
+    /// `loop`: run the body until `exit` (or an error) unwinds it.
+    Loop { body: Rc<RefCell<Vec<Object>>> },
+    /// `for`: push the control value, run the body, advance, repeat.
+    For {
+        body: Rc<RefCell<Vec<Object>>>,
+        control: ForControl,
+    },
+}
+
+pub(crate) struct ForControl {
+    current: f64,
+    increment: f64,
+    limit: f64,
+    /// All three operands were integers, so the pushed control values are
+    /// integers too, per the PLRM.
+    integral: bool,
+}
+
+impl ForControl {
+    pub(crate) fn new(initial: Num, increment: Num, limit: Num) -> Self {
+        let integral = matches!(
+            (initial, increment, limit),
+            (Num::Int(_), Num::Int(_), Num::Int(_))
+        );
+        ForControl {
+            current: initial.to_f64(),
+            increment: increment.to_f64(),
+            limit: limit.to_f64(),
+            integral,
+        }
+    }
+
+    /// A zero increment never finishes — that matches PostScript, where
+    /// such a loop runs until `exit`.
+    fn finished(&self) -> bool {
+        if self.increment >= 0.0 {
+            self.current > self.limit
+        } else {
+            self.current < self.limit
+        }
+    }
+
+    fn value(&self) -> Object {
+        if self.integral {
+            Object::int(self.current as i64)
+        } else {
+            Object::real(self.current)
+        }
+    }
 }
 
 pub struct Interp {
@@ -137,42 +191,81 @@ impl Interp {
     }
 
     /// Pull the next object to execute off the execution stack, popping
-    /// exhausted frames as they empty.
+    /// exhausted frames and iterating loop frames as needed.
     fn next_item(&mut self) -> Result<Option<Object>, PsError> {
+        // Frame inspection and stack mutation can't overlap borrows, so
+        // each pass decides on an action first, then applies it.
+        enum Action {
+            Yield(Object),
+            PopThenYield(Object),
+            Pop,
+            Iterate(Rc<RefCell<Vec<Object>>>),
+            IterateWith(Object, Rc<RefCell<Vec<Object>>>),
+        }
         loop {
-            let Some(frame) = self.estack.last_mut() else {
-                return Ok(None);
-            };
-            match frame {
-                Frame::Scanner(lexer) => match lexer.next_token()? {
-                    None => {
-                        self.estack.pop();
-                    }
-                    Some(Token::RBrace) => {
-                        return Err(PsError::Syntax("'}' with no matching '{'".to_string()));
-                    }
-                    Some(Token::LBrace) => return Ok(Some(scan_procedure(lexer, 0)?)),
-                    Some(tok) => return Ok(Some(token_to_object(tok))),
-                },
-                Frame::Proc { body, pc } => {
-                    let (obj, done) = {
+            let action = {
+                let Some(frame) = self.estack.last_mut() else {
+                    return Ok(None);
+                };
+                match frame {
+                    Frame::Scanner(lexer) => match lexer.next_token()? {
+                        None => Action::Pop,
+                        Some(Token::RBrace) => {
+                            return Err(PsError::Syntax("'}' with no matching '{'".to_string()));
+                        }
+                        Some(Token::LBrace) => Action::Yield(scan_procedure(lexer, 0)?),
+                        Some(tok) => Action::Yield(token_to_object(tok)),
+                    },
+                    Frame::Proc { body, pc } => {
                         let b = body.borrow();
                         if *pc >= b.len() {
-                            (None, true)
+                            Action::Pop
                         } else {
                             let o = b[*pc].clone();
                             *pc += 1;
-                            (Some(o), *pc >= b.len())
+                            // Tail call: the frame is finished the moment
+                            // it yields its last element, so drop it
+                            // before executing.
+                            if *pc >= b.len() {
+                                Action::PopThenYield(o)
+                            } else {
+                                Action::Yield(o)
+                            }
                         }
-                    };
-                    // Tail call: the frame is finished the moment it yields
-                    // its last element, so drop it before executing.
-                    if done {
-                        self.estack.pop();
                     }
-                    if let Some(o) = obj {
-                        return Ok(Some(o));
+                    Frame::Repeat { body, remaining } => {
+                        if *remaining <= 0 {
+                            Action::Pop
+                        } else {
+                            *remaining -= 1;
+                            Action::Iterate(body.clone())
+                        }
                     }
+                    Frame::Loop { body } => Action::Iterate(body.clone()),
+                    Frame::For { body, control } => {
+                        if control.finished() {
+                            Action::Pop
+                        } else {
+                            let v = control.value();
+                            control.current += control.increment;
+                            Action::IterateWith(v, body.clone())
+                        }
+                    }
+                }
+            };
+            match action {
+                Action::Yield(o) => return Ok(Some(o)),
+                Action::PopThenYield(o) => {
+                    self.estack.pop();
+                    return Ok(Some(o));
+                }
+                Action::Pop => {
+                    self.estack.pop();
+                }
+                Action::Iterate(body) => self.push_proc_frame(body)?,
+                Action::IterateWith(v, body) => {
+                    self.push(v);
+                    self.push_proc_frame(body)?;
                 }
             }
         }
@@ -241,6 +334,74 @@ impl Interp {
             return Err(PsError::ExecStackOverflow);
         }
         self.estack.push(Frame::Proc { body, pc: 0 });
+        Ok(())
+    }
+
+    fn push_frame(&mut self, frame: Frame) -> Result<(), PsError> {
+        if self.estack.len() >= EXEC_STACK_LIMIT {
+            return Err(PsError::ExecStackOverflow);
+        }
+        self.estack.push(frame);
+        Ok(())
+    }
+
+    /// `exec` and the conditional operators: run an object with full
+    /// executable semantics (procedures run rather than being pushed).
+    pub(crate) fn exec_object(&mut self, obj: Object) -> Result<(), PsError> {
+        self.execute_resolved(obj)
+    }
+
+    pub(crate) fn begin_repeat(
+        &mut self,
+        body: Rc<RefCell<Vec<Object>>>,
+        count: i64,
+    ) -> Result<(), PsError> {
+        self.push_frame(Frame::Repeat {
+            body,
+            remaining: count,
+        })
+    }
+
+    pub(crate) fn begin_loop(&mut self, body: Rc<RefCell<Vec<Object>>>) -> Result<(), PsError> {
+        self.push_frame(Frame::Loop { body })
+    }
+
+    pub(crate) fn begin_for(
+        &mut self,
+        body: Rc<RefCell<Vec<Object>>>,
+        control: ForControl,
+    ) -> Result<(), PsError> {
+        self.push_frame(Frame::For { body, control })
+    }
+
+    /// `exit`: unwind to (and including) the innermost loop frame.
+    /// Stops at a source boundary — `exit` can't jump out of the program
+    /// that's executing it, per the PLRM's `invalidexit`.
+    pub(crate) fn exit_loop(&mut self) -> Result<(), PsError> {
+        loop {
+            match self.estack.last() {
+                None | Some(Frame::Scanner(_)) => return Err(PsError::InvalidExit),
+                Some(Frame::Repeat { .. } | Frame::Loop { .. } | Frame::For { .. }) => {
+                    self.estack.pop();
+                    return Ok(());
+                }
+                Some(Frame::Proc { .. }) => {
+                    self.estack.pop();
+                }
+            }
+        }
+    }
+
+    pub(crate) fn push_dict(&mut self, dict: Rc<RefCell<Dict>>) {
+        self.dstack.push(dict);
+    }
+
+    /// `end`: systemdict and userdict are permanent, per the PLRM.
+    pub(crate) fn pop_dict(&mut self) -> Result<(), PsError> {
+        if self.dstack.len() <= 2 {
+            return Err(PsError::DictStackUnderflow);
+        }
+        self.dstack.pop();
         Ok(())
     }
 

@@ -7,18 +7,21 @@ time.
 
 ## Status
 
-**Stage 2 (graphics core + live window) complete.** On top of the Stage 1
-language core (tokenizer, object model, three-stack interpreter, stack and
-arithmetic operators), the graphics engine now works: path construction
-(`moveto`/`lineto`/`curveto`/`arc`/`arcn` and relatives, `closepath`,
-`currentpoint`), painting (`fill`, `eofill`, `stroke`, `erasepage`,
-`showpage`), graphics state (`gsave`/`grestore`, `setgray`/`setrgbcolor`,
-line width/cap/join/miter), and coordinate transforms
-(`translate`/`rotate`/`scale`). Programs run in a **live window** so you
-can watch them draw, or headlessly to a PNG. `def` and control flow are
-Stage 3, so recursive programs don't run yet — `examples/stage2_demo.ps`
-shows what straight-line PostScript can do today. Errors use the standard
-PostScript error names and never panic on program input.
+**Stage 3 (control flow and procedures) complete.** Real recursive
+PostScript art programs run and draw live: the language core (tokenizer,
+object model, three-stack interpreter, stack/arithmetic operators, `def`,
+dictionaries, `if`/`ifelse`, `for`/`repeat`/`loop`/`exit`, comparisons,
+`bind`), the graphics engine (paths, `arc`/`arcn`, `fill`/`eofill`/
+`stroke`, `gsave`/`grestore`, colors and line attributes,
+`translate`/`rotate`/`scale`), and a **live window** so you can watch
+programs draw — or headless PNG rendering, which is cross-checked against
+Ghostscript on the example fractals. Errors use the standard PostScript
+error names and never panic on program input; runaway recursion is a
+catchable `execstackoverflow`, and tail-recursive programs run in
+constant execution-stack space.
+
+Try `cargo run -- --page 500x500 examples/sierpinski.ps` and watch the
+triangles appear.
 
 See `INIT.md` for the roadmap, `ARCHITECTURE.md` for the design writeup,
 and `NOTES.md` for per-stage summaries.
@@ -28,7 +31,7 @@ and `NOTES.md` for per-stage summaries.
 Requires a stable Rust toolchain.
 
 ```sh
-cargo run -- examples/stage2_demo.ps      # watch it draw, live
+cargo run -- --page 500x500 examples/sierpinski.ps      # watch it draw, live
 cargo run -- --speed 10 file.ps           # slower (steps per frame, default 100)
 cargo run -- --png out.png file.ps        # headless render to PNG
 cargo run -- --page 500x500 file.ps       # canvas size (default 612x792)
@@ -36,6 +39,10 @@ cargo run                                 # interactive REPL
 cargo run -- -e '3 4 add ='               # evaluate a snippet
 cargo test                                # language + pixel-level render tests
 ```
+
+The `examples/` directory has three recursive fractals (Sierpinski
+triangle, Koch snowflake, golden spiral) plus a straight-line demo; all
+render identically in pscat and Ghostscript.
 
 A REPL taste:
 
