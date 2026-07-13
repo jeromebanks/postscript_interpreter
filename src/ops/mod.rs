@@ -8,6 +8,7 @@ pub mod data;
 pub mod dict;
 pub mod graphics;
 pub mod logic;
+pub mod matrix;
 pub mod misc;
 pub mod stack;
 
@@ -28,6 +29,9 @@ pub fn install_all(dict: &mut Dict) {
     data::install(dict);
     dict::install(dict);
     graphics::install(dict);
+    // matrix installs after graphics: its translate/scale/rotate
+    // dispatchers (matrix-operand aware) replace the plain CTM forms.
+    matrix::install(dict);
     logic::install(dict);
     misc::install(dict);
 

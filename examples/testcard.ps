@@ -1,0 +1,138 @@
+%!PS-Adobe-3.0 EPSF-3.0
+%%BoundingBox: 0 0 500 500
+%%Title: pscat test card
+%%Creator: pscat
+%%EndComments
+
+% A "found-style" test card: written the way real-world PostScript is,
+% with a shortcut prolog, stopped-guarded feature probes, data-driven
+% drawing via forall, string building with cvs, clipping, dashes, and
+% matrix bookkeeping. If this renders identically in pscat and
+% Ghostscript, Stage 5 is doing its job.
+
+% --- prolog, the classic way -------------------------------------------
+/bd { bind def } bind def
+/m /moveto load def
+/l /lineto load def
+/np /newpath load def
+/cp /closepath load def
+/rect { % x y w h rect -
+  4 dict begin
+  /h exch def /w exch def /y exch def /x exch def
+  np x y m w 0 rlineto 0 h rlineto w neg 0 rlineto cp
+  end
+} bd
+
+% background
+0.96 0.95 0.92 setrgbcolor 0 0 500 500 rect fill
+
+% frame
+0.2 setgray 2 setlinewidth 6 6 488 488 rect stroke
+
+% --- stopped guard: probe for a feature, fall back gracefully ----------
+% (every serious prolog does this dance)
+/have_hsb { /sethsbcolor where { pop true } { false } ifelse } bd
+
+% --- hsb color wheel, clipped to a ring --------------------------------
+gsave
+  130 360 translate
+  % ring clip: outer circle minus inner circle, via eoclip
+  np 0 0 90 0 360 arc cp 0 0 50 0 360 arc cp eoclip
+  np
+  have_hsb {
+    0 30 330 {
+      /a exch def
+      a 360 div 0.85 0.9 sethsbcolor
+      np 0 0 m 0 0 95 a a 30 add arc cp fill
+    } for
+  } {
+    0.5 setgray np 0 0 95 0 360 arc fill
+  } ifelse
+grestore
+
+% --- data-driven bar chart via forall ----------------------------------
+gsave
+  280 290 translate
+  0.25 setgray 1 setlinewidth
+  np 0 0 m 190 0 l stroke
+  /x 8 def
+  [ 130 62 95 150 41 108 ]
+  {
+    /h exch def
+    0.18 0.35 0.60 setrgbcolor
+    x 2 add 0 26 h rect fill
+    0.2 setgray
+    x 2 add 0 26 h rect stroke
+    /x x 30 add def
+  } forall
+grestore
+
+% --- dash pattern samples ----------------------------------------------
+gsave
+  40 240 translate
+  0.15 setgray
+  [ [12 6] [2 4] [16 4 2 4] [8 3 2 3 2 3] ]
+  {
+    /pat exch def
+    pat 0 setdash 3 setlinewidth
+    np 0 0 m 420 0 l stroke
+    0 -18 translate
+  } forall
+  [] 0 setdash
+grestore
+
+% --- clipped starburst ---------------------------------------------------
+gsave
+  120 110 translate
+  np 0 0 80 0 360 arc clip
+  np
+  0.75 0.25 0.15 setrgbcolor 2 setlinewidth
+  0 10 350 {
+    /a exch def
+    gsave
+      a rotate
+      np 0 0 m 110 0 l stroke
+    grestore
+  } for
+  % kept path from clip is gone (newpath above); outline the boundary
+  0.2 setgray 2 setlinewidth
+  np 0 0 80 0 360 arc stroke
+grestore
+
+% --- cvs drives geometry: encode a number, tick per byte ----------------
+gsave
+  250 60 translate
+  /buf 12 string def
+  /label 20260712 buf cvs def     % "20260712"
+  0.3 setgray 2 setlinewidth 1 setlinecap
+  /x 0 def
+  label {
+    /ch exch def
+    % digit byte -> tick height (48 = '0')
+    np x 0 m x ch 48 sub 6 mul 6 add l stroke
+    /x x 14 add def
+  } forall
+grestore
+
+% --- matrix bookkeeping instead of gsave -------------------------------
+/saved matrix currentmatrix def
+330 120 translate 30 rotate 0.8 0.8 scale
+0.85 0.65 0.2 setrgbcolor
+-35 -35 70 70 rect fill
+0.2 setgray 2 setlinewidth
+-35 -35 70 70 rect stroke
+saved setmatrix
+
+% deterministic confetti — arithmetic scatter, not rand, so pscat and
+% Ghostscript place every fleck identically
+0.5 setlinewidth
+0.3 setgray
+0 1 59 {
+  /i exch def
+  /cx i 73 mul 440 mod 30 add def   % x in 30..470
+  /cy i 137 mul 50 mod 18 add def   % y in 18..68
+  np cx cy m cx 3 add cy 3 add l stroke
+} for
+
+showpage
+%%EOF

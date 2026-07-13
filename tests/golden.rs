@@ -116,6 +116,7 @@ fn examples_match_ghostscript() {
         "koch_snowflake.ps",
         "golden_spiral.ps",
         "stage2_demo.ps",
+        "testcard.ps",
     ] {
         assert_close(name);
     }

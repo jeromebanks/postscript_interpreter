@@ -65,6 +65,20 @@ impl PsPath {
         self.current = Some(p);
     }
 
+    /// Every point in the path, control points included — enough for a
+    /// conservative bounding box.
+    pub fn points(&self) -> Vec<DevPoint> {
+        let mut out = Vec::new();
+        for seg in &self.segs {
+            match *seg {
+                Seg::Move(p) | Seg::Line(p) => out.push(p),
+                Seg::Curve(c1, c2, p) => out.extend([c1, c2, p]),
+                Seg::Close => {}
+            }
+        }
+        out
+    }
+
     fn curve_to(&mut self, c1: DevPoint, c2: DevPoint, p: DevPoint) {
         self.segs.push(Seg::Curve(c1, c2, p));
         self.current = Some(p);
@@ -104,13 +118,27 @@ pub struct GraphicsState {
     pub line_cap: LineCap,
     pub line_join: LineJoin,
     pub miter_limit: f32,
+    /// Dash pattern and phase, in user-space units; empty pattern = solid.
+    pub dash: Option<(Vec<f64>, f64)>,
     pub path: PsPath,
+    /// Current clip: an alpha mask (intersection of all active clips) and
+    /// the most recent clip path, which `clippath` hands back.
+    clip: Option<ClipState>,
+}
+
+#[derive(Clone)]
+struct ClipState {
+    mask: std::rc::Rc<tiny_skia::Mask>,
+    path: PsPath,
 }
 
 pub struct Gfx {
     pub pixmap: Pixmap,
     state: GraphicsState,
     saved: Vec<GraphicsState>,
+    /// The device CTM before any program transforms — what `initmatrix`
+    /// restores and `defaultmatrix` reports.
+    base_ctm: Transform,
     /// Set by anything that paints; the window loop presents and clears it.
     pub dirty: bool,
     /// Set by `showpage`; lets the front end know the program considers
@@ -122,21 +150,25 @@ impl Gfx {
     pub fn new(width: u32, height: u32) -> Option<Self> {
         let mut pixmap = Pixmap::new(width, height)?;
         pixmap.fill(tiny_skia::Color::WHITE);
+        // Device y grows downward; PostScript y grows upward. The base
+        // CTM flips the axis so user (0,0) is the bottom-left corner, as
+        // the LaserWriter intended.
+        let base_ctm = Transform::from_row(1.0, 0.0, 0.0, -1.0, 0.0, height as f32);
         Some(Gfx {
             pixmap,
             state: GraphicsState {
-                // Device y grows downward; PostScript y grows upward.
-                // The base CTM flips the axis so user (0,0) is the
-                // bottom-left corner, as the LaserWriter intended.
-                ctm: Transform::from_row(1.0, 0.0, 0.0, -1.0, 0.0, height as f32),
+                ctm: base_ctm,
                 rgb: (0.0, 0.0, 0.0),
                 line_width: 1.0,
                 line_cap: LineCap::Butt,
                 line_join: LineJoin::Miter,
                 miter_limit: 10.0,
+                dash: None,
                 path: PsPath::default(),
+                clip: None,
             },
             saved: Vec::new(),
+            base_ctm,
             dirty: false,
             page_shown: false,
         })
@@ -177,6 +209,18 @@ impl Gfx {
         // pre_concat: the new operation applies to points before the
         // existing CTM — PostScript's `translate`/`rotate`/`scale` order.
         self.state.ctm = self.state.ctm.pre_concat(m);
+    }
+
+    pub fn ctm(&self) -> Transform {
+        self.state.ctm
+    }
+
+    pub fn set_ctm(&mut self, m: Transform) {
+        self.state.ctm = m;
+    }
+
+    pub fn base_ctm(&self) -> Transform {
+        self.base_ctm
     }
 
     // --- path construction ---------------------------------------------
@@ -311,10 +355,17 @@ impl Gfx {
         paint
     }
 
+    /// Rc clone so the mask can outlive the `&mut self.pixmap` borrow.
+    fn clip_mask(&self) -> Option<std::rc::Rc<tiny_skia::Mask>> {
+        self.state.clip.as_ref().map(|c| c.mask.clone())
+    }
+
     pub fn fill(&mut self, rule: FillRule) {
         if let Some(path) = self.state.path.to_skia() {
+            let paint = self.paint();
+            let mask = self.clip_mask();
             self.pixmap
-                .fill_path(&path, &self.paint(), rule, Transform::identity(), None);
+                .fill_path(&path, &paint, rule, Transform::identity(), mask.as_deref());
             self.dirty = true;
         }
         // Painting consumes the path (implicit newpath), filled or not.
@@ -323,26 +374,42 @@ impl Gfx {
 
     pub fn stroke(&mut self) {
         if let Some(path) = self.state.path.to_skia() {
+            let scale = self.ctm_scale();
+            let dash = self.state.dash.as_ref().and_then(|(pattern, phase)| {
+                // Dash lengths are user-space; scale them like the width.
+                let scaled: Vec<f32> = pattern.iter().map(|d| (*d * scale) as f32).collect();
+                tiny_skia::StrokeDash::new(scaled, (*phase * scale) as f32)
+            });
             let stroke = Stroke {
                 width: self.device_line_width(),
                 line_cap: self.state.line_cap,
                 line_join: self.state.line_join,
                 miter_limit: self.state.miter_limit,
-                dash: None,
+                dash,
             };
-            self.pixmap
-                .stroke_path(&path, &self.paint(), &stroke, Transform::identity(), None);
+            let paint = self.paint();
+            let mask = self.clip_mask();
+            self.pixmap.stroke_path(
+                &path,
+                &paint,
+                &stroke,
+                Transform::identity(),
+                mask.as_deref(),
+            );
             self.dirty = true;
         }
         self.newpath();
     }
 
-    /// √|det CTM| scales user-space width to device space — see the
-    /// module comment for why this approximation.
-    fn device_line_width(&self) -> f32 {
+    /// √|det CTM| — the user-to-device scale factor for widths and dash
+    /// lengths; see the module comment for why this approximation.
+    fn ctm_scale(&self) -> f64 {
         let m = &self.state.ctm;
-        let det = f64::from(m.sx * m.sy - m.kx * m.ky);
-        let w = self.state.line_width * det.abs().sqrt();
+        f64::from(m.sx * m.sy - m.kx * m.ky).abs().sqrt()
+    }
+
+    fn device_line_width(&self) -> f32 {
+        let w = self.state.line_width * self.ctm_scale();
         if self.state.line_width <= 0.0 {
             // PostScript width 0 means "thinnest line the device can
             // render" — one device pixel, never invisible.
@@ -404,6 +471,157 @@ impl Gfx {
         }
         self.state.miter_limit = limit as f32;
         Ok(())
+    }
+
+    /// Empty pattern = solid. Rangecheck on negatives or an all-zero
+    /// pattern, per the PLRM.
+    pub fn set_dash(&mut self, pattern: Vec<f64>, phase: f64) -> Result<(), PsError> {
+        if pattern.is_empty() {
+            self.state.dash = None;
+            return Ok(());
+        }
+        if pattern.iter().any(|d| *d < 0.0) || pattern.iter().all(|d| *d == 0.0) {
+            return Err(PsError::Rangecheck);
+        }
+        self.state.dash = Some((pattern, phase));
+        Ok(())
+    }
+
+    pub fn current_dash(&self) -> (Vec<f64>, f64) {
+        match &self.state.dash {
+            Some((p, ph)) => (p.clone(), *ph),
+            None => (Vec::new(), 0.0),
+        }
+    }
+
+    // --- clipping ---------------------------------------------------------
+
+    /// Intersect the clip with the current path. Unlike painting, `clip`
+    /// leaves the current path in place, per the PLRM.
+    pub fn clip(&mut self, rule: FillRule) -> Result<(), PsError> {
+        let (w, h) = (self.pixmap.width(), self.pixmap.height());
+        let mut mask = tiny_skia::Mask::new(w, h).ok_or(PsError::Limitcheck)?;
+        if let Some(path) = self.state.path.to_skia() {
+            mask.fill_path(&path, rule, true, Transform::identity());
+        }
+        // An empty path clips everything away: the fresh mask is already
+        // all-zero, which is exactly that.
+        if let Some(prev) = &self.state.clip {
+            let prev_data = prev.mask.data();
+            for (m, p) in mask.data_mut().iter_mut().zip(prev_data) {
+                *m = ((u16::from(*m) * u16::from(*p)) / 255) as u8;
+            }
+        }
+        self.state.clip = Some(ClipState {
+            mask: std::rc::Rc::new(mask),
+            path: self.state.path.clone(),
+        });
+        Ok(())
+    }
+
+    pub fn initclip(&mut self) {
+        self.state.clip = None;
+    }
+
+    /// `clippath`: replace the current path with the clip boundary — the
+    /// most recent clip path, or the whole page if unclipped. (The true
+    /// intersection path isn't tracked; the mask is. Documented
+    /// approximation.)
+    pub fn set_path_to_clip(&mut self) {
+        match &self.state.clip {
+            Some(c) => self.state.path = c.path.clone(),
+            None => {
+                let (w, h) = (self.pixmap.width() as f32, self.pixmap.height() as f32);
+                let mut p = PsPath::default();
+                p.move_to(DevPoint { x: 0.0, y: 0.0 });
+                p.line_to(DevPoint { x: w, y: 0.0 });
+                p.line_to(DevPoint { x: w, y: h });
+                p.line_to(DevPoint { x: 0.0, y: h });
+                p.close();
+                self.state.path = p;
+            }
+        }
+    }
+
+    /// Bounding box of the current path in user space (control points
+    /// included, per the PLRM's allowance).
+    pub fn path_bbox(&self) -> Result<(f64, f64, f64, f64), PsError> {
+        let pts = self.state.path.points();
+        if pts.is_empty() {
+            return Err(PsError::NoCurrentPoint);
+        }
+        let (mut lx, mut ly, mut ux, mut uy) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for p in pts {
+            let (x, y) = self.device_to_user(p)?;
+            lx = lx.min(x);
+            ly = ly.min(y);
+            ux = ux.max(x);
+            uy = uy.max(y);
+        }
+        Ok((lx, ly, ux, uy))
+    }
+
+    // --- color ------------------------------------------------------------
+
+    pub fn rgb(&self) -> (f64, f64, f64) {
+        let (r, g, b) = self.state.rgb;
+        (f64::from(r), f64::from(g), f64::from(b))
+    }
+
+    /// NTSC luminance weighting, per the PLRM's `currentgray`.
+    pub fn gray(&self) -> f64 {
+        let (r, g, b) = self.rgb();
+        0.3 * r + 0.59 * g + 0.11 * b
+    }
+
+    pub fn set_hsb(&mut self, h: f64, s: f64, v: f64) {
+        let (h, s, v) = (h.rem_euclid(1.0), s.clamp(0.0, 1.0), v.clamp(0.0, 1.0));
+        let sector = (h * 6.0).floor();
+        let f = h * 6.0 - sector;
+        let p = v * (1.0 - s);
+        let q = v * (1.0 - s * f);
+        let t = v * (1.0 - s * (1.0 - f));
+        let (r, g, b) = match sector as i32 {
+            0 => (v, t, p),
+            1 => (q, v, p),
+            2 => (p, v, t),
+            3 => (p, q, v),
+            4 => (t, p, v),
+            _ => (v, p, q),
+        };
+        self.set_rgb(r, g, b);
+    }
+
+    pub fn hsb(&self) -> (f64, f64, f64) {
+        let (r, g, b) = self.rgb();
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let delta = max - min;
+        let v = max;
+        let s = if max > 0.0 { delta / max } else { 0.0 };
+        let h = if delta == 0.0 {
+            0.0
+        } else if max == r {
+            ((g - b) / delta).rem_euclid(6.0) / 6.0
+        } else if max == g {
+            ((b - r) / delta + 2.0) / 6.0
+        } else {
+            ((r - g) / delta + 4.0) / 6.0
+        };
+        (h, s, v)
+    }
+
+    pub fn set_cmyk(&mut self, c: f64, m: f64, y: f64, k: f64) {
+        let k = k.clamp(0.0, 1.0);
+        self.set_rgb(
+            (1.0 - c.clamp(0.0, 1.0)) * (1.0 - k),
+            (1.0 - m.clamp(0.0, 1.0)) * (1.0 - k),
+            (1.0 - y.clamp(0.0, 1.0)) * (1.0 - k),
+        );
+    }
+
+    pub fn line_width(&self) -> f64 {
+        self.state.line_width
     }
 }
 

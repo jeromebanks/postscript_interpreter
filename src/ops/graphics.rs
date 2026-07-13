@@ -6,7 +6,7 @@ use tiny_skia::{FillRule, Transform};
 
 use crate::error::PsError;
 use crate::interp::Interp;
-use crate::object::{Dict, Object};
+use crate::object::{Dict, Object, Value};
 
 pub fn install(dict: &mut Dict) {
     use super::op;
@@ -37,7 +37,21 @@ pub fn install(dict: &mut Dict) {
     op(dict, "setlinecap", setlinecap);
     op(dict, "setlinejoin", setlinejoin);
     op(dict, "setmiterlimit", setmiterlimit);
-    // Coordinate system
+    op(dict, "setdash", setdash);
+    op(dict, "currentdash", currentdash);
+    op(dict, "sethsbcolor", sethsbcolor);
+    op(dict, "currenthsbcolor", currenthsbcolor);
+    op(dict, "setcmykcolor", setcmykcolor);
+    op(dict, "currentrgbcolor", currentrgbcolor);
+    op(dict, "currentgray", currentgray);
+    op(dict, "currentlinewidth", currentlinewidth);
+    // Clipping
+    op(dict, "clip", clip);
+    op(dict, "eoclip", eoclip);
+    op(dict, "clippath", clippath);
+    op(dict, "initclip", initclip);
+    op(dict, "pathbbox", pathbbox);
+    // Coordinate system (the matrix-operand forms live in ops::matrix)
     op(dict, "translate", translate);
     op(dict, "scale", scale);
     op(dict, "rotate", rotate);
@@ -193,6 +207,104 @@ fn setlinejoin(it: &mut Interp) -> Result<(), PsError> {
 fn setmiterlimit(it: &mut Interp) -> Result<(), PsError> {
     let limit = it.pop_f64()?;
     it.gfx.set_miter_limit(limit)
+}
+
+fn setdash(it: &mut Interp) -> Result<(), PsError> {
+    let phase = it.pop_f64()?;
+    let obj = it.pop()?;
+    let Value::Array(a) = &obj.value else {
+        return Err(PsError::Typecheck);
+    };
+    let mut pattern = Vec::with_capacity(a.len());
+    for i in 0..a.len() {
+        match a.get(i).as_ref().map(|o| &o.value) {
+            Some(Value::Integer(n)) => pattern.push(*n as f64),
+            Some(Value::Real(r)) => pattern.push(*r),
+            _ => return Err(PsError::Typecheck),
+        }
+    }
+    it.gfx.set_dash(pattern, phase)
+}
+
+fn currentdash(it: &mut Interp) -> Result<(), PsError> {
+    let (pattern, phase) = it.gfx.current_dash();
+    it.push(Object::array(
+        pattern.into_iter().map(Object::real).collect(),
+    ));
+    it.push(Object::real(phase));
+    Ok(())
+}
+
+fn sethsbcolor(it: &mut Interp) -> Result<(), PsError> {
+    let b = it.pop_f64()?;
+    let s = it.pop_f64()?;
+    let h = it.pop_f64()?;
+    it.gfx.set_hsb(h, s, b);
+    Ok(())
+}
+
+fn currenthsbcolor(it: &mut Interp) -> Result<(), PsError> {
+    let (h, s, b) = it.gfx.hsb();
+    it.push(Object::real(h));
+    it.push(Object::real(s));
+    it.push(Object::real(b));
+    Ok(())
+}
+
+fn setcmykcolor(it: &mut Interp) -> Result<(), PsError> {
+    let k = it.pop_f64()?;
+    let y = it.pop_f64()?;
+    let m = it.pop_f64()?;
+    let c = it.pop_f64()?;
+    it.gfx.set_cmyk(c, m, y, k);
+    Ok(())
+}
+
+fn currentrgbcolor(it: &mut Interp) -> Result<(), PsError> {
+    let (r, g, b) = it.gfx.rgb();
+    it.push(Object::real(r));
+    it.push(Object::real(g));
+    it.push(Object::real(b));
+    Ok(())
+}
+
+fn currentgray(it: &mut Interp) -> Result<(), PsError> {
+    let g = it.gfx.gray();
+    it.push(Object::real(g));
+    Ok(())
+}
+
+fn currentlinewidth(it: &mut Interp) -> Result<(), PsError> {
+    let w = it.gfx.line_width();
+    it.push(Object::real(w));
+    Ok(())
+}
+
+fn clip(it: &mut Interp) -> Result<(), PsError> {
+    it.gfx.clip(FillRule::Winding)
+}
+
+fn eoclip(it: &mut Interp) -> Result<(), PsError> {
+    it.gfx.clip(FillRule::EvenOdd)
+}
+
+fn clippath(it: &mut Interp) -> Result<(), PsError> {
+    it.gfx.set_path_to_clip();
+    Ok(())
+}
+
+fn initclip(it: &mut Interp) -> Result<(), PsError> {
+    it.gfx.initclip();
+    Ok(())
+}
+
+fn pathbbox(it: &mut Interp) -> Result<(), PsError> {
+    let (lx, ly, ux, uy) = it.gfx.path_bbox()?;
+    it.push(Object::real(lx));
+    it.push(Object::real(ly));
+    it.push(Object::real(ux));
+    it.push(Object::real(uy));
+    Ok(())
 }
 
 fn translate(it: &mut Interp) -> Result<(), PsError> {
