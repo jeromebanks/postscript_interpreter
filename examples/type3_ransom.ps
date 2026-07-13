@@ -1,0 +1,78 @@
+%!PS-Adobe-3.0
+%% type3_ransom.ps — *dynamic* Type 3 generation. RansomFont has no
+%% fixed glyphs at all: every time a character is shown, BuildChar
+%% invents it fresh — a random base face at a random size, tilted,
+%% nudged, on a pasted pastel paper scrap. The same string renders
+%% differently every time it appears (watch the three (pscat)s).
+%%
+%% Under the hood each glyph is a nested show: BuildChar picks a face,
+%% measures the character with stringwidth (a suppressed show inside a
+%% painting show), declares its width with setcharwidth, then paints.
+%% Deterministic per run — pscat's rand is a fixed-seed LCG — but not
+%% comparable to Ghostscript, whose rand differs. 500x500 page.
+
+/RansomFont 8 dict def
+RansomFont begin
+  /FontType 3 def
+  /FontMatrix [0.001 0 0 0.001 0 0] def
+  /FontBBox [-100 -200 1400 1000] def
+  /Encoding 256 array def
+  0 1 255 { Encoding exch /chr put } for
+  /faces [ /Times-Bold /Helvetica-Bold /Courier-Bold
+           /Times-BoldItalic /Helvetica /Times-Roman ] def
+  /BuildChar {            % font code BuildChar -
+    exch begin
+      /code exch def
+      /c 1 string def  c 0 code put
+      code 32 eq {
+        % spaces are just gaps — no scrap
+        450 0 setcharwidth
+      } {
+        /face faces rand faces length mod get def
+        /size 760 rand 340 mod add def
+        /tilt rand 25 mod 12 sub def
+        face findfont size scalefont setfont
+        /w c stringwidth pop def
+        w 120 add 0 setcharwidth
+        rand 140 mod 70 sub  0 translate
+        0 rand 120 mod 60 sub translate
+        tilt rotate
+        % the paper scrap
+        rand 1000 mod 1000 div  0.32  0.96 sethsbcolor
+        -40 -150 moveto
+        w 80 add -150 lineto  w 80 add 830 lineto  -40 830 lineto
+        closepath fill
+        % the letter
+        0.07 0.07 0.12 setrgbcolor
+        20 0 moveto c show
+      } ifelse
+    end
+  } def
+end
+/RansomFont RansomFont definefont pop
+
+% ---------------------------------------------------------------------
+/Helvetica findfont 12 scalefont setfont
+40 468 moveto (RansomFont: BuildChar invents every glyph at show time) show
+
+/RansomFont findfont 42 scalefont setfont
+30 390 moveto (BRING 512K) show
+30 330 moveto (OF RAM TO) show
+30 270 moveto (THE PLOTTER) show
+
+/Helvetica findfont 12 scalefont setfont
+40 220 moveto (same string, three shows - no two renders alike:) show
+
+/RansomFont findfont 30 scalefont setfont
+45 160 moveto (pscat) show
+45 110 moveto (pscat) show
+45  60 moveto (pscat) show
+
+% and dynamic glyphs still respect the whole pipeline:
+gsave
+  330 150 translate -90 rotate
+  /RansomFont findfont 26 scalefont setfont
+  0 0 moveto (pscat!) show
+grestore
+
+showpage

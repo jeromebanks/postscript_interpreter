@@ -96,8 +96,8 @@ Goal: `(Hello, LaserWriter) show` — and the gallery gains typography.
 This is the emotional payoff stage; it's sequenced after Stage 5 because
 font machinery uses dicts/arrays heavily.
 
-**Tasks 1–4 ✅ (2026-07-13)** — see `FONTS.md` for the architecture and
-`NOTES.md` for the summary. Tasks 5–7 remain.
+**Tasks 1–5 ✅ (2026-07-13)** — see `FONTS.md` for the architecture and
+`NOTES.md` for the summaries. Tasks 6–7 remain.
 
 1. ✅ **Font architecture writeup** — `FONTS.md`: font dicts are real
    Dicts with `FID` as the registry seam; bundled Liberation faces via
@@ -110,8 +110,10 @@ font machinery uses dicts/arrays heavily.
    same in-show procedure execution as BuildChar). [sonnet]
 4. ✅ **Encodings** — StandardEncoding/ISOLatin1Encoding vectors,
    `Encoding` array remapping (read live per glyph). [haiku]
-5. **Type 3 fonts** — `BuildChar`/`BuildGlyph` procedures executed by the
-   machine inside a glyph context. Touches the exec stack. [opus]
+5. ✅ **Type 3 fonts** — the show family became a `Frame::Show` on the
+   execution stack (one glyph per step); `BuildChar`/`BuildGlyph` run
+   in sealed glyph contexts; `setcachedevice(2)`/`setcharwidth`;
+   `kshow` (deferred from task 3) rode along. [opus]
 6. **Type 1 fonts** — eexec decryption, charstring interpreter, seac,
    hint-ignoring first pass. The single hardest parsing job in the
    project. [opus]

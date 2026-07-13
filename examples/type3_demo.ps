@@ -1,0 +1,173 @@
+%!PS-Adobe-3.0
+%% type3_demo.ps — three procedural Type 3 fonts on one 500x500 page.
+%% Every glyph is a PostScript procedure executed at show time:
+%%
+%%   CellFont  — dynamic generation: the glyph *is* the character code,
+%%               rendered as its 8 bits in a 2x4 grid. No two letters
+%%               share a shape, and nobody drew any of them.
+%%   GearFont  — parametric: digits render as gears whose tooth count
+%%               is the digit itself (0 gets ten teeth).
+%%   SprigFont — BuildGlyph dingbats: named vector doodles (/leaf /bud
+%%               /berry) reachable through a custom Encoding.
+%%
+%% Deterministic throughout, so it renders identically in Ghostscript.
+%%
+%% Caching lesson learned the hard way: real interpreters cache
+%% setcachedevice glyphs by their *encoded name*, so a font whose
+%% Encoding maps many codes to one name renders them all as the first
+%% one cached. CellFont/GearFont therefore use StandardEncoding (one
+%% name per code) even though BuildChar only looks at the code. Fonts
+%% that genuinely want a fresh glyph per occurrence must use
+%% setcharwidth, which is defined as uncacheable — see
+%% type3_ransom.ps for that.
+
+% ---------------------------------------------------------------------
+% CellFont: 8 bits of the char code in a 2-wide, 4-tall grid.
+% Glyph space is 1000 units; each cell is 220 with a 30 gutter.
+/CellFont 6 dict def
+CellFont begin
+  /FontType 3 def
+  /FontMatrix [0.001 0 0 0.001 0 0] def
+  /FontBBox [0 0 800 1000] def
+  % StandardEncoding: distinct names per code, so cache-keyed
+  % interpreters render each character separately (see header).
+  /Encoding StandardEncoding def
+  /BuildChar {          % font code BuildChar -
+    exch pop            % keep the code: the glyph IS the code
+    600 0 0 0 550 1000 setcachedevice
+    /code exch def
+    0 1 7 {
+      /bit exch def
+      code 1 bit bitshift and 0 ne {
+        /col bit 2 mod def
+        /row bit 2 idiv def
+        col 280 mul 30 add   row 240 mul 30 add
+        moveto
+        220 0 rlineto 0 200 rlineto -220 0 rlineto closepath fill
+      } if
+    } for
+  } def
+end
+/CellFont CellFont definefont pop
+
+% ---------------------------------------------------------------------
+% GearFont: '0'-'9' are gears; tooth count = digit value (0 -> 10).
+/GearFont 6 dict def
+GearFont begin
+  /FontType 3 def
+  /FontMatrix [0.001 0 0 0.001 0 0] def
+  /FontBBox [0 0 1000 1000] def
+  /Encoding StandardEncoding def   % distinct names: one cache slot per digit
+  /BuildChar {          % font code BuildChar -
+    exch pop
+    1050 0 0 0 1000 1000 setcachedevice
+    /teeth exch 48 sub dup 0 eq { pop 10 } if def
+    /step 360 teeth div def
+    % rim with teeth: alternate outer/inner radius around the circle
+    500 450 translate
+    0 1 teeth 1 sub {
+      /i exch def
+      /a i step mul def
+      a       cos 400 mul  a       sin 400 mul  i 0 eq {moveto} {lineto} ifelse
+      a step 0.25 mul add cos 400 mul  a step 0.25 mul add sin 400 mul lineto
+      a step 0.40 mul add cos 300 mul  a step 0.40 mul add sin 300 mul lineto
+      a step 0.85 mul add cos 300 mul  a step 0.85 mul add sin 300 mul lineto
+      a step add cos 400 mul  a step add sin 400 mul lineto
+    } for
+    closepath
+    % axle hole, even-odd so it punches through
+    120 0 moveto 0 0 120 0 360 arc closepath
+    eofill
+  } def
+end
+/GearFont GearFont definefont pop
+
+% ---------------------------------------------------------------------
+% SprigFont: BuildGlyph dingbats selected by *name* through Encoding.
+/SprigFont 6 dict def
+SprigFont begin
+  /FontType 3 def
+  /FontMatrix [0.001 0 0 0.001 0 0] def
+  /FontBBox [0 0 1000 1000] def
+  /Encoding 256 array def
+  0 1 255 { Encoding exch /.notdef put } for
+  Encoding 108 /leaf  put   % l
+  Encoding 98  /bud   put   % b
+  Encoding 111 /berry put   % o
+  /BuildGlyph {         % font name BuildGlyph -
+    exch pop
+    900 0 0 0 900 900 setcachedevice
+    dup /leaf eq {
+      % a leaf: two curves mirrored across the diagonal, plus a midrib
+      100 100 moveto
+      100 560 340 800 800 800 curveto
+      800 340 560 100 100 100 curveto
+      closepath fill
+      40 setlinewidth 160 160 moveto 720 720 lineto stroke
+    } if
+    dup /bud eq {
+      450 100 moveto 450 750 lineto 60 setlinewidth stroke
+      450 720 180 0 360 arc closepath fill
+    } if
+    /berry eq {
+      300 300 170 0 360 arc closepath fill
+      620 550 120 0 360 arc closepath fill
+      250 680  90 0 360 arc closepath fill
+    } if
+  } def
+end
+/SprigFont SprigFont definefont pop
+
+% ---------------------------------------------------------------------
+% The page.
+/Helvetica-Bold findfont 26 scalefont setfont
+40 448 moveto (Type 3: glyphs are programs) show
+/Helvetica findfont 12 scalefont setfont
+40 428 moveto (every shape below is a BuildChar or BuildGlyph procedure) show
+
+% CellFont: the same string twice, as text and as its own bit portrait
+/Helvetica findfont 13 scalefont setfont
+40 385 moveto (\(PSCAT\) as its own bits:) show
+/CellFont findfont 34 scalefont setfont
+0.15 0.25 0.75 setrgbcolor
+215 372 moveto (PSCAT) show
+0 setgray
+
+% GearFont: a number typeset as machinery
+/Helvetica findfont 13 scalefont setfont
+40 320 moveto (365204 in gears \(teeth = digit\):) show
+/GearFont findfont 52 scalefont setfont
+0.35 setgray
+55 252 moveto (365204) show
+0 setgray
+
+% SprigFont: dingbats by name, mixed sizes on one baseline
+/Helvetica findfont 13 scalefont setfont
+40 205 moveto (a sprig border, from three named glyphs:) show
+0.10 0.45 0.20 setrgbcolor
+/SprigFont findfont 30 scalefont setfont
+44 160 moveto (lobl oblo blob) show
+/SprigFont findfont 48 scalefont setfont
+44 100 moveto (lob) show
+/SprigFont findfont 18 scalefont setfont
+260 110 moveto (looobbbolll) show
+0 setgray
+
+% and the engine test: Type 3 through the full pipeline — rotated,
+% scaled anisotropically via makefont, and measured by stringwidth
+gsave
+  360 60 translate 25 rotate
+  /CellFont findfont [40 0 0 22 0 0] makefont setfont
+  0.75 0.20 0.15 setrgbcolor
+  0 0 moveto (ok!) show
+grestore
+/Helvetica findfont 10 scalefont setfont
+40 40 moveto
+(stringwidth of the gear line: ) show
+/GearFont findfont 52 scalefont setfont
+(365204) stringwidth pop
+10 mul round 10 div    % one decimal, so the digits render identically everywhere
+/Helvetica findfont 10 scalefont setfont
+20 string cvs show ( pt) show
+
+showpage

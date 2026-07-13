@@ -126,4 +126,8 @@ fn examples_match_ghostscript() {
     }
     // Text compares with the wider ink bands (see assert_close).
     assert_close("specimen.ps", true);
+    // Type 3 glyphs are pure PostScript geometry — deterministic in
+    // both interpreters (the ransom demo, which uses rand, stays out:
+    // rand is implementation-specific).
+    assert_close("type3_demo.ps", true);
 }

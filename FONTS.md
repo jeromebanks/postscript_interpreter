@@ -151,21 +151,42 @@ no separate stroke-path form worth distinguishing; documented.)
   `ISOLatin1Encoding` systemdict arrays. (`selectfont` is Level 2 but
   ubiquitous in found files and one line here.)
 
-## Decision 6 — the execution-machine touchpoint is deferred, on purpose
+## Decision 6 — the show family is an execution-stack frame
 
-`show` for outline fonts is **synchronous**: it pops its operands,
-paints, and returns like any other operator. No new frame types.
+*(Task 5 implemented this; tasks 2–4 originally shipped `show` as a
+synchronous operator, which the frame subsumed.)*
 
-Two future features genuinely need `show` to *interleave with the
-machine*: **Type 3 fonts** (each glyph runs a `BuildChar` procedure)
-and **`kshow`** (runs a procedure between each glyph pair). Those get a
-`ShowFrame` on the execution stack — the `Frame::Forall` pattern,
-yielding control to a procedure per glyph and resuming — when Stage 6
-task 5 lands. That is the known [opus] exec-stack change of this
-stage; nothing in tasks 2–4 pre-builds for it beyond keeping the
-per-glyph paint step (`paint_glyph(name)`) a separable function a
-frame can call one glyph at a time. `kshow` ships with that task, not
-before.
+Every show variant (`show` family, `stringwidth`, `charpath`, `kshow`)
+pushes a **`Frame::Show`** onto the execution stack and returns; the
+machine then processes **one glyph per step**:
+
+- **Outline glyphs** paint synchronously within a step (the per-glyph
+  engine from tasks 2–3, unchanged).
+- **Type 3 glyphs** open a *sealed glyph context* — a full
+  graphics-state snapshot plus gsave-stack watermark, the CTM set to
+  glyph space at the pen, a fresh path — and yield to the font's
+  `BuildGlyph` (preferred, gets the encoded name) or `BuildChar` (gets
+  the code) as an ordinary procedure frame. When it finishes, the
+  context is restored no matter what the procedure did to the graphics
+  state, and the pen advances by the `setcachedevice`/`setcharwidth`
+  width through FontMatrix and CTM. Unwinding (`stop`, an uncaught
+  error) seals open contexts too; `exit` can't cross a show
+  (`invalidexit`).
+- **`kshow`** yields to its proc between character pairs with both
+  codes pushed; the pen is re-read from the current point afterwards,
+  so the proc can kern (that's the point) — or even change the font.
+
+Why frames make everything easy: the frame runs to completion *before
+the token after the operator*, so `stringwidth` pushing its results at
+frame-pop preserves program order exactly; nested shows inside
+BuildChar are just frames above frames; and the live window gets
+glyph-by-glyph rendering for free.
+
+`stringwidth`/`charpath` on Type 3 fonts execute the glyph procedure
+with **painting suppressed** (a counter on `Gfx`, since shows nest) —
+that's where a Type 3 width comes from, per the PLRM. `charpath` on
+Type 3 advances without contributing outlines (capturing BuildChar's
+paints as paths is not attempted; documented deviation).
 
 ## What "done" looks like for tasks 2–4
 
@@ -183,12 +204,15 @@ before.
 
 ## Deferred, explicitly
 
-- **Type 3** (task 5) and **Type 1** (task 6) — see Decision 6; Type 1
-  additionally waits on `eexec`/charstring parsing (Stage 7's file
-  machinery helps).
+- **Type 1** (task 6) — waits on `eexec`/charstring parsing (Stage 7's
+  file machinery helps).
 - **Glyph cache** (task 7) — measure first; the re-parse-per-show
-  choice above is the thing it would obsolete.
-- **`kshow`**, **`cshow`** — need the ShowFrame.
+  choice above is the thing it would obsolete. For Type 3, a cache
+  keyed on (font, size, glyph) is what would make `setcachedevice`'s
+  bbox meaningful.
+- **`cshow`** — trivial atop the ShowFrame now; take it with Type 0
+  work if ever.
+- **`charpath` capturing Type 3 outlines** — see Decision 6.
 - **FontID as a distinct object type** — see Decision 2.
 - **Symbol** — substituted, not mapped; revisit with Type 1.
 - **`rootfont`/composite (Type 0) fonts, CID fonts** — Level 2/3

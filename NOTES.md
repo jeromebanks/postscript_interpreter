@@ -3,6 +3,50 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 6, task 5 — Type 3 fonts and kshow (2026-07-13)
+
+**Built** (the stage's [opus] exec-stack piece; design in `FONTS.md`
+Decision 6, rewritten to match):
+- **`Frame::Show`**: the entire show family (`show ashow widthshow
+  awidthshow kshow stringwidth charpath`) now queues a frame and lets
+  the machine process one glyph per step. Frame ordering is program
+  ordering, so `stringwidth` pushing its result at frame-pop, nested
+  shows inside BuildChar, and glyph-by-glyph live-window rendering all
+  fall out for free. Outline glyphs still paint synchronously within
+  their step.
+- **Type 3 glyph contexts**: `BuildGlyph` (preferred, receives the
+  encoded name) or `BuildChar` (receives the code) runs inside a
+  sealed context — graphics-state snapshot + gsave watermark, CTM set
+  to glyph space at the pen, fresh path — restored regardless of what
+  the procedure does (unbalanced gsave included). `setcachedevice`,
+  `setcachedevice2`, and `setcharwidth` record the width, which
+  advances the pen through FontMatrix∘CTM. Unwinding (`stop`, uncaught
+  errors, program abort) seals open contexts; `exit` across a show is
+  `invalidexit`.
+- **Metrics execute glyph procedures**: `stringwidth`/`charpath` on
+  Type 3 run BuildChar with painting suppressed (a nestable counter on
+  `Gfx`) — per the PLRM, that's where the width comes from.
+- **`kshow`**: proc runs between character pairs with both codes
+  pushed; the pen re-reads the current point after, so procs can kern
+  or even swap fonts mid-string.
+- **Demos**: `examples/type3_demo.ps` (deterministic, in the golden
+  suite: bit-pattern CellFont, parametric GearFont, BuildGlyph
+  SprigFont dingbats) and `examples/type3_ransom.ps` (dynamic
+  generation: every glyph invented at show time — random face, size,
+  tilt, paper scrap — via nested show inside BuildChar; deterministic
+  per run, not gs-comparable since rand differs).
+- **Tests**: 15 in `tests/type3.rs` — advances and kshow displacement
+  pinned against Ghostscript, context sealing, catchable BuildChar
+  errors, nesting, suppressed stringwidth, charpath-on-Type-3.
+
+**Tradeoffs / deviations:** `charpath` on Type 3 advances without
+capturing outlines; `setcachedevice`'s bbox is recorded nowhere (no
+glyph cache yet — task 7); color restrictions on setcachedevice glyphs
+are not enforced (lenient superset). `cshow` still absent (trivial
+now; with Type 0 work if ever).
+
+**Next:** Stage 6 task 6 (Type 1 parsing) and task 7 (glyph cache).
+
 ## Stage 6, tasks 1–4 — text and base fonts (2026-07-13)
 
 **Built** (per `ROADMAP.md` Stage 6; tasks 5–7 remain open):

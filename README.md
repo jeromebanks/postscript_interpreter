@@ -7,20 +7,29 @@ time.
 
 ## Status
 
-**Stage 6 text and fonts: the core is in.** `(Hello, LaserWriter) show`
-works — `findfont`/`scalefont`/`makefont`/`setfont`/`selectfont`/
-`definefont`, the `show` family (`ashow`/`widthshow`/`awidthshow`),
-`stringwidth`, and `charpath` (text as geometry: outline, clip, measure).
-The standard base fonts (Helvetica, Times, Courier families) are backed
-by bundled Liberation faces — metrically compatible with the Adobe
-originals, so layout agrees with Ghostscript — and glyphs render through
-the same path pipeline as everything else: scaled, rotated, sheared,
-clipped, and colored like any fill. `StandardEncoding`/
-`ISOLatin1Encoding` and the PLRM re-encoding idiom work (Encoding is
-read live from the font dict). `examples/specimen.ps` is the type-
-specimen demo, golden-tested against Ghostscript. Design writeup:
-`FONTS.md`. Still open in Stage 6: Type 3 (`BuildChar`) and Type 1
-fonts, `kshow`, and the glyph cache.
+**Stage 6 text and fonts: the core is in, Type 3 included.**
+`(Hello, LaserWriter) show` works — `findfont`/`scalefont`/`makefont`/
+`setfont`/`selectfont`/`definefont`, the full `show` family (`ashow`/
+`widthshow`/`awidthshow`/`kshow`), `stringwidth`, and `charpath` (text
+as geometry: outline, clip, measure). The standard base fonts
+(Helvetica, Times, Courier families) are backed by bundled Liberation
+faces — metrically compatible with the Adobe originals, so layout
+agrees with Ghostscript — and glyphs render through the same path
+pipeline as everything else: scaled, rotated, sheared, clipped, and
+colored like any fill. `StandardEncoding`/`ISOLatin1Encoding` and the
+PLRM re-encoding idiom work (Encoding is read live from the font dict).
+
+**Type 3 fonts — glyphs that are programs — run for real:** `BuildChar`
+/`BuildGlyph` procedures execute on the machine inside sealed glyph
+contexts, `setcachedevice`/`setcharwidth` drive metrics, and
+`stringwidth` executes glyph procedures with painting suppressed, per
+the PLRM. See `examples/type3_demo.ps` (procedural bit-glyphs, gears,
+dingbats — golden-tested against Ghostscript) and
+`examples/type3_ransom.ps`, where every glyph is invented fresh at
+show time — no two occurrences of a letter alike.
+`examples/specimen.ps` is the base-font type-specimen demo. Design
+writeup: `FONTS.md`. Still open in Stage 6: Type 1 fonts and the
+glyph cache.
 
 **Stage 5 (run found PostScript) complete.** Beyond drawing live, pscat
 now executes the idioms real-world `.ps` files depend on: arrays and
