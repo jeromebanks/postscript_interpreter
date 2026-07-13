@@ -25,6 +25,8 @@ pub enum PsError {
     InvalidExit,
     #[error("dictstackunderflow")]
     DictStackUnderflow,
+    #[error("invalidfont")]
+    InvalidFont,
     #[error("syntaxerror: {0}")]
     Syntax(String),
     #[error("limitcheck")]
@@ -48,6 +50,7 @@ impl PsError {
             PsError::NoCurrentPoint => "nocurrentpoint",
             PsError::InvalidExit => "invalidexit",
             PsError::DictStackUnderflow => "dictstackunderflow",
+            PsError::InvalidFont => "invalidfont",
             PsError::Syntax(_) => "syntaxerror",
             PsError::Limitcheck => "limitcheck",
             PsError::Io => "ioerror",

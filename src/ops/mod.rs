@@ -6,6 +6,7 @@ pub mod control;
 pub mod convert;
 pub mod data;
 pub mod dict;
+pub mod font;
 pub mod graphics;
 pub mod logic;
 pub mod matrix;
@@ -32,6 +33,7 @@ pub fn install_all(dict: &mut Dict) {
     // matrix installs after graphics: its translate/scale/rotate
     // dispatchers (matrix-operand aware) replace the plain CTM forms.
     matrix::install(dict);
+    font::install(dict);
     logic::install(dict);
     misc::install(dict);
 

@@ -18,6 +18,7 @@
 use tiny_skia::{FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
 use crate::error::PsError;
+use crate::font::FontState;
 
 /// US Letter in points — the default page when none is specified.
 pub const DEFAULT_PAGE: (u32, u32) = (612, 792);
@@ -54,13 +55,13 @@ impl PsPath {
         self.current
     }
 
-    fn move_to(&mut self, p: DevPoint) {
+    pub(crate) fn move_to(&mut self, p: DevPoint) {
         self.segs.push(Seg::Move(p));
         self.current = Some(p);
         self.subpath_start = Some(p);
     }
 
-    fn line_to(&mut self, p: DevPoint) {
+    pub(crate) fn line_to(&mut self, p: DevPoint) {
         self.segs.push(Seg::Line(p));
         self.current = Some(p);
     }
@@ -79,12 +80,24 @@ impl PsPath {
         out
     }
 
-    fn curve_to(&mut self, c1: DevPoint, c2: DevPoint, p: DevPoint) {
+    pub(crate) fn curve_to(&mut self, c1: DevPoint, c2: DevPoint, p: DevPoint) {
         self.segs.push(Seg::Curve(c1, c2, p));
         self.current = Some(p);
     }
 
-    fn close(&mut self) {
+    /// Append another path's segments (charpath splicing glyph outlines
+    /// into the current path).
+    pub(crate) fn extend_from(&mut self, other: &PsPath) {
+        self.segs.extend(other.segs.iter().cloned());
+        if other.current.is_some() {
+            self.current = other.current;
+        }
+        if other.subpath_start.is_some() {
+            self.subpath_start = other.subpath_start;
+        }
+    }
+
+    pub(crate) fn close(&mut self) {
         // closepath on an empty path is a legal no-op in PostScript.
         if let Some(start) = self.subpath_start {
             self.segs.push(Seg::Close);
@@ -120,6 +133,10 @@ pub struct GraphicsState {
     pub miter_limit: f32,
     /// Dash pattern and phase, in user-space units; empty pattern = solid.
     pub dash: Option<(Vec<f64>, f64)>,
+    /// The current font, set by `setfont`; snapshotted here so gsave/
+    /// grestore roll it back like everything else. None until the first
+    /// setfont — `show` then reports invalidfont, per the PLRM.
+    pub font: Option<FontState>,
     pub path: PsPath,
     /// Current clip: an alpha mask (intersection of all active clips) and
     /// the most recent clip path, which `clippath` hands back.
@@ -164,6 +181,7 @@ impl Gfx {
                 line_join: LineJoin::Miter,
                 miter_limit: 10.0,
                 dash: None,
+                font: None,
                 path: PsPath::default(),
                 clip: None,
             },
@@ -492,6 +510,47 @@ impl Gfx {
             Some((p, ph)) => (p.clone(), *ph),
             None => (Vec::new(), 0.0),
         }
+    }
+
+    // --- text -------------------------------------------------------------
+
+    pub fn set_font(&mut self, f: FontState) {
+        self.state.font = Some(f);
+    }
+
+    /// The raw device-space current point — the show engine works in
+    /// device space throughout (see `src/font.rs`).
+    pub(crate) fn device_current_point(&self) -> Option<DevPoint> {
+        self.state.path.current()
+    }
+
+    /// Advance the current point without touching the rest of the path —
+    /// how `show` leaves the pen after the last glyph.
+    pub(crate) fn move_to_device(&mut self, p: DevPoint) {
+        self.state.path.move_to(p);
+    }
+
+    /// Fill a free-standing path (a glyph outline) with the current
+    /// paint and clip, leaving the current path alone. TrueType outlines
+    /// are wound for nonzero filling.
+    pub(crate) fn fill_path_direct(&mut self, path: &PsPath) {
+        if let Some(p) = path.to_skia() {
+            let paint = self.paint();
+            let mask = self.clip_mask();
+            self.pixmap.fill_path(
+                &p,
+                &paint,
+                FillRule::Winding,
+                Transform::identity(),
+                mask.as_deref(),
+            );
+            self.dirty = true;
+        }
+    }
+
+    /// Splice a glyph outline into the current path (`charpath`).
+    pub(crate) fn append_path(&mut self, path: &PsPath) {
+        self.state.path.extend_from(path);
     }
 
     // --- clipping ---------------------------------------------------------
