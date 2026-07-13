@@ -16,6 +16,28 @@ pub fn install(dict: &mut Dict) {
     op(dict, "print", print_string);
     op(dict, "quit", quit);
     op(dict, "handleerror", handleerror);
+    // Access-control attributes are not modeled (nothing enforces
+    // them), but the operators must exist as identities: every real
+    // Type 1 font says `executeonly`/`noaccess` on its way in.
+    op(dict, "executeonly", access_noop);
+    op(dict, "readonly", access_noop);
+    op(dict, "noaccess", access_noop);
+    op(dict, "rcheck", access_check);
+    op(dict, "wcheck", access_check);
+}
+
+fn access_noop(it: &mut Interp) -> Result<(), PsError> {
+    // operand ... operand: identity, but stackunderflow still applies.
+    let obj = it.pop()?;
+    it.push(obj);
+    Ok(())
+}
+
+/// Everything reads/writes as permitted here; report true.
+fn access_check(it: &mut Interp) -> Result<(), PsError> {
+    it.pop()?;
+    it.push(Object::bool(true));
+    Ok(())
 }
 
 /// The default error reporter: prints from $error the way the CLI does,

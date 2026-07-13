@@ -18,7 +18,7 @@ use ttf_parser::{Face, GlyphId};
 use crate::encodings;
 use crate::error::PsError;
 use crate::gfx::{DevPoint, Gfx, PsPath};
-use crate::object::{Dict, Object, Value};
+use crate::object::{Dict, Object, PsString, Value};
 
 /// `FID` value for fonts with no outline source we can drive yet
 /// (Type 3 dicts accepted by `definefont`); `show` reports invalidfont.
@@ -369,6 +369,101 @@ fn outline_glyph(
     Ok((g[0] * w, g[1] * w))
 }
 
+/// One Type 1 glyph: decrypt the charstring, interpret it (hints
+/// ignored, flex as curves — see `src/type1.rs`), and run the outline
+/// through the same FontMatrix∘CTM pipeline as every other glyph
+/// source. Charspace units go through FontMatrix directly (no em
+/// normalization — the font's own 0.001 matrix is the convention).
+fn type1_glyph(
+    gfx: &mut Gfx,
+    fs: &FontState,
+    byte: u8,
+    mode: &ShowMode,
+    pen: DevPoint,
+) -> Result<(f64, f64), PsError> {
+    let name = encoding_name(fs, byte);
+    let (charstrings, len_iv, subr_strings) = {
+        let d = fs.dict.borrow();
+        let cs = match d.get("CharStrings").as_ref().map(|o| &o.value) {
+            Some(Value::Dict(cs)) => cs.clone(),
+            _ => return Err(PsError::InvalidFont),
+        };
+        let mut len_iv = 4usize;
+        let mut subr_strings: Vec<crate::object::PsString> = Vec::new();
+        if let Some(Value::Dict(private)) = d.get("Private").as_ref().map(|o| &o.value) {
+            let p = private.borrow();
+            if let Some(Value::Integer(n)) = p.get("lenIV").as_ref().map(|o| &o.value) {
+                len_iv = usize::try_from(*n).unwrap_or(4);
+            }
+            if let Some(Value::Array(a)) = p.get("Subrs").as_ref().map(|o| &o.value) {
+                for i in 0..a.len() {
+                    if let Some(Value::String(s)) = a.get(i).as_ref().map(|o| &o.value) {
+                        subr_strings.push(s.clone());
+                    } else {
+                        subr_strings.push(PsString::from_bytes(Vec::new()));
+                    }
+                }
+            }
+        }
+        (cs, len_iv, subr_strings)
+    };
+    let fetch = |n: &str| -> Option<Vec<u8>> {
+        match charstrings.borrow().get(n).as_ref().map(|o| &o.value) {
+            Some(Value::String(s)) => Some(crate::file::decrypt_charstring(&s.to_vec(), len_iv)),
+            _ => None,
+        }
+    };
+    let Some(code) = fetch(&name).or_else(|| fetch(".notdef")) else {
+        return Ok((0.0, 0.0));
+    };
+    let subrs: Vec<Vec<u8>> = subr_strings
+        .iter()
+        .map(|s| crate::file::decrypt_charstring(&s.to_vec(), len_iv))
+        .collect();
+    let glyph = crate::type1::run(
+        &code,
+        &crate::type1::FontData {
+            subrs: &subrs,
+            charstring_by_name: &fetch,
+        },
+    )?;
+
+    let fm = fs.matrix;
+    if !matches!(mode, ShowMode::Width) {
+        let ctm = gfx.ctm();
+        let (c00, c01) = (f64::from(ctm.sx), f64::from(ctm.kx));
+        let (c10, c11) = (f64::from(ctm.ky), f64::from(ctm.sy));
+        let fm_off = ctm_lin(gfx, (fm[4], fm[5]));
+        let m = GlyphTransform {
+            a: c00 * fm[0] + c01 * fm[1],
+            b: c10 * fm[0] + c11 * fm[1],
+            c: c00 * fm[2] + c01 * fm[3],
+            d: c10 * fm[2] + c11 * fm[3],
+            tx: f64::from(pen.x) + fm_off.0,
+            ty: f64::from(pen.y) + fm_off.1,
+        };
+        let mut path = PsPath::default();
+        for cmd in &glyph.cmds {
+            match *cmd {
+                crate::type1::Cmd::Move(x, y) => path.move_to(m.apply(x, y)),
+                crate::type1::Cmd::Line(x, y) => path.line_to(m.apply(x, y)),
+                crate::type1::Cmd::Curve(x1, y1, x2, y2, x, y) => {
+                    path.curve_to(m.apply(x1, y1), m.apply(x2, y2), m.apply(x, y));
+                }
+                crate::type1::Cmd::Close => path.close(),
+            }
+        }
+        if !path.is_empty() {
+            match mode {
+                ShowMode::Paint => gfx.fill_path_direct(&path),
+                ShowMode::Charpath => gfx.append_path(&path),
+                ShowMode::Width => unreachable!("checked above"),
+            }
+        }
+    }
+    Ok((fm[0] * glyph.width, fm[1] * glyph.width))
+}
+
 /// A Type 3 glyph whose BuildChar/BuildGlyph procedure is currently
 /// executing on the machine. Holds everything needed to seal the glyph
 /// context back up, however the procedure exits.
@@ -508,7 +603,24 @@ impl ShowCtx {
             }
             Ok(ShowStep::Again)
         } else {
-            self.begin_type3_glyph(gfx, fs, byte)
+            // No registry entry: a procedural font. Type 3 glyph
+            // procedures win; otherwise Type 1 CharStrings render
+            // synchronously like outlines.
+            let is_type3 = {
+                let d = fs.dict.borrow();
+                d.get("BuildGlyph").is_some() || d.get("BuildChar").is_some()
+            };
+            if is_type3 {
+                self.begin_type3_glyph(gfx, fs, byte)
+            } else {
+                let adv = type1_glyph(gfx, &fs, byte, &self.mode, self.pen)?;
+                self.idx += 1;
+                self.advance(gfx, byte, adv);
+                if let Some(step) = self.maybe_kshow() {
+                    return Ok(step);
+                }
+                Ok(ShowStep::Again)
+            }
         }
     }
 

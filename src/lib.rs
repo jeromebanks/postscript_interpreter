@@ -12,6 +12,7 @@ pub mod interp;
 pub mod lexer;
 pub mod object;
 pub mod ops;
+pub(crate) mod type1;
 pub mod window;
 
 pub use error::PsError;

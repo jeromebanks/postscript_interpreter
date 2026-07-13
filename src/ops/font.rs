@@ -116,10 +116,12 @@ fn definefont(it: &mut Interp) -> Result<(), PsError> {
             Some(Value::Integer(t)) => Some(*t),
             _ => None,
         };
-        // Type 3 dicts have no outline registry entry — their glyphs
-        // are BuildChar/BuildGlyph procedures the show frame executes;
-        // anything else gets the substitute face so it still renders.
-        let fid = if font_type == Some(3) {
+        // Procedural fonts have no outline registry entry: Type 3
+        // glyphs are BuildChar/BuildGlyph procedures, Type 1 glyphs
+        // are CharStrings — both rendered by the show machinery.
+        // Anything else gets the substitute face so it still renders.
+        let has_charstrings = d.borrow().get("CharStrings").is_some();
+        let fid = if font_type == Some(3) || has_charstrings {
             font::FID_NONE
         } else {
             font::SUBSTITUTE
