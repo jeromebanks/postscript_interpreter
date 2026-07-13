@@ -276,47 +276,21 @@ fn resolve_glyph(face: &Face, name: &str) -> Option<GlyphId> {
         .or_else(|| encodings::name_to_char(name).and_then(|c| face.glyph_index(c)))
 }
 
-/// The engine behind the `show` family. Walks `text` byte by byte
-/// through the current font's live Encoding, painting/appending/
-/// measuring per `mode`. Returns the total advance in user space
-/// (what `stringwidth` reports).
-pub(crate) fn run_show(
-    gfx: &mut Gfx,
-    text: &[u8],
-    params: &ShowParams,
-    mode: ShowMode,
-) -> Result<(f64, f64), PsError> {
-    let fs = gfx.state().font.clone().ok_or(PsError::InvalidFont)?;
-    if fs.fid < 0 {
-        // A definefont'd dict with no outline source (e.g. Type 3 until
-        // that task lands).
-        return Err(PsError::InvalidFont);
-    }
-    let face = face_for(fs.fid)?;
-    let k = 1000.0 / f64::from(face.units_per_em());
-    let fm = fs.matrix;
+/// CTM linear part in f64 (tiny-skia rows: sx ky kx sy tx ty), applied
+/// to a user-space distance.
+fn ctm_lin(gfx: &Gfx, (x, y): (f64, f64)) -> (f64, f64) {
+    let m = gfx.ctm();
+    (
+        f64::from(m.sx) * x + f64::from(m.kx) * y,
+        f64::from(m.ky) * x + f64::from(m.sy) * y,
+    )
+}
 
-    // CTM linear part in f64 (tiny-skia rows: sx ky kx sy tx ty).
-    let ctm = gfx.ctm();
-    let (c00, c01) = (f64::from(ctm.sx), f64::from(ctm.kx));
-    let (c10, c11) = (f64::from(ctm.ky), f64::from(ctm.sy));
-    let ctm_lin = |x: f64, y: f64| (c00 * x + c01 * y, c10 * x + c11 * y);
-
-    // Pen position in device space. Width mode needs no current point,
-    // per the PLRM (stringwidth is pure metrics).
-    let mut pen = match mode {
-        ShowMode::Width => DevPoint { x: 0.0, y: 0.0 },
-        _ => gfx.device_current_point().ok_or(PsError::NoCurrentPoint)?,
-    };
-
-    // Glyph-space → user-space linear part (FontMatrix over 1000-unit
-    // glyph space, with the em normalization folded in) …
-    let g = [fm[0] * k, fm[1] * k, fm[2] * k, fm[3] * k];
-    // … and the FontMatrix translation, a per-glyph user-space offset.
-    let fm_off = ctm_lin(fm[4], fm[5]);
-
-    // The Encoding array is read live from the font dict; a font dict
-    // without one (hand-built) falls back to StandardEncoding.
+/// The Encoding lookup, read live from the font dict per the FONTS.md
+/// set-time-semantics decision; a font dict without an Encoding
+/// (hand-built) falls back to StandardEncoding. Out-of-range or
+/// non-name entries behave as .notdef.
+fn encoding_name(fs: &FontState, byte: u8) -> Rc<str> {
     let enc = fs
         .dict
         .borrow()
@@ -325,72 +299,314 @@ pub(crate) fn run_show(
             Value::Array(a) => Some(a.clone()),
             _ => None,
         });
-    let std_names = encodings::standard_encoding();
+    match &enc {
+        Some(a) => match a.get(usize::from(byte)).as_ref().map(|o| &o.value) {
+            Some(Value::Name(n)) => n.clone(),
+            _ => ".notdef".into(),
+        },
+        None => encodings::standard_encoding()[usize::from(byte)].into(),
+    }
+}
 
-    let mut total = (0.0f64, 0.0f64);
-    for &byte in text {
-        let name: Rc<str> = match &enc {
-            Some(a) => match a.get(usize::from(byte)).as_ref().map(|o| &o.value) {
-                Some(Value::Name(n)) => n.clone(),
-                // Out-of-range or non-name entries behave as .notdef.
-                _ => ".notdef".into(),
-            },
-            None => std_names[usize::from(byte)].into(),
+/// One outline-font glyph: paint/append/measure at `pen`, returning the
+/// raw user-space advance (before per-show extras).
+fn outline_glyph(
+    gfx: &mut Gfx,
+    fs: &FontState,
+    byte: u8,
+    mode: &ShowMode,
+    pen: DevPoint,
+) -> Result<(f64, f64), PsError> {
+    let face = face_for(fs.fid)?;
+    let k = 1000.0 / f64::from(face.units_per_em());
+    let fm = fs.matrix;
+    // Glyph-space → user-space linear part (FontMatrix over 1000-unit
+    // glyph space, with the em normalization folded in).
+    let g = [fm[0] * k, fm[1] * k, fm[2] * k, fm[3] * k];
+
+    let name = encoding_name(fs, byte);
+    let gid = resolve_glyph(&face, &name);
+
+    if let Some(gid) = gid
+        && !matches!(mode, ShowMode::Width)
+    {
+        let ctm = gfx.ctm();
+        let (c00, c01) = (f64::from(ctm.sx), f64::from(ctm.kx));
+        let (c10, c11) = (f64::from(ctm.ky), f64::from(ctm.sy));
+        // The FontMatrix translation is a per-glyph user-space offset.
+        let fm_off = ctm_lin(gfx, (fm[4], fm[5]));
+        let m = GlyphTransform {
+            a: c00 * g[0] + c01 * g[1],
+            b: c10 * g[0] + c11 * g[1],
+            c: c00 * g[2] + c01 * g[3],
+            d: c10 * g[2] + c11 * g[3],
+            tx: f64::from(pen.x) + fm_off.0,
+            ty: f64::from(pen.y) + fm_off.1,
         };
-        let gid = resolve_glyph(&face, &name);
-
-        if let Some(gid) = gid
-            && !matches!(mode, ShowMode::Width)
-        {
-            let m = GlyphTransform {
-                a: c00 * g[0] + c01 * g[1],
-                b: c10 * g[0] + c11 * g[1],
-                c: c00 * g[2] + c01 * g[3],
-                d: c10 * g[2] + c11 * g[3],
-                tx: f64::from(pen.x) + fm_off.0,
-                ty: f64::from(pen.y) + fm_off.1,
-            };
-            let mut sink = PathSink {
-                path: PsPath::default(),
-                m,
-                cur: (0.0, 0.0),
-            };
-            face.outline_glyph(gid, &mut sink);
-            if !sink.path.is_empty() {
-                match mode {
-                    ShowMode::Paint => gfx.fill_path_direct(&sink.path),
-                    ShowMode::Charpath => gfx.append_path(&sink.path),
-                    ShowMode::Width => unreachable!("checked above"),
-                }
+        let mut sink = PathSink {
+            path: PsPath::default(),
+            m,
+            cur: (0.0, 0.0),
+        };
+        face.outline_glyph(gid, &mut sink);
+        if !sink.path.is_empty() {
+            match mode {
+                ShowMode::Paint => gfx.fill_path_direct(&sink.path),
+                ShowMode::Charpath => gfx.append_path(&sink.path),
+                ShowMode::Width => unreachable!("checked above"),
             }
         }
+    }
 
-        // Missing glyphs still advance — by .notdef's width, like a real
-        // interpreter showing an unencoded character. Width is in raw
-        // glyph units; `g` below already carries the em normalization.
-        let w = f64::from(
-            gid.and_then(|g| face.glyph_hor_advance(g))
-                .or_else(|| face.glyph_hor_advance(GlyphId(0)))
-                .unwrap_or(0),
-        );
-        let mut adv = (g[0] * w, g[1] * w);
-        adv.0 += params.extra.0;
-        adv.1 += params.extra.1;
-        if let Some((ch, (cx, cy))) = params.char_extra
+    // Missing glyphs still advance — by .notdef's width, like a real
+    // interpreter showing an unencoded character. Width is in raw glyph
+    // units; `g` already carries the em normalization.
+    let w = f64::from(
+        gid.and_then(|g| face.glyph_hor_advance(g))
+            .or_else(|| face.glyph_hor_advance(GlyphId(0)))
+            .unwrap_or(0),
+    );
+    Ok((g[0] * w, g[1] * w))
+}
+
+/// A Type 3 glyph whose BuildChar/BuildGlyph procedure is currently
+/// executing on the machine. Holds everything needed to seal the glyph
+/// context back up, however the procedure exits.
+pub(crate) struct PendingGlyph {
+    byte: u8,
+    /// Glyph-space width from setcachedevice/setcharwidth; a BuildChar
+    /// that never declares one advances by zero.
+    width: Option<(f64, f64)>,
+    /// The FontState matrix at setup, for the advance transform.
+    matrix: [f64; 6],
+    depth: usize,
+    saved: Box<crate::gfx::GraphicsState>,
+    suppressed: bool,
+}
+
+/// What the machine should do after a ShowCtx step.
+pub(crate) enum ShowStep {
+    /// The show is complete; pop the frame.
+    Pop,
+    /// stringwidth complete; pop the frame and push wx wy.
+    PopPushWidth(f64, f64),
+    /// Push `operands`, then execute `target` (a BuildChar/BuildGlyph or
+    /// kshow procedure); step again when it finishes.
+    Exec {
+        operands: Vec<Object>,
+        target: Object,
+    },
+    /// Synchronous work done (an outline glyph painted); step again.
+    Again,
+}
+
+/// The execution-stack frame behind the whole show family (`FONTS.md`
+/// Decision 6). One glyph per machine step: outline glyphs paint
+/// synchronously, Type 3 glyphs yield to their BuildChar/BuildGlyph
+/// procedure, and kshow yields to its proc between characters. Because
+/// it's a frame, text draws glyph by glyph in the live window, nested
+/// shows inside BuildChar just work, and `stringwidth`'s results land
+/// on the operand stack before the next token runs — frame order *is*
+/// program order.
+pub(crate) struct ShowCtx {
+    text: Vec<u8>,
+    idx: usize,
+    /// Device-space pen. The current point is re-fetched after each
+    /// kshow proc so the proc can move it — that's what kshow is *for*.
+    pen: DevPoint,
+    /// User-space accumulated advance (the stringwidth result).
+    total: (f64, f64),
+    params: ShowParams,
+    mode: ShowMode,
+    kshow_proc: Option<Object>,
+    pending: Option<PendingGlyph>,
+    /// A kshow proc is on the stack above us.
+    kshow_wait: bool,
+}
+
+impl ShowCtx {
+    pub(crate) fn new(
+        text: Vec<u8>,
+        params: ShowParams,
+        mode: ShowMode,
+        kshow_proc: Option<Object>,
+        pen: DevPoint,
+    ) -> Self {
+        ShowCtx {
+            text,
+            idx: 0,
+            pen,
+            total: (0.0, 0.0),
+            params,
+            mode,
+            kshow_proc,
+            pending: None,
+            kshow_wait: false,
+        }
+    }
+
+    pub(crate) fn has_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    /// setcachedevice/setcharwidth landing here, in glyph space.
+    pub(crate) fn set_glyph_width(&mut self, w: (f64, f64)) {
+        if let Some(p) = &mut self.pending {
+            p.width = Some(w);
+        }
+    }
+
+    /// Unwind bookkeeping when the frame is popped abnormally (stop, an
+    /// uncaught error) with a glyph context still open.
+    pub(crate) fn cleanup(&mut self, gfx: &mut Gfx) {
+        if let Some(p) = self.pending.take() {
+            if p.suppressed {
+                gfx.unsuppress_painting();
+            }
+            gfx.restore_glyph_snapshot(p.depth, p.saved);
+        }
+    }
+
+    pub(crate) fn step(&mut self, gfx: &mut Gfx) -> Result<ShowStep, PsError> {
+        // A BuildChar just finished: seal the glyph context and advance.
+        if let Some(p) = self.pending.take() {
+            if p.suppressed {
+                gfx.unsuppress_painting();
+            }
+            gfx.restore_glyph_snapshot(p.depth, p.saved);
+            let (wx, wy) = p.width.unwrap_or((0.0, 0.0));
+            let m = p.matrix;
+            self.advance(gfx, p.byte, (m[0] * wx + m[2] * wy, m[1] * wx + m[3] * wy));
+            if let Some(step) = self.maybe_kshow() {
+                return Ok(step);
+            }
+            return Ok(ShowStep::Again);
+        }
+        // A kshow proc just finished: it may have moved the current
+        // point; the next glyph starts wherever it left the pen.
+        if self.kshow_wait {
+            self.kshow_wait = false;
+            if !matches!(self.mode, ShowMode::Width) {
+                self.pen = gfx.device_current_point().ok_or(PsError::NoCurrentPoint)?;
+            }
+        }
+        let Some(&byte) = self.text.get(self.idx) else {
+            return Ok(match self.mode {
+                ShowMode::Width => ShowStep::PopPushWidth(self.total.0, self.total.1),
+                _ => ShowStep::Pop,
+            });
+        };
+        // The font is read per glyph: a kshow proc (or a nested show
+        // inside BuildChar) may have changed it.
+        let fs = gfx.state().font.clone().ok_or(PsError::InvalidFont)?;
+        if fs.fid >= 0 {
+            let adv = outline_glyph(gfx, &fs, byte, &self.mode, self.pen)?;
+            self.idx += 1;
+            self.advance(gfx, byte, adv);
+            if let Some(step) = self.maybe_kshow() {
+                return Ok(step);
+            }
+            Ok(ShowStep::Again)
+        } else {
+            self.begin_type3_glyph(gfx, fs, byte)
+        }
+    }
+
+    /// Apply one glyph's advance (plus ashow/widthshow extras) to the
+    /// running total and, when painting, to the pen and current point.
+    fn advance(&mut self, gfx: &mut Gfx, byte: u8, mut adv: (f64, f64)) {
+        adv.0 += self.params.extra.0;
+        adv.1 += self.params.extra.1;
+        if let Some((ch, (cx, cy))) = self.params.char_extra
             && ch == byte
         {
             adv.0 += cx;
             adv.1 += cy;
         }
-        total.0 += adv.0;
-        total.1 += adv.1;
-        let (dx, dy) = ctm_lin(adv.0, adv.1);
-        pen.x += dx as f32;
-        pen.y += dy as f32;
+        self.total.0 += adv.0;
+        self.total.1 += adv.1;
+        if !matches!(self.mode, ShowMode::Width) {
+            let (dx, dy) = ctm_lin(gfx, adv);
+            self.pen.x += dx as f32;
+            self.pen.y += dy as f32;
+            // Advance the visible current point per glyph, not at the
+            // end: BuildChar and kshow procs are allowed to observe it.
+            gfx.move_to_device(self.pen);
+        }
     }
 
-    if !matches!(mode, ShowMode::Width) {
-        gfx.move_to_device(pen);
+    /// Between two characters (never before the first or after the
+    /// last), kshow pushes their codes and runs its proc.
+    fn maybe_kshow(&mut self) -> Option<ShowStep> {
+        let proc = self.kshow_proc.as_ref()?;
+        let &next = self.text.get(self.idx)?;
+        let prev = self.text[self.idx - 1];
+        self.kshow_wait = true;
+        Some(ShowStep::Exec {
+            operands: vec![Object::int(i64::from(prev)), Object::int(i64::from(next))],
+            target: proc.clone(),
+        })
     }
-    Ok(total)
+
+    /// Open a Type 3 glyph context: snapshot the graphics state, set the
+    /// CTM so BuildChar draws in glyph space at the pen, start a fresh
+    /// path, and hand the machine the procedure to run. Metrics-only
+    /// modes run the procedure with painting suppressed — that's how
+    /// stringwidth learns a Type 3 width (charpath on Type 3 advances
+    /// without appending outlines; documented in FONTS.md).
+    fn begin_type3_glyph(
+        &mut self,
+        gfx: &mut Gfx,
+        fs: FontState,
+        byte: u8,
+    ) -> Result<ShowStep, PsError> {
+        let name = encoding_name(&fs, byte);
+        let (target, char_operand) = {
+            let d = fs.dict.borrow();
+            // BuildGlyph (Level 2, name-driven) wins over BuildChar
+            // (Level 1, code-driven), per the PLRM.
+            if let Some(bg) = d.get("BuildGlyph") {
+                (bg, Object::lit(Value::Name(name)))
+            } else if let Some(bc) = d.get("BuildChar") {
+                (bc, Object::int(i64::from(byte)))
+            } else {
+                return Err(PsError::InvalidFont);
+            }
+        };
+        let (depth, saved) = gfx.glyph_snapshot();
+        let suppressed = !matches!(self.mode, ShowMode::Paint);
+        if suppressed {
+            gfx.suppress_painting();
+        }
+        // Glyph space → FontMatrix → user space at the pen → device:
+        // same pipeline as outline glyphs, installed as the CTM so
+        // BuildChar's ordinary path operators land in the right place.
+        let fm = fs.matrix;
+        let ctm = gfx.ctm();
+        let (c00, c01) = (f64::from(ctm.sx), f64::from(ctm.kx));
+        let (c10, c11) = (f64::from(ctm.ky), f64::from(ctm.sy));
+        let off = ctm_lin(gfx, (fm[4], fm[5]));
+        gfx.set_ctm(tiny_skia::Transform::from_row(
+            (c00 * fm[0] + c01 * fm[1]) as f32,
+            (c10 * fm[0] + c11 * fm[1]) as f32,
+            (c00 * fm[2] + c01 * fm[3]) as f32,
+            (c10 * fm[2] + c11 * fm[3]) as f32,
+            (f64::from(self.pen.x) + off.0) as f32,
+            (f64::from(self.pen.y) + off.1) as f32,
+        ));
+        gfx.newpath();
+        self.idx += 1;
+        self.pending = Some(PendingGlyph {
+            byte,
+            width: None,
+            matrix: fs.matrix,
+            depth,
+            saved,
+            suppressed,
+        });
+        Ok(ShowStep::Exec {
+            operands: vec![Object::lit(Value::Dict(fs.dict.clone())), char_operand],
+            target,
+        })
+    }
 }

@@ -56,7 +56,14 @@ impl PsPath {
     }
 
     pub(crate) fn move_to(&mut self, p: DevPoint) {
-        self.segs.push(Seg::Move(p));
+        // Collapse consecutive moves: the earlier one starts an empty
+        // subpath nothing can ever reference. Keeps show's per-glyph
+        // pen advances from bloating the path.
+        if let Some(Seg::Move(last)) = self.segs.last_mut() {
+            *last = p;
+        } else {
+            self.segs.push(Seg::Move(p));
+        }
         self.current = Some(p);
         self.subpath_start = Some(p);
     }
@@ -161,6 +168,10 @@ pub struct Gfx {
     /// Set by `showpage`; lets the front end know the program considers
     /// the page complete.
     pub page_shown: bool,
+    /// Nonzero while a Type 3 BuildChar runs for metrics only
+    /// (stringwidth/charpath): painting operators consume their paths
+    /// but leave the pixels alone. A counter, not a flag — shows nest.
+    suppress_paint: u32,
 }
 
 impl Gfx {
@@ -189,6 +200,7 @@ impl Gfx {
             base_ctm,
             dirty: false,
             page_shown: false,
+            suppress_paint: 0,
         })
     }
 
@@ -379,7 +391,9 @@ impl Gfx {
     }
 
     pub fn fill(&mut self, rule: FillRule) {
-        if let Some(path) = self.state.path.to_skia() {
+        if self.suppress_paint == 0
+            && let Some(path) = self.state.path.to_skia()
+        {
             let paint = self.paint();
             let mask = self.clip_mask();
             self.pixmap
@@ -391,6 +405,10 @@ impl Gfx {
     }
 
     pub fn stroke(&mut self) {
+        if self.suppress_paint > 0 {
+            self.newpath();
+            return;
+        }
         if let Some(path) = self.state.path.to_skia() {
             let scale = self.ctm_scale();
             let dash = self.state.dash.as_ref().and_then(|(pattern, phase)| {
@@ -438,6 +456,9 @@ impl Gfx {
     }
 
     pub fn erase(&mut self) {
+        if self.suppress_paint > 0 {
+            return;
+        }
         self.pixmap.fill(tiny_skia::Color::WHITE);
         self.dirty = true;
     }
@@ -534,6 +555,9 @@ impl Gfx {
     /// paint and clip, leaving the current path alone. TrueType outlines
     /// are wound for nonzero filling.
     pub(crate) fn fill_path_direct(&mut self, path: &PsPath) {
+        if self.suppress_paint > 0 {
+            return;
+        }
         if let Some(p) = path.to_skia() {
             let paint = self.paint();
             let mask = self.clip_mask();
@@ -551,6 +575,26 @@ impl Gfx {
     /// Splice a glyph outline into the current path (`charpath`).
     pub(crate) fn append_path(&mut self, path: &PsPath) {
         self.state.path.extend_from(path);
+    }
+
+    /// Enter a Type 3 glyph context: remember where the gsave stack is
+    /// and what the state was, so the glyph can be sealed off no matter
+    /// what BuildChar does (unbalanced gsave/grestore included).
+    pub(crate) fn glyph_snapshot(&self) -> (usize, Box<GraphicsState>) {
+        (self.saved.len(), Box::new(self.state.clone()))
+    }
+
+    pub(crate) fn restore_glyph_snapshot(&mut self, depth: usize, state: Box<GraphicsState>) {
+        self.saved.truncate(depth);
+        self.state = *state;
+    }
+
+    pub(crate) fn suppress_painting(&mut self) {
+        self.suppress_paint += 1;
+    }
+
+    pub(crate) fn unsuppress_painting(&mut self) {
+        self.suppress_paint = self.suppress_paint.saturating_sub(1);
     }
 
     // --- clipping ---------------------------------------------------------

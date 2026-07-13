@@ -24,8 +24,12 @@ pub fn install(dict: &mut Dict) {
     op(dict, "ashow", ashow);
     op(dict, "widthshow", widthshow);
     op(dict, "awidthshow", awidthshow);
+    op(dict, "kshow", kshow);
     op(dict, "stringwidth", stringwidth);
     op(dict, "charpath", charpath);
+    op(dict, "setcachedevice", setcachedevice);
+    op(dict, "setcachedevice2", setcachedevice2);
+    op(dict, "setcharwidth", setcharwidth);
 
     // The shared font-registration dict, and the two standard encoding
     // vectors, as ordinary systemdict values. Font dicts get their own
@@ -112,8 +116,8 @@ fn definefont(it: &mut Interp) -> Result<(), PsError> {
             Some(Value::Integer(t)) => Some(*t),
             _ => None,
         };
-        // Type 3 dicts are accepted and stored, but have no outline
-        // source until BuildChar execution lands (Stage 6 task 5);
+        // Type 3 dicts have no outline registry entry — their glyphs
+        // are BuildChar/BuildGlyph procedures the show frame executes;
         // anything else gets the substitute face so it still renders.
         let fid = if font_type == Some(3) {
             font::FID_NONE
@@ -236,15 +240,41 @@ fn selectfont(it: &mut Interp) -> Result<(), PsError> {
     })
 }
 
+/// The shared front door of the show family: validate what the PLRM
+/// wants validated *before* anything paints (font set; current point
+/// for the painting/charpath forms), then queue the show as an
+/// execution-stack frame — the machine does the rest, one glyph per
+/// step (Type 3 glyph procedures run as ordinary frames above it).
+fn begin_show(
+    it: &mut Interp,
+    text: PsString,
+    params: ShowParams,
+    mode: ShowMode,
+    kshow_proc: Option<Object>,
+) -> Result<(), PsError> {
+    if it.gfx.state().font.is_none() {
+        return Err(PsError::InvalidFont);
+    }
+    let pen = match mode {
+        // stringwidth is pure metrics; no current point required.
+        ShowMode::Width => crate::gfx::DevPoint { x: 0.0, y: 0.0 },
+        _ => it
+            .gfx
+            .device_current_point()
+            .ok_or(PsError::NoCurrentPoint)?,
+    };
+    it.begin_show(font::ShowCtx::new(
+        text.to_vec(),
+        params,
+        mode,
+        kshow_proc,
+        pen,
+    ))
+}
+
 fn show(it: &mut Interp) -> Result<(), PsError> {
     let s = pop_string(it)?;
-    font::run_show(
-        &mut it.gfx,
-        &s.to_vec(),
-        &ShowParams::default(),
-        ShowMode::Paint,
-    )?;
-    Ok(())
+    begin_show(it, s, ShowParams::default(), ShowMode::Paint, None)
 }
 
 /// ax ay string ashow — per-glyph extra advance.
@@ -256,8 +286,7 @@ fn ashow(it: &mut Interp) -> Result<(), PsError> {
         extra: (ax, ay),
         char_extra: None,
     };
-    font::run_show(&mut it.gfx, &s.to_vec(), &params, ShowMode::Paint)?;
-    Ok(())
+    begin_show(it, s, params, ShowMode::Paint, None)
 }
 
 fn pop_char_code(it: &mut Interp) -> Result<u8, PsError> {
@@ -276,8 +305,7 @@ fn widthshow(it: &mut Interp) -> Result<(), PsError> {
         extra: (0.0, 0.0),
         char_extra: Some((ch, (cx, cy))),
     };
-    font::run_show(&mut it.gfx, &s.to_vec(), &params, ShowMode::Paint)?;
-    Ok(())
+    begin_show(it, s, params, ShowMode::Paint, None)
 }
 
 /// cx cy char ax ay string awidthshow — both at once.
@@ -292,37 +320,77 @@ fn awidthshow(it: &mut Interp) -> Result<(), PsError> {
         extra: (ax, ay),
         char_extra: Some((ch, (cx, cy))),
     };
-    font::run_show(&mut it.gfx, &s.to_vec(), &params, ShowMode::Paint)?;
-    Ok(())
+    begin_show(it, s, params, ShowMode::Paint, None)
 }
 
+/// proc string kshow — the proc runs between each pair of characters
+/// with their codes on the stack, and may move the current point (the
+/// classic manual-kerning hook) or even change the font.
+fn kshow(it: &mut Interp) -> Result<(), PsError> {
+    let s = pop_string(it)?;
+    let proc = it.pop()?;
+    if !proc.executable || !matches!(proc.value, Value::Array(_)) {
+        return Err(PsError::Typecheck);
+    }
+    begin_show(it, s, ShowParams::default(), ShowMode::Paint, Some(proc))
+}
+
+/// The results are pushed when the frame completes — which the machine
+/// reaches before the next token, so program order is preserved. For
+/// Type 3 fonts this *executes* BuildChar with painting suppressed;
+/// that's where the width comes from, per the PLRM.
 fn stringwidth(it: &mut Interp) -> Result<(), PsError> {
     let s = pop_string(it)?;
-    let (wx, wy) = font::run_show(
-        &mut it.gfx,
-        &s.to_vec(),
-        &ShowParams::default(),
-        ShowMode::Width,
-    )?;
-    it.push(Object::real(wx));
-    it.push(Object::real(wy));
-    Ok(())
+    begin_show(it, s, ShowParams::default(), ShowMode::Width, None)
 }
 
 /// string bool charpath — append the text's outlines to the current
 /// path. The bool selects stroke-path vs fill-path semantics in real
 /// PostScript; outline fonts have only one useful form, so both operands
-/// produce it (documented in FONTS.md).
+/// produce it. Type 3 glyphs advance without contributing outlines
+/// (documented in FONTS.md).
 fn charpath(it: &mut Interp) -> Result<(), PsError> {
     let Value::Boolean(_) = it.pop()?.value else {
         return Err(PsError::Typecheck);
     };
     let s = pop_string(it)?;
-    font::run_show(
-        &mut it.gfx,
-        &s.to_vec(),
-        &ShowParams::default(),
-        ShowMode::Charpath,
-    )?;
-    Ok(())
+    begin_show(it, s, ShowParams::default(), ShowMode::Charpath, None)
+}
+
+/// wx wy llx lly urx ury setcachedevice — inside BuildChar, declares the
+/// glyph's width (and a bbox we don't cache by). PLRM says painting
+/// after it uses the inherited color; without a glyph cache that needs
+/// no enforcement.
+fn setcachedevice(it: &mut Interp) -> Result<(), PsError> {
+    let mut v = [0.0; 6];
+    for slot in v.iter_mut().rev() {
+        *slot = it.pop_f64()?;
+    }
+    record_glyph_width(it, (v[0], v[1]), "setcachedevice")
+}
+
+/// Level 2 variant with vertical-writing metrics; w0 is all we use.
+fn setcachedevice2(it: &mut Interp) -> Result<(), PsError> {
+    let mut v = [0.0; 10];
+    for slot in v.iter_mut().rev() {
+        *slot = it.pop_f64()?;
+    }
+    record_glyph_width(it, (v[0], v[1]), "setcachedevice2")
+}
+
+/// wx wy setcharwidth — like setcachedevice without the bbox; the glyph
+/// may paint in color.
+fn setcharwidth(it: &mut Interp) -> Result<(), PsError> {
+    let wy = it.pop_f64()?;
+    let wx = it.pop_f64()?;
+    record_glyph_width(it, (wx, wy), "setcharwidth")
+}
+
+fn record_glyph_width(it: &mut Interp, w: (f64, f64), op: &str) -> Result<(), PsError> {
+    if it.set_type3_glyph_width(w) {
+        Ok(())
+    } else {
+        // Outside a glyph procedure these names have no meaning.
+        Err(PsError::Undefined(op.to_string()))
+    }
 }

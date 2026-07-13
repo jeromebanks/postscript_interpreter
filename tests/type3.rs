@@ -1,0 +1,277 @@
+//! Type 3 (BuildChar/BuildGlyph) fonts and kshow — the ShowFrame
+//! machinery. Width/advance expectations cross-checked against
+//! Ghostscript (e.g. the 600/1000-em box glyph at 12pt advances 7.2).
+
+use pscat::{Interp, PsError, Value};
+
+/// A minimal Type 3 font: 'a' (and only 'a') is a filled 500x700 box,
+/// width 600, in a 1000-unit glyph space.
+const BOX_FONT: &str = "
+    /T3 7 dict def
+    T3 begin
+      /FontType 3 def
+      /FontMatrix [0.001 0 0 0.001 0 0] def
+      /FontBBox [0 0 1000 1000] def
+      /Encoding 256 array def
+      0 1 255 { Encoding exch /.notdef put } for
+      Encoding 97 /box put
+      /BuildChar {
+        exch begin
+          600 0 0 0 500 700 setcachedevice
+          0 0 moveto 500 0 lineto 500 700 lineto 0 700 lineto closepath fill
+        end
+      } def
+    end
+    /BoxFont T3 definefont pop
+";
+
+fn run(src: &str) -> Interp {
+    let mut it = Interp::with_page(100, 100).expect("test page");
+    it.run_str(src)
+        .unwrap_or_else(|e| panic!("run failed: {e}"));
+    it
+}
+
+fn pop_f64(it: &mut Interp) -> f64 {
+    match it.pop().expect("operand").value {
+        Value::Integer(i) => i as f64,
+        Value::Real(r) => r,
+        _ => panic!("expected number"),
+    }
+}
+
+fn ink_count(it: &Interp) -> usize {
+    it.gfx()
+        .pixmap
+        .pixels()
+        .iter()
+        .filter(|p| p.red() < 128)
+        .count()
+}
+
+#[test]
+fn buildchar_paints_and_advances() {
+    let mut it = run(&format!(
+        "{BOX_FONT} /BoxFont findfont 12 scalefont setfont \
+         10 20 moveto (aa) show currentpoint"
+    ));
+    let y = pop_f64(&mut it);
+    let x = pop_f64(&mut it);
+    // Two glyphs, 600 units each at 12pt: 2 x 7.2 (gs: 14.398 with
+    // device rounding; we compute in f64).
+    assert!((x - 24.4).abs() < 1e-3, "advance to {x}");
+    assert!((y - 20.0).abs() < 1e-3, "baseline {y}");
+    // Two 6x8.4pt boxes of ink.
+    assert!(
+        ink_count(&it) > 80,
+        "expected glyph ink, got {}",
+        ink_count(&it)
+    );
+}
+
+#[test]
+fn type3_stringwidth_measures_without_painting() {
+    let mut it = run(&format!(
+        "{BOX_FONT} /BoxFont findfont 12 scalefont setfont (aaa) stringwidth"
+    ));
+    let wy = pop_f64(&mut it);
+    let wx = pop_f64(&mut it);
+    assert!((wx - 21.6).abs() < 1e-6, "width {wx}");
+    assert_eq!(wy, 0.0);
+    // BuildChar ran (that's where the width came from) but painted
+    // nothing — and needed no current point.
+    assert_eq!(ink_count(&it), 0);
+}
+
+#[test]
+fn setcharwidth_works_like_setcachedevice() {
+    let mut it = run("/T3 5 dict def
+         T3 begin
+           /FontType 3 def
+           /FontMatrix [0.001 0 0 0.001 0 0] def
+           /Encoding 256 array def 0 1 255 { Encoding exch /.notdef put } for
+           /BuildChar { pop pop 250 0 setcharwidth } def
+         end
+         /W T3 definefont pop /W findfont 40 scalefont setfont
+         (xy) stringwidth");
+    let _wy = pop_f64(&mut it);
+    let wx = pop_f64(&mut it);
+    assert!((wx - 20.0).abs() < 1e-6, "2 x 250 x 0.04 = 20, got {wx}");
+}
+
+#[test]
+fn missing_width_declaration_advances_zero() {
+    let mut it = run(&format!(
+        "{BOX_FONT} T3 /BuildChar {{ pop pop }} put \
+         /Z T3 definefont pop /Z findfont 12 scalefont setfont \
+         5 5 moveto (aaa) show currentpoint pop"
+    ));
+    let x = pop_f64(&mut it);
+    assert!((x - 5.0).abs() < 1e-3, "no setcachedevice, no advance: {x}");
+}
+
+#[test]
+fn buildglyph_is_preferred_and_gets_the_name() {
+    // BuildGlyph receives the *encoded name* (and wins over BuildChar);
+    // remapping the encoding changes which name arrives.
+    let mut it = run("/T3 6 dict def
+         T3 begin
+           /FontType 3 def
+           /FontMatrix [0.001 0 0 0.001 0 0] def
+           /Encoding 256 array def 0 1 255 { Encoding exch /.notdef put } for
+           Encoding 97 /alpha put
+           /BuildChar { pop pop 0 0 setcharwidth } def
+           /BuildGlyph { exch pop /GotName exch def 300 0 setcharwidth } def
+         end
+         /G T3 definefont pop /G findfont 10 scalefont setfont
+         0 0 moveto (a) show
+         GotName");
+    assert_eq!(it.pop().expect("name").repr(), "/alpha");
+}
+
+#[test]
+fn glyph_context_is_sealed() {
+    // Color and CTM changes inside BuildChar must not leak out, even
+    // with an unbalanced gsave left behind.
+    let mut it = run(&format!(
+        "{BOX_FONT} T3 /BuildChar {{
+             pop pop 600 0 setcharwidth
+             1 0 0 setrgbcolor 3 3 scale gsave
+         }} put
+         /Leaky T3 definefont pop
+         0 0 1 setrgbcolor
+         /Leaky findfont 12 scalefont setfont
+         10 10 moveto (aa) show
+         currentrgbcolor"
+    ));
+    let b = pop_f64(&mut it);
+    let g = pop_f64(&mut it);
+    let r = pop_f64(&mut it);
+    assert_eq!((r, g, b), (0.0, 0.0, 1.0), "color must not leak");
+    // The CTM is intact: a known rectangle lands where it always does.
+    it.run_str("newpath 40 40 moveto 60 40 lineto 60 60 lineto 40 60 lineto closepath fill")
+        .expect("fill");
+    let p = it.gfx().pixmap.pixel(50, 50).expect("pixel");
+    assert_eq!((p.red(), p.green(), p.blue()), (0, 0, 255));
+}
+
+#[test]
+fn buildchar_errors_are_catchable_and_contained() {
+    let mut it = run(&format!(
+        "{BOX_FONT} T3 /BuildChar {{ pop pop 1 0 add undefined_operator_xyz }} put
+         /Bad T3 definefont pop
+         0.5 setgray
+         /Bad findfont 12 scalefont setfont
+         10 10 moveto
+         {{ (aa) show }} stopped
+         currentgray"
+    ));
+    let gray = pop_f64(&mut it);
+    let caught = it.pop().expect("stopped result");
+    assert_eq!(caught.repr(), "true");
+    assert!(
+        (gray - 0.5).abs() < 0.01,
+        "state restored after error: {gray}"
+    );
+}
+
+#[test]
+fn exit_inside_buildchar_is_invalidexit() {
+    let mut it = Interp::with_page(100, 100).expect("page");
+    let src = format!(
+        "{BOX_FONT} T3 /BuildChar {{ pop pop exit }} put
+         /E T3 definefont pop /E findfont 12 scalefont setfont
+         0 0 moveto (a) show"
+    );
+    assert_eq!(it.run_str(&src), Err(PsError::InvalidExit));
+}
+
+#[test]
+fn nested_show_inside_buildchar() {
+    // A Type 3 glyph that renders itself by showing an outline glyph —
+    // recursion through the frame machinery.
+    let mut it = run(&format!(
+        "{BOX_FONT} T3 /BuildChar {{
+             pop pop
+             1000 0 setcharwidth
+             /Helvetica findfont 1000 scalefont setfont
+             0 0 moveto (X) show
+         }} put
+         /Nest T3 definefont pop /Nest findfont 30 scalefont setfont
+         20 30 moveto (a) show currentpoint pop"
+    ));
+    let x = pop_f64(&mut it);
+    assert!((x - 50.0).abs() < 1e-3, "outer advance 30pt: {x}");
+    assert!(ink_count(&it) > 50, "nested X painted");
+}
+
+#[test]
+fn type3_respects_ctm_and_clip() {
+    let it = run(&format!(
+        "{BOX_FONT} /BoxFont findfont 20 scalefont setfont \
+         50 20 translate 30 rotate 0 0 moveto (a) show"
+    ));
+    assert!(ink_count(&it) > 100, "rotated Type 3 glyph painted");
+}
+
+#[test]
+fn kshow_runs_proc_between_characters() {
+    // gs cross-check: (abc) kshow with {pop pop 10 0 rmoveto} ends
+    // exactly 2 x 10 further than plain stringwidth — the proc runs
+    // between pairs (twice for three characters) and its rmoveto moves
+    // where the next glyph starts.
+    let mut it = run("/Helvetica findfont 12 scalefont setfont
+         (abc) stringwidth pop
+         0 0 moveto
+         {pop pop 10 0 rmoveto} (abc) kshow
+         currentpoint pop exch sub");
+    let extra = pop_f64(&mut it);
+    assert!((extra - 20.0).abs() < 1e-6, "two proc runs x 10: {extra}");
+}
+
+#[test]
+fn kshow_proc_sees_character_codes() {
+    let mut it = run("/codes 10 dict def
+         /Helvetica findfont 12 scalefont setfont
+         0 0 moveto
+         {codes exch /second exch put codes exch /first exch put} (AB) kshow
+         codes /first get codes /second get");
+    let second = pop_f64(&mut it);
+    let first = pop_f64(&mut it);
+    assert_eq!((first, second), (65.0, 66.0));
+}
+
+#[test]
+fn kshow_works_with_type3_fonts() {
+    let mut it = run(&format!(
+        "{BOX_FONT} /BoxFont findfont 12 scalefont setfont \
+         0 0 moveto {{pop pop 5 0 rmoveto}} (aaa) kshow currentpoint pop"
+    ));
+    let x = pop_f64(&mut it);
+    // 3 x 7.2 + 2 x 5 = 31.6
+    assert!((x - 31.6).abs() < 1e-3, "type3 kshow advance {x}");
+}
+
+#[test]
+fn setcachedevice_outside_buildchar_is_undefined() {
+    let mut it = Interp::with_page(100, 100).expect("page");
+    assert!(matches!(
+        it.run_str("1 2 3 4 5 6 setcachedevice"),
+        Err(PsError::Undefined(_))
+    ));
+    assert!(matches!(
+        it.run_str("1 2 setcharwidth"),
+        Err(PsError::Undefined(_))
+    ));
+}
+
+#[test]
+fn charpath_on_type3_advances_without_outlines() {
+    let mut it = run(&format!(
+        "{BOX_FONT} /BoxFont findfont 12 scalefont setfont \
+         newpath 10 10 moveto (aa) false charpath currentpoint pop"
+    ));
+    let x = pop_f64(&mut it);
+    assert!((x - 24.4).abs() < 1e-3, "charpath advance {x}");
+    assert_eq!(ink_count(&it), 0, "charpath painted nothing");
+}

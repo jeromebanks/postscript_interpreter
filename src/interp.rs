@@ -17,6 +17,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::error::PsError;
+use crate::font::{ShowCtx, ShowStep};
 use crate::gfx::{DEFAULT_PAGE, Gfx};
 use crate::lexer::{Lexer, Token};
 use crate::object::{Dict, Num, Object, PsArray, PsString, Value};
@@ -48,6 +49,9 @@ enum Frame {
     /// and pushes `false`; `stop` (or a recoverable error) unwinds to it
     /// and pushes `true`.
     StopMark,
+    /// The show family: one glyph per step; Type 3 glyphs and kshow
+    /// procs run as ordinary frames above this one (see `crate::font`).
+    Show(Box<ShowCtx>),
 }
 
 pub(crate) enum ForallSrc {
@@ -183,9 +187,20 @@ impl Interp {
     pub fn step_n(&mut self, budget: usize) -> Result<bool, PsError> {
         let result = self.step_n_inner(budget);
         if result.is_err() || self.quit_requested {
-            self.estack.clear();
+            self.unwind_all();
         }
         result
+    }
+
+    /// Abort the program: drop every frame, sealing any Type 3 glyph
+    /// contexts left open (their graphics-state snapshot and paint
+    /// suppression must not leak past the show that created them).
+    fn unwind_all(&mut self) {
+        while let Some(frame) = self.estack.pop() {
+            if let Frame::Show(mut ctx) = frame {
+                ctx.cleanup(&mut self.gfx);
+            }
+        }
     }
 
     fn step_n_inner(&mut self, budget: usize) -> Result<bool, PsError> {
@@ -270,15 +285,27 @@ impl Interp {
             PopThenYield(Object),
             Pop,
             PopThenPush(Object),
+            PopThenPush2(Object, Object),
             Iterate(PsArray),
             IterateWith(Object, PsArray),
             IterateWith2(Object, Object, PsArray),
+            /// Show frame: push operands, then execute the target with
+            /// procedure-call semantics (BuildChar, kshow proc).
+            ExecWith(Vec<Object>, Object),
+            /// Show frame did synchronous work; go around again.
+            Nothing,
         }
         loop {
             let action = {
                 // Split borrow: the scanner needs the dictionary stack
-                // (for //immediate names) while the frame is borrowed.
-                let Interp { estack, dstack, .. } = self;
+                // (for //immediate names), the show frame the graphics
+                // state, while the frame itself is borrowed.
+                let Interp {
+                    estack,
+                    dstack,
+                    gfx,
+                    ..
+                } = self;
                 let Some(frame) = estack.last_mut() else {
                     return Ok(None);
                 };
@@ -353,6 +380,14 @@ impl Interp {
                     // Reached from above means the stopped procedure ran
                     // to completion without stopping.
                     Frame::StopMark => Action::PopThenPush(Object::bool(false)),
+                    Frame::Show(ctx) => match ctx.step(gfx)? {
+                        ShowStep::Pop => Action::Pop,
+                        ShowStep::PopPushWidth(wx, wy) => {
+                            Action::PopThenPush2(Object::real(wx), Object::real(wy))
+                        }
+                        ShowStep::Exec { operands, target } => Action::ExecWith(operands, target),
+                        ShowStep::Again => Action::Nothing,
+                    },
                 }
             };
             match action {
@@ -368,6 +403,11 @@ impl Interp {
                     self.estack.pop();
                     self.push(o);
                 }
+                Action::PopThenPush2(a, b) => {
+                    self.estack.pop();
+                    self.push(a);
+                    self.push(b);
+                }
                 Action::Iterate(body) => self.push_proc_frame(body)?,
                 Action::IterateWith(v, body) => {
                     self.push(v);
@@ -378,6 +418,13 @@ impl Interp {
                     self.push(b);
                     self.push_proc_frame(body)?;
                 }
+                Action::ExecWith(operands, target) => {
+                    for o in operands {
+                        self.push(o);
+                    }
+                    self.exec_object(target)?;
+                }
+                Action::Nothing => {}
             }
         }
     }
@@ -511,25 +558,50 @@ impl Interp {
         self.push_frame(Frame::StopMark)
     }
 
-    /// Unwind to (and including) the nearest StopMark. Returns whether a
-    /// context existed; with none, the whole program is aborted, which is
-    /// what the PLRM's outermost job-server `stopped` would do.
-    pub(crate) fn do_stop(&mut self) -> bool {
-        while let Some(frame) = self.estack.pop() {
-            if matches!(frame, Frame::StopMark) {
+    /// Queue a show (any of the family) as an execution-stack frame.
+    pub(crate) fn begin_show(&mut self, ctx: ShowCtx) -> Result<(), PsError> {
+        self.push_frame(Frame::Show(Box::new(ctx)))
+    }
+
+    /// setcachedevice/setcharwidth: hand the width to the innermost show
+    /// whose glyph procedure is actually running. False if there is none
+    /// — the operators are meaningless outside BuildChar.
+    pub(crate) fn set_type3_glyph_width(&mut self, w: (f64, f64)) -> bool {
+        for frame in self.estack.iter_mut().rev() {
+            if let Frame::Show(ctx) = frame
+                && ctx.has_pending()
+            {
+                ctx.set_glyph_width(w);
                 return true;
             }
         }
         false
     }
 
+    /// Unwind to (and including) the nearest StopMark. Returns whether a
+    /// context existed; with none, the whole program is aborted, which is
+    /// what the PLRM's outermost job-server `stopped` would do.
+    pub(crate) fn do_stop(&mut self) -> bool {
+        while let Some(frame) = self.estack.pop() {
+            match frame {
+                Frame::StopMark => return true,
+                // Unwinding across an in-flight show must seal its glyph
+                // context (see unwind_all).
+                Frame::Show(mut ctx) => ctx.cleanup(&mut self.gfx),
+                _ => {}
+            }
+        }
+        false
+    }
+
     /// `exit`: unwind to (and including) the innermost loop frame.
-    /// Stops at a source boundary or a `stopped` boundary — `exit` can't
-    /// jump out of either, per the PLRM's `invalidexit`.
+    /// Stops at a source boundary, a `stopped` boundary, or a show in
+    /// progress (a BuildChar/kshow proc can't `exit` the show) — per the
+    /// PLRM's `invalidexit`.
     pub(crate) fn exit_loop(&mut self) -> Result<(), PsError> {
         loop {
             match self.estack.last() {
-                None | Some(Frame::Scanner(_) | Frame::StopMark) => {
+                None | Some(Frame::Scanner(_) | Frame::StopMark | Frame::Show(_)) => {
                     return Err(PsError::InvalidExit);
                 }
                 Some(
