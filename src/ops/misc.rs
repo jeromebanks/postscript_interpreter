@@ -5,7 +5,7 @@ use std::io::Write;
 
 use crate::error::PsError;
 use crate::interp::Interp;
-use crate::object::{Dict, Value};
+use crate::object::{Dict, Object, Value};
 
 pub fn install(dict: &mut Dict) {
     use super::op;
@@ -15,6 +15,32 @@ pub fn install(dict: &mut Dict) {
     op(dict, "pstack", pstack_dump);
     op(dict, "print", print_string);
     op(dict, "quit", quit);
+    op(dict, "handleerror", handleerror);
+}
+
+/// The default error reporter: prints from $error the way the CLI does,
+/// then clears newerror so the next error is distinguishable.
+fn handleerror(it: &mut Interp) -> Result<(), PsError> {
+    let Some(obj) = it.load("$error") else {
+        return Ok(());
+    };
+    let Value::Dict(d) = &obj.value else {
+        return Ok(());
+    };
+    let (name, command) = {
+        let d = d.borrow();
+        (
+            d.get("errorname").map(|o| o.text()),
+            d.get("command").map(|o| o.text()),
+        )
+    };
+    eprintln!(
+        "%%[ Error: {}; OffendingCommand: {} ]%%",
+        name.unwrap_or_else(|| "--none--".to_string()),
+        command.unwrap_or_else(|| "--none--".to_string())
+    );
+    d.borrow_mut().put("newerror".into(), Object::bool(false));
+    Ok(())
 }
 
 fn print_text(it: &mut Interp) -> Result<(), PsError> {

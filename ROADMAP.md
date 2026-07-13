@@ -42,6 +42,10 @@ first and `gs` second (`tests/golden.rs` shows the comparison pattern).
 
 ## Stage 5 — Run found PostScript (data structures + error recovery)
 
+**✅ COMPLETE (2026-07-12)** — all twelve items shipped; see `NOTES.md`
+for the summary and the deviations list (errordict custom handlers and
+error-time operand restoration remain open, folded into future work).
+
 Goal: real `.ps` files from the internet execute. They lean on arrays,
 strings, `forall`, and `stopped` constantly. Demonstrable by a corpus of
 found files rendering side-by-side with Ghostscript.

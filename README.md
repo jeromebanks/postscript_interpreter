@@ -7,8 +7,17 @@ time.
 
 ## Status
 
-**Stage 4 (robustness & polish) complete.** Real recursive PostScript
-art programs run and draw live: the language core (tokenizer,
+**Stage 5 (run found PostScript) complete.** Beyond drawing live, pscat
+now executes the idioms real-world `.ps` files depend on: arrays and
+strings with true PLRM view semantics (`get`/`put`/`getinterval`/
+`forall`/`aload`), dictionaries with arbitrary keys and `<<>>` literals,
+type conversions (`cvi`/`cvs`/`cvx`/…), catchable errors
+(`stopped`/`stop`/`$error`), `search`/`token`, clipping, dash patterns,
+HSB/CMYK color, the full matrix operator set, `//immediate` names, and
+ASCII85 strings. `examples/testcard.ps` — written like a found file,
+shortcut prolog and all — renders identically in pscat and Ghostscript.
+
+All of Stage 1–4 still holds: the language core (tokenizer,
 object model, three-stack interpreter, stack/arithmetic operators, `def`,
 dictionaries, `if`/`ifelse`, `for`/`repeat`/`loop`/`exit`, comparisons,
 `bind`), the graphics engine (paths, `arc`/`arcn`, `fill`/`eofill`/

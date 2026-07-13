@@ -276,7 +276,10 @@ impl Interp {
         }
         loop {
             let action = {
-                let Some(frame) = self.estack.last_mut() else {
+                // Split borrow: the scanner needs the dictionary stack
+                // (for //immediate names) while the frame is borrowed.
+                let Interp { estack, dstack, .. } = self;
+                let Some(frame) = estack.last_mut() else {
                     return Ok(None);
                 };
                 match frame {
@@ -285,7 +288,10 @@ impl Interp {
                         Some(Token::RBrace) => {
                             return Err(PsError::Syntax("'}' with no matching '{'".to_string()));
                         }
-                        Some(Token::LBrace) => Action::Yield(scan_procedure(lexer, 0)?),
+                        Some(Token::LBrace) => Action::Yield(scan_procedure(lexer, 0, dstack)?),
+                        Some(Token::ImmediateName(n)) => {
+                            Action::Yield(resolve_immediate(&n, dstack)?)
+                        }
                         Some(tok) => Action::Yield(token_to_object(tok)),
                     },
                     Frame::Proc { body, pc } => match body.get(*pc) {
@@ -460,6 +466,25 @@ impl Interp {
     /// executable semantics (procedures run rather than being pushed).
     pub(crate) fn exec_object(&mut self, obj: Object) -> Result<(), PsError> {
         self.execute_resolved(obj)
+    }
+
+    /// The `token` operator: scan one token from raw bytes, returning the
+    /// object and how many bytes the scanner consumed.
+    pub(crate) fn scan_token_from(
+        &self,
+        bytes: Vec<u8>,
+    ) -> Result<Option<(Object, usize)>, PsError> {
+        let mut lexer = Lexer::new(bytes);
+        let obj = match lexer.next_token()? {
+            None => return Ok(None),
+            Some(Token::RBrace) => {
+                return Err(PsError::Syntax("'}' with no matching '{'".to_string()));
+            }
+            Some(Token::LBrace) => scan_procedure(&mut lexer, 0, &self.dstack)?,
+            Some(Token::ImmediateName(n)) => resolve_immediate(&n, &self.dstack)?,
+            Some(tok) => token_to_object(tok),
+        };
+        Ok(Some((obj, lexer.pos())))
     }
 
     pub(crate) fn begin_repeat(&mut self, body: PsArray, count: i64) -> Result<(), PsError> {
@@ -641,15 +666,32 @@ fn token_to_object(tok: Token) -> Object {
         Token::String(bytes) => Object::string(bytes),
         Token::Name(n) => Object::exec(Value::Name(n.into())),
         Token::LiteralName(n) => Object::lit(Value::Name(n.into())),
-        // Both callers (next_item and scan_procedure) consume brace tokens
-        // before converting, so these cannot reach here.
-        Token::LBrace | Token::RBrace => unreachable!("brace tokens handled by the scanner"),
+        // All callers consume brace and immediate-name tokens before
+        // converting, so these cannot reach here.
+        Token::LBrace | Token::RBrace | Token::ImmediateName(_) => {
+            unreachable!("structural tokens handled by the scanner")
+        }
     }
+}
+
+/// `//name`: substituted with its current value at scan time — the value
+/// is *not* executed, even if it's a procedure.
+fn resolve_immediate(name: &str, dicts: &[Rc<RefCell<Dict>>]) -> Result<Object, PsError> {
+    for d in dicts.iter().rev() {
+        if let Some(v) = d.borrow().get(name) {
+            return Ok(v);
+        }
+    }
+    Err(PsError::Undefined(name.to_string()))
 }
 
 /// Collect tokens up to the matching `}` into a procedure object. Called
 /// with the opening `{` already consumed.
-fn scan_procedure(lexer: &mut Lexer, depth: usize) -> Result<Object, PsError> {
+fn scan_procedure(
+    lexer: &mut Lexer,
+    depth: usize,
+    dicts: &[Rc<RefCell<Dict>>],
+) -> Result<Object, PsError> {
     if depth >= PROC_NESTING_LIMIT {
         return Err(PsError::Limitcheck);
     }
@@ -662,7 +704,8 @@ fn scan_procedure(lexer: &mut Lexer, depth: usize) -> Result<Object, PsError> {
                 ));
             }
             Some(Token::RBrace) => break,
-            Some(Token::LBrace) => items.push(scan_procedure(lexer, depth + 1)?),
+            Some(Token::LBrace) => items.push(scan_procedure(lexer, depth + 1, dicts)?),
+            Some(Token::ImmediateName(n)) => items.push(resolve_immediate(&n, dicts)?),
             Some(tok) => items.push(token_to_object(tok)),
         }
     }

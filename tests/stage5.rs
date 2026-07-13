@@ -207,6 +207,64 @@ fn bitshift() {
 }
 
 #[test]
+fn search_and_anchorsearch() {
+    assert_eq!(
+        eval("(abcdef) (cd) search"),
+        ["(ef)", "(cd)", "(ab)", "true"]
+    );
+    assert_eq!(eval("(abcdef) (xy) search"), ["(abcdef)", "false"]);
+    // Results are views: writing through `match` hits the original...
+    assert_eq!(
+        eval("/s (abcdef) def s (cd) search pop pop 0 88 put pop s"),
+        ["(abXdef)"]
+    );
+    assert_eq!(
+        eval("(abcdef) (ab) anchorsearch"),
+        ["(cdef)", "(ab)", "true"]
+    );
+    assert_eq!(eval("(abcdef) (cd) anchorsearch"), ["(abcdef)", "false"]);
+    assert_eq!(eval("(ab) (abcd) anchorsearch"), ["(ab)", "false"]);
+}
+
+#[test]
+fn token_scans_strings() {
+    assert_eq!(eval("(12 34) token"), ["( 34)", "12", "true"]);
+    assert_eq!(eval("(  ) token"), ["false"]);
+    assert_eq!(eval("(/name rest) token"), ["( rest)", "/name", "true"]);
+    // A procedure scans whole.
+    assert_eq!(eval("({1 2 add} x) token"), ["( x)", "{1 2 add}", "true"]);
+    // The classic loop: consume every token from a string.
+    assert_eq!(
+        eval("/s (1 2 3 4) def { s token {exch /s exch def} {exit} ifelse } loop s length"),
+        ["1", "2", "3", "4", "0"]
+    );
+}
+
+#[test]
+fn immediate_names_substitute_at_scan_time() {
+    // //x freezes the value at scan time; redefining x later is invisible.
+    assert_eq!(eval("/x 5 def /p { //x } def /x 9 def p"), ["5"]);
+    // The substituted value is not executed, even as a procedure...
+    assert_eq!(eval("/q {1 2 add} def //q"), ["{1 2 add}"]);
+    // ...and an undefined immediate name errors at scan time, catchable.
+    assert_eq!(eval("{(//nope_undefined) cvx exec} stopped"), ["true"]);
+}
+
+#[test]
+fn ascii85_string_literals() {
+    assert_eq!(eval("<~BOu!r~> length"), ["4"]);
+    assert_eq!(eval("<~BOu!r~> (hell) eq"), ["true"]);
+}
+
+#[test]
+fn handleerror_reports_and_resets() {
+    assert_eq!(
+        eval("{1 0 div} stopped pop handleerror $error /newerror get"),
+        ["false"]
+    );
+}
+
+#[test]
 fn prolog_idioms_from_the_wild() {
     // The classic shortcut-prolog pattern found in real files.
     assert_eq!(

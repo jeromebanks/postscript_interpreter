@@ -26,6 +26,82 @@ pub fn install(dict: &mut Dict) {
     op(dict, "string", string);
     op(dict, "aload", aload);
     op(dict, "astore", astore);
+    op(dict, "search", search);
+    op(dict, "anchorsearch", anchorsearch);
+    op(dict, "token", token);
+}
+
+fn pop_string(it: &mut Interp) -> Result<crate::object::PsString, PsError> {
+    match &it.pop()?.value {
+        Value::String(s) => Ok(s.clone()),
+        _ => Err(PsError::Typecheck),
+    }
+}
+
+/// str seek search -> post match pre true | str false. The three results
+/// are views into str, per the PLRM.
+fn search(it: &mut Interp) -> Result<(), PsError> {
+    let seek = pop_string(it)?;
+    let s = pop_string(it)?;
+    let hay = s.to_vec();
+    let needle = seek.to_vec();
+    let found = if needle.is_empty() {
+        Some(0)
+    } else if needle.len() > hay.len() {
+        None
+    } else {
+        hay.windows(needle.len()).position(|w| w == needle)
+    };
+    match found {
+        Some(i) => {
+            let n = needle.len();
+            it.push(Object::lit(Value::String(
+                s.interval(i + n, s.len() - i - n)?,
+            )));
+            it.push(Object::lit(Value::String(s.interval(i, n)?)));
+            it.push(Object::lit(Value::String(s.interval(0, i)?)));
+            it.push(Object::bool(true));
+        }
+        None => {
+            it.push(Object::lit(Value::String(s)));
+            it.push(Object::bool(false));
+        }
+    }
+    Ok(())
+}
+
+/// str seek anchorsearch -> post match true | str false.
+fn anchorsearch(it: &mut Interp) -> Result<(), PsError> {
+    let seek = pop_string(it)?;
+    let s = pop_string(it)?;
+    let n = seek.len();
+    let matches = n <= s.len() && s.borrow_bytes()[..n] == *seek.borrow_bytes();
+    if matches {
+        it.push(Object::lit(Value::String(s.interval(n, s.len() - n)?)));
+        it.push(Object::lit(Value::String(s.interval(0, n)?)));
+        it.push(Object::bool(true));
+    } else {
+        it.push(Object::lit(Value::String(s)));
+        it.push(Object::bool(false));
+    }
+    Ok(())
+}
+
+/// str token -> post any true | false.
+fn token(it: &mut Interp) -> Result<(), PsError> {
+    let s = pop_string(it)?;
+    match it.scan_token_from(s.to_vec())? {
+        Some((obj, consumed)) => {
+            let consumed = consumed.min(s.len());
+            it.push(Object::lit(Value::String(
+                s.interval(consumed, s.len() - consumed)?,
+            )));
+            it.push(obj);
+            it.push(Object::bool(true));
+        }
+        None => it.push(Object::bool(false)),
+    }
+    Ok(())
 }
 
 fn index_of(key: &Object) -> Result<usize, PsError> {

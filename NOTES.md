@@ -3,6 +3,58 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 5 — Run found PostScript (2026-07-12)
+
+**Built** (per `ROADMAP.md` Stage 5, all twelve items):
+- **Views**: arrays and strings are now `PsArray`/`PsString` — shared
+  backing plus offset/length — so `getinterval`/`cvs`/`search` results
+  alias their source per the PLRM. The iterative-drop protection moved
+  to the backing store.
+- **General dict keys**: names/strings on the original fast path;
+  integers (reals with integer value unify, per spec), booleans, marks,
+  and composites-by-identity in a second map preserving original key
+  objects for `forall`.
+- **Data ops**: `length get put getinterval putinterval copy`
+  (polymorphic incl. the stack form) `forall` (new frame type, all
+  three container kinds) `array string aload astore`.
+- **Dict ops**: `<< >> known where store undef currentdict
+  countdictstack cleardictstack maxlength`.
+- **Conversions**: `cvi cvr cvn cvs cvrs cvx cvlit type xcheck`
+  (string→number uses the scanner's full syntax, radix included).
+- **Error recovery**: `stop`/`stopped` as an exec-stack boundary frame;
+  errors inside a stopped context record errorname/command into
+  `$error` and resume with `true`; `handleerror` reports and resets.
+  `exit` across a stopped boundary is `invalidexit` per the PLRM.
+- **Strings as programs**: executable strings run as source
+  (`(...) cvx exec`); `search anchorsearch token` (token reuses the
+  real scanner, procedures included).
+- **Graphics**: `clip eoclip initclip clippath pathbbox` (alpha-mask
+  intersection; clip is part of the gsave snapshot and leaves the
+  path), `setdash currentdash`, `sethsbcolor currenthsbcolor
+  setcmykcolor currentrgbcolor currentgray currentlinewidth`.
+- **Matrices**: full operand set (`matrix identmatrix defaultmatrix
+  currentmatrix setmatrix initmatrix concat concatmatrix invertmatrix
+  transform/itransform/dtransform/idtransform`) plus matrix-form
+  dispatch for `translate/scale/rotate`.
+- **Scanner**: `//immediate` names (resolved at scan time, value not
+  executed), ASCII85 `<~...~>` literals.
+- **Misc**: `rand srand rrand` (deterministic LCG), `bitshift`.
+- **Corpus**: `examples/testcard.ps` — a found-style file (shortcut
+  prolog, where-probe, forall charts, cvs geometry, eoclip ring, matrix
+  bookkeeping) rendering identically in pscat and Ghostscript; in the
+  golden suite. 90 tests total.
+
+**Tradeoffs / deviations:** custom procedures installed in `errordict`
+are not consulted (the `stopped`+`$error` path covers found-file usage);
+the operand stack is *not* restored to pre-operator state when an error
+is caught (PLRM handlers see pre-error operands — revisit with the
+errordict work); `maxlength` reports current length (Level 2 dicts grow
+anyway); `clippath` returns the most recent clip path rather than the
+true intersection outline (the mask *is* the true intersection).
+
+**Next:** Stage 6 — text and fonts, starting with the font architecture
+writeup (`ROADMAP.md` Stage 6 item 1, [opus+review]).
+
 ## Stage 4 — Robustness and polish (2026-07-11)
 
 **Audit result:** one real crash found and fixed. Dropping a deeply

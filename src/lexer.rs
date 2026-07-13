@@ -22,6 +22,8 @@ pub enum Token {
     Name(String),
     /// `/name`
     LiteralName(String),
+    /// `//name` — replaced by its current value at scan time.
+    ImmediateName(String),
     LBrace,
     RBrace,
 }
@@ -55,6 +57,11 @@ impl Lexer {
         Lexer { src, pos: 0 }
     }
 
+    /// Bytes consumed so far — the `token` operator's remainder split.
+    pub(crate) fn pos(&self) -> usize {
+        self.pos
+    }
+
     fn peek(&self) -> Option<u8> {
         self.src.get(self.pos).copied()
     }
@@ -83,7 +90,8 @@ impl Lexer {
                         return Ok(Some(Token::Name("<<".to_string())));
                     }
                     Some(b'~') => {
-                        return Err(syntax("ASCII85 strings (<~...~>) are not supported yet"));
+                        self.pos += 1;
+                        return Ok(Some(Token::String(self.read_ascii85_string()?)));
                     }
                     _ => return Ok(Some(Token::String(self.read_hex_string()?))),
                 },
@@ -99,9 +107,11 @@ impl Lexer {
                 b'}' => return Ok(Some(Token::RBrace)),
                 b'/' => {
                     if self.peek() == Some(b'/') {
-                        return Err(syntax(
-                            "'//' immediately-evaluated names are not supported yet",
-                        ));
+                        self.pos += 1;
+                        let word = self.read_regular_run();
+                        return Ok(Some(Token::ImmediateName(
+                            String::from_utf8_lossy(&word).into_owned(),
+                        )));
                     }
                     let word = self.read_regular_run();
                     return Ok(Some(Token::LiteralName(
@@ -201,6 +211,56 @@ impl Lexer {
                 _ => out.push(b),
             }
         }
+    }
+
+    /// `<~ ... ~>` ASCII85: 5 chars ('!'..'u') encode 4 bytes; 'z' is a
+    /// shorthand for four zero bytes; a final partial group of n chars
+    /// yields n-1 bytes.
+    fn read_ascii85_string(&mut self) -> Result<Vec<u8>, PsError> {
+        let mut out = Vec::new();
+        let mut group = [0u8; 5];
+        let mut n = 0usize;
+        loop {
+            let Some(b) = self.bump() else {
+                return Err(syntax("unterminated ASCII85 string"));
+            };
+            match b {
+                b'~' => {
+                    if self.bump() != Some(b'>') {
+                        return Err(syntax("'~' without '>' in ASCII85 string"));
+                    }
+                    break;
+                }
+                _ if is_whitespace(b) => {}
+                b'z' if n == 0 => out.extend_from_slice(&[0, 0, 0, 0]),
+                b'!'..=b'u' => {
+                    group[n] = b - b'!';
+                    n += 1;
+                    if n == 5 {
+                        let v = group.iter().fold(0u32, |acc, d| {
+                            acc.wrapping_mul(85).wrapping_add(u32::from(*d))
+                        });
+                        out.extend_from_slice(&v.to_be_bytes());
+                        n = 0;
+                    }
+                }
+                _ => return Err(syntax("invalid character in ASCII85 string")),
+            }
+        }
+        if n == 1 {
+            return Err(syntax("truncated ASCII85 group"));
+        }
+        if n > 1 {
+            // Pad with 'u' (84) and keep n-1 output bytes.
+            for slot in group.iter_mut().skip(n) {
+                *slot = 84;
+            }
+            let v = group.iter().fold(0u32, |acc, d| {
+                acc.wrapping_mul(85).wrapping_add(u32::from(*d))
+            });
+            out.extend_from_slice(&v.to_be_bytes()[..n - 1]);
+        }
+        Ok(out)
     }
 
     fn read_hex_string(&mut self) -> Result<Vec<u8>, PsError> {
@@ -440,7 +500,33 @@ mod tests {
 
     #[test]
     fn syntax_errors() {
-        for src in ["(abc", ")", ">", "<zz>", "<12", "<~85~>", "//x"] {
+        for src in ["(abc", ")", ">", "<zz>", "<12"] {
+            assert!(matches!(lex_err(src), PsError::Syntax(_)), "input {src:?}");
+        }
+    }
+
+    #[test]
+    fn immediate_names() {
+        assert_eq!(lex("//foo"), vec![Token::ImmediateName("foo".to_string())]);
+        assert_eq!(
+            lex("/a//b"),
+            vec![
+                Token::LiteralName("a".to_string()),
+                Token::ImmediateName("b".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn ascii85_strings() {
+        // "BOu!r" is the canonical encoding of "hell".
+        assert_eq!(lex("<~BOu!r~>"), vec![Token::String(b"hell".to_vec())]);
+        // Partial final group: 2 chars -> 1 byte.
+        assert_eq!(lex("<~@/~>"), vec![Token::String(b"a".to_vec())]);
+        // 'z' is four zero bytes; whitespace is ignored.
+        assert_eq!(lex("<~ z ~>"), vec![Token::String(vec![0, 0, 0, 0])]);
+        assert_eq!(lex("<~~>"), vec![Token::String(Vec::new())]);
+        for src in ["<~BOu!r", "<~v~>", "<~!~>"] {
             assert!(matches!(lex_err(src), PsError::Syntax(_)), "input {src:?}");
         }
     }
