@@ -9,6 +9,7 @@
 //! valid executable names per the PLRM.
 
 use crate::error::PsError;
+use crate::file::{FileHandle, PsFile};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -28,9 +29,17 @@ pub enum Token {
     RBrace,
 }
 
+/// The scanner reads through a shared [`FileHandle`], so a program can
+/// interleave scanning with data reads from the same source
+/// (`currentfile eexec`, inline images) and the position stays
+/// consistent. Executable strings scan the same way but are not *files*
+/// — `currentfile` skips them.
 pub struct Lexer {
-    src: Vec<u8>,
-    pos: usize,
+    file: FileHandle,
+    is_file: bool,
+    /// eexec pushed systemdict for this source's duration; pop it when
+    /// the source is exhausted or closed.
+    pub(crate) pop_systemdict: bool,
 }
 
 const fn is_whitespace(b: u8) -> bool {
@@ -53,51 +62,85 @@ fn syntax(msg: &str) -> PsError {
 }
 
 impl Lexer {
+    /// Scan a byte buffer that is *not* a file (an executable string).
     pub fn new(src: Vec<u8>) -> Self {
-        Lexer { src, pos: 0 }
+        Lexer {
+            file: PsFile::from_bytes(src),
+            is_file: false,
+            pop_systemdict: false,
+        }
+    }
+
+    /// Scan program source as a file (the main program, `run`).
+    pub fn main_program(src: Vec<u8>) -> Self {
+        Lexer {
+            file: PsFile::from_bytes(src),
+            is_file: true,
+            pop_systemdict: false,
+        }
+    }
+
+    /// Scan an existing file object in place (`exec` on a file, eexec).
+    pub(crate) fn from_file(file: FileHandle) -> Self {
+        Lexer {
+            file,
+            is_file: true,
+            pop_systemdict: false,
+        }
+    }
+
+    /// The handle `currentfile` returns, if this scanner is a file.
+    pub(crate) fn file(&self) -> Option<&FileHandle> {
+        self.is_file.then_some(&self.file)
     }
 
     /// Bytes consumed so far — the `token` operator's remainder split.
     pub(crate) fn pos(&self) -> usize {
-        self.pos
+        self.file.borrow().pos()
     }
 
-    fn peek(&self) -> Option<u8> {
-        self.src.get(self.pos).copied()
+    fn peek(&mut self) -> Result<Option<u8>, PsError> {
+        self.file.borrow_mut().peek_byte()
     }
 
-    fn bump(&mut self) -> Option<u8> {
-        let b = self.peek();
-        if b.is_some() {
-            self.pos += 1;
-        }
-        b
+    fn bump(&mut self) -> Result<Option<u8>, PsError> {
+        self.file.borrow_mut().read_byte()
     }
 
     pub fn next_token(&mut self) -> Result<Option<Token>, PsError> {
         loop {
-            let Some(b) = self.bump() else {
+            let Some(b) = self.peek()? else {
                 return Ok(None);
             };
+            if is_whitespace(b) {
+                self.bump()?;
+                continue;
+            }
+            if is_regular(b) {
+                // Number-or-name words dispatch on their whole run; the
+                // first byte must not be consumed before reading it.
+                let word = self.read_regular_run()?;
+                return Ok(Some(classify_word(&word)));
+            }
+            self.bump()?;
             match b {
-                _ if is_whitespace(b) => {}
-                b'%' => self.skip_comment(),
+                b'%' => self.skip_comment()?,
                 b'(' => return Ok(Some(Token::String(self.read_string()?))),
                 b')' => return Err(syntax("')' with no matching '('")),
-                b'<' => match self.peek() {
+                b'<' => match self.peek()? {
                     Some(b'<') => {
-                        self.pos += 1;
+                        self.bump()?;
                         return Ok(Some(Token::Name("<<".to_string())));
                     }
                     Some(b'~') => {
-                        self.pos += 1;
+                        self.bump()?;
                         return Ok(Some(Token::String(self.read_ascii85_string()?)));
                     }
                     _ => return Ok(Some(Token::String(self.read_hex_string()?))),
                 },
-                b'>' => match self.peek() {
+                b'>' => match self.peek()? {
                     Some(b'>') => {
-                        self.pos += 1;
+                        self.bump()?;
                         return Ok(Some(Token::Name(">>".to_string())));
                     }
                     _ => return Err(syntax("'>' outside a hex string")),
@@ -106,57 +149,56 @@ impl Lexer {
                 b'{' => return Ok(Some(Token::LBrace)),
                 b'}' => return Ok(Some(Token::RBrace)),
                 b'/' => {
-                    if self.peek() == Some(b'/') {
-                        self.pos += 1;
-                        let word = self.read_regular_run();
+                    if self.peek()? == Some(b'/') {
+                        self.bump()?;
+                        let word = self.read_regular_run()?;
                         return Ok(Some(Token::ImmediateName(
                             String::from_utf8_lossy(&word).into_owned(),
                         )));
                     }
-                    let word = self.read_regular_run();
+                    let word = self.read_regular_run()?;
                     return Ok(Some(Token::LiteralName(
                         String::from_utf8_lossy(&word).into_owned(),
                     )));
                 }
-                _ => {
-                    self.pos -= 1;
-                    let word = self.read_regular_run();
-                    return Ok(Some(classify_word(&word)));
-                }
+                // is_regular handled above; whitespace at the top.
+                _ => unreachable!("delimiter byte {b} not dispatched"),
             }
         }
     }
 
-    fn skip_comment(&mut self) {
-        while let Some(b) = self.peek() {
+    fn skip_comment(&mut self) -> Result<(), PsError> {
+        while let Some(b) = self.peek()? {
             if b == b'\n' || b == b'\r' {
                 break;
             }
-            self.pos += 1;
+            self.bump()?;
         }
+        Ok(())
     }
 
-    fn read_regular_run(&mut self) -> Vec<u8> {
-        let start = self.pos;
-        while let Some(b) = self.peek() {
+    fn read_regular_run(&mut self) -> Result<Vec<u8>, PsError> {
+        let mut out = Vec::new();
+        while let Some(b) = self.peek()? {
             if !is_regular(b) {
                 break;
             }
-            self.pos += 1;
+            out.push(b);
+            self.bump()?;
         }
-        self.src[start..self.pos].to_vec()
+        Ok(out)
     }
 
     fn read_string(&mut self) -> Result<Vec<u8>, PsError> {
         let mut out = Vec::new();
         let mut depth = 1usize;
         loop {
-            let Some(b) = self.bump() else {
+            let Some(b) = self.bump()? else {
                 return Err(syntax("unterminated string"));
             };
             match b {
                 b'\\' => {
-                    let Some(e) = self.bump() else {
+                    let Some(e) = self.bump()? else {
                         return Err(syntax("unterminated string"));
                     };
                     match e {
@@ -168,10 +210,10 @@ impl Lexer {
                         b'0'..=b'7' => {
                             let mut v = u32::from(e - b'0');
                             for _ in 0..2 {
-                                match self.peek() {
+                                match self.peek()? {
                                     Some(d @ b'0'..=b'7') => {
                                         v = v * 8 + u32::from(d - b'0');
-                                        self.pos += 1;
+                                        self.bump()?;
                                     }
                                     _ => break,
                                 }
@@ -182,8 +224,8 @@ impl Lexer {
                         // \<newline> is a line continuation: no character.
                         b'\n' => {}
                         b'\r' => {
-                            if self.peek() == Some(b'\n') {
-                                self.pos += 1;
+                            if self.peek()? == Some(b'\n') {
+                                self.bump()?;
                             }
                         }
                         // Includes \\, \(, \): the escaped character itself.
@@ -203,8 +245,8 @@ impl Lexer {
                 }
                 // The PLRM normalizes CR and CRLF inside strings to LF.
                 b'\r' => {
-                    if self.peek() == Some(b'\n') {
-                        self.pos += 1;
+                    if self.peek()? == Some(b'\n') {
+                        self.bump()?;
                     }
                     out.push(b'\n');
                 }
@@ -221,12 +263,12 @@ impl Lexer {
         let mut group = [0u8; 5];
         let mut n = 0usize;
         loop {
-            let Some(b) = self.bump() else {
+            let Some(b) = self.bump()? else {
                 return Err(syntax("unterminated ASCII85 string"));
             };
             match b {
                 b'~' => {
-                    if self.bump() != Some(b'>') {
+                    if self.bump()? != Some(b'>') {
                         return Err(syntax("'~' without '>' in ASCII85 string"));
                     }
                     break;
@@ -266,7 +308,7 @@ impl Lexer {
     fn read_hex_string(&mut self) -> Result<Vec<u8>, PsError> {
         let mut nibbles = Vec::new();
         loop {
-            let Some(b) = self.bump() else {
+            let Some(b) = self.bump()? else {
                 return Err(syntax("unterminated hex string"));
             };
             match b {

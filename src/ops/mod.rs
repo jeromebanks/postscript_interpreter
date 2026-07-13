@@ -6,6 +6,7 @@ pub mod control;
 pub mod convert;
 pub mod data;
 pub mod dict;
+pub mod file;
 pub mod font;
 pub mod graphics;
 pub mod logic;
@@ -34,6 +35,7 @@ pub fn install_all(dict: &mut Dict) {
     // dispatchers (matrix-operand aware) replace the plain CTM forms.
     matrix::install(dict);
     font::install(dict);
+    file::install(dict);
     logic::install(dict);
     misc::install(dict);
 

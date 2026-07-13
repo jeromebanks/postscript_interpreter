@@ -39,6 +39,7 @@ fn objects_equal(a: &Object, b: &Object) -> bool {
         (Array(x), Array(y)) => x.same_object(y),
         (Dict(x), Dict(y)) => Rc::ptr_eq(x, y),
         (Operator(x), Operator(y)) => std::ptr::fn_addr_eq(x.func, y.func),
+        (File(x), File(y)) => Rc::ptr_eq(x, y),
         _ => false,
     }
 }

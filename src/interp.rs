@@ -146,15 +146,23 @@ impl Interp {
             "$error".into(),
             Object::lit(Value::Dict(Rc::new(RefCell::new(error_state)))),
         );
+        let system = Rc::new(RefCell::new(system));
+        let user = Rc::new(RefCell::new(Dict::new()));
+        // The permanent dicts are reachable by name, per the PLRM —
+        // found code writes `userdict /x get` and `systemdict begin`
+        // routinely. (systemdict referencing itself is an Rc cycle, so
+        // it outlives the Interp — one bounded allocation per
+        // interpreter, for an object with process lifetime anyway.)
+        system.borrow_mut().put(
+            "systemdict".into(),
+            Object::lit(Value::Dict(system.clone())),
+        );
+        system
+            .borrow_mut()
+            .put("userdict".into(), Object::lit(Value::Dict(user.clone())));
         Some(Interp {
             ostack: Vec::new(),
-            dstack: vec![
-                Rc::new(RefCell::new(system)),
-                // userdict; empty until `def` lands in Stage 3, but having
-                // the two-dict stack from day one means name resolution
-                // semantics don't change later.
-                Rc::new(RefCell::new(Dict::new())),
-            ],
+            dstack: vec![system, user],
             estack: Vec::new(),
             quit_requested: false,
             last_name: None,
@@ -178,7 +186,8 @@ impl Interp {
     pub fn begin_source(&mut self, src: &[u8]) {
         self.quit_requested = false;
         self.last_name = None;
-        self.estack.push(Frame::Scanner(Lexer::new(src.to_vec())));
+        self.estack
+            .push(Frame::Scanner(Lexer::main_program(src.to_vec())));
     }
 
     /// Execute up to `budget` objects. `Ok(true)` means work remains. On
@@ -294,6 +303,9 @@ impl Interp {
             ExecWith(Vec<Object>, Object),
             /// Show frame did synchronous work; go around again.
             Nothing,
+            /// An eexec source finished: it carried a systemdict push
+            /// that ends with it.
+            PopScannerAndDict,
         }
         loop {
             let action = {
@@ -311,7 +323,13 @@ impl Interp {
                 };
                 match frame {
                     Frame::Scanner(lexer) => match lexer.next_token()? {
-                        None => Action::Pop,
+                        None => {
+                            if lexer.pop_systemdict {
+                                Action::PopScannerAndDict
+                            } else {
+                                Action::Pop
+                            }
+                        }
                         Some(Token::RBrace) => {
                             return Err(PsError::Syntax("'}' with no matching '{'".to_string()));
                         }
@@ -425,6 +443,12 @@ impl Interp {
                     self.exec_object(target)?;
                 }
                 Action::Nothing => {}
+                Action::PopScannerAndDict => {
+                    self.estack.pop();
+                    if self.dstack.len() > 2 {
+                        self.dstack.pop();
+                    }
+                }
             }
         }
     }
@@ -471,6 +495,11 @@ impl Interp {
                 Value::String(s) => {
                     return self.push_frame(Frame::Scanner(Lexer::new(s.to_vec())));
                 }
+                // An executable file runs in place, sharing its position
+                // with everything else holding the handle.
+                Value::File(f) => {
+                    return self.push_frame(Frame::Scanner(Lexer::from_file(f.clone())));
+                }
                 Value::Name(n) => {
                     hops += 1;
                     if hops > 100 {
@@ -515,6 +544,16 @@ impl Interp {
         self.execute_resolved(obj)
     }
 
+    /// The `token` operator on a file: one token scanned in place — the
+    /// file's shared position advances exactly past it.
+    pub(crate) fn scan_token_from_file(
+        &self,
+        file: crate::file::FileHandle,
+    ) -> Result<Option<Object>, PsError> {
+        let mut lexer = Lexer::from_file(file);
+        Ok(self.scan_one(&mut lexer)?.map(|(obj, _)| obj))
+    }
+
     /// The `token` operator: scan one token from raw bytes, returning the
     /// object and how many bytes the scanner consumed.
     pub(crate) fn scan_token_from(
@@ -522,12 +561,16 @@ impl Interp {
         bytes: Vec<u8>,
     ) -> Result<Option<(Object, usize)>, PsError> {
         let mut lexer = Lexer::new(bytes);
+        self.scan_one(&mut lexer)
+    }
+
+    fn scan_one(&self, lexer: &mut Lexer) -> Result<Option<(Object, usize)>, PsError> {
         let obj = match lexer.next_token()? {
             None => return Ok(None),
             Some(Token::RBrace) => {
                 return Err(PsError::Syntax("'}' with no matching '{'".to_string()));
             }
-            Some(Token::LBrace) => scan_procedure(&mut lexer, 0, &self.dstack)?,
+            Some(Token::LBrace) => scan_procedure(lexer, 0, &self.dstack)?,
             Some(Token::ImmediateName(n)) => resolve_immediate(&n, &self.dstack)?,
             Some(tok) => token_to_object(tok),
         };
@@ -561,6 +604,26 @@ impl Interp {
     /// Queue a show (any of the family) as an execution-stack frame.
     pub(crate) fn begin_show(&mut self, ctx: ShowCtx) -> Result<(), PsError> {
         self.push_frame(Frame::Show(Box::new(ctx)))
+    }
+
+    /// `currentfile`: the topmost *file* being executed. Executable
+    /// strings scan through the same machinery but aren't files, per
+    /// the PLRM, so they're skipped.
+    pub(crate) fn current_file(&self) -> Option<crate::file::FileHandle> {
+        self.estack.iter().rev().find_map(|f| match f {
+            Frame::Scanner(lx) => lx.file().cloned(),
+            _ => None,
+        })
+    }
+
+    /// `eexec`: run a decrypting view of `file` as program source, with
+    /// systemdict pushed for its duration (Type 1 fonts assume it).
+    pub(crate) fn begin_eexec(&mut self, file: crate::file::FileHandle) -> Result<(), PsError> {
+        let eexec_file = crate::file::PsFile::filtered(file, crate::file::Decoder::eexec());
+        let mut lexer = Lexer::from_file(eexec_file);
+        lexer.pop_systemdict = true;
+        self.push_dict(self.dstack[0].clone());
+        self.push_frame(Frame::Scanner(lexer))
     }
 
     /// setcachedevice/setcharwidth: hand the width to the innermost show

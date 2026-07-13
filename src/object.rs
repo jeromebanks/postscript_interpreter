@@ -26,6 +26,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use crate::error::PsError;
+use crate::file::FileHandle;
 use crate::interp::Interp;
 
 pub type OpFn = fn(&mut Interp) -> Result<(), PsError>;
@@ -226,6 +227,7 @@ pub enum Value {
     Array(PsArray),
     Dict(Rc<RefCell<Dict>>),
     Operator(Operator),
+    File(FileHandle),
 }
 
 #[derive(Clone)]
@@ -290,6 +292,7 @@ impl Object {
             Value::Array(_) => "arraytype",
             Value::Dict(_) => "dicttype",
             Value::Operator(_) => "operatortype",
+            Value::File(_) => "filetype",
         }
     }
 
@@ -303,9 +306,12 @@ impl Object {
             Value::Boolean(b) => b.to_string(),
             Value::Name(n) => n.to_string(),
             Value::String(s) => s.text(),
-            Value::Mark | Value::Null | Value::Array(_) | Value::Dict(_) | Value::Operator(_) => {
-                "--nostringval--".to_string()
-            }
+            Value::Mark
+            | Value::Null
+            | Value::Array(_)
+            | Value::Dict(_)
+            | Value::Operator(_)
+            | Value::File(_) => "--nostringval--".to_string(),
         }
     }
 
@@ -352,6 +358,7 @@ impl Object {
             }
             Value::Dict(_) => "-dict-".to_string(),
             Value::Operator(op) => format!("--{}--", op.name),
+            Value::File(_) => "-file-".to_string(),
         }
     }
 }
@@ -452,6 +459,7 @@ enum ExoticKey {
     ArrayId(usize, usize, usize),
     DictId(usize),
     OperatorId(usize),
+    FileId(usize),
 }
 
 enum KeyClass {
@@ -480,6 +488,7 @@ fn classify_key(key: &Object) -> Result<KeyClass, PsError> {
         }
         Value::Dict(d) => KeyClass::Exotic(ExoticKey::DictId(Rc::as_ptr(d) as usize)),
         Value::Operator(op) => KeyClass::Exotic(ExoticKey::OperatorId(op.func as usize)),
+        Value::File(f) => KeyClass::Exotic(ExoticKey::FileId(Rc::as_ptr(f) as usize)),
         // The one type the PLRM forbids as a key.
         Value::Null => return Err(PsError::Typecheck),
     })

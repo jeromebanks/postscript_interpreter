@@ -27,6 +27,10 @@ pub enum PsError {
     DictStackUnderflow,
     #[error("invalidfont")]
     InvalidFont,
+    #[error("invalidfileaccess")]
+    InvalidFileAccess,
+    #[error("undefinedfilename")]
+    UndefinedFilename,
     #[error("syntaxerror: {0}")]
     Syntax(String),
     #[error("limitcheck")]
@@ -51,6 +55,8 @@ impl PsError {
             PsError::InvalidExit => "invalidexit",
             PsError::DictStackUnderflow => "dictstackunderflow",
             PsError::InvalidFont => "invalidfont",
+            PsError::InvalidFileAccess => "invalidfileaccess",
+            PsError::UndefinedFilename => "undefinedfilename",
             PsError::Syntax(_) => "syntaxerror",
             PsError::Limitcheck => "limitcheck",
             PsError::Io => "ioerror",

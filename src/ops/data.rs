@@ -87,9 +87,24 @@ fn anchorsearch(it: &mut Interp) -> Result<(), PsError> {
     Ok(())
 }
 
-/// str token -> post any true | false.
+/// str token -> post any true | false, or file token -> any true |
+/// false (the file's shared position advances past the token).
 fn token(it: &mut Interp) -> Result<(), PsError> {
-    let s = pop_string(it)?;
+    let src = it.pop()?;
+    let s = match &src.value {
+        Value::String(s) => s.clone(),
+        Value::File(f) => {
+            match it.scan_token_from_file(f.clone())? {
+                Some(obj) => {
+                    it.push(obj);
+                    it.push(Object::bool(true));
+                }
+                None => it.push(Object::bool(false)),
+            }
+            return Ok(());
+        }
+        _ => return Err(PsError::Typecheck),
+    };
     match it.scan_token_from(s.to_vec())? {
         Some((obj, consumed)) => {
             let consumed = consumed.min(s.len());
