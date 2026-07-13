@@ -120,6 +120,7 @@ impl Lexer {
                 // Number-or-name words dispatch on their whole run; the
                 // first byte must not be consumed before reading it.
                 let word = self.read_regular_run()?;
+                self.eat_token_delimiter()?;
                 return Ok(Some(classify_word(&word)));
             }
             self.bump()?;
@@ -152,11 +153,13 @@ impl Lexer {
                     if self.peek()? == Some(b'/') {
                         self.bump()?;
                         let word = self.read_regular_run()?;
+                        self.eat_token_delimiter()?;
                         return Ok(Some(Token::ImmediateName(
                             String::from_utf8_lossy(&word).into_owned(),
                         )));
                     }
                     let word = self.read_regular_run()?;
+                    self.eat_token_delimiter()?;
                     return Ok(Some(Token::LiteralName(
                         String::from_utf8_lossy(&word).into_owned(),
                     )));
@@ -165,6 +168,23 @@ impl Lexer {
                 _ => unreachable!("delimiter byte {b} not dispatched"),
             }
         }
+    }
+
+    /// A token terminated *by* whitespace consumes that one whitespace
+    /// character (CRLF counting as one), per the PLRM. Programs never
+    /// notice, but anything reading data from a shared file position
+    /// right after a token does — `N RD <binary>` in Type 1 fonts most
+    /// of all.
+    fn eat_token_delimiter(&mut self) -> Result<(), PsError> {
+        if let Some(b) = self.peek()?
+            && is_whitespace(b)
+        {
+            self.bump()?;
+            if b == b'\r' && self.peek()? == Some(b'\n') {
+                self.bump()?;
+            }
+        }
+        Ok(())
     }
 
     fn skip_comment(&mut self) -> Result<(), PsError> {

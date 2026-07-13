@@ -24,11 +24,11 @@ fn top_repr(it: &mut Interp) -> String {
 
 #[test]
 fn currentfile_reads_data_from_the_program() {
-    // readstring consumes the five bytes immediately after the token's
-    // end — the delimiter space is data, per the PLRM. The scanner then
-    // resumes with the remainder ("9 pop pop") as program text.
-    let mut it = run("currentfile 5 string readstring ABCD9 pop pop");
-    assert_eq!(top_repr(&mut it), "( ABCD)");
+    // The single space after `readstring` is the token's delimiter and
+    // is consumed with it (PLRM; pinned against gs) — data starts at
+    // 'A'. The scanner then resumes with " pop" as program text.
+    let mut it = run("currentfile 5 string readstring ABCDE pop");
+    assert_eq!(top_repr(&mut it), "(ABCDE)");
 }
 
 #[test]
@@ -39,18 +39,16 @@ fn currentfile_readhexstring_ignores_delimiters() {
 
 #[test]
 fn read_single_bytes() {
-    // read consumes the single byte right after the token — the space —
-    // and the scanner resumes with "42".
-    let mut it = run("currentfile read 42");
-    assert_eq!(top_repr(&mut it), "42");
+    // The delimiter space went with the token; read takes 'X'.
+    let mut it = run("currentfile read X");
     assert_eq!(top_repr(&mut it), "true");
-    assert_eq!(top_repr(&mut it), "32");
+    assert_eq!(top_repr(&mut it), "88");
 }
 
 #[test]
 fn readline_splits_on_newlines() {
     let mut it = run_bytes(b"currentfile 20 string readline data here\npop");
-    assert_eq!(top_repr(&mut it), "( data here)");
+    assert_eq!(top_repr(&mut it), "(data here)");
 }
 
 #[test]

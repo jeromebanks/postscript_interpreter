@@ -228,9 +228,10 @@ fn search_and_anchorsearch() {
 
 #[test]
 fn token_scans_strings() {
-    assert_eq!(eval("(12 34) token"), ["( 34)", "12", "true"]);
+    // The delimiter space is consumed with the token (pinned against gs).
+    assert_eq!(eval("(12 34) token"), ["(34)", "12", "true"]);
     assert_eq!(eval("(  ) token"), ["false"]);
-    assert_eq!(eval("(/name rest) token"), ["( rest)", "/name", "true"]);
+    assert_eq!(eval("(/name rest) token"), ["(rest)", "/name", "true"]);
     // A procedure scans whole.
     assert_eq!(eval("({1 2 add} x) token"), ["( x)", "{1 2 add}", "true"]);
     // The classic loop: consume every token from a string.
