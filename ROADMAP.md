@@ -96,19 +96,20 @@ Goal: `(Hello, LaserWriter) show` — and the gallery gains typography.
 This is the emotional payoff stage; it's sequenced after Stage 5 because
 font machinery uses dicts/arrays heavily.
 
-1. **Font architecture writeup** — how fonts plug into the object model:
-   font dicts, `FontDirectory`, encoding vectors, the glyph cache, and
-   which outline source backs the core names. Decide: bundled open
-   fonts (via `ttf-parser`) mapped to the standard 13 names is the
-   pragmatic v1; Type 1 parsing is its own line item. [opus+review]
-2. **Font dict plumbing** — `findfont scalefont makefont setfont
-   currentfont definefont`, `FontMatrix` composition with the CTM.
-   [sonnet, after #1]
-3. **`show` and metrics** — `show stringwidth charpath`, glyph outlines
-   → path construction (reuses the existing path/paint pipeline
-   unchanged). `ashow widthshow awidthshow kshow` afterward. [sonnet]
-4. **Encodings** — StandardEncoding/ISOLatin1Encoding vectors, `Encoding`
-   array remapping. Table-heavy, mechanical. [haiku]
+**Tasks 1–4 ✅ (2026-07-13)** — see `FONTS.md` for the architecture and
+`NOTES.md` for the summary. Tasks 5–7 remain.
+
+1. ✅ **Font architecture writeup** — `FONTS.md`: font dicts are real
+   Dicts with `FID` as the registry seam; bundled Liberation faces via
+   `ttf-parser` back the standard names; `setfont` caches FontMatrix,
+   `show` reads Encoding live. [opus+review]
+2. ✅ **Font dict plumbing** — `findfont scalefont makefont setfont
+   currentfont definefont selectfont`, FontMatrix composition. [sonnet]
+3. ✅ **`show` and metrics** — `show stringwidth charpath ashow
+   widthshow awidthshow` (`kshow` deferred to task 5 — it needs the
+   same in-show procedure execution as BuildChar). [sonnet]
+4. ✅ **Encodings** — StandardEncoding/ISOLatin1Encoding vectors,
+   `Encoding` array remapping (read live per glyph). [haiku]
 5. **Type 3 fonts** — `BuildChar`/`BuildGlyph` procedures executed by the
    machine inside a glyph context. Touches the exec stack. [opus]
 6. **Type 1 fonts** — eexec decryption, charstring interpreter, seac,

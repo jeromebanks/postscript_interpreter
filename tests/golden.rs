@@ -78,22 +78,26 @@ fn luma(rgb: &[f64; 3]) -> f64 {
     (rgb[0] + rgb[1] + rgb[2]) / 3.0
 }
 
-fn assert_close(name: &str) {
+fn assert_close(name: &str, text: bool) {
     let ours = downsample(&render_pscat(&format!("examples/{name}")));
     let theirs = downsample(&render_gs(&format!("examples/{name}")));
     assert_eq!(ours.len(), theirs.len());
+    // The sharp check: a block with ink in one render and none in the
+    // other is a missing or misplaced shape, not an antialiasing
+    // difference. (Pure AA-density differences — e.g. dozens of
+    // overlapping half-pixel strokes in the burst hub — leave both
+    // renders clearly inked.) Text needs wider bands: pscat's Liberation
+    // faces and gs's URW faces are metric-compatible but not
+    // shape-identical, so glyph *edges* put a few pixels in blocks the
+    // other render grazes — solidly-inked-vs-untouched still fails.
+    let (ink, blank) = if text { (200.0, 253.0) } else { (230.0, 250.0) };
     let mut total = 0f64;
     for (i, (a, b)) in ours.iter().zip(&theirs).enumerate() {
         for ch in 0..3 {
             total += (a[ch] - b[ch]).abs();
         }
-        // The sharp check: a block with ink in one render and none in the
-        // other is a missing or misplaced shape, not an antialiasing
-        // difference. (Pure AA-density differences — e.g. dozens of
-        // overlapping half-pixel strokes in the burst hub — leave both
-        // renders clearly inked.)
         let (la, lb) = (luma(a), luma(b));
-        let disjoint = (la < 230.0 && lb > 250.0) || (lb < 230.0 && la > 250.0);
+        let disjoint = (la < ink && lb > blank) || (lb < ink && la > blank);
         assert!(
             !disjoint,
             "{name}: block {i} inked in one render only ({la:.0} vs {lb:.0})"
@@ -118,6 +122,8 @@ fn examples_match_ghostscript() {
         "stage2_demo.ps",
         "testcard.ps",
     ] {
-        assert_close(name);
+        assert_close(name, false);
     }
+    // Text compares with the wider ink bands (see assert_close).
+    assert_close("specimen.ps", true);
 }

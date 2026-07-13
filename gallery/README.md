@@ -1,10 +1,11 @@
 # Gallery
 
-Six pieces of generative art, written in pure PostScript for `pscat` and
-using only the operator set the interpreter has today (Stages 1–3): no
-`rand`, no `sethsbcolor`, no arrays — so the pieces carry their own
-linear-congruential random generator and HSB→RGB converter as PostScript
-procedures.
+Generative art, written in pure PostScript for `pscat` and using only
+the operator set the interpreter had when each piece was made. The six
+originals date to Stage 3 — no `rand`, no `sethsbcolor`, no arrays — so
+they carry their own linear-congruential random generator and HSB→RGB
+converter as PostScript procedures. Ring of Type is the Stage 6 piece
+and leans on what that stage added: fonts, `stringwidth`, `charpath`.
 
 | Piece | File | Technique |
 |---|---|---|
@@ -14,6 +15,7 @@ procedures.
 | Fern, After Barnsley | `fern.ps` | Chaos game, 48,000 points over four affine maps |
 | Silk Waves | `silk_waves.ps` | 66 threads displaced by two interfering sine fields |
 | Frost Mandala | `frost_mandala.ps` | Six-fold circle recursion, 11° twist per generation (1,555+ circles) |
+| Ring of Type | `ring_of_type.ps` | One sentence circling 11 shrinking rings, set glyph by glyph; charpath ampersand |
 
 ## Viewing the gallery
 

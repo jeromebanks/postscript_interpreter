@@ -1,0 +1,58 @@
+%!PS-Adobe-3.0
+%% specimen.ps — Stage 6 type specimen: the base faces, scaled, rotated,
+%% outlined, clipped, and re-encoded. Draws on a 500x500 canvas.
+%% Metrics match Ghostscript (both substitute metric-compatible faces);
+%% exact glyph shapes differ slightly (Liberation vs URW Nimbus).
+
+% --- centered title ---------------------------------------------------
+/Helvetica-Bold findfont 64 scalefont setfont
+/title (pscat) def
+250 title stringwidth pop 2 div sub 420 moveto
+title show
+
+/Helvetica findfont 13 scalefont setfont
+/subtitle (a PostScript interpreter, now with type) def
+250 subtitle stringwidth pop 2 div sub 398 moveto
+subtitle show
+
+% --- family waterfall -------------------------------------------------
+/line 355 def
+/specimen {            % name size (text) specimen -
+    3 -1 roll findfont 3 -1 roll scalefont setfont
+    40 line moveto show
+    /line line 34 sub def
+} def
+
+/Times-Roman      24 (Times Roman quartz sphinx)   specimen
+/Times-Italic     24 (Times Italic quartz sphinx)  specimen
+/Times-Bold       24 (Times Bold quartz sphinx)    specimen
+/Helvetica        24 (Helvetica vexing wizards)    specimen
+/Helvetica-Oblique 24 (Helvetica Oblique wizards)  specimen
+/Courier          22 (Courier fixed pitch 12345)   specimen
+/Courier-Bold     22 (Courier Bold fixed pitch)    specimen
+
+% --- charpath: outline type ------------------------------------------
+/Helvetica-Bold findfont 58 scalefont setfont
+0.85 setlinewidth
+40 60 moveto (OUTLINE) false charpath stroke
+
+% --- rotated baseline --------------------------------------------------
+gsave
+    370 60 translate 52 rotate
+    /Times-Italic findfont 30 scalefont setfont
+    0 0 moveto (angled!) show
+grestore
+
+% --- re-encoded accents (ISOLatin1) ------------------------------------
+/Times-Latin1
+    /Times-Roman findfont dup length dict copy
+    dup /Encoding ISOLatin1Encoding put
+definefont pop
+/Times-Latin1 findfont 22 scalefont setfont
+355 300 moveto (caf\351 d\351j\340 vu) show
+
+% --- widthshow: stretched word spacing ---------------------------------
+/Helvetica findfont 15 scalefont setfont
+355 270 moveto 9 0 8#040 (loose  words) widthshow
+
+showpage

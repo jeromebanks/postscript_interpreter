@@ -7,6 +7,21 @@ time.
 
 ## Status
 
+**Stage 6 text and fonts: the core is in.** `(Hello, LaserWriter) show`
+works — `findfont`/`scalefont`/`makefont`/`setfont`/`selectfont`/
+`definefont`, the `show` family (`ashow`/`widthshow`/`awidthshow`),
+`stringwidth`, and `charpath` (text as geometry: outline, clip, measure).
+The standard base fonts (Helvetica, Times, Courier families) are backed
+by bundled Liberation faces — metrically compatible with the Adobe
+originals, so layout agrees with Ghostscript — and glyphs render through
+the same path pipeline as everything else: scaled, rotated, sheared,
+clipped, and colored like any fill. `StandardEncoding`/
+`ISOLatin1Encoding` and the PLRM re-encoding idiom work (Encoding is
+read live from the font dict). `examples/specimen.ps` is the type-
+specimen demo, golden-tested against Ghostscript. Design writeup:
+`FONTS.md`. Still open in Stage 6: Type 3 (`BuildChar`) and Type 1
+fonts, `kshow`, and the glyph cache.
+
 **Stage 5 (run found PostScript) complete.** Beyond drawing live, pscat
 now executes the idioms real-world `.ps` files depend on: arrays and
 strings with true PLRM view semantics (`get`/`put`/`getinterval`/
@@ -55,17 +70,19 @@ cargo test                                # language + pixel-level render tests
 ```
 
 The `examples/` directory has three recursive fractals (Sierpinski
-triangle, Koch snowflake, golden spiral) plus a straight-line demo; all
-render identically in pscat and Ghostscript.
+triangle, Koch snowflake, golden spiral), a found-file-style test card,
+and a type specimen (`specimen.ps`); all render identically in pscat
+and Ghostscript.
 
 ## Gallery
 
-`gallery/` holds six generative-art programs written in pure PostScript
-for this interpreter — and *within its current operator set*, which
-means no `rand`, no `sethsbcolor`, no arrays: each piece carries its own
-linear-congruential random generator and HSB→RGB converter as PostScript
-procedures. Everything is deterministic; change a `/seed` and a
-different tree or fern grows.
+`gallery/` holds generative-art programs written in pure PostScript for
+this interpreter, each *within the operator set it had at the time*.
+The six Stage 3 originals predate `rand`, `sethsbcolor`, and arrays, so
+they carry their own linear-congruential random generator and HSB→RGB
+converter as PostScript procedures; Ring of Type is built on Stage 6's
+fonts. Everything is deterministic; change a `/seed` and a different
+tree or fern grows.
 
 | Piece | Technique |
 |---|---|
@@ -75,6 +92,7 @@ different tree or fern grows.
 | `fern.ps` | Barnsley chaos game — 48,000 points over four affine maps, no outline drawn |
 | `silk_waves.ps` | 66 threads displaced by two interfering sine fields |
 | `frost_mandala.ps` | Six-fold circle recursion, 11° twist per generation — 1,555+ circles |
+| `ring_of_type.ps` | (Stage 6) one sentence circling eleven shrinking rings, set glyph by glyph around a charpath ampersand |
 
 View them one at a time:
 

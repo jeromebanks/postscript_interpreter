@@ -1,0 +1,63 @@
+%!PS-Adobe-3.0 EPSF-3.0
+%%BoundingBox: 0 0 700 700
+%%Title: Ring of Type
+%%Creator: Claude, resident artist
+%%EndComments
+
+% The Stage 6 piece: typography as geometry. One sentence circles the
+% page eleven times, set a character at a time on shrinking rings —
+% each glyph placed with stringwidth and its own rotate, so the baseline
+% bends where straight text can't. Faces alternate serif/sans as the
+% rings descend from midnight blue to ember, and a giant charpath
+% ampersand — type as pure outline — anchors the middle.
+
+/msg (HELLO, LASERWRITER \267 DRAWN LIVE BY PSCAT \267 ) def
+
+350 350 translate
+
+% fontname size radius hue startangle ringoftype -
+/ringoftype {
+  7 dict begin
+  /theta exch def /hue exch def /r exch def /size exch def
+  findfont size scalefont setfont
+  hue 0.72 0.62 sethsbcolor
+  /stop theta 357 sub def   % close the ring, minus a thin seam
+  /i 0 def
+  % walk characters around the ring until the next one wouldn't fit
+  {
+    /c msg i msg length mod 1 getinterval def
+    % angular advance that keeps letterspacing true on this radius:
+    % arc length = glyph width, in degrees = w/r * 180/pi
+    /w c stringwidth pop r div 57.29578 mul def
+    theta w sub stop lt { exit } if
+    gsave
+      theta rotate
+      0 r moveto
+      c show
+    grestore
+    /theta theta w sub def
+    /i i 1 add def
+  } loop
+  end
+} def
+
+/Times-Bold        30 292 0.62 90 ringoftype
+/Helvetica         24 258 0.66 78 ringoftype
+/Times-Italic      22 228 0.70 64 ringoftype
+/Helvetica-Bold    19 200 0.76 48 ringoftype
+/Times-Roman       17 176 0.83 30 ringoftype
+/Helvetica-Oblique 15 154 0.90 12 ringoftype
+/Times-Bold        13 134 0.96 -8 ringoftype
+/Helvetica         11 117 0.02 -30 ringoftype
+/Times-Italic      10 101 0.05 -50 ringoftype
+/Courier-Bold       9  86 0.08 -70 ringoftype
+/Times-Roman        8  73 0.10 -90 ringoftype
+
+% the ampersand: type as outline geometry, centered by its own metrics
+/Times-Italic findfont 150 scalefont setfont
+0.08 0.85 0.45 sethsbcolor
+1.6 setlinewidth
+(&) stringwidth pop 2 div neg -52 moveto
+(&) false charpath stroke
+
+showpage

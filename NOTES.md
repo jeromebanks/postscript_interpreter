@@ -3,6 +3,57 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 6, tasks 1–4 — text and base fonts (2026-07-13)
+
+**Built** (per `ROADMAP.md` Stage 6; tasks 5–7 remain open):
+- **Architecture writeup** (`FONTS.md`): font dicts are ordinary Dicts;
+  `FID` (an integer index — documented type deviation) is the seam to a
+  Rust-side registry of 12 bundled Liberation faces (OFL, in `fonts/`,
+  `include_bytes!`'d) covering the base-13 names minus Symbol.
+  Process note: the task was tagged [opus+review]; the review pass was
+  done in-session (this session ran on a stronger-than-opus model —
+  no stronger reviewer available) and caught one real spec error
+  (scalefont/makefont must *shallow*-copy the dict, sharing the
+  Encoding array).
+- **Plumbing**: `findfont` (lazy materialization into a real
+  `FontDirectory`; unknown names substitute the default face,
+  gs-style, instead of `invalidfont` — documented), `scalefont`/
+  `makefont` (shallow copy + f64 matrix composition), `setfont`
+  (validates, caches FontMatrix in the graphics state — gsave/grestore
+  snapshot the font for free), `currentfont`, `definefont` (FID
+  assignment; Type 3 dicts accepted but unrenderable until task 5),
+  `selectfont`.
+- **Show engine** (`src/font.rs`): byte → live Encoding lookup →
+  glyph name → glyph id (font's `post` table, then Adobe-name→Unicode→
+  `cmap` fallback) → outline through glyph→FontMatrix→CTM into a
+  device-space path (quads elevated to cubics), filled through the
+  normal paint+clip path without touching the current path; pen
+  advances by the transformed advance vector. `show ashow widthshow
+  awidthshow stringwidth charpath` all drive it; rotation/shear falls
+  out of the matrix pipeline.
+- **Encodings** (`src/encodings.rs`): Appendix E StandardEncoding and
+  ISOLatin1Encoding, installed in systemdict and (fresh copy) in each
+  built-in font dict; re-encoding idiom golden-tested.
+- **Tests**: 21 in `tests/fonts.rs` (plumbing, metrics vs the 600/em
+  Courier expectation, ink/clip/rotation pixels, live re-encoding);
+  encoding-table unit tests; `examples/specimen.ps` in the golden
+  suite (text compares with wider ink bands — Liberation vs URW
+  shapes differ at glyph-edge granularity; metrics agree).
+
+**Tradeoffs / deviations:** `FID` is integertype, not fonttype; Symbol
+substitutes Helvetica; unknown `findfont` substitutes rather than
+erroring; `charpath`'s bool operand is ignored (one outline form);
+faces are re-parsed per show call (glyph-cache task will measure);
+`show` is synchronous — Type 3/`kshow` need the ShowFrame exec-stack
+design sketched in `FONTS.md` Decision 6.
+
+The gallery gained its typography piece (`ring_of_type.ps` — the
+stage-goal payoff: text on eleven shrinking rings around a charpath
+ampersand).
+
+**Next:** Stage 6 task 5 (Type 3 / BuildChar, the [opus] exec-stack
+piece, plus `kshow`), task 6 (Type 1 parsing), task 7 (glyph cache).
+
 ## Stage 5 — Run found PostScript (2026-07-12)
 
 **Built** (per `ROADMAP.md` Stage 5, all twelve items):
