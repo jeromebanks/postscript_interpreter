@@ -96,8 +96,8 @@ Goal: `(Hello, LaserWriter) show` — and the gallery gains typography.
 This is the emotional payoff stage; it's sequenced after Stage 5 because
 font machinery uses dicts/arrays heavily.
 
-**Tasks 1–5 ✅ (2026-07-13)** — see `FONTS.md` for the architecture and
-`NOTES.md` for the summaries. Tasks 6–7 remain.
+**✅ COMPLETE (2026-07-13)** — all seven tasks; see `FONTS.md` for the
+architecture and `NOTES.md` for the summaries.
 
 1. ✅ **Font architecture writeup** — `FONTS.md`: font dicts are real
    Dicts with `FID` as the registry seam; bundled Liberation faces via
@@ -114,27 +114,38 @@ font machinery uses dicts/arrays heavily.
    execution stack (one glyph per step); `BuildChar`/`BuildGlyph` run
    in sealed glyph contexts; `setcachedevice(2)`/`setcharwidth`;
    `kshow` (deferred from task 3) rode along. [opus]
-6. **Type 1 fonts** — eexec decryption, charstring interpreter, seac,
-   hint-ignoring first pass. The single hardest parsing job in the
-   project. [opus]
-7. **Glyph cache** — render-once-per-(font,size,glyph) bitmap or path
-   cache; measure before and after. [sonnet]
+6. ✅ **Type 1 fonts** — eexec decryption (via the Stage 7 file/filter
+   machinery, done first for exactly this reason), `src/type1.rs`
+   charstring interpreter (hints ignored, flex, seac, OtherSubrs),
+   verified by generating a complete PFA and cross-checking gs accepts
+   the same bytes. [opus]
+7. ✅ **Glyph cache** — measured first, per the task: face-parse cache
+   (OnceLock) took stringwidth 2×; show is rasterization-bound at
+   ~330k glyphs/sec, so the bitmap cache is deferred until something
+   feels slow (same doctrine as name interning). [sonnet]
 
 ## Stage 7 — Images and filters
 
 Goal: EPS files with embedded images render; `image`/`imagemask` work.
 
-1. **File objects + `currentfile`** — a file/string source as a
-   first-class object and as an exec-stack frame (the `Frame::Scanner`
-   shape generalizes). Prerequisite for inline images, eexec, filters.
-   [opus]
-2. **Filter framework + easy decoders** — `filter` operator;
-   ASCIIHexDecode, ASCII85Decode, RunLengthDecode. [sonnet, after #1]
-3. **Compression decoders** — FlateDecode (`flate2`), LZWDecode (small
-   hand-rolled), DCTDecode (`jpeg-decoder` or `zune-jpeg`). [sonnet]
-4. **`image`/`imagemask`/`colorimage`** — sample decoding, ImageMatrix,
-   scaling through the CTM into tiny-skia. Level 2 dict form and Level 1
-   operand form. [opus] for the pipeline, [sonnet] for variants.
+**✅ COMPLETE except DCTDecode (2026-07-13)** — see `NOTES.md` and
+`HANDOFF.md`. `examples/postcard.ps` demonstrates the whole pipeline
+inline and sits in the golden suite.
+
+1. ✅ **File objects + `currentfile`** — `Value::File` sharing one read
+   cursor with the scanner (`src/file.rs`); `read readstring
+   readhexstring readline closefile bytesavailable status`, exec/token
+   on files, `run`, read-only `file`. [opus]
+2. ✅ **Filter framework + easy decoders** — `filter`; on-demand
+   ASCIIHex/ASCII85/RunLength + the eexec cipher; a filter consumes
+   exactly the source bytes its consumer needed. [sonnet]
+3. ✅ **Compression decoders** — FlateDecode (`flate2`), LZWDecode
+   (hand-rolled). **DCTDecode remains** (`zune-jpeg`; buffers whole
+   stream — fine for DataSource use). [sonnet]
+4. ✅ **`image`/`imagemask`/`colorimage`** — `Frame::Image`, both
+   operand forms, gray/RGB/CMYK 1/2/4/8-bit, Decode arrays, proc/file/
+   string sources, filter-chain draining, minimal `setcolorspace`.
+   Gap: MultipleDataSources colorimage (limitcheck). [opus]
 
 ## Stage 8 — VM fidelity and performance
 

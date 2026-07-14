@@ -3,6 +3,86 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 6 complete + Stage 7 (2026-07-13)
+
+**Stage 6 task 6 — Type 1 fonts.** `src/type1.rs` is a hint-ignoring
+charstring interpreter (numbers, moves/lines/curves, hsbw/sbw,
+callsubr/return, div, seac with FreeType's sidebearing reading, flex
+via OtherSubrs 0–2 as literal cubics, OtherSubr 3 threaded through
+pop/callsubr). Glyph dispatch in `ShowCtx::step`: registry fid ≥ 0 →
+bundled TTF; `BuildGlyph`/`BuildChar` in the dict → Type 3 frame;
+`CharStrings` → Type 1 (decrypted per Private/lenIV with Subrs),
+rendered synchronously through the same FontMatrix∘CTM transform as
+every glyph source. `tests/type1.rs` *generates a complete canonical
+PFA in memory* (eexec + charstring encryption, `N RD <binary>`
+delivery, Private/CharStrings/definefont sequence, zeros,
+cleartomark) — and Ghostscript accepts the identical bytes, agreeing
+on metrics. Supporting work that made it possible:
+- **File objects** (Stage 7 task 1, `src/file.rs` + `Value::File`):
+  one shared read cursor between the scanner and data reads. The
+  Lexer now pulls bytes through a `FileHandle`.
+- **Filters** (task 2): files layered on files, decoding *on demand*
+  so a filter consumes exactly the source bytes its consumer needed —
+  the property `currentfile eexec` + `closefile` + cleartomark
+  depends on. ASCIIHex/ASCII85/RunLength + the eexec cipher
+  (hex/binary sniffed), later Flate (flate2, byte-fed) and LZW
+  (hand-rolled, EarlyChange=1).
+- **Scanner delimiter fix**: a token terminated by whitespace consumes
+  that one character (CRLF as a unit), per PLRM and pinned against
+  gs — without it `N RD <binary>` reads the wrong byte. `token`
+  remainders changed accordingly (stage5 expectations updated to
+  match gs).
+- **`systemdict`/`userdict` by name** — simply missing until now;
+  eexec pushes systemdict for its duration (fonts assume it).
+- Access ops `executeonly readonly noaccess rcheck wcheck` as
+  identities (every real font executes them).
+
+**Stage 6 task 7 — glyph cache, measured.** Faces are now parsed once
+per process (OnceLock over the `'static` bundled data). Measured
+(release, M-series, 110k glyphs): show 0.35s→0.33s (rasterization
+dominates), stringwidth 0.04s→0.02s. At ~330k painted glyphs/sec a
+bitmap cache is not worth its complexity yet — same philosophy as
+name interning: revisit when something feels slow. `setcachedevice`'s
+bbox remains unused until then.
+
+**Stage 7 tasks 1–3** shipped as described above (file objects,
+filter framework, Flate/LZW). DCTDecode/CCITTFax deliberately absent
+(`filter` reports them undefined).
+
+**Stage 7 task 4 — images.** `src/image.rs` + `ops/image.rs`:
+`image` (Level 1 five-operand and Level 2 dict forms), `imagemask`
+(polarity pinned against gs: true ≡ Decode [1 0] ≡ paint the 1s),
+`colorimage` (interleaved single source; 1/3/4 components).
+`Frame::Image` accumulates data like the show frame: procedure
+sources run as frames above and hand back strings (empty string =
+EOD; premature EOD renders what arrived, missing samples read 0);
+file/string sources drain synchronously. Rasterization inverse-maps
+each device pixel through CTM⁻¹ then ImageMatrix (nearest neighbor),
+blending through the clip mask. Minimal `setcolorspace`/
+`currentcolorspace` for the three device spaces (the dict form reads
+the current space's component count; color operators set it
+implicitly per the PLRM).
+
+**Tradeoffs / deviations (this whole block):**
+- `file` op is read-only (`(r)`); write modes are invalidfileaccess.
+- Filter `encode` variants don't exist; parameter dicts are accepted
+  and ignored.
+- `colorimage` with MultipleDataSources → limitcheck (documented gap).
+- Images are nearest-neighbor, no interpolation (`/Interpolate`
+  ignored); 12-bit samples unsupported (rangecheck).
+- Type 1: hints ignored entirely; no `/Metrics` override; CID/CFF
+  (Type 2 charstrings) out of scope.
+- eexec's systemdict push is popped at source exhaustion but *not*
+  restored on error unwinds (program is aborting anyway).
+
+**Closing state:** `examples/postcard.ps` (inline hex/Flate images,
+colorimage, imagemask sprites) joined the golden suite — the corpus
+proof for the image pipeline. Bitmap fonts (Type 3 BuildChar using
+imagemask) are tested working. **Everything else about continuing
+this project — orientation, gotchas, and the recommended next-work
+order (DCTDecode, found-file corpus round 2, then Stage 8's
+save/restore) — lives in `HANDOFF.md`.**
+
 ## Stage 6, task 5 — Type 3 fonts and kshow (2026-07-13)
 
 **Built** (the stage's [opus] exec-stack piece; design in `FONTS.md`

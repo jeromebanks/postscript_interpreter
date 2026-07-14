@@ -7,29 +7,34 @@ time.
 
 ## Status
 
-**Stage 6 text and fonts: the core is in, Type 3 included.**
-`(Hello, LaserWriter) show` works — `findfont`/`scalefont`/`makefont`/
-`setfont`/`selectfont`/`definefont`, the full `show` family (`ashow`/
-`widthshow`/`awidthshow`/`kshow`), `stringwidth`, and `charpath` (text
-as geometry: outline, clip, measure). The standard base fonts
-(Helvetica, Times, Courier families) are backed by bundled Liberation
-faces — metrically compatible with the Adobe originals, so layout
-agrees with Ghostscript — and glyphs render through the same path
-pipeline as everything else: scaled, rotated, sheared, clipped, and
-colored like any fill. `StandardEncoding`/`ISOLatin1Encoding` and the
-PLRM re-encoding idiom work (Encoding is read live from the font dict).
+**Stage 6 (text and fonts) and Stage 7 (files, filters, images) are
+complete.** Text works in three font technologies:
 
-**Type 3 fonts — glyphs that are programs — run for real:** `BuildChar`
-/`BuildGlyph` procedures execute on the machine inside sealed glyph
-contexts, `setcachedevice`/`setcharwidth` drive metrics, and
-`stringwidth` executes glyph procedures with painting suppressed, per
-the PLRM. See `examples/type3_demo.ps` (procedural bit-glyphs, gears,
-dingbats — golden-tested against Ghostscript) and
-`examples/type3_ransom.ps`, where every glyph is invented fresh at
-show time — no two occurrences of a letter alike.
-`examples/specimen.ps` is the base-font type-specimen demo. Design
-writeup: `FONTS.md`. Still open in Stage 6: Type 1 fonts and the
-glyph cache.
+- **The standard base fonts** (Helvetica, Times, Courier families,
+  backed by bundled metric-compatible Liberation faces) through the
+  full operator set: `findfont`/`scalefont`/`makefont`/`setfont`/
+  `selectfont`/`definefont`, `show`/`ashow`/`widthshow`/`awidthshow`/
+  `kshow`, `stringwidth`, `charpath` (text as geometry), Standard and
+  ISOLatin1 encodings with the PLRM re-encoding idiom.
+- **Type 3 fonts** — glyphs that are programs: `BuildChar`/`BuildGlyph`
+  run on the machine in sealed glyph contexts (see
+  `examples/type3_ransom.ps`, where every glyph is invented fresh at
+  show time), including bitmap fonts that stamp their raster with
+  `imagemask`.
+- **Type 1 fonts** — the real thing: `currentfile eexec`, encrypted
+  charstrings via the `N RD <binary>` idiom, a hint-ignoring
+  charstring interpreter with flex and seac. The test suite generates
+  a complete PFA and Ghostscript accepts the identical bytes.
+
+And the Stage 7 machinery underneath: **file objects** sharing one
+read cursor with the scanner (`currentfile`, `read*`, `token`/`exec`
+on files), **decode filters** (ASCIIHex, ASCII85, RunLength, Flate,
+LZW) as composable on-demand file layers, and **sampled images** —
+`image`/`imagemask`/`colorimage` in both operand forms, from string,
+file, filter-chain, or procedure data sources, through the full
+CTM/clip pipeline. `examples/postcard.ps` shows it all inline;
+`FONTS.md` has the font design writeup, `HANDOFF.md` the state of
+the world and what's next (DCTDecode, then Stage 8's save/restore).
 
 **Stage 5 (run found PostScript) complete.** Beyond drawing live, pscat
 now executes the idioms real-world `.ps` files depend on: arrays and

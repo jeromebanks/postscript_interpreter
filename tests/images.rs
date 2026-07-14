@@ -141,6 +141,34 @@ fn empty_string_from_proc_ends_the_image_early() {
 }
 
 #[test]
+fn bitmap_fonts_work_via_imagemask_in_buildchar() {
+    // The classic bitmap-font construction: a Type 3 glyph procedure
+    // that stamps its raster with imagemask. Image frame inside a
+    // BuildChar frame inside a show frame — all nested machinery.
+    let it = run("/BitFont 6 dict def
+         BitFont begin
+           /FontType 3 def
+           /FontMatrix [0.001 0 0 0.001 0 0] def
+           /Encoding 256 array def 0 1 255 { Encoding exch /.notdef put } for
+           Encoding 97 /blk put
+           /BuildChar {
+             exch begin
+               1000 0 0 0 800 800 setcachedevice
+               800 800 scale
+               2 2 true [2 0 0 -2 0 2] {<c0 00>} imagemask
+             end
+           } def
+         end
+         /BitFont BitFont definefont pop
+         /BitFont findfont 60 scalefont setfont
+         20 20 moveto (a) show");
+    // <c0> on 2x2 = rows [1 1] / [0 0]: the raster's top half paints.
+    // Glyph occupies user (20..68)^2; top half = user y 44..68.
+    assert_eq!(pixel(&it, 40, 100 - 60), BLACK, "top half stamped");
+    assert_eq!(pixel(&it, 40, 100 - 30), WHITE, "bottom half clear");
+}
+
+#[test]
 fn exit_inside_data_proc_is_invalidexit() {
     let mut it = Interp::with_page(100, 100).expect("page");
     assert_eq!(
