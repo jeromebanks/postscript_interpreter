@@ -133,6 +133,10 @@ impl PsPath {
 pub struct GraphicsState {
     pub ctm: Transform,
     pub rgb: (f32, f32, f32),
+    /// Component count of the current color space (1/3/4 for the
+    /// device spaces) — the Level 2 image dict form reads it. Set
+    /// implicitly by the color operators, per the PLRM.
+    colorspace_ncomp: u32,
     /// In user-space units, per the spec; converted at stroke time.
     pub line_width: f64,
     pub line_cap: LineCap,
@@ -187,6 +191,7 @@ impl Gfx {
             state: GraphicsState {
                 ctm: base_ctm,
                 rgb: (0.0, 0.0, 0.0),
+                colorspace_ncomp: 1,
                 line_width: 1.0,
                 line_cap: LineCap::Butt,
                 line_join: LineJoin::Miter,
@@ -206,6 +211,10 @@ impl Gfx {
 
     pub fn state(&self) -> &GraphicsState {
         &self.state
+    }
+
+    pub(crate) fn colorspace_ncomp(&self) -> u32 {
+        self.state.colorspace_ncomp
     }
 
     // --- coordinate plumbing -------------------------------------------
@@ -386,6 +395,10 @@ impl Gfx {
     }
 
     /// Rc clone so the mask can outlive the `&mut self.pixmap` borrow.
+    pub(crate) fn clip_mask_data(&self) -> Option<std::rc::Rc<tiny_skia::Mask>> {
+        self.clip_mask()
+    }
+
     fn clip_mask(&self) -> Option<std::rc::Rc<tiny_skia::Mask>> {
         self.state.clip.as_ref().map(|c| c.mask.clone())
     }
@@ -478,6 +491,10 @@ impl Gfx {
 
     pub fn set_rgb(&mut self, r: f64, g: f64, b: f64) {
         self.state.rgb = (clamp01(r), clamp01(g), clamp01(b));
+    }
+
+    pub(crate) fn set_colorspace(&mut self, ncomp: u32) {
+        self.state.colorspace_ncomp = ncomp;
     }
 
     pub fn set_line_width(&mut self, w: f64) {

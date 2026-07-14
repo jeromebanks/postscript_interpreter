@@ -155,6 +155,24 @@ impl PsFile {
         self.consumed
     }
 
+    /// Whether this file is a decode filter (as opposed to raw bytes).
+    /// `image` drains filter sources to their EOD marker on completion
+    /// — that's how the scanner gets past an inline image's trailing
+    /// `>` or `~>` (pinned against gs); raw files are left exact.
+    pub fn is_filter(&self) -> bool {
+        matches!(self.kind, Kind::Filter { .. })
+    }
+
+    /// A filter's underlying source, for draining chains: each layer
+    /// must reach its own EOD marker so the bottom raw file ends up
+    /// positioned right after all the encoded data.
+    pub fn filter_source(&self) -> Option<FileHandle> {
+        match &self.kind {
+            Kind::Filter { source, .. } => Some(source.clone()),
+            Kind::Bytes { .. } => None,
+        }
+    }
+
     pub fn same_object(a: &FileHandle, b: &FileHandle) -> bool {
         Rc::ptr_eq(a, b)
     }
@@ -180,6 +198,35 @@ pub enum Decoder {
         skip: usize,
         mode: EexecMode,
     },
+    /// zlib (RFC 1950) — PostScript FlateDecode. Fed one byte at a
+    /// time so the source stops exactly at the end of the compressed
+    /// stream (deflate marks its own final block).
+    Flate(Box<flate2::Decompress>),
+    /// PostScript LZWDecode: variable 9–12 bit codes, MSB-first,
+    /// EarlyChange=1.
+    Lzw(Box<LzwState>),
+}
+
+pub struct LzwState {
+    /// Bit reservoir, MSB-aligned.
+    acc: u32,
+    nbits: u32,
+    code_width: u32,
+    /// Dictionary entries beyond the 256 literals + 2 control codes.
+    table: Vec<Vec<u8>>,
+    prev: Option<Vec<u8>>,
+}
+
+impl Default for LzwState {
+    fn default() -> Self {
+        LzwState {
+            acc: 0,
+            nbits: 0,
+            code_width: 9,
+            table: Vec::new(),
+            prev: None,
+        }
+    }
 }
 
 pub enum EexecMode {
@@ -207,6 +254,14 @@ impl Decoder {
             skip: 4,
             mode: EexecMode::Unknown,
         }
+    }
+
+    pub fn flate() -> Self {
+        Decoder::Flate(Box::new(flate2::Decompress::new(true)))
+    }
+
+    pub fn lzw() -> Self {
+        Decoder::Lzw(Box::default())
     }
 
     fn pull(
@@ -307,6 +362,79 @@ impl Decoder {
                 }
                 Ok(())
             }
+            Decoder::Flate(z) => {
+                let mut outbuf = [0u8; 512];
+                loop {
+                    let Some(b) = next()? else {
+                        *eod = true;
+                        return Ok(());
+                    };
+                    let before = z.total_out();
+                    let status = z
+                        .decompress(&[b], &mut outbuf, flate2::FlushDecompress::None)
+                        .map_err(|_| PsError::Io)?;
+                    let produced = (z.total_out() - before) as usize;
+                    out.extend(&outbuf[..produced]);
+                    if matches!(status, flate2::Status::StreamEnd) {
+                        *eod = true;
+                        return Ok(());
+                    }
+                    if produced > 0 {
+                        return Ok(());
+                    }
+                }
+            }
+            Decoder::Lzw(st) => loop {
+                // Refill the bit reservoir to one code's worth.
+                while st.nbits < st.code_width {
+                    let Some(b) = next()? else {
+                        *eod = true;
+                        return Ok(());
+                    };
+                    st.acc = (st.acc << 8) | u32::from(b);
+                    st.nbits += 8;
+                }
+                st.nbits -= st.code_width;
+                let code = (st.acc >> st.nbits) & ((1 << st.code_width) - 1);
+                match code {
+                    256 => {
+                        st.table.clear();
+                        st.code_width = 9;
+                        st.prev = None;
+                    }
+                    257 => {
+                        *eod = true;
+                        return Ok(());
+                    }
+                    _ => {
+                        let entry: Vec<u8> = if code < 256 {
+                            vec![code as u8]
+                        } else if let Some(e) = st.table.get(code as usize - 258) {
+                            e.clone()
+                        } else if let Some(prev) = &st.prev {
+                            // The classic KwKwK case: code == next slot.
+                            let mut e = prev.clone();
+                            e.push(prev[0]);
+                            e
+                        } else {
+                            return Err(PsError::Io);
+                        };
+                        if let Some(prev) = st.prev.take() {
+                            let mut new = prev;
+                            new.push(entry[0]);
+                            st.table.push(new);
+                        }
+                        // EarlyChange=1: widen one code early.
+                        let filled = st.table.len() + 258;
+                        if filled + 1 >= (1 << st.code_width) && st.code_width < 12 {
+                            st.code_width += 1;
+                        }
+                        st.prev = Some(entry.clone());
+                        out.extend(entry);
+                        return Ok(());
+                    }
+                }
+            },
             Decoder::Eexec { r, skip, mode } => {
                 if matches!(mode, EexecMode::Unknown) {
                     // Skip leading whitespace, then sniff the first four

@@ -1110,6 +1110,7 @@ dependencies = [
 name = "pscat"
 version = "0.5.0"
 dependencies = [
+ "flate2",
  "softbuffer",
  "thiserror 2.0.18",
  "tiny-skia 0.12.0",

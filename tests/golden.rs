@@ -130,4 +130,6 @@ fn examples_match_ghostscript() {
     // both interpreters (the ransom demo, which uses rand, stays out:
     // rand is implementation-specific).
     assert_close("type3_demo.ps", true);
+    // Inline images: image/colorimage/imagemask + filter chains.
+    assert_close("postcard.ps", true);
 }

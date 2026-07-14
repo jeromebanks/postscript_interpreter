@@ -160,6 +160,33 @@ fn eexec_pushes_systemdict_for_its_duration() {
 }
 
 #[test]
+fn flate_decode_roundtrip() {
+    use flate2::{Compression, write::ZlibEncoder};
+    use std::io::Write;
+    let mut enc = ZlibEncoder::new(Vec::new(), Compression::default());
+    enc.write_all(b"compressed postscript payload")
+        .expect("compress");
+    let z = enc.finish().expect("finish");
+    let hex: String = z.iter().map(|b| format!("{b:02x}")).collect();
+    let mut it = run(&format!(
+        "({hex}) /ASCIIHexDecode filter /FlateDecode filter
+         64 string readstring"
+    ));
+    assert_eq!(top_repr(&mut it), "false");
+    assert_eq!(top_repr(&mut it), "(compressed postscript payload)");
+}
+
+#[test]
+fn lzw_decode_known_vector() {
+    // Hand-packed 9-bit codes for "aaaa":
+    // Clear(256) 97 258 97 EOD(257) -> 80 18 60 46 18 08.
+    let mut it = run("(801860461808) /ASCIIHexDecode filter /LZWDecode filter
+         8 string readstring");
+    assert_eq!(top_repr(&mut it), "false");
+    assert_eq!(top_repr(&mut it), "(aaaa)");
+}
+
+#[test]
 fn file_errors() {
     let mut it = Interp::with_page(100, 100).expect("page");
     assert_eq!(

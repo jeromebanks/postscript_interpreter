@@ -8,6 +8,7 @@ pub mod error;
 pub mod file;
 pub mod font;
 pub mod gfx;
+pub(crate) mod image;
 pub mod interp;
 pub mod lexer;
 pub mod object;

@@ -19,6 +19,7 @@ use std::rc::Rc;
 use crate::error::PsError;
 use crate::font::{ShowCtx, ShowStep};
 use crate::gfx::{DEFAULT_PAGE, Gfx};
+use crate::image::{ImageCtx, ImageStep};
 use crate::lexer::{Lexer, Token};
 use crate::object::{Dict, Num, Object, PsArray, PsString, Value};
 use crate::ops;
@@ -52,6 +53,9 @@ enum Frame {
     /// The show family: one glyph per step; Type 3 glyphs and kshow
     /// procs run as ordinary frames above this one (see `crate::font`).
     Show(Box<ShowCtx>),
+    /// image/imagemask/colorimage accumulating sample data; procedure
+    /// data sources run as frames above (see `crate::image`).
+    Image(Box<ImageCtx>),
 }
 
 pub(crate) enum ForallSrc {
@@ -316,6 +320,7 @@ impl Interp {
                     estack,
                     dstack,
                     gfx,
+                    ostack,
                     ..
                 } = self;
                 let Some(frame) = estack.last_mut() else {
@@ -406,6 +411,17 @@ impl Interp {
                         ShowStep::Exec { operands, target } => Action::ExecWith(operands, target),
                         ShowStep::Again => Action::Nothing,
                     },
+                    Frame::Image(ctx) => {
+                        if ctx.waiting() {
+                            // The data-source procedure's result.
+                            let s = ostack.pop().ok_or(PsError::StackUnderflow)?;
+                            ctx.supply(s)?;
+                        }
+                        match ctx.step(gfx)? {
+                            ImageStep::Exec(p) => Action::ExecWith(Vec::new(), p),
+                            ImageStep::Done => Action::Pop,
+                        }
+                    }
                 }
             };
             match action {
@@ -606,6 +622,11 @@ impl Interp {
         self.push_frame(Frame::Show(Box::new(ctx)))
     }
 
+    /// Queue an image (image/imagemask/colorimage) frame.
+    pub(crate) fn begin_image(&mut self, ctx: ImageCtx) -> Result<(), PsError> {
+        self.push_frame(Frame::Image(Box::new(ctx)))
+    }
+
     /// `currentfile`: the topmost *file* being executed. Executable
     /// strings scan through the same machinery but aren't files, per
     /// the PLRM, so they're skipped.
@@ -664,7 +685,8 @@ impl Interp {
     pub(crate) fn exit_loop(&mut self) -> Result<(), PsError> {
         loop {
             match self.estack.last() {
-                None | Some(Frame::Scanner(_) | Frame::StopMark | Frame::Show(_)) => {
+                None
+                | Some(Frame::Scanner(_) | Frame::StopMark | Frame::Show(_) | Frame::Image(_)) => {
                     return Err(PsError::InvalidExit);
                 }
                 Some(

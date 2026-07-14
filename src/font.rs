@@ -93,10 +93,20 @@ pub(crate) fn builtin_index(name: &str) -> Option<i64> {
         .map(|i| i as i64)
 }
 
-fn face_for(fid: i64) -> Result<Face<'static>, PsError> {
+/// Parsed faces, once per process — the bundled data is `'static`, so
+/// the zero-copy `Face` views can live forever. (Stage 6 task 7:
+/// measured before/after; numbers in NOTES.md.)
+static FACES: std::sync::OnceLock<Vec<Face<'static>>> = std::sync::OnceLock::new();
+
+fn face_for(fid: i64) -> Result<&'static Face<'static>, PsError> {
     let idx = usize::try_from(fid).map_err(|_| PsError::InvalidFont)?;
-    let b = BUILTINS.get(idx).ok_or(PsError::InvalidFont)?;
-    Face::parse(b.data, 0).map_err(|_| PsError::InvalidFont)
+    let faces = FACES.get_or_init(|| {
+        BUILTINS
+            .iter()
+            .map(|b| Face::parse(b.data, 0).expect("bundled font parses"))
+            .collect()
+    });
+    faces.get(idx).ok_or(PsError::InvalidFont)
 }
 
 /// The current font, snapshotted by `setfont` into the graphics state
@@ -325,7 +335,7 @@ fn outline_glyph(
     let g = [fm[0] * k, fm[1] * k, fm[2] * k, fm[3] * k];
 
     let name = encoding_name(fs, byte);
-    let gid = resolve_glyph(&face, &name);
+    let gid = resolve_glyph(face, &name);
 
     if let Some(gid) = gid
         && !matches!(mode, ShowMode::Width)

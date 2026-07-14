@@ -1,0 +1,63 @@
+%!PS-Adobe-3.0
+%% postcard.ps — the Stage 7 image pipeline on one 500x500 page:
+%%   - a 1-bit checkerboard (Level 1 image), scaled huge
+%%   - RGB sunset stripes (colorimage, interleaved)
+%%   - an 8-bit gray ramp (inline hex data through currentfile)
+%%   - imagemask sprites stamped from one string in three colors
+%%   - a FlateDecode-compressed RGB tile (filter chain on currentfile)
+%% Deterministic; renders identically in Ghostscript (golden suite).
+
+% --- sky: RGB stripes via colorimage -----------------------------------
+gsave
+  0 300 translate 500 200 scale
+  1 5 8 [1 0 0 -5 0 5]
+  <2b2d5a 5a4a8c b45a78 e6825a ffb45a>
+  false 3 colorimage
+grestore
+
+% --- sea: 1-bit checkerboard, image + Decode-free Level 1 form ---------
+gsave
+  0 180 translate 500 120 scale
+  8 4 1 [8 0 0 -4 0 4]
+  { <55 aa 55 aa> }
+  image
+grestore
+
+% --- beach: gray ramp through the classic currentfile idiom ------------
+gsave
+  0 100 translate 500 80 scale
+  8 1 8 [8 0 0 -1 0 1]
+  currentfile /ASCIIHexDecode filter image
+  30 50 70 90 b0 d0 e8 f8>
+grestore
+
+% --- invaders: one bitmap string, stamped as imagemask in 3 colors -----
+/invader <1818 3c7e ffdb ff24 5aa5> def   % 8x10 1-bit sprite
+/stamp {  % x y r g b stamp -
+  setrgbcolor
+  gsave
+    translate 60 75 scale
+    8 10 true [8 0 0 -10 0 10] invader imagemask
+  grestore
+} def
+ 60 205  0.10 0.10 0.15 stamp
+215 215  0.60 0.12 0.12 stamp
+370 200  0.95 0.85 0.30 stamp
+
+% --- souvenir: Flate-compressed RGB tile through a filter chain --------
+gsave
+  330 30 translate 140 56 scale
+  4 4 8 [4 0 0 -4 0 4]
+  currentfile /ASCIIHexDecode filter /FlateDecode filter
+  false 3 colorimage
+  78da05c1411100000802b03ac63184217c9284230801086118b70a26547c4189234b38b1d6b3d0f2d6d598a6dad778a1bc1aa3>
+grestore
+
+% --- caption ------------------------------------------------------------
+0 setgray
+/Helvetica-Bold findfont 22 scalefont setfont
+30 55 moveto (greetings from raster bay) show
+/Helvetica findfont 11 scalefont setfont
+30 36 moveto (image | colorimage | imagemask | FlateDecode, all inline) show
+
+showpage

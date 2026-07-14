@@ -195,7 +195,10 @@ fn filter(it: &mut Interp) -> Result<(), PsError> {
         "ASCIIHexDecode" => Decoder::ascii_hex(),
         "ASCII85Decode" => Decoder::ascii85(),
         "RunLengthDecode" => Decoder::RunLength,
-        // Encode filters (and decoders we don't have) are undefined.
+        "FlateDecode" => Decoder::flate(),
+        "LZWDecode" => Decoder::lzw(),
+        // Encode filters (and decoders we don't have: DCTDecode,
+        // CCITTFaxDecode) are undefined.
         _ => return Err(PsError::Undefined(name.to_string())),
     };
     let mut src = it.pop()?;

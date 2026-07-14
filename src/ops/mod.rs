@@ -9,6 +9,7 @@ pub mod dict;
 pub mod file;
 pub mod font;
 pub mod graphics;
+pub mod image;
 pub mod logic;
 pub mod matrix;
 pub mod misc;
@@ -36,6 +37,7 @@ pub fn install_all(dict: &mut Dict) {
     matrix::install(dict);
     font::install(dict);
     file::install(dict);
+    image::install(dict);
     logic::install(dict);
     misc::install(dict);
 

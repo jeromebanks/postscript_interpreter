@@ -7,6 +7,7 @@ description = "A PostScript interpreter for watching programs draw, live"
 [dependencies]
 softbuffer = "0.4.8"
 thiserror = "2"
+flate2 = "1"
 tiny-skia = "0.12.0"
 ttf-parser = "0.25"
 winit = "0.30.13"
