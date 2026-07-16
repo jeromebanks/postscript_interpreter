@@ -186,6 +186,59 @@ fn lzw_decode_known_vector() {
     assert_eq!(top_repr(&mut it), "(aaaa)");
 }
 
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+// Fixtures: flat-color JPEGs produced by gs (jpeggray / jpeg devices),
+// APP/COM segments stripped. Flat color survives JPEG nearly exactly
+// (DC coefficient only), so tight tolerances hold.
+
+#[test]
+fn dct_decode_gray_jpeg() {
+    // 8x8 grayscale, 0.5 setgray: 64 one-byte samples near 128.
+    let jpeg = hex(include_bytes!("data/gray8.jpg"));
+    let mut it = run(&format!(
+        "({jpeg}) /ASCIIHexDecode filter /DCTDecode filter
+         100 string readstring pop dup length exch 0 get"
+    ));
+    let first: i64 = top_repr(&mut it).parse().expect("sample");
+    let len: i64 = top_repr(&mut it).parse().expect("length");
+    assert_eq!(len, 64, "one byte per grayscale sample");
+    assert!((first - 128).abs() <= 8, "mid-gray sample, got {first}");
+}
+
+#[test]
+fn dct_decode_color_jpeg_yields_rgb() {
+    // 4x4 solid red: 48 bytes of interleaved RGB.
+    let jpeg = hex(include_bytes!("data/red4.jpg"));
+    let mut it = run(&format!(
+        "({jpeg}) /ASCIIHexDecode filter /DCTDecode filter
+         100 string readstring pop
+         dup length exch dup 0 get exch dup 1 get exch 2 get"
+    ));
+    let b: i64 = top_repr(&mut it).parse().expect("b");
+    let g: i64 = top_repr(&mut it).parse().expect("g");
+    let r: i64 = top_repr(&mut it).parse().expect("r");
+    let len: i64 = top_repr(&mut it).parse().expect("length");
+    assert_eq!(len, 48, "three bytes per pixel");
+    assert!(r >= 240 && g <= 15 && b <= 15, "red pixel, got {r} {g} {b}");
+}
+
+#[test]
+fn dct_consumes_exactly_through_eoi() {
+    // Bytes after the JPEG's EOI marker stay unread in the source —
+    // the shared-cursor contract every decoder keeps.
+    let jpeg = hex(include_bytes!("data/gray8.jpg"));
+    let mut it = run(&format!(
+        "({jpeg}414243>) /ASCIIHexDecode filter dup /DCTDecode filter
+         100 string readstring pop pop
+         3 string readstring"
+    ));
+    assert_eq!(top_repr(&mut it), "true");
+    assert_eq!(top_repr(&mut it), "(ABC)");
+}
+
 #[test]
 fn file_errors() {
     let mut it = Interp::with_page(100, 100).expect("page");

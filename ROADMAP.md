@@ -128,9 +128,9 @@ architecture and `NOTES.md` for the summaries.
 
 Goal: EPS files with embedded images render; `image`/`imagemask` work.
 
-**✅ COMPLETE except DCTDecode (2026-07-13)** — see `NOTES.md` and
-`HANDOFF.md`. `examples/postcard.ps` demonstrates the whole pipeline
-inline and sits in the golden suite.
+**✅ COMPLETE (2026-07-16)** — see `NOTES.md` and `HANDOFF.md`.
+`examples/postcard.ps` demonstrates the whole pipeline inline and sits
+in the golden suite. DCTDecode landed 07-16, after the 07-13 wrap.
 
 1. ✅ **File objects + `currentfile`** — `Value::File` sharing one read
    cursor with the scanner (`src/file.rs`); `read readstring
@@ -140,8 +140,8 @@ inline and sits in the golden suite.
    ASCIIHex/ASCII85/RunLength + the eexec cipher; a filter consumes
    exactly the source bytes its consumer needed. [sonnet]
 3. ✅ **Compression decoders** — FlateDecode (`flate2`), LZWDecode
-   (hand-rolled). **DCTDecode remains** (`zune-jpeg`; buffers whole
-   stream — fine for DataSource use). [sonnet]
+   (hand-rolled), DCTDecode (`zune-jpeg`; buffers one whole JPEG but
+   marker-aware, consuming exactly through EOI). [sonnet]
 4. ✅ **`image`/`imagemask`/`colorimage`** — `Frame::Image`, both
    operand forms, gray/RGB/CMYK 1/2/4/8-bit, Decode arrays, proc/file/
    string sources, filter-chain draining, minimal `setcolorspace`.

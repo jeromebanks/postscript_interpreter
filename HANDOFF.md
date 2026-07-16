@@ -1,14 +1,15 @@
 # HANDOFF.md — state of the interpreter and how to continue
 
 Written 2026-07-13, at the completion of Stages 6 (text and fonts) and
-7 (images and filters, minus DCTDecode). Written for whichever model
+7 (images and filters); DCTDecode closed the stage's one gap on
+2026-07-16. Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
 `NOTES.md` has per-stage histories; this file is the *orientation*.
 
 ## Where things stand
 
-**168 tests across 16 suites, clippy clean.** Stages 1–7 are done
+**174 tests across 16 suites, clippy clean.** Stages 1–7 are done
 except the explicit gaps below. The interpreter runs found PostScript
 with data structures, error recovery, text in three font technologies
 (bundled TrueType via ttf-parser, Type 3 glyph procedures, Type 1
@@ -61,7 +62,9 @@ renders eight examples in both and compares block-downsampled output).
 - Access control (`executeonly` etc.) is not modeled — identities.
 - Filter parameter dicts accepted and ignored; no encode filters.
 - Images: nearest-neighbor, no `/Interpolate`, no 12-bit samples, no
-  MultipleDataSources colorimage (limitcheck), no DCTDecode yet.
+  MultipleDataSources colorimage (limitcheck). DCTDecode buffers one
+  whole JPEG (marker-aware, stops exactly at EOI); CCITTFax absent;
+  Adobe inverted-CMYK JPEGs untested.
 - errordict handlers not consulted; error-time operand-stack
   restoration not done (PLRM handlers see pre-error operands).
 - eexec's systemdict push isn't restored on error unwinds.
@@ -82,10 +85,8 @@ renders eight examples in both and compares block-downsampled output).
 
 ## Next work, in recommended order
 
-1. **DCTDecode** (Stage 7 leftover, [sonnet]): `zune-jpeg` behind a
-   `Decoder::Dct` variant. It must buffer the whole JPEG (breaks
-   exact-consumption; acceptable — real files use it as a DataSource,
-   and the image drain handles positioning). Wire gray + YCbCr→RGB.
+1. ✅ **DCTDecode** — done 2026-07-16 (`Decoder::Dct`, zune-jpeg;
+   marker-aware buffering, exact EOI consumption; see NOTES.md).
 2. **Found-file corpus round 2** ([sonnet]): pull 3–5 real EPS files
    with embedded images and Type 1 fonts; add per-file status notes
    like Stage 5's testcard. This will surface the next real gaps

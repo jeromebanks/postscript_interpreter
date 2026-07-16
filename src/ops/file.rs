@@ -197,7 +197,8 @@ fn filter(it: &mut Interp) -> Result<(), PsError> {
         "RunLengthDecode" => Decoder::RunLength,
         "FlateDecode" => Decoder::flate(),
         "LZWDecode" => Decoder::lzw(),
-        // Encode filters (and decoders we don't have: DCTDecode,
+        "DCTDecode" => Decoder::dct(),
+        // Encode filters (and the one decoder we don't have,
         // CCITTFaxDecode) are undefined.
         _ => return Err(PsError::Undefined(name.to_string())),
     };

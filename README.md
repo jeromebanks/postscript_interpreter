@@ -29,12 +29,12 @@ complete.** Text works in three font technologies:
 And the Stage 7 machinery underneath: **file objects** sharing one
 read cursor with the scanner (`currentfile`, `read*`, `token`/`exec`
 on files), **decode filters** (ASCIIHex, ASCII85, RunLength, Flate,
-LZW) as composable on-demand file layers, and **sampled images** —
-`image`/`imagemask`/`colorimage` in both operand forms, from string,
-file, filter-chain, or procedure data sources, through the full
-CTM/clip pipeline. `examples/postcard.ps` shows it all inline;
-`FONTS.md` has the font design writeup, `HANDOFF.md` the state of
-the world and what's next (DCTDecode, then Stage 8's save/restore).
+LZW, DCT/JPEG) as composable on-demand file layers, and **sampled
+images** — `image`/`imagemask`/`colorimage` in both operand forms,
+from string, file, filter-chain, or procedure data sources, through
+the full CTM/clip pipeline. `examples/postcard.ps` shows it all
+inline; `FONTS.md` has the font design writeup, `HANDOFF.md` the
+state of the world and what's next (Stage 8's save/restore).
 
 **Stage 5 (run found PostScript) complete.** Beyond drawing live, pscat
 now executes the idioms real-world `.ps` files depend on: arrays and

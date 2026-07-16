@@ -205,6 +205,14 @@ pub enum Decoder {
     /// PostScript LZWDecode: variable 9–12 bit codes, MSB-first,
     /// EarlyChange=1.
     Lzw(Box<LzwState>),
+    /// DCTDecode (JPEG, via zune-jpeg). The one decoder that buffers:
+    /// JPEG needs whole-stream context (Huffman tables, progressive
+    /// scans), so the first pull reads one complete JPEG — marker-aware,
+    /// stopping exactly at the EOI — and decodes it all at once. The
+    /// flag records that the image has been consumed.
+    Dct {
+        done: bool,
+    },
 }
 
 pub struct LzwState {
@@ -262,6 +270,10 @@ impl Decoder {
 
     pub fn lzw() -> Self {
         Decoder::Lzw(Box::default())
+    }
+
+    pub fn dct() -> Self {
+        Decoder::Dct { done: false }
     }
 
     fn pull(
@@ -435,6 +447,29 @@ impl Decoder {
                     }
                 }
             },
+            Decoder::Dct { done } => {
+                use zune_jpeg::zune_core::{colorspace::ColorSpace, options::DecoderOptions};
+                if *done {
+                    *eod = true;
+                    return Ok(());
+                }
+                *done = true;
+                let data = buffer_jpeg(source)?;
+                let mut dec = zune_jpeg::JpegDecoder::new(std::io::Cursor::new(data));
+                dec.decode_headers().map_err(|_| PsError::Io)?;
+                // One output byte per PostScript sample: grayscale JPEGs
+                // yield 1 component, CMYK/YCCK 4; everything else (the
+                // usual YCbCr) converts to RGB triples.
+                let want = match dec.input_colorspace() {
+                    Some(ColorSpace::Luma) => ColorSpace::Luma,
+                    Some(ColorSpace::CMYK | ColorSpace::YCCK) => ColorSpace::CMYK,
+                    _ => ColorSpace::RGB,
+                };
+                dec.set_options(DecoderOptions::default().jpeg_set_out_colorspace(want));
+                out.extend(dec.decode().map_err(|_| PsError::Io)?);
+                *eod = true;
+                Ok(())
+            }
             Decoder::Eexec { r, skip, mode } => {
                 if matches!(mode, EexecMode::Unknown) {
                     // Skip leading whitespace, then sniff the first four
@@ -473,6 +508,64 @@ impl Decoder {
                     if out.len() > before {
                         return Ok(());
                     }
+                }
+            }
+        }
+    }
+}
+
+/// Read one complete JPEG from `source`, consuming exactly through its
+/// EOI marker so bytes after the image stay unread (the shared-cursor
+/// contract every other decoder keeps). Marker-aware: segment lengths
+/// are honored (an EXIF thumbnail's embedded EOI is skipped, not
+/// mistaken for the end) and entropy-coded data is scanned respecting
+/// FF00 byte stuffing and RST0–7 restart markers. Premature EOF just
+/// ends the buffer — zune-jpeg reports the damage.
+fn buffer_jpeg(source: &FileHandle) -> Result<Vec<u8>, PsError> {
+    let mut buf = Vec::new();
+    macro_rules! byte {
+        // The inner block scopes the RefCell borrow — two byte!()s can
+        // share a statement.
+        () => {
+            match {
+                let b = source.borrow_mut().read_byte();
+                b
+            }? {
+                Some(b) => {
+                    buf.push(b);
+                    b
+                }
+                None => return Ok(buf),
+            }
+        };
+    }
+    loop {
+        // Find the next marker: skip to an FF (entropy data or fill
+        // bytes), take the code, and treat FF00 stuffing and restart
+        // markers as data.
+        let marker = loop {
+            if byte!() != 0xFF {
+                continue;
+            }
+            let mut code = byte!();
+            while code == 0xFF {
+                code = byte!();
+            }
+            match code {
+                0x00 | 0xD0..=0xD7 => {}
+                _ => break code,
+            }
+        };
+        match marker {
+            0xD9 => return Ok(buf), // EOI
+            0xD8 | 0x01 => {}       // SOI, TEM: no payload
+            _ => {
+                // Every other marker carries a 16-bit length that
+                // counts itself; SOS's header is followed by entropy
+                // data, which the scan above walks through.
+                let len = usize::from(byte!()) << 8 | usize::from(byte!());
+                for _ in 2..len {
+                    byte!();
                 }
             }
         }

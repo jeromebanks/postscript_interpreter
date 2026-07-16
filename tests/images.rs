@@ -168,6 +168,39 @@ fn bitmap_fonts_work_via_imagemask_in_buildchar() {
     assert_eq!(pixel(&it, 40, 100 - 30), WHITE, "bottom half clear");
 }
 
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[test]
+fn dct_source_feeds_image() {
+    // 8x8 mid-gray JPEG (tests/data fixture) as an image DataSource,
+    // through the classic hex→DCT filter chain.
+    let jpeg = hex(include_bytes!("data/gray8.jpg"));
+    let it = run(&format!(
+        "10 10 translate 80 80 scale
+         8 8 8 [8 0 0 -8 0 8]
+         ({jpeg}) /ASCIIHexDecode filter /DCTDecode filter image"
+    ));
+    let (r, g, b) = pixel(&it, 50, 50);
+    assert_eq!((r, g), (g, b), "gray stays gray");
+    assert!((i32::from(r) - 128).abs() <= 8, "mid-gray, got {r}");
+    assert_eq!(pixel(&it, 5, 5), WHITE, "outside untouched");
+}
+
+#[test]
+fn dct_source_feeds_colorimage() {
+    let jpeg = hex(include_bytes!("data/red4.jpg"));
+    let it = run(&format!(
+        "10 10 translate 80 80 scale
+         4 4 8 [4 0 0 -4 0 4]
+         ({jpeg}) /ASCIIHexDecode filter /DCTDecode filter
+         false 3 colorimage"
+    ));
+    let (r, g, b) = pixel(&it, 50, 50);
+    assert!(r >= 240 && g <= 15 && b <= 15, "red, got {r} {g} {b}");
+}
+
 #[test]
 fn exit_inside_data_proc_is_invalidexit() {
     let mut it = Interp::with_page(100, 100).expect("page");
