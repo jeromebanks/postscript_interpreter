@@ -3,6 +3,27 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 12 — dynamic handwriting (2026-07-17)
+
+`examples/handwriting.ps`: the /HandScript Type 3 font. Letterforms
+are single-stroke polyline skeletons (lowercase, digits,
+punctuation) on the 1000-unit grid; `drawstroke` jitters every point
+through `rand` (±16 units) and smooths the run into quadratic-style
+curves (interior points become control points, segments end at
+midpoints — a pen slurring through corners). BuildChar adds
+per-glyph slant with a rightward bias, baseline drift, and
+pen-pressure width variation, stroking with round caps/joins.
+
+The mechanics that make it work are all existing machinery: Type 3
+glyphs are deliberately uncached (Stage 6 task 7), so every `show`
+re-runs BuildChar and re-rolls the pen — repeated characters never
+match; `rand` is a seeded LCG, so whole pages are reproducible run
+to run (`tests/handwriting.rs` pins both properties). One
+portability lesson pinned by running the file in gs: font dicts go
+read-only at definefont there, so BuildChar's working defs live in
+a scratch dict inside the font (invalidaccess otherwise; we don't
+model access control, so our run never noticed).
+
 ## Stage 11 — performance parity investigation (2026-07-17)
 
 **The harness** (`benches/vs_gs.rs`, `cargo bench --bench vs_gs`):

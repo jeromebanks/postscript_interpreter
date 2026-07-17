@@ -1,0 +1,233 @@
+%!PS-Adobe-3.0
+%%Title: a letter, in my own hand
+%%Creator: pscat — Stage 12, dynamic handwriting
+%%BoundingBox: 0 0 612 792
+%%EndComments
+
+% A Type 3 font whose glyphs are *generated fresh every time they are
+% drawn*: each letter is a single-stroke skeleton, and BuildChar runs
+% the points through rand-driven jitter, a random slant, and baseline
+% drift before stroking with round caps. Repeated characters never
+% render identically — the page reads like a person wrote it. Because
+% Type 3 glyphs are deliberately uncached, every `show` re-runs
+% BuildChar and re-rolls the pen; because rand is a seeded LCG, the
+% whole page is nonetheless reproducible run to run.
+
+% ---------------------------------------------------------------- font
+
+/HandScriptDict 12 dict def
+HandScriptDict begin
+
+  /FontType 3 def
+  /FontMatrix [0.001 0 0 0.001 0 0] def
+  /FontBBox [-50 -300 600 800] def
+
+  % --- the skeletons: /name [advance [stroke] [stroke] ...] --------
+  % Design grid: baseline 0, x-height 500, ascenders ~750, descenders
+  % to -250. Each stroke is a flat [x y x y ...] polyline; the
+  % renderer smooths it into quadratic-style curves, so corners round
+  % off the way a moving pen rounds them.
+  /CharDefs 48 dict def
+  CharDefs begin
+    /.notdef    [300] def
+    /space      [300] def
+    /a [520 [370 460 190 510 50 330 70 120 220 10 360 90 380 240]
+            [380 500 380 150 420 10 480 40]] def
+    /b [450 [60 750 60 20]
+            [60 400 210 500 370 400 380 160 240 10 60 80]] def
+    /c [430 [380 420 240 510 70 380 60 160 220 10 390 90]] def
+    /d [520 [370 440 190 510 50 330 70 120 210 10 370 90]
+            [390 750 390 130 430 10 480 50]] def
+    /e [440 [70 290 370 310 350 450 190 510 60 330 80 120 240 10 390 90]] def
+    /f [380 [330 690 250 750 190 660 190 30]
+            [80 480 320 480]] def
+    /g [520 [370 440 190 510 50 330 70 120 210 10 370 90]
+            [380 480 380 -80 290 -230 140 -190]] def
+    /h [420 [60 750 60 20]
+            [60 350 190 510 330 430 340 20]] def
+    /i [260 [130 500 130 20]
+            [125 645 145 660]] def
+    /j [300 [190 500 190 -120 110 -240 10 -190]
+            [185 645 205 660]] def
+    /k [400 [60 750 60 20]
+            [300 480 80 240]
+            [150 310 330 20]] def
+    /l [280 [140 750 140 70 190 10 240 40]] def
+    /m [540 [60 500 60 20]
+            [60 360 150 510 250 420 250 40]
+            [250 350 350 510 450 420 460 20]] def
+    /n [420 [60 500 60 20]
+            [60 350 190 510 330 430 340 20]] def
+    /o [450 [220 510 60 350 70 130 230 10 390 140 380 380 230 500]] def
+    /p [460 [60 500 60 -250]
+            [60 400 220 510 380 400 380 150 230 20 60 90]] def
+    /q [520 [370 440 190 510 50 330 70 120 210 10 370 90]
+            [380 500 380 -180 440 -250]] def
+    /r [360 [60 500 60 20]
+            [60 330 170 490 310 470]] def
+    /s [420 [350 450 200 510 70 430 140 290 300 230 360 100 240 10 70 70]] def
+    /t [380 [180 700 180 80 240 10 310 50]
+            [60 500 330 500]] def
+    /u [450 [60 500 70 140 180 10 330 80 370 250]
+            [370 500 370 20]] def
+    /v [400 [60 500 180 40 220 40 340 500]] def
+    /w [500 [50 500 140 20 250 380 360 20 450 500]] def
+    /x [420 [60 480 360 20]
+            [350 480 50 30]] def
+    /y [430 [60 500 200 60]
+            [370 500 160 -180 40 -230]] def
+    /z [420 [70 480 350 480 60 30 360 30]] def
+    /zero  [400 [200 700 60 500 60 180 200 0 340 180 340 500 200 700]] def
+    /one   [400 [120 560 220 700 220 20]] def
+    /two   [420 [70 550 180 700 330 620 300 420 70 30 360 40]] def
+    /three [420 [80 620 220 700 330 570 220 400 340 250 220 20 70 90]] def
+    /four  [430 [280 700 70 250 380 260]
+                [300 480 300 20]] def
+    /five  [420 [330 700 110 700 90 430 260 470 360 300 300 60 90 30]] def
+    /six   [420 [320 690 140 520 70 250 140 50 300 30 360 200 240 330 90 260]] def
+    /seven [400 [70 700 360 700 180 20]] def
+    /eight [420 [210 700 80 570 200 400 330 240 210 30 90 240 210 400 340 560 210 700]] def
+    /nine  [430 [330 660 150 640 90 480 190 370 330 430]
+                [340 690 330 100 220 0]] def
+    /period     [200 [60 25 75 15 65 5]] def
+    /comma      [220 [70 40 60 -10 20 -90]] def
+    /hyphen     [320 [40 250 240 260]] def
+    /quoteright [160 [60 660 40 560]] def
+    /exclam     [220 [70 700 80 220]
+                     [75 30 85 20]] def
+    /question   [400 [60 600 160 700 300 620 290 470 180 380 180 240]
+                     [180 40 190 30]] def
+  end
+
+  /Encoding 256 array def
+  0 1 255 { Encoding exch /.notdef put } for
+  Encoding 32 /space put
+  0 1 25 {
+    /idx exch def
+    % build the one-letter name a..z from its character code
+    /ch 1 string def
+    ch 0 idx 97 add put
+    Encoding idx 97 add ch cvn put
+  } for
+  [/zero /one /two /three /four /five /six /seven /eight /nine]
+  0 1 9 { /d exch def dup d get Encoding d 48 add 3 -1 roll put } for pop
+  Encoding 46 /period put
+  Encoding 44 /comma put
+  Encoding 45 /hyphen put
+  Encoding 39 /quoteright put
+  Encoding 33 /exclam put
+  Encoding 63 /question put
+
+  % --- the pen ------------------------------------------------------
+  % Jitter amplitude in glyph units. Endpoint wobble is what makes
+  % the same letter come out different every time.
+  /J 16 def
+  /jit { rand 2 J mul 1 add mod J sub } def
+
+  % [x y x y ...] drawstroke -  jitter the points, then draw a smooth
+  % open curve through them (each interior point becomes a quadratic
+  % control point, segment ends at midpoints — the way a pen slurs
+  % through corners). Two-point strokes are simple wobbly lines.
+  /drawstroke {
+    /p exch def
+    /n p length 2 idiv def
+    /qx n array def
+    /qy n array def
+    0 1 n 1 sub {
+      /i exch def
+      qx i p i 2 mul get jit add put
+      qy i p i 2 mul 1 add get jit add put
+    } for
+    qx 0 get qy 0 get moveto
+    n 2 eq {
+      qx 1 get qy 1 get lineto
+    } {
+      /cx qx 0 get def
+      /cy qy 0 get def
+      1 1 n 2 sub {
+        /i exch def
+        /px qx i get def
+        /py qy i get def
+        i n 2 sub eq {
+          /ex qx n 1 sub get def
+          /ey qy n 1 sub get def
+        } {
+          /ex qx i get qx i 1 add get add 2 div def
+          /ey qy i get qy i 1 add get add 2 div def
+        } ifelse
+        % quadratic (cur, ctrl, end) as the equivalent cubic
+        cx px cx sub 2 mul 3 div add
+        cy py cy sub 2 mul 3 div add
+        ex px ex sub 2 mul 3 div add
+        ey py ey sub 2 mul 3 div add
+        ex ey curveto
+        /cx ex def
+        /cy ey def
+      } for
+    } ifelse
+  } def
+
+  % BuildChar's scratch space: real interpreters make the font dict
+  % read-only at definefont, so working defs go in here instead.
+  /work 24 dict def
+
+  /BuildChar {
+    exch begin
+      work begin
+      Encoding exch get
+      CharDefs exch 2 copy known not { pop pop CharDefs /.notdef } if get
+      /g exch def
+      g 0 get 0 setcharwidth
+      % per-glyph humanity: a slant somewhere between upright and
+      % eager, a baseline that drifts, a pen pressed a little harder
+      % or softer than last time
+      [1 0 rand 120 mod 40 sub 1000 div 1 0 rand 33 mod 16 sub] concat
+      22 rand 13 mod add setlinewidth
+      1 setlinecap
+      1 setlinejoin
+      1 1 g length 1 sub {
+        g exch get drawstroke stroke
+      } for
+      end
+    end
+  } def
+
+end
+
+/HandScript HandScriptDict definefont pop
+
+% ---------------------------------------------------------------- page
+
+% ruled paper
+0.78 0.85 0.94 setrgbcolor
+0.8 setlinewidth
+664 -52 140 {
+  /y exch def
+  newpath 60 y moveto 552 y lineto stroke
+} for
+0.94 0.68 0.68 setrgbcolor
+newpath 100 792 moveto 100 60 lineto stroke
+
+% the letter, written on the lines
+0.13 0.14 0.34 setrgbcolor
+/HandScript findfont 34 scalefont setfont
+
+/writeline {  % (text) lineno writeline -
+  664 exch 52 mul sub
+  116 exch moveto
+  show
+} def
+
+(dear ghostscript,)                 0 writeline
+(after thirty years of letting)     1 writeline
+(you do the writing, i have)        2 writeline
+(learned to hold the pen)           3 writeline
+(myself. the lines wobble and)      4 writeline
+(no two letters match - look,)      5 writeline
+(eee and 88 and zzz - but)          6 writeline
+(every word is my own.)             7 writeline
+(yours, warmly,)                    8 writeline
+(pscat)                             9 writeline
+
+showpage
+%%EOF

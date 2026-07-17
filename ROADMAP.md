@@ -256,22 +256,28 @@ points, wobbling baseline, varying slant and stroke width — so
 repeated characters never render identically and a page reads like a
 human actually wrote it.
 
-1. **Stroke-skeleton font data** — single-stroke letterforms
-   (lowercase, uppercase, digits, basic punctuation) as polyline/
-   curve skeletons on a design grid, the raw material the jitter
-   works on. [sonnet]
-2. **The dynamic font** — a Type 3 font whose BuildChar draws the
-   skeleton through the interpreter's own `rand` (deterministic seed
-   = reproducible pages, still per-instance variation because
-   BuildChar runs per glyph drawn — Type 3 glyphs are deliberately
-   uncached). Round caps/joins, jittered points, per-glyph slant and
-   baseline drift. Pure PostScript riding on existing machinery —
-   the font is itself a demo that the interpreter is complete enough
-   to host it. [sonnet]
-3. **Demo + gallery piece** — an example page (a handwritten letter,
-   naturally) in the golden-style visual checks (structure asserted;
-   pixel comparison excluded like the other rand-driven art), plus a
-   Gallery II entry. [any]
+**✅ COMPLETE (2026-07-17)** — `examples/handwriting.ps`: the
+/HandScript Type 3 font, pure PostScript riding on existing
+machinery. Verified in both interpreters (gs runs the same file).
+
+1. ✅ **Stroke-skeleton font data** — single-stroke letterforms
+   (full lowercase, digits, punctuation) as flat polylines on a
+   1000-unit grid, smoothed at draw time into quadratic-style curves
+   so corners round the way a moving pen rounds them. [sonnet]
+2. ✅ **The dynamic font** — BuildChar jitters every point through
+   the interpreter's own `rand` (±16 units), adds per-glyph slant
+   (upright-to-eager bias), baseline drift, and pen-pressure width
+   variation, then strokes with round caps. Type 3 glyphs are
+   deliberately uncached, so every `show` re-rolls; the seeded LCG
+   keeps whole pages reproducible (`tests/handwriting.rs` pins
+   determinism *and* that no two glyph instances match). BuildChar
+   defs go in a scratch dict — gs makes font dicts read-only at
+   definefont, and the file runs there too. [sonnet]
+3. ✅ **Demo** — the example page is a handwritten letter to
+   Ghostscript on ruled paper; structure tests assert ink, page
+   count, per-instance variation, determinism, and gs acceptance
+   (pixel comparison excluded like the other rand-driven art). A
+   Gallery II entry can reuse the font wholesale. [any]
 
 ---
 

@@ -48,6 +48,18 @@ classics render block-identical to Ghostscript.
 both mirror the paint pipeline directly, and the PDF is verified by
 letting Ghostscript rasterize it back.
 
+**Stage 11 (performance parity)**: `cargo bench --bench vs_gs` races
+both interpreters on speed and peak memory. pscat starts 5× faster,
+uses 3–5× less memory on every workload, and wins every rendering
+page; the honest remaining gaps (fib ~2.3×, fern ~1.9×) and what was
+done about them live in NOTES.md.
+
+**Stage 12 (handwriting)**: `examples/handwriting.ps` — a Type 3
+font whose glyphs are generated fresh per draw with rand-jittered
+strokes, wandering baselines, and varying pen pressure. No two
+letters ever match, every page is reproducible, and the same file
+runs in Ghostscript.
+
 **Stage 5 (run found PostScript) complete.** Beyond drawing live, pscat
 now executes the idioms real-world `.ps` files depend on: arrays and
 strings with true PLRM view semantics (`get`/`put`/`getinterval`/
