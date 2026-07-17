@@ -2,14 +2,16 @@
 
 Written 2026-07-13 at the completion of Stages 6–7; last updated
 2026-07-17 with Stages 8, 9, 10 (spool mode, halftone, Gallery II's
-Hundred Lines), 11 (perf parity), and 12 (handwriting) complete. Written for whichever model
+Hundred Lines), 11 (perf parity), 12 (handwriting), and 13 (the
+handwrite string→PNG tool: `scripts/handwrite.sh` over the reusable
+`lib/handscript.ps`) complete. Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
 `NOTES.md` has per-stage histories; this file is the *orientation*.
 
 ## Where things stand
 
-**259 tests across 24 suites, clippy clean.** Stages 1–12
+**264 tests across 25 suites, clippy clean.** Stages 1–13
 are done
 (Stage 8's one open sliver: the `--interactive` windowed REPL,
 design note in NOTES.md). Stage 8 delivered: **save/restore** as

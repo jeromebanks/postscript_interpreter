@@ -3,6 +3,45 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 13 — handwrite: string → PNG (2026-07-17)
+
+`./scripts/handwrite.sh "any text"` → a PNG of the text written in
+/HandScript, word-wrapped like a person filling a page, page height
+auto-sized to the text. Appearance options are CLI flags (size,
+width/height, margin, leading, jitter, pen, ink RGB, plain/ruled
+paper, seed, dpi, halftone, output path).
+
+**Where the logic lives** — `lib/handscript.ps`, deliberately: the
+font (the Stage 12 definition with the gallery's /W pen-width
+adaptation) plus a dict-driven layout API in a `HSLayout` dict.
+Public entries: `opts hs-write` (draws; caller shows the page) and
+`opts hs-linecount` (measures, drawing nothing). One options dict,
+schema documented in the file header, every key defaulted except
+/Text. The library draws nothing on load and runs unchanged in gs
+(pinned by test), so it can be embedded wholesale in other
+applications; the bash script is only argument parsing, string
+escaping (lowercase + `\()` escapes), and two pscat invocations.
+
+**The wrap engine** measures with skeleton advances (CharDefs), not
+rendered ink — breaks are exact, cheap, and jitter-independent, so
+hs-linecount always agrees with hs-write (pinned by test: a page
+rendered with and without a preceding count pass is byte-identical,
+despite the count consuming rand for line-start wobble). Greedy
+wrap on space/tab/CR; newline forces the break; blank lines are
+kept; a word wider than the column overflows rather than splits;
+unknown characters (capitals aside — the script lowercases) advance
+invisibly as .notdef.
+
+**Auto-height** is the reuse story in miniature: the script runs
+`hs-linecount` headlessly, sizes the page in awk, then renders.
+`--height` overrides it.
+
+Deferred: capitals (font has none — script lowercases; a proper
+upper-case skeleton set is Gallery II-adjacent work), hyphenating
+column-overflowing words, right-margin raggedness control, and a
+`--stdin` mode if piping ever wants it. Five tests in
+`tests/handwrite.rs` (25th suite).
+
 ## Stage 10 — halftone screens; stage complete (2026-07-17)
 
 `--halftone` (`src/halftone.rs`): the optional "authentic laser

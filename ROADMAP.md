@@ -293,6 +293,10 @@ machinery. Verified in both interpreters (gs runs the same file).
 
 ## Stage 13 — handwrite: string in, handwritten PNG out
 
+**✅ COMPLETE (2026-07-17)** — all three items; see `NOTES.md`. The
+README's "Handwrite" section documents usage; the options-dict
+schema is in `lib/handscript.ps`'s header.
+
 Goal: `./scripts/handwrite.sh "any text"` produces a PNG of the text
 written in the Stage 12 /HandScript font, word-wrapped across
 multiple lines the way a person fills a page — and the machinery is
