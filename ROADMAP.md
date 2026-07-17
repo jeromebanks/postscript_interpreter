@@ -151,6 +151,11 @@ in the golden suite. DCTDecode landed 07-16, after the 07-13 wrap.
 
 Goal: the semantics that separate a toy from an implementation.
 
+**✅ COMPLETE (2026-07-16)** — save/restore, interning, benches, color
+spaces, Level 2 odds and ends, corpus round 2 (the gs classics render
+block-identical), `--pstack-on-error`. The one open sliver is task
+6's `--interactive` windowed REPL (design note in NOTES.md).
+
 1. ✅ **`save`/`restore`** (2026-07-16) — object-granularity
    copy-on-write journaling; design writeup and gs pins in `VM.md`,
    deviations documented there (no invalidrestore stack scan; files
@@ -169,12 +174,14 @@ Goal: the semantics that separate a toy from an implementation.
    Separation (tint transform via the new `Frame::PostOp`
    continuation), `setcolor`, spaces in the gsave snapshot;
    `setcmykcolor` predated this. Gaps in `ops/color.rs` docs. [sonnet]
-5. **`packedarray`, `usertime`/`realtime`, `languagelevel`, resource
-   category basics** (`defineresource findresource`). [sonnet]
-6. **Interactive niceties** — `pstack`-on-error option in the REPL, an
-   `--interactive` flag that opens the window *and* a REPL together
-   (needs a second thread or event-loop integration — small design
-   note first). [sonnet]
+5. ✅ **`packedarray`, `usertime`/`realtime`, `languagelevel`, resource
+   category basics** (2026-07-16) — `ops/level2.rs`; Font category
+   delegates to findfont/definefont; writes journaled. [sonnet]
+6. **Interactive niceties** — ✅ `--pstack-on-error` (REPL + headless,
+   2026-07-16). The `--interactive` window+REPL flag remains: design
+   note in NOTES.md (stdin thread → EventLoopProxy user events →
+   run_str between frames); deferred until the windowed path can be
+   exercised for real. [sonnet]
 
 ## Stage 9 — Output targets
 

@@ -3,6 +3,41 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 8 wrap — corpus round 2, Level 2 odds and ends (2026-07-16)
+
+**Found-file corpus round 2** (`tests/corpus.rs`): the Ghostscript
+classics — tiger, golfer, escher, colorcir, doretree render
+block-identical to gs; snowflak and vasarely run clean but are
+rand-driven art (implementation-specific sequences), asserted to run
+rather than match. Files download on first run (gitignored;
+AGPL-distributed, so fetched rather than vendored) and the test
+skips offline. Two comparison lessons pinned: give gs
+`-dGraphicsAlphaBits=4` or AA policy swamps the signal on edge-dense
+art, and colors that "look wrong" at first glance are usually that
+same AA thinning, not color math (sethsbcolor matched gs exactly).
+What the corpus actually surfaced: `setflat`/`currentflat` (stored
+hint; tiny-skia flattens itself) and `min`/`max`/`.min`/`.max` (gs
+conveniences). waterfal.ps stays out — it reads gs's QUIET
+command-line define.
+
+**Task 5** (`ops/level2.rs`): packedarray (plain arrays; packing flag
+tracked but inert), usertime/realtime, languagelevel = 2, and
+resource basics — defineresource/findresource/resourcestatus/
+undefineresource, Font category delegating to findfont/definefont,
+other categories in a per-interp registry, writes journaled so
+restore rolls them back. Status/size in resourcestatus are 0 0
+fictions, like vmstatus's byte counts.
+
+**Task 6, half of it**: `--pstack-on-error` prints the operand stack
+(gs post-mortem style) after errors in both REPL and headless runs.
+The `--interactive` flag (window + REPL together) remains; design
+note: a stdin-reader thread ships raw lines through
+`winit::EventLoopProxy::send_event` into the existing event loop,
+which runs each line via `run_str` between frame budgets — the
+interpreter stays single-threaded and owned by the loop; the reader
+thread never touches it. Deferred until someone wants it enough to
+test the windowed path properly.
+
 ## Stage 8 task 4 — Indexed and Separation color spaces (2026-07-16)
 
 `ops/color.rs` + a real `ColorSpace` enum in the graphics state

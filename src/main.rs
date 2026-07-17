@@ -13,6 +13,8 @@ struct Options {
     png: Option<String>,
     steps_per_frame: usize,
     page: (u32, u32),
+    /// Print the operand stack after an error (REPL and headless).
+    pstack_on_error: bool,
 }
 
 fn main() -> ExitCode {
@@ -35,13 +37,13 @@ fn main() -> ExitCode {
 
     if let Some(expr) = &options.eval {
         return finish_headless(
-            run_headless(&mut interp, expr.as_bytes()),
+            run_headless(&mut interp, expr.as_bytes(), &options),
             &interp,
             &options,
         );
     }
     let Some(path) = &options.file else {
-        return repl(&mut interp);
+        return repl(&mut interp, &options);
     };
     let source = match std::fs::read(path) {
         Ok(bytes) => bytes,
@@ -52,7 +54,11 @@ fn main() -> ExitCode {
     };
 
     if options.headless || options.png.is_some() {
-        return finish_headless(run_headless(&mut interp, &source), &interp, &options);
+        return finish_headless(
+            run_headless(&mut interp, &source, &options),
+            &interp,
+            &options,
+        );
     }
 
     interp.begin_source(&source);
@@ -69,14 +75,28 @@ fn main() -> ExitCode {
     }
 }
 
-fn run_headless(interp: &mut Interp, source: &[u8]) -> bool {
+fn run_headless(interp: &mut Interp, source: &[u8], options: &Options) -> bool {
     match interp.run_source(source) {
         Ok(()) => true,
         Err(e) => {
             eprintln!("{}", interp.error_report(&e));
+            if options.pstack_on_error {
+                print_pstack(interp);
+            }
             false
         }
     }
+}
+
+/// gs-style post-mortem: the operand stack, bottom to top, in `==`
+/// syntax — exactly what you want when a found file dies mid-run.
+fn print_pstack(interp: &Interp) {
+    let stack = interp.operand_stack();
+    eprint!("Operand stack ({}):", stack.len());
+    for obj in stack {
+        eprint!(" {}", obj.repr());
+    }
+    eprintln!();
 }
 
 /// Write the PNG (if requested) even after an error — a partial canvas is
@@ -104,6 +124,7 @@ fn parse_args() -> Result<Options, String> {
         png: None,
         steps_per_frame: 100,
         page: gfx::DEFAULT_PAGE,
+        pstack_on_error: false,
     };
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -116,6 +137,7 @@ fn parse_args() -> Result<Options, String> {
                 options.eval = Some(args.next().ok_or("missing expression after -e")?);
             }
             "--headless" => options.headless = true,
+            "--pstack-on-error" => options.pstack_on_error = true,
             "--png" => {
                 options.png = Some(args.next().ok_or("missing path after --png")?);
             }
@@ -162,9 +184,10 @@ fn print_usage() {
     println!("      --png PATH      write the final canvas as a PNG (implies --headless)");
     println!("      --speed N       interpreter steps per frame (default 100)");
     println!("      --page WxH      canvas size in points (default 612x792, US Letter)");
+    println!("      --pstack-on-error  print the operand stack after an error");
 }
 
-fn repl(interp: &mut Interp) -> ExitCode {
+fn repl(interp: &mut Interp, options: &Options) -> ExitCode {
     println!(
         "pscat {} — PostScript interpreter (headless canvas; graphics ops draw off-screen)",
         env!("CARGO_PKG_VERSION")
@@ -200,6 +223,9 @@ fn repl(interp: &mut Interp) -> ExitCode {
                 let source = std::mem::take(&mut pending);
                 if let Err(e) = interp.run_str(&source) {
                     eprintln!("{}", interp.error_report(&e));
+                    if options.pstack_on_error {
+                        print_pstack(interp);
+                    }
                 }
                 if interp.quit_requested() {
                     return ExitCode::SUCCESS;
