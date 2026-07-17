@@ -34,7 +34,13 @@ images** — `image`/`imagemask`/`colorimage` in both operand forms,
 from string, file, filter-chain, or procedure data sources, through
 the full CTM/clip pipeline. `examples/postcard.ps` shows it all
 inline; `FONTS.md` has the font design writeup, `HANDOFF.md` the
-state of the world and what's next (Stage 8's save/restore).
+state of the world and what's next (Stage 8: name interning).
+
+**Stage 8 (VM fidelity) underway**: full `save`/`restore` semantics —
+arrays, dicts, and definitions roll back; strings exempt per the spec;
+graphics restore as `grestoreall` to the save point (`VM.md` is the
+design writeup, pinned against Ghostscript) — plus `vmstatus`,
+`grestoreall`, and a perf yardstick in `benches/`.
 
 **Stage 5 (run found PostScript) complete.** Beyond drawing live, pscat
 now executes the idioms real-world `.ps` files depend on: arrays and

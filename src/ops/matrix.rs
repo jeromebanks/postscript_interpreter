@@ -52,13 +52,14 @@ pub(crate) fn read_matrix(obj: &Object) -> Result<Transform, PsError> {
     Ok(Transform::from_row(m[0], m[1], m[2], m[3], m[4], m[5]))
 }
 
-fn write_matrix(obj: &Object, t: Transform) -> Result<(), PsError> {
+fn write_matrix(it: &mut Interp, obj: &Object, t: Transform) -> Result<(), PsError> {
     let Value::Array(a) = &obj.value else {
         return Err(PsError::Typecheck);
     };
     if a.len() != 6 {
         return Err(PsError::Rangecheck);
     }
+    it.journal_array(a);
     for (i, v) in [t.sx, t.ky, t.kx, t.sy, t.tx, t.ty].into_iter().enumerate() {
         a.put(i, Object::real(f64::from(v)))?;
     }
@@ -80,21 +81,23 @@ fn matrix(it: &mut Interp) -> Result<(), PsError> {
 
 fn identmatrix(it: &mut Interp) -> Result<(), PsError> {
     let obj = it.pop()?;
-    write_matrix(&obj, Transform::identity())?;
+    write_matrix(it, &obj, Transform::identity())?;
     it.push(obj.clone());
     Ok(())
 }
 
 fn defaultmatrix(it: &mut Interp) -> Result<(), PsError> {
     let obj = it.pop()?;
-    write_matrix(&obj, it.gfx.base_ctm())?;
+    let base = it.gfx.base_ctm();
+    write_matrix(it, &obj, base)?;
     it.push(obj.clone());
     Ok(())
 }
 
 fn currentmatrix(it: &mut Interp) -> Result<(), PsError> {
     let obj = it.pop()?;
-    write_matrix(&obj, it.gfx.ctm())?;
+    let ctm = it.gfx.ctm();
+    write_matrix(it, &obj, ctm)?;
     it.push(obj.clone());
     Ok(())
 }
@@ -124,7 +127,7 @@ fn concatmatrix(it: &mut Interp) -> Result<(), PsError> {
     let m3 = it.pop()?;
     let m2 = read_matrix(&it.pop()?)?;
     let m1 = read_matrix(&it.pop()?)?;
-    write_matrix(&m3, m2.pre_concat(m1))?;
+    write_matrix(it, &m3, m2.pre_concat(m1))?;
     it.push(m3.clone());
     Ok(())
 }
@@ -133,7 +136,7 @@ fn invertmatrix(it: &mut Interp) -> Result<(), PsError> {
     let m2 = it.pop()?;
     let m1 = read_matrix(&it.pop()?)?;
     let inv = m1.invert().ok_or(PsError::UndefinedResult)?;
-    write_matrix(&m2, inv)?;
+    write_matrix(it, &m2, inv)?;
     it.push(m2.clone());
     Ok(())
 }
@@ -192,7 +195,7 @@ fn two_arg_matrix_form(it: &mut Interp, build: fn(f64, f64) -> Transform) -> Res
         Value::Array(_) => {
             let b = it.pop_f64()?;
             let a = it.pop_f64()?;
-            write_matrix(&top, build(a, b))?;
+            write_matrix(it, &top, build(a, b))?;
             it.push(top.clone());
         }
         Value::Integer(n) => {
@@ -223,7 +226,7 @@ fn rotate(it: &mut Interp) -> Result<(), PsError> {
     match &top.value {
         Value::Array(_) => {
             let angle = it.pop_f64()?;
-            write_matrix(&top, Transform::from_rotate(angle as f32))?;
+            write_matrix(it, &top, Transform::from_rotate(angle as f32))?;
             it.push(top.clone());
         }
         Value::Integer(_) | Value::Real(_) => {

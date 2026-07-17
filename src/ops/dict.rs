@@ -107,16 +107,19 @@ fn where_op(it: &mut Interp) -> Result<(), PsError> {
 fn store(it: &mut Interp) -> Result<(), PsError> {
     let value = it.pop()?;
     let key = it.pop()?;
-    match it.find_defining_dict(&key)? {
-        Some(d) => d.borrow_mut().put_obj(&key, value)?,
-        None => it.current_dict().borrow_mut().put_obj(&key, value)?,
-    }
+    let d = match it.find_defining_dict(&key)? {
+        Some(d) => d,
+        None => it.current_dict(),
+    };
+    it.journal_dict(&d);
+    d.borrow_mut().put_obj(&key, value)?;
     Ok(())
 }
 
 fn undef(it: &mut Interp) -> Result<(), PsError> {
     let key = it.pop()?;
     let d = pop_dict_operand(it)?;
+    it.journal_dict(&d);
     d.borrow_mut().undef(&key)
 }
 
@@ -184,10 +187,13 @@ fn bind(it: &mut Interp) -> Result<(), PsError> {
 /// Replace executable names that currently resolve to operators with the
 /// operators themselves, recursing into nested procedures — the classic
 /// "immune to later redefinition, and faster" transform.
-fn bind_proc(it: &Interp, body: &PsArray, depth: usize) {
+fn bind_proc(it: &mut Interp, body: &PsArray, depth: usize) {
     if depth > 100 {
         return;
     }
+    // bind mutates VM contents like any put — journaled so restore
+    // un-binds, matching Adobe's VM semantics.
+    it.journal_array(body);
     let mut nested: Vec<PsArray> = Vec::new();
     // for_each_mut declines (harmlessly) if the storage is already
     // borrowed — the self-referential case.

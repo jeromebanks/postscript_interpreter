@@ -169,7 +169,12 @@ fn put(it: &mut Interp) -> Result<(), PsError> {
     let key = it.pop()?;
     let obj = it.pop()?;
     match &obj.value {
-        Value::Array(a) => a.put(index_of(&key)?, value),
+        Value::Array(a) => {
+            it.journal_array(a);
+            a.put(index_of(&key)?, value)
+        }
+        // Strings take no journal barrier: restore exempts string
+        // contents, per PLRM §3.7.3.2 (pinned against gs — VM.md).
         Value::String(s) => {
             let b = match value.value {
                 Value::Integer(i) if (0..=255).contains(&i) => i as u8,
@@ -178,7 +183,10 @@ fn put(it: &mut Interp) -> Result<(), PsError> {
             };
             s.put_byte(index_of(&key)?, b)
         }
-        Value::Dict(d) => d.borrow_mut().put_obj(&key, value),
+        Value::Dict(d) => {
+            it.journal_dict(d);
+            d.borrow_mut().put_obj(&key, value)
+        }
         _ => Err(PsError::Typecheck),
     }
 }
@@ -212,6 +220,7 @@ fn putinterval(it: &mut Interp) -> Result<(), PsError> {
     let dst = it.pop()?;
     match (&dst.value, &src.value) {
         (Value::Array(d), Value::Array(s)) => {
+            it.journal_array(d);
             // Snapshot first so overlapping views over the same storage
             // copy correctly.
             let items = s.snapshot();
@@ -243,6 +252,7 @@ fn copy(it: &mut Interp) -> Result<(), PsError> {
             let Value::Array(src) = &src_obj.value else {
                 return Err(PsError::Typecheck);
             };
+            it.journal_array(dst);
             let items = src.snapshot();
             if items.len() > dst.len() {
                 return Err(PsError::Rangecheck);
@@ -274,6 +284,7 @@ fn copy(it: &mut Interp) -> Result<(), PsError> {
             let Value::Dict(src) = &src_obj.value else {
                 return Err(PsError::Typecheck);
             };
+            it.journal_dict(dst);
             let pairs = src.borrow().pairs();
             {
                 let mut d = dst.borrow_mut();
@@ -341,6 +352,7 @@ fn astore(it: &mut Interp) -> Result<(), PsError> {
     let Value::Array(a) = &obj.value else {
         return Err(PsError::Typecheck);
     };
+    it.journal_array(a);
     // Elements come off the stack top-down, filling the array back-to-
     // front, so a0..an-1 land in order.
     for i in (0..a.len()).rev() {

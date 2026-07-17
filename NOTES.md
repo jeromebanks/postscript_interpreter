@@ -3,6 +3,43 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 8 tasks 1 + 3 — save/restore and the perf yardstick (2026-07-16)
+
+**save/restore** (`VM.md` is the design doc — read it first; every
+choice is pinned against gs there). Object-granularity copy-on-write
+journaling: while a save is live, the first mutation of an array's or
+dict's backing store at the current save level snapshots the whole
+store into an undo journal; restore replays it backwards. Zero
+overhead with no save live. The long-feared object-model reach was
+one new `Value::Save(Rc<SaveHandle>)` variant (savetype) plus `Clone`
+on `Dict`. Graphics rollback reuses the Type 3 glyph-snapshot
+mechanism (boundary state lives in the save record, not on the gsave
+stack). `vmstatus` (level real, byte counts fixed fictions) and
+`grestoreall` came along.
+
+Key facts pinned before design (they shaped it):
+- **Strings are exempt from restore** (PLRM §3.7.3.2, confirmed in
+  gs) — no string write path needs a journal barrier.
+- restore = grestoreall to the save point (unbalanced gsaves inside
+  the context are discarded).
+- Write barriers audited into: put/putinterval/copy/astore (arrays),
+  put/def/store/undef/copy (dicts), bind, the matrix-filling
+  operators, definefont (FID + FontDirectory), findfont's
+  substitution install, and the interpreter's own `$error` writes.
+
+Deviations (documented in `VM.md` and tested as deviations):
+- No invalidrestore scan of the stacks for post-save composites (gs
+  errors; under `Rc` the objects stay valid — render, don't error).
+- restore doesn't close files opened since the save.
+- `grestore` can pop through a save boundary (balanced programs never
+  notice); `grestoreall` respects it.
+
+**Perf yardstick** (`benches/perf.rs`, `cargo bench`): fib 27 /
+defloop / sierpinski / fern, best-of-three. Baseline: fib 214ms vs
+gs ~30ms net of startup — the interning gap is ~7×, worse than the
+~3× previously recorded; Stage 8 task 2 has measurable headroom.
+save/restore added no regression (209ms after).
+
 ## Stage 7 truly complete — DCTDecode (2026-07-16)
 
 **DCTDecode** (`Decoder::Dct`, zune-jpeg 0.5). The one decoder that

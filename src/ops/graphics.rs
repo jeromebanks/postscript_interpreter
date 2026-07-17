@@ -31,6 +31,7 @@ pub fn install(dict: &mut Dict) {
     // Graphics state
     op(dict, "gsave", gsave);
     op(dict, "grestore", grestore);
+    op(dict, "grestoreall", grestoreall);
     op(dict, "setgray", setgray);
     op(dict, "setrgbcolor", setrgbcolor);
     op(dict, "setlinewidth", setlinewidth);
@@ -166,6 +167,13 @@ fn showpage(it: &mut Interp) -> Result<(), PsError> {
 
 fn gsave(it: &mut Interp) -> Result<(), PsError> {
     it.gfx.gsave();
+    Ok(())
+}
+
+/// Pop to the innermost save's boundary (the state stays available for
+/// that save's restore), or to the bottom when no save is live.
+fn grestoreall(it: &mut Interp) -> Result<(), PsError> {
+    it.do_grestoreall();
     Ok(())
 }
 

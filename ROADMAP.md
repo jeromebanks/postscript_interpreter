@@ -151,17 +151,18 @@ in the golden suite. DCTDecode landed 07-16, after the 07-13 wrap.
 
 Goal: the semantics that separate a toy from an implementation.
 
-1. **`save`/`restore`** — full VM snapshot semantics. The one feature
-   flagged since Stage 1 as able to reach into the object model
-   (copy-on-write vs. generation-stamped journaling — decide on paper
-   first). `gsave` state, dict contents, and array contents all roll
-   back. [opus+review]
+1. ✅ **`save`/`restore`** (2026-07-16) — object-granularity
+   copy-on-write journaling; design writeup and gs pins in `VM.md`,
+   deviations documented there (no invalidrestore stack scan; files
+   not closed by restore). `savetype` objects, `vmstatus`,
+   `grestoreall` included. [opus+review]
 2. **Name interning** — replace `Rc<str>` name keys with interned
-   symbols; benchmark first (`fib 27` vs gs is the existing yardstick,
-   ~3× gap attributed to hashing). Touches lexer, object model, dicts.
-   [opus]
-3. **Benchmark suite** — `benches/` with the fib/loop/sierpinski/fern
-   workloads so #2 and future perf work have regression cover. [haiku]
+   symbols; benchmark first (`fib 27` vs gs is the existing yardstick;
+   `benches/` now measures the gap at ~7× on an M-series). Touches
+   lexer, object model, dicts. [opus]
+3. ✅ **Benchmark suite** (2026-07-16) — `benches/perf.rs`, four
+   workloads (fib/defloop/sierpinski/fern), best-of-three wall clock
+   under `cargo bench`. [haiku]
 4. **Color spaces** — `setcmykcolor` (and real CMYK→RGB), Indexed,
    Separation as they appear in found files. [sonnet]
 5. **`packedarray`, `usertime`/`realtime`, `languagelevel`, resource

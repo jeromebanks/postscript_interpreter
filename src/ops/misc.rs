@@ -61,6 +61,8 @@ fn handleerror(it: &mut Interp) -> Result<(), PsError> {
         name.unwrap_or_else(|| "--none--".to_string()),
         command.unwrap_or_else(|| "--none--".to_string())
     );
+    let d = d.clone();
+    it.journal_dict(&d);
     d.borrow_mut().put("newerror".into(), Object::bool(false));
     Ok(())
 }

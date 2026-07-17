@@ -93,6 +93,7 @@ fn findfont(it: &mut Interp) -> Result<(), PsError> {
             };
             let fid = font::builtin_index(&requested).unwrap_or(font::SUBSTITUTE);
             let d = font::build_builtin_dict(fid)?;
+            it.journal_dict(&dir);
             dir.borrow_mut()
                 .put_obj(&key, Object::lit(Value::Dict(d.clone())))?;
             d
@@ -126,9 +127,11 @@ fn definefont(it: &mut Interp) -> Result<(), PsError> {
         } else {
             font::SUBSTITUTE
         };
+        it.journal_dict(d);
         d.borrow_mut().put("FID".into(), Object::int(fid));
     }
     let dir = font_directory(it)?;
+    it.journal_dict(&dir);
     dir.borrow_mut().put_obj(&key, font_obj.clone())?;
     it.push(font_obj);
     Ok(())

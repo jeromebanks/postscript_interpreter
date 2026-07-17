@@ -9,8 +9,9 @@ touching code. `ROADMAP.md` has the task list with model routing;
 
 ## Where things stand
 
-**174 tests across 16 suites, clippy clean.** Stages 1–7 are done
-except the explicit gaps below. The interpreter runs found PostScript
+**196 tests across 17 suites, clippy clean.** Stages 1–7 are done,
+and Stage 8's save/restore + benches landed (see below), with the
+explicit gaps noted. The interpreter runs found PostScript
 with data structures, error recovery, text in three font technologies
 (bundled TrueType via ttf-parser, Type 3 glyph procedures, Type 1
 charstrings), file objects and decode filters, and sampled images.
@@ -91,16 +92,18 @@ renders eight examples in both and compares block-downsampled output).
    with embedded images and Type 1 fonts; add per-file status notes
    like Stage 5's testcard. This will surface the next real gaps
    (probably `save`/`restore` and DSC-comment tolerance).
-3. **Stage 8 task 1, `save`/`restore`** ([opus+review] — the big one):
-   flagged since Stage 1 as the feature that can reach into the object
-   model. Design on paper first (copy-on-write vs generation-stamped
-   journaling); `ARCHITECTURE.md` has the framing. Most found files
-   that fail today fail on this.
-4. **Stage 8 task 2, name interning** ([opus]): fib(27) is ~3× slower
-   than gs, attributed to hashing `Rc<str>` names per lookup. Build
-   `benches/` first (Stage 8 task 3, [haiku]) so it's measurable.
-5. Stage 8 remainder, then Stage 9 (multi-page, PDF/SVG export) per
-   ROADMAP.
+3. ✅ **Stage 8 task 1, `save`/`restore`** — done 2026-07-16.
+   Object-granularity COW journaling; design + gs pins + deviations
+   in `VM.md`; tests in `tests/vm.rs`. New mutating operators must
+   call `Interp::journal_array`/`journal_dict` before writing
+   program-visible array/dict contents (strings are exempt by spec).
+4. **Stage 8 task 2, name interning** ([opus]): `benches/` exists now
+   (task 3, done) and puts the fib-27 gap vs gs at ~7× on an M-series
+   (214ms vs ~30ms), attributed to hashing `Rc<str>` names per
+   lookup. Touches lexer, object model, dicts.
+5. Stage 8 remainder (color spaces, packedarray/resources,
+   interactive niceties), then Stage 9 (multi-page, PDF/SVG export)
+   per ROADMAP.
 
 ## Gotchas for the next implementer
 

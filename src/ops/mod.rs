@@ -14,6 +14,7 @@ pub mod logic;
 pub mod matrix;
 pub mod misc;
 pub mod stack;
+pub mod vm;
 
 use crate::object::{Dict, Object, OpFn, Operator, Value};
 
@@ -40,6 +41,7 @@ pub fn install_all(dict: &mut Dict) {
     image::install(dict);
     logic::install(dict);
     misc::install(dict);
+    vm::install(dict);
 
     // Constants: executing a name bound to a literal object pushes the
     // object, which is exactly the behavior `true`, `mark`, etc. need —

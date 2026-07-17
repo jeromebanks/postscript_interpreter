@@ -166,11 +166,11 @@ Graphics semantics worth knowing (`src/gfx.rs`):
 
 ## Known-hard things being deliberately deferred
 
-- **`save`/`restore`** — full VM snapshotting touches the object model
-  (copy-on-write or generation-stamping composites). `gsave`/`grestore`
-  (graphics state only) covers most real programs and comes first, in
-  Stage 2. Flagged now because it's the one future feature that could
-  reach back into the object model's design.
+- **`save`/`restore`** — ~~deferred~~ landed in Stage 8 as an
+  object-granularity copy-on-write journal (design writeup: `VM.md`).
+  The feared reach into the object model amounted to one new `Value`
+  variant (`Save`) and `Clone` on `Dict`; the `Rc<RefCell>` composite
+  representation absorbed the rest unchanged.
 - **Name interning** — see above; do it when a benchmark exists.
 - **`//name` immediate evaluation, ASCII85 strings, `<<`/`>>` dict
   construction** — the lexer recognizes and cleanly rejects the first

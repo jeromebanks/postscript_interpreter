@@ -37,6 +37,8 @@ pub enum PsError {
     Limitcheck,
     #[error("ioerror")]
     Io,
+    #[error("invalidrestore")]
+    InvalidRestore,
 }
 
 impl PsError {
@@ -60,6 +62,7 @@ impl PsError {
             PsError::Syntax(_) => "syntaxerror",
             PsError::Limitcheck => "limitcheck",
             PsError::Io => "ioerror",
+            PsError::InvalidRestore => "invalidrestore",
         }
     }
 }

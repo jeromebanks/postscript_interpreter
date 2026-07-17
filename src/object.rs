@@ -20,7 +20,7 @@
 //! interval sees it — which real PostScript code relies on (`cvs`
 //! returning a prefix of its buffer, prologs slicing tables).
 
-use std::cell::{Ref, RefCell, RefMut};
+use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
@@ -211,6 +211,15 @@ impl PsString {
     }
 }
 
+/// What a `save` object points at. The record of what to roll back
+/// lives in the interpreter's save stack; the handle only carries
+/// identity (restore finds its record by `Rc::ptr_eq`) and validity
+/// (restoring an outer save invalidates the inner handles — a later
+/// restore on one is `invalidrestore`). Design writeup: `VM.md`.
+pub struct SaveHandle {
+    pub(crate) valid: Cell<bool>,
+}
+
 #[derive(Clone)]
 pub enum Value {
     /// PLRM specifies 32-bit integers; we use 64-bit as the implementation
@@ -228,6 +237,7 @@ pub enum Value {
     Dict(Rc<RefCell<Dict>>),
     Operator(Operator),
     File(FileHandle),
+    Save(Rc<SaveHandle>),
 }
 
 #[derive(Clone)]
@@ -293,6 +303,7 @@ impl Object {
             Value::Dict(_) => "dicttype",
             Value::Operator(_) => "operatortype",
             Value::File(_) => "filetype",
+            Value::Save(_) => "savetype",
         }
     }
 
@@ -311,7 +322,8 @@ impl Object {
             | Value::Array(_)
             | Value::Dict(_)
             | Value::Operator(_)
-            | Value::File(_) => "--nostringval--".to_string(),
+            | Value::File(_)
+            | Value::Save(_) => "--nostringval--".to_string(),
         }
     }
 
@@ -359,6 +371,7 @@ impl Object {
             Value::Dict(_) => "-dict-".to_string(),
             Value::Operator(op) => format!("--{}--", op.name),
             Value::File(_) => "-file-".to_string(),
+            Value::Save(_) => "-save-".to_string(),
         }
     }
 }
@@ -460,6 +473,7 @@ enum ExoticKey {
     DictId(usize),
     OperatorId(usize),
     FileId(usize),
+    SaveId(usize),
 }
 
 enum KeyClass {
@@ -489,13 +503,15 @@ fn classify_key(key: &Object) -> Result<KeyClass, PsError> {
         Value::Dict(d) => KeyClass::Exotic(ExoticKey::DictId(Rc::as_ptr(d) as usize)),
         Value::Operator(op) => KeyClass::Exotic(ExoticKey::OperatorId(op.func as usize)),
         Value::File(f) => KeyClass::Exotic(ExoticKey::FileId(Rc::as_ptr(f) as usize)),
+        Value::Save(h) => KeyClass::Exotic(ExoticKey::SaveId(Rc::as_ptr(h) as usize)),
         // The one type the PLRM forbids as a key.
         Value::Null => return Err(PsError::Typecheck),
     })
 }
 
-/// A PostScript dictionary.
-#[derive(Default)]
+/// A PostScript dictionary. `Clone` is shallow (values are `Rc`
+/// handles) — it's what the save/restore journal snapshots.
+#[derive(Default, Clone)]
 pub struct Dict {
     names: HashMap<Rc<str>, Object>,
     /// Exotic entries keep the original key object so `forall` and

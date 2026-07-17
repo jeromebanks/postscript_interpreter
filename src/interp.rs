@@ -13,15 +13,16 @@
 //!    *before* that element executes, so tail-recursive PostScript runs in
 //!    constant execution-stack space for free.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::error::PsError;
 use crate::font::{ShowCtx, ShowStep};
-use crate::gfx::{DEFAULT_PAGE, Gfx};
+use crate::gfx::{DEFAULT_PAGE, Gfx, GraphicsState};
 use crate::image::{ImageCtx, ImageStep};
 use crate::lexer::{Lexer, Token};
-use crate::object::{Dict, Num, Object, PsArray, PsString, Value};
+use crate::object::{Dict, Num, Object, PsArray, PsString, SaveHandle, Value};
 use crate::ops;
 
 /// Generous enough for any sane program (procedure calls in tail position
@@ -111,10 +112,43 @@ impl ForControl {
     }
 }
 
+/// One undo entry in the save/restore journal: the whole backing store
+/// of an array or dict as it was when first mutated at the current save
+/// level (object-granularity copy-on-write — see `VM.md`). Strings are
+/// exempt from restore per PLRM §3.7.3.2, so they never appear here.
+enum JEntry {
+    Array {
+        data: Rc<RefCell<Vec<Object>>>,
+        old: Vec<Object>,
+    },
+    Dict {
+        dict: Rc<RefCell<Dict>>,
+        old: Dict,
+    },
+}
+
+/// The interpreter-side record behind a `save` object.
+struct SaveRecord {
+    handle: Rc<SaveHandle>,
+    /// Journal length at save time; restore undoes back to here.
+    journal_mark: usize,
+    /// Backing-store pointers already journaled at this level. The
+    /// journal entry keeps the `Rc` alive, so pointer reuse can't alias.
+    seen: HashSet<usize>,
+    /// Graphics snapshot (same mechanism as Type 3 glyph contexts):
+    /// restore = grestoreall to the save point.
+    gfx_depth: usize,
+    gfx_state: Box<GraphicsState>,
+}
+
 pub struct Interp {
     pub(crate) ostack: Vec<Object>,
     dstack: Vec<Rc<RefCell<Dict>>>,
     estack: Vec<Frame>,
+    /// Mutation journal + live save records. Empty save stack = no
+    /// journaling (the common, zero-overhead path).
+    journal: Vec<JEntry>,
+    save_stack: Vec<SaveRecord>,
     pub(crate) quit_requested: bool,
     /// The most recently executed name, for `OffendingCommand` in error
     /// reports.
@@ -168,6 +202,8 @@ impl Interp {
             ostack: Vec::new(),
             dstack: vec![system, user],
             estack: Vec::new(),
+            journal: Vec::new(),
+            save_stack: Vec::new(),
             quit_requested: false,
             last_name: None,
             rand_state: 1,
@@ -262,6 +298,8 @@ impl Interp {
             None => None,
         };
         if let Some(d) = error_dict {
+            // $error is a VM dict; its writes roll back like any other.
+            self.journal_dict(&d);
             let mut d = d.borrow_mut();
             d.put("newerror".into(), Object::bool(true));
             d.put(
@@ -757,8 +795,109 @@ impl Interp {
     /// Define a name in the topmost dictionary (what `def` will do once
     /// control flow lands; already used by tests and available to embedders).
     pub fn define(&mut self, name: &str, obj: Object) {
-        if let Some(top) = self.dstack.last() {
+        if let Some(top) = self.dstack.last().cloned() {
+            self.journal_dict(&top);
             top.borrow_mut().put(name.into(), obj);
+        }
+    }
+
+    // --- save/restore (design: VM.md) -----------------------------------
+
+    /// Copy-on-write barrier: call *before* mutating an array's contents.
+    /// First touch at the current save level snapshots the whole backing
+    /// store; later touches are one hash lookup. No-op with no live save.
+    pub(crate) fn journal_array(&mut self, a: &PsArray) {
+        let Some(rec) = self.save_stack.last_mut() else {
+            return;
+        };
+        let data = a.data_rc();
+        if rec.seen.insert(Rc::as_ptr(data) as usize) {
+            self.journal.push(JEntry::Array {
+                data: data.clone(),
+                old: data.borrow().clone(),
+            });
+        }
+    }
+
+    /// The dict counterpart of [`journal_array`].
+    pub(crate) fn journal_dict(&mut self, d: &Rc<RefCell<Dict>>) {
+        let Some(rec) = self.save_stack.last_mut() else {
+            return;
+        };
+        if rec.seen.insert(Rc::as_ptr(d) as usize) {
+            self.journal.push(JEntry::Dict {
+                dict: d.clone(),
+                old: d.borrow().clone(),
+            });
+        }
+    }
+
+    pub(crate) fn do_save(&mut self) -> Object {
+        let (gfx_depth, gfx_state) = self.gfx.glyph_snapshot();
+        let handle = Rc::new(SaveHandle {
+            valid: Cell::new(true),
+        });
+        self.save_stack.push(SaveRecord {
+            handle: handle.clone(),
+            journal_mark: self.journal.len(),
+            seen: HashSet::new(),
+            gfx_depth,
+            gfx_state,
+        });
+        Object::lit(Value::Save(handle))
+    }
+
+    pub(crate) fn do_restore(&mut self, obj: &Object) -> Result<(), PsError> {
+        let Value::Save(h) = &obj.value else {
+            return Err(PsError::Typecheck);
+        };
+        if !h.valid.get() {
+            return Err(PsError::InvalidRestore);
+        }
+        let idx = self
+            .save_stack
+            .iter()
+            .position(|r| Rc::ptr_eq(&r.handle, h))
+            .ok_or(PsError::InvalidRestore)?;
+        // Restoring this save discards any newer ones; their objects go
+        // stale (a later restore on them is invalidrestore, per PLRM).
+        for rec in &self.save_stack[idx..] {
+            rec.handle.valid.set(false);
+        }
+        self.save_stack.truncate(idx + 1);
+        let rec = self.save_stack.pop().expect("record at idx exists");
+        while self.journal.len() > rec.journal_mark {
+            match self.journal.pop().expect("length checked") {
+                // Replacing contents while holding the borrow is safe
+                // even for self-referential structures: the displaced
+                // objects' Drop skips anything still multiply-owned,
+                // and this cell is kept alive by `data`/`dict` itself.
+                JEntry::Array { data, old } => *data.borrow_mut() = old,
+                JEntry::Dict { dict, old } => *dict.borrow_mut() = old,
+            }
+        }
+        // grestoreall to the save point, then drop the saved state —
+        // pinned against gs (`save gsave gsave 5 setlinewidth restore`).
+        self.gfx
+            .restore_glyph_snapshot(rec.gfx_depth, rec.gfx_state);
+        Ok(())
+    }
+
+    /// `vmstatus`'s save-nesting level.
+    pub(crate) fn save_level(&self) -> usize {
+        self.save_stack.len()
+    }
+
+    /// `grestoreall`: pop to the innermost save's boundary (keeping the
+    /// boundary state available for its restore), or to the bottom.
+    pub(crate) fn do_grestoreall(&mut self) {
+        match self.save_stack.last() {
+            Some(rec) => {
+                let state = rec.gfx_state.clone();
+                let depth = rec.gfx_depth;
+                self.gfx.restore_glyph_snapshot(depth, state);
+            }
+            None => self.gfx.grestore_all_bottom(),
         }
     }
 

@@ -489,6 +489,15 @@ impl Gfx {
         }
     }
 
+    /// `grestoreall` with no save active: pop everything, ending in the
+    /// bottommost saved state.
+    pub(crate) fn grestore_all_bottom(&mut self) {
+        if let Some(first) = self.saved.first() {
+            self.state = first.clone();
+            self.saved.clear();
+        }
+    }
+
     pub fn set_rgb(&mut self, r: f64, g: f64, b: f64) {
         self.state.rgb = (clamp01(r), clamp01(g), clamp01(b));
     }
