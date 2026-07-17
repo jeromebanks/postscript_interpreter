@@ -146,6 +146,40 @@ impl PsPath {
         d
     }
 
+    /// PDF path-construction operators for the same segments.
+    pub(crate) fn to_pdf_ops(&self) -> String {
+        use std::fmt::Write as _;
+        let mut d = String::new();
+        let f = |v: f32| {
+            let s = format!("{v:.3}");
+            s.trim_end_matches('0').trim_end_matches('.').to_string()
+        };
+        for seg in &self.segs {
+            match *seg {
+                Seg::Move(p) => {
+                    let _ = write!(d, "{} {} m ", f(p.x), f(p.y));
+                }
+                Seg::Line(p) => {
+                    let _ = write!(d, "{} {} l ", f(p.x), f(p.y));
+                }
+                Seg::Curve(c1, c2, p) => {
+                    let _ = write!(
+                        d,
+                        "{} {} {} {} {} {} c ",
+                        f(c1.x),
+                        f(c1.y),
+                        f(c2.x),
+                        f(c2.y),
+                        f(p.x),
+                        f(p.y)
+                    );
+                }
+                Seg::Close => d.push_str("h "),
+            }
+        }
+        d.trim_end().to_string()
+    }
+
     fn to_skia(&self) -> Option<tiny_skia::Path> {
         let mut pb = PathBuilder::new();
         for seg in &self.segs {
@@ -295,6 +329,8 @@ pub struct Gfx {
     suppress_paint: u32,
     /// SVG export recorder (`--svg`); mirrors every paint when on.
     svg: Option<Box<crate::svg::SvgRecorder>>,
+    /// PDF export recorder (`--pdf`); same seams, PDF syntax.
+    pdf: Option<Box<crate::pdf::PdfRecorder>>,
 }
 
 impl Gfx {
@@ -337,6 +373,7 @@ impl Gfx {
             pending_erase: false,
             painted_since_page: false,
             svg: None,
+            pdf: None,
             suppress_paint: 0,
         })
     }
@@ -552,6 +589,9 @@ impl Gfx {
             if let Some(svg) = &mut self.svg {
                 svg.erase();
             }
+            if let Some(pdf) = &mut self.pdf {
+                pdf.erase();
+            }
             self.dirty = true;
         }
         self.painted_since_page = true;
@@ -572,6 +612,14 @@ impl Gfx {
                 let chain = self.state.clip.as_ref().map(|c| c.node.clone());
                 if let Some(svg) = &mut self.svg {
                     svg.fill(&d, rule, rgb, &chain);
+                }
+            }
+            {
+                let rgb = self.state.rgb;
+                let chain = self.state.clip.as_ref().map(|c| c.node.clone());
+                let Gfx { pdf, state, .. } = self;
+                if let Some(pdf) = pdf {
+                    pdf.fill(&state.path, rule, rgb, &chain);
                 }
             }
             self.dirty = true;
@@ -634,6 +682,19 @@ impl Gfx {
                         &chain,
                     );
                 }
+                let Gfx { pdf, state, .. } = self;
+                if let Some(pdf) = pdf {
+                    pdf.stroke(
+                        &state.path,
+                        rgb,
+                        w,
+                        cap,
+                        join,
+                        ml,
+                        scaled_dash.as_ref().map(|(p, ph)| (p.as_slice(), *ph)),
+                        &chain,
+                    );
+                }
             }
             self.dirty = true;
         }
@@ -668,6 +729,9 @@ impl Gfx {
         if let Some(svg) = &mut self.svg {
             svg.erase();
         }
+        if let Some(pdf) = &mut self.pdf {
+            pdf.erase();
+        }
         self.dirty = true;
     }
 
@@ -681,6 +745,9 @@ impl Gfx {
         if let Some(svg) = &mut self.svg {
             svg.end_page();
         }
+        if let Some(pdf) = &mut self.pdf {
+            pdf.end_page();
+        }
         self.page_shown = true;
         self.pending_erase = true;
         self.painted_since_page = false;
@@ -691,6 +758,9 @@ impl Gfx {
         self.completed.push(self.pixmap.clone());
         if let Some(svg) = &mut self.svg {
             svg.end_page();
+        }
+        if let Some(pdf) = &mut self.pdf {
+            pdf.end_page();
         }
         self.page_shown = true;
     }
@@ -723,6 +793,39 @@ impl Gfx {
 
     pub(crate) fn svg_wanted(&self) -> bool {
         self.svg.is_some() && self.suppress_paint == 0
+    }
+
+    /// Turn on PDF recording (`--pdf`).
+    pub fn enable_pdf(&mut self) {
+        self.pdf = Some(Box::new(crate::pdf::PdfRecorder::new(
+            self.pixmap.width(),
+            self.pixmap.height(),
+        )));
+    }
+
+    /// The finished PDF document (None when recording is off).
+    pub fn pdf_document(&self) -> Option<Vec<u8>> {
+        self.pdf
+            .as_ref()
+            .map(|pdf| pdf.finish(self.painted_since_page))
+    }
+
+    pub(crate) fn pdf_wanted(&self) -> bool {
+        self.pdf.is_some() && self.suppress_paint == 0
+    }
+
+    pub(crate) fn pdf_image(
+        &mut self,
+        w: usize,
+        h: usize,
+        data: crate::pdf::ImageData,
+        t: [f32; 6],
+    ) {
+        let fill = self.state.rgb;
+        let chain = self.state.clip.as_ref().map(|c| c.node.clone());
+        if let Some(pdf) = &mut self.pdf {
+            pdf.image(w, h, data, t, fill, &chain);
+        }
     }
 
     pub(crate) fn svg_image(&mut self, png: &[u8], w: usize, h: usize, t: [f32; 6]) {
@@ -878,6 +981,13 @@ impl Gfx {
                 let chain = self.state.clip.as_ref().map(|c| c.node.clone());
                 if let Some(svg) = &mut self.svg {
                     svg.fill(&d, FillRule::Winding, rgb, &chain);
+                }
+            }
+            if self.pdf.is_some() {
+                let rgb = self.state.rgb;
+                let chain = self.state.clip.as_ref().map(|c| c.node.clone());
+                if let Some(pdf) = &mut self.pdf {
+                    pdf.fill(path, FillRule::Winding, rgb, &chain);
                 }
             }
             self.dirty = true;

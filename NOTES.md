@@ -3,6 +3,42 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 9 — output targets (2026-07-16)
+
+**Multi-page** (`tests/pages.rs`): showpage snapshots the page, does
+a full initgraphics (gs-pinned: CTM/color/width reset, font kept),
+and erases *lazily* — the canvas keeps the finished page until the
+next mark. That single idea resolves the Stage 2 "showpage doesn't
+erase" deviation without defeating watching: single-page programs
+keep their picture, multi-page programs erase exactly when page N+1
+starts. All paint entry points funnel through `Gfx::prepare_paint`.
+copypage/initgraphics ops added; `--png` numbers multi-page output;
+the window browses pages with arrow keys.
+
+**`--dpi`** — one scale factor in the base CTM
+(`Interp::with_page_scaled`); verified pixel-identical to gs -r144.
+
+**SVG export** (`--svg`, `src/svg.rs`): a recorder mirroring the
+paint pipeline at six seams in Gfx — device-space paths serialize
+1:1, glyphs arrive as outlines, clips became a *chain* (ClipState
+now records path links, not just the newest) rendered as nested
+clipPath groups, images embed as base64 PNG with the rasterizer's
+exact transform. One document per page, lazy erase mirrored.
+Verified by rasterizing postcard.ps's SVG in a browser.
+
+**PDF export** (`--pdf`, `src/pdf.rs` — the design note lives in its
+module doc): same recorder pattern, PDF syntax; the design decision
+(mirror vs re-execution vs retained display list) is recorded there.
+Content streams reuse our y-down device coordinates behind one flip
+`cm`; each element carries its own clip chain in `q…Q`; images are
+Flate-compressed RGB XObjects; imagemasks are 1-bit `/ImageMask`
+stencils painted in the current color — PostScript's own semantics.
+The strong test: **gs rasterizes our PDFs** and they block-match our
+canvas (postcard, specimen).
+
+If a third export target appears, promote the recorder seams into a
+neutral display list and make SVG/PDF serializers of it.
+
 ## Stage 8 wrap — corpus round 2, Level 2 odds and ends (2026-07-16)
 
 **Found-file corpus round 2** (`tests/corpus.rs`): the Ghostscript

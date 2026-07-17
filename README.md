@@ -36,11 +36,17 @@ the full CTM/clip pipeline. `examples/postcard.ps` shows it all
 inline; `FONTS.md` has the font design writeup, `HANDOFF.md` the
 state of the world and what's next (Stage 8: name interning).
 
-**Stage 8 (VM fidelity) underway**: full `save`/`restore` semantics —
-arrays, dicts, and definitions roll back; strings exempt per the spec;
-graphics restore as `grestoreall` to the save point (`VM.md` is the
-design writeup, pinned against Ghostscript) — plus `vmstatus`,
-`grestoreall`, and a perf yardstick in `benches/`.
+**Stage 8 (VM fidelity) complete**: full `save`/`restore` semantics
+(`VM.md` is the design writeup, pinned against Ghostscript), interned
+names (fib 27 ~1.6× faster), Indexed/Separation color spaces, Level 2
+odds and ends, and a found-file corpus — tiger.eps and the other gs
+classics render block-identical to Ghostscript.
+
+**Stage 9 (output targets) complete**: real multi-page `showpage`
+(the window keeps showing the finished page; `--png` numbers pages),
+`--dpi` for print-resolution rendering, and `--svg`/`--pdf` export —
+both mirror the paint pipeline directly, and the PDF is verified by
+letting Ghostscript rasterize it back.
 
 **Stage 5 (run found PostScript) complete.** Beyond drawing live, pscat
 now executes the idioms real-world `.ps` files depend on: arrays and

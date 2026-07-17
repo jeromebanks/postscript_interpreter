@@ -185,14 +185,23 @@ block-identical), `--pstack-on-error`. The one open sliver is task
 
 ## Stage 9 — Output targets
 
+**✅ COMPLETE (2026-07-16)** — multi-page showpage (lazy erase), --dpi,
+SVG export, PDF export; every target verified against gs or a browser
+rasterization of our own output.
+
 1. ✅ **Multi-page documents** (2026-07-16) — showpage snapshots the
    page, full initgraphics (gs-pinned), *lazy* erase (canvas keeps the
    finished page until the next mark — the window keeps its picture);
    copypage/initgraphics ops; `--png` numbers multi-page output;
    arrow-key page browsing in the window. [sonnet]
-2. **PDF export** — replay executed page content into a PDF (either via
-   a recording display list or by re-running per page). Design note
-   first: display list vs. re-execution. [opus+review]
+2. ✅ **PDF export** (2026-07-16) — `--pdf`; design note in
+   `src/pdf.rs`: the paint-pipeline-mirror recorder (as proven by SVG)
+   beat both re-execution (side effects, rand) and a retained display
+   list (no third consumer yet). Content streams in our device space
+   (one flip cm per page), per-element q…Q clip chains, images as
+   Flate RGB XObjects, imagemasks as /ImageMask stencils, text as
+   outlines. Oracle: gs rasterizes our PDFs and they block-match our
+   canvas. [opus+review]
 3. ✅ **Print-resolution rendering** (2026-07-16) — `--dpi`, verified
    pixel-identical against gs -r144. [haiku]
 4. ✅ **SVG export** (2026-07-16) — `--svg`; `src/svg.rs` mirrors the

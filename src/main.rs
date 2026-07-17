@@ -17,6 +17,8 @@ struct Options {
     dpi: f32,
     /// Write the page(s) as SVG (implies headless).
     svg: Option<String>,
+    /// Write the document as PDF (implies headless).
+    pdf: Option<String>,
     /// Print the operand stack after an error (REPL and headless).
     pstack_on_error: bool,
 }
@@ -44,6 +46,9 @@ fn main() -> ExitCode {
     if options.svg.is_some() {
         interp.gfx_mut().enable_svg();
     }
+    if options.pdf.is_some() {
+        interp.gfx_mut().enable_pdf();
+    }
     if let Some(expr) = &options.eval {
         return finish_headless(
             run_headless(&mut interp, expr.as_bytes(), &options),
@@ -62,7 +67,7 @@ fn main() -> ExitCode {
         }
     };
 
-    if options.headless || options.png.is_some() || options.svg.is_some() {
+    if options.headless || options.png.is_some() || options.svg.is_some() || options.pdf.is_some() {
         return finish_headless(
             run_headless(&mut interp, &source, &options),
             &interp,
@@ -160,6 +165,15 @@ fn finish_headless(ok: bool, interp: &Interp, options: &Options) -> ExitCode {
             }
         }
     }
+    if let Some(path) = &options.pdf
+        && let Some(doc) = interp.gfx().pdf_document()
+    {
+        if let Err(e) = std::fs::write(path, doc) {
+            eprintln!("pscat: cannot write {path}: {e}");
+            return ExitCode::FAILURE;
+        }
+        println!("pscat: wrote {path}");
+    }
     if ok {
         ExitCode::SUCCESS
     } else {
@@ -185,6 +199,7 @@ fn parse_args() -> Result<Options, String> {
         page: gfx::DEFAULT_PAGE,
         dpi: 72.0,
         svg: None,
+        pdf: None,
         pstack_on_error: false,
     };
     let mut args = env::args().skip(1);
@@ -212,6 +227,9 @@ fn parse_args() -> Result<Options, String> {
             }
             "--svg" => {
                 options.svg = Some(args.next().ok_or("missing path after --svg")?);
+            }
+            "--pdf" => {
+                options.pdf = Some(args.next().ok_or("missing path after --pdf")?);
             }
             "--speed" => {
                 let n = args.next().ok_or("missing value after --speed")?;
@@ -257,6 +275,7 @@ fn print_usage() {
     println!("      --speed N       interpreter steps per frame (default 100)");
     println!("      --page WxH      canvas size in points (default 612x792, US Letter)");
     println!("      --svg PATH      write the page(s) as SVG (implies --headless)");
+    println!("      --pdf PATH      write the document as PDF (implies --headless)");
     println!("      --dpi N         device resolution (default 72 = 1 pixel per point)");
     println!("      --pstack-on-error  print the operand stack after an error");
 }

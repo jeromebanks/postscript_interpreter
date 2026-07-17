@@ -1,14 +1,14 @@
 # HANDOFF.md — state of the interpreter and how to continue
 
 Written 2026-07-13 at the completion of Stages 6–7; last updated
-2026-07-16 with Stage 8 complete. Written for whichever model
+2026-07-16 with Stages 8 and 9 complete. Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
 `NOTES.md` has per-stage histories; this file is the *orientation*.
 
 ## Where things stand
 
-**223 tests across 20 suites, clippy clean.** Stages 1–8 are done
+**244 tests across 23 suites, clippy clean.** Stages 1–9 are done
 (Stage 8's one open sliver: the `--interactive` windowed REPL,
 design note in NOTES.md). Stage 8 delivered: **save/restore** as
 object-granularity copy-on-write journaling (`VM.md` is the design
@@ -20,7 +20,11 @@ spec); **name interning** (`src/name.rs`, fib 214→137ms);
 generic `Frame::PostOp` continuation — copy that pattern for any
 operator needing a procedure's result); **Level 2 odds and ends**
 (`ops/level2.rs`); and **corpus round 2** (`tests/corpus.rs`): tiger,
-golfer, escher, colorcir, doretree render block-identical to gs. The interpreter runs found PostScript
+golfer, escher, colorcir, doretree render block-identical to gs.
+Stage 9 delivered the output targets: real multi-page `showpage`
+(lazy erase — the window keeps the finished page), `--dpi`, and
+`--svg`/`--pdf` export (paint-pipeline mirrors; the PDF is verified
+by gs rasterizing it back). The interpreter runs found PostScript
 with data structures, error recovery, text in three font technologies
 (bundled TrueType via ttf-parser, Type 3 glyph procedures, Type 1
 charstrings), file objects and decode filters, and sampled images.
@@ -95,20 +99,20 @@ renders eight examples in both and compares block-downsampled output).
 
 ## Next work, in recommended order
 
-1. **Stage 9 task 1, multi-page** ([sonnet]): `showpage` advances a
-   page counter, window gains page navigation, `--png` writes
-   out-001.png etc.; resolve the Stage 2 "showpage doesn't erase"
-   deviation properly.
-2. **Stage 9 task 3, `--dpi`** ([haiku]): decouple page points from
-   device pixels — the CTM already supports it.
-3. **Stage 9 task 4, SVG export** ([sonnet]): the path/paint pipeline
-   maps nearly 1:1.
-4. **Stage 9 task 2, PDF export** ([opus+review]): design note first
-   (display list vs. re-execution).
-5. Leftovers when they itch: `--interactive` (note in NOTES.md),
-   remaining perf (frame loop's per-element RefCell borrow + clone,
-   noted in benches/perf.rs), errordict handlers, DSC tolerance as
-   the corpus grows.
+1. **Stage 10** (stretch/fun, per ROADMAP): spool mode, halftone
+   screens, Gallery II pieces using the new text/image/color powers.
+2. Leftovers when they itch: `--interactive` (design note in
+   NOTES.md), remaining perf (the frame loop's per-element RefCell
+   borrow + Object clone, noted in benches/perf.rs), errordict
+   handlers, error-time operand restoration, DSC-comment tolerance
+   and more corpus files, CCITTFax.
+3. Worth knowing before touching export: SVG (`src/svg.rs`) and PDF
+   (`src/pdf.rs`) both mirror the paint pipeline at the same seams
+   in `Gfx` (fill, stroke, glyph fill, erase, prepare_paint,
+   end_page, plus the image hook in `image.rs`). A third export
+   target should promote those seams into a neutral display list
+   first — the design note in `src/pdf.rs` says why that wasn't
+   done at two.
 
 ## Gotchas for the next implementer
 

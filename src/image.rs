@@ -299,6 +299,47 @@ impl ImageCtx {
         }
     }
 
+    /// Mirror into the PDF recorder: masks pass their packed 1-bit
+    /// rows straight through (that's already our wire format); color
+    /// images decode to interleaved RGB.
+    fn record_pdf(&self, gfx: &mut Gfx, ctm: tiny_skia::Transform) {
+        let m = self.matrix;
+        let img = tiny_skia::Transform::from_row(
+            m[0] as f32,
+            m[1] as f32,
+            m[2] as f32,
+            m[3] as f32,
+            m[4] as f32,
+            m[5] as f32,
+        );
+        let Some(inv) = img.invert() else { return };
+        let t = inv.post_concat(ctm);
+        let data = match self.mask {
+            Some(paint_ones) => crate::pdf::ImageData::Mask {
+                bits: self.data.clone(),
+                paint_ones,
+            },
+            None => {
+                let mut rgb = Vec::with_capacity(self.width * self.height * 3);
+                for iy in 0..self.height {
+                    for ix in 0..self.width {
+                        let (r, g, b) = self.rgb_at(ix, iy);
+                        rgb.push((r * 255.0).round() as u8);
+                        rgb.push((g * 255.0).round() as u8);
+                        rgb.push((b * 255.0).round() as u8);
+                    }
+                }
+                crate::pdf::ImageData::Rgb(rgb)
+            }
+        };
+        gfx.pdf_image(
+            self.width,
+            self.height,
+            data,
+            [t.sx, t.ky, t.kx, t.sy, t.tx, t.ty],
+        );
+    }
+
     fn rasterize(&self, gfx: &mut Gfx) {
         if self.width == 0 || self.height == 0 || self.bits == 0 {
             return;
@@ -310,6 +351,9 @@ impl ImageCtx {
         gfx.prepare_paint();
         if gfx.svg_wanted() {
             self.record_svg(gfx, ctm);
+        }
+        if gfx.pdf_wanted() {
+            self.record_pdf(gfx, ctm);
         }
         // Device bounding box of the user-space unit square.
         let (pw, ph) = (gfx.pixmap.width() as i64, gfx.pixmap.height() as i64);
