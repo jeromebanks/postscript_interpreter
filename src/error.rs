@@ -39,6 +39,8 @@ pub enum PsError {
     Io,
     #[error("invalidrestore")]
     InvalidRestore,
+    #[error("undefinedresource")]
+    UndefinedResource,
 }
 
 impl PsError {
@@ -63,6 +65,7 @@ impl PsError {
             PsError::Limitcheck => "limitcheck",
             PsError::Io => "ioerror",
             PsError::InvalidRestore => "invalidrestore",
+            PsError::UndefinedResource => "undefinedresource",
         }
     }
 }

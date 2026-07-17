@@ -53,7 +53,7 @@ fn encoding_array(names: [&'static str; 256]) -> Object {
     Object::array(names.into_iter().map(Object::name).collect())
 }
 
-fn font_directory(it: &Interp) -> Result<Rc<RefCell<Dict>>, PsError> {
+pub(crate) fn font_directory(it: &Interp) -> Result<Rc<RefCell<Dict>>, PsError> {
     match it.load("FontDirectory").as_ref().map(|o| &o.value) {
         Some(Value::Dict(d)) => Ok(d.clone()),
         // Only reachable if a program clobbers the name with a non-dict.
@@ -79,7 +79,7 @@ fn pop_string(it: &mut Interp) -> Result<PsString, PsError> {
 /// built-in names materialize on first use; unknown names substitute
 /// the default face rather than erroring, Ghostscript-style, so found
 /// files keep running (documented deviation).
-fn findfont(it: &mut Interp) -> Result<(), PsError> {
+pub(crate) fn findfont(it: &mut Interp) -> Result<(), PsError> {
     let key = it.pop()?;
     let dir = font_directory(it)?;
     let existing = dir.borrow().get_obj(&key)?;
@@ -105,7 +105,7 @@ fn findfont(it: &mut Interp) -> Result<(), PsError> {
 
 /// key font definefont → font. Installs into FontDirectory; gives dicts
 /// that lack one an FID (the seam to the outline registry — see FONTS.md).
-fn definefont(it: &mut Interp) -> Result<(), PsError> {
+pub(crate) fn definefont(it: &mut Interp) -> Result<(), PsError> {
     let font_obj = it.pop()?;
     let key = it.pop()?;
     let Value::Dict(d) = &font_obj.value else {

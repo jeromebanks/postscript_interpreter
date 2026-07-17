@@ -169,6 +169,14 @@ pub struct Interp {
     /// State for `rand`/`srand`/`rrand`. Deterministic by default —
     /// reproducible art is a feature here, not a bug.
     pub(crate) rand_state: i64,
+    /// `setpacking` flag — tracked, but packed arrays are ordinary
+    /// arrays here (ops/level2.rs).
+    pub(crate) packing: bool,
+    /// `usertime`'s zero point.
+    pub(crate) start_instant: std::time::Instant,
+    /// Non-Font resource categories (ops/level2.rs). Font shares
+    /// FontDirectory instead.
+    resources: crate::ops::level2::CategoryMap,
     pub(crate) gfx: Gfx,
 }
 
@@ -220,6 +228,9 @@ impl Interp {
             quit_requested: false,
             last_name: None,
             rand_state: 1,
+            packing: false,
+            start_instant: std::time::Instant::now(),
+            resources: Default::default(),
             gfx,
         })
     }
@@ -810,6 +821,15 @@ impl Interp {
                 }
             }
         }
+    }
+
+    /// The instance dict for a non-Font resource category, created on
+    /// first touch.
+    pub(crate) fn resource_category(&mut self, category: &Rc<str>) -> Rc<RefCell<Dict>> {
+        self.resources
+            .entry(category.clone())
+            .or_insert_with(|| Rc::new(RefCell::new(Dict::new())))
+            .clone()
     }
 
     // --- dictionary-stack access for the dict operators -----------------

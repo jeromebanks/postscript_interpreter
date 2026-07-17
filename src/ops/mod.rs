@@ -11,6 +11,7 @@ pub mod file;
 pub mod font;
 pub mod graphics;
 pub mod image;
+pub mod level2;
 pub mod logic;
 pub mod matrix;
 pub mod misc;
@@ -44,6 +45,7 @@ pub fn install_all(dict: &mut Dict) {
     misc::install(dict);
     vm::install(dict);
     color::install(dict);
+    level2::install(dict);
 
     // Constants: executing a name bound to a literal object pushes the
     // object, which is exactly the behavior `true`, `mark`, etc. need —
