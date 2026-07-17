@@ -3,6 +3,46 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 11 — performance parity investigation (2026-07-17)
+
+**The harness** (`benches/vs_gs.rs`, `cargo bench --bench vs_gs`):
+identical workloads through both binaries, wall time best-of-three
+plus peak RSS via `/usr/bin/time -l`, startup row for netting out.
+
+**Headline: pscat wins almost everywhere.** M-series numbers after
+this stage's fix — pscat vs gs: startup 4ms/19ms, memory 3–5×
+smaller on every workload (5.6–9.4MB vs 18–44MB), saveloop 3ms/23ms,
+sierpinski 3ms/26ms, specimen 4ms/35ms, postcard 5ms/28ms, defloop
+now *tied* 24ms/24ms. The two remaining gaps are fib 27 (124ms vs
+54ms) and fern (247ms vs 149ms).
+
+**What profiling found** (macOS `sample` on fib 30 / fern):
+- A custom `Drop for Object` (the Stage-4 iterative-teardown guard)
+  taxed ~18% of fib: every popped operand — integers included —
+  paid a function call. **Fixed** by moving the impl to `PsArray`
+  where it belongs: non-array values get the compiler's plain drop
+  glue, arrays keep the last-handle iterative teardown. fib
+  134→124ms, defloop 30→24ms (tie), fern 264→247ms. Bonus:
+  `obj.value` is movable now — the old E0509 gotcha is gone.
+- A **name-lookup cache was built, measured, and rejected** — twice
+  (global write-generation, then per-name generations with dict-
+  stack invalidation). fib gained only ~5% while def-heavy code
+  (fern, defloop) paid more in bookkeeping than the two integer-hash
+  probes it saved. The uncached walk is already near-optimal at a
+  two-dict stack. Kept: nothing; the numbers said no.
+- Both remaining gaps share one root: per-element machine-loop cost
+  (step dispatch ~26%, dstack walk ~17%, per-element `PsArray::get`
+  clone ~11%, drop glue ~9%). Fern is interpreter-bound, *not*
+  raster-bound — the tiny-skia side is already fast, and fern's
+  malloc traffic is its own `3 dict` per `sethsb` call.
+
+**Deliberately not done** (the levers left, in order of expected
+payoff, all representation changes): borrow-yield or bytecode-style
+procedure bodies to kill the per-element clone; gs-style per-name
+binding slots; NaN-boxed objects. For an interpreter whose real
+workloads (rendering) already beat gs 5–7×, they're not worth the
+architectural churn today.
+
 ## Stage 9 — output targets (2026-07-16)
 
 **Multi-page** (`tests/pages.rs`): showpage snapshots the page, does

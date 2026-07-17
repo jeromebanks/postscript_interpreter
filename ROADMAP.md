@@ -228,25 +228,25 @@ Goal: know exactly where pscat stands against gs on speed, memory,
 and overall resource usage — with a repeatable harness, not anecdotes
 — and close the gaps worth closing.
 
-1. **Comparison harness** — extend `benches/` with a pscat-vs-gs
-   runner: identical workloads through both binaries, measuring wall
-   time and peak RSS (`/usr/bin/time -l` on macOS), reporting a
-   table with gs's startup cost netted out. Workloads: the existing
-   four (fib/defloop/sierpinski/fern) plus a text-heavy page, an
-   image/filter-heavy page, and a save/restore-heavy loop. [sonnet]
-2. **Investigation** — profile the biggest gaps the harness reports;
-   record findings in NOTES.md before optimizing (the interning task
-   set the pattern: measure, fix, re-measure). Known suspects going
-   in: the frame loop's per-element RefCell borrow + Object clone,
-   dstack walking on every unbound name, per-glyph rasterization.
-   [opus]
-3. **Targeted optimizations** — whatever #2 justifies, each with
-   before/after bench numbers in the commit. Candidate levers:
-   generation-stamped name-lookup cache (invalidated on dict writes
-   and dstack changes), cheaper Frame::Proc element stepping, glyph
-   bitmap cache (deferred since Stage 6 task 7). Memory: page
-   snapshots, journal growth under long-lived saves, name-table and
-   font-cache footprints. [opus]
+**✅ COMPLETE (2026-07-17)** — see NOTES.md for the full findings.
+Headline: pscat beats gs on startup (4ms vs 19ms), memory (3–5×
+smaller on every workload), save/restore (8×), and every rendering
+page (5–7×); defloop is tied. Remaining gaps (fib ~2.3×, fern ~1.9×
+net of startup) are per-element machine-loop costs; the justified
+fix (Drop moved from Object to PsArray, ~8–20% across workloads)
+landed, the unjustified one (name-lookup cache — built two ways,
+measured, slower on def-heavy code) was reverted with its numbers
+recorded.
+
+1. ✅ **Comparison harness** — `benches/vs_gs.rs` (wall + peak RSS,
+   startup row for netting). [sonnet]
+2. ✅ **Investigation** — `sample` profiles of fib and fern; findings
+   in NOTES.md. Fern is interpreter-bound, not raster-bound. [opus]
+3. ✅ **Targeted optimizations** — `Drop` relocation (kept, with
+   numbers); lookup cache (rejected, with numbers); the remaining
+   levers (bytecode-style bodies, per-name binding slots, NaN
+   boxing) are recorded as future representation changes. Memory
+   needed nothing: smallest footprint of the two by far. [opus]
 
 ## Stage 12 — Handwritten text (dynamic glyph generation)
 

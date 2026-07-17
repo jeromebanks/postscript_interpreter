@@ -116,8 +116,11 @@ renders eight examples in both and compares block-downsampled output).
 
 ## Gotchas for the next implementer
 
-- `Object` has a custom `Drop` (iterative teardown) — you cannot move
-  out of `obj.value`; match on `&obj.value` and clone the Rc.
+- `PsArray` has a custom `Drop` (iterative teardown of last-handle
+  storage; it moved off `Object` in Stage 11 for speed, so
+  `obj.value` is movable these days). Don't reintroduce a
+  `Drop for Object` — profiling showed it taxing every popped
+  operand (~18% of fib).
 - `Interp` split-borrows fields in `next_item` (`estack`, `dstack`,
   `gfx`, `ostack`); new frame types plug in there and must decide
   their action before any stack mutation (the `Action` enum).

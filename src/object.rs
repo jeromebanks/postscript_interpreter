@@ -66,6 +66,7 @@ impl PsArray {
         self.len == 0
     }
 
+    #[inline]
     pub fn get(&self, i: usize) -> Option<Object> {
         if i < self.len {
             Some(self.data.borrow()[self.off + i].clone())
@@ -383,32 +384,43 @@ impl fmt::Debug for Object {
     }
 }
 
+thread_local! {
+    /// Shared placeholder storage for the teardown swap below. Its
+    /// refcount is always ≥ 1 (this handle), so it can never be
+    /// try_unwrapped and never recurses.
+    static EMPTY_STORE: Rc<RefCell<Vec<Object>>> = Rc::new(RefCell::new(Vec::new()));
+}
+
 /// Deeply nested arrays (10k levels of `[`) would drop recursively — one
-/// Rust stack frame per level — and abort the process. When this is the
-/// last handle to an array's backing store, tear it down iteratively
+/// Rust stack frame per level — and abort the process. When this view is
+/// the last handle to an array's backing store, tear it down iteratively
 /// instead, reusing the store's own element vector as the worklist.
-impl Drop for Object {
+///
+/// The impl lives on `PsArray`, not `Object`, so every non-array value
+/// (the overwhelming majority of drops — every popped operand) keeps
+/// the compiler's plain drop glue; profiling fib showed a custom
+/// `Drop for Object` taxing ~18% of the whole run (NOTES.md, Stage 11).
+impl Drop for PsArray {
+    #[inline]
     fn drop(&mut self) {
-        let Value::Array(a) = &self.value else {
-            return;
-        };
-        if Rc::strong_count(a.data_rc()) != 1 {
+        if Rc::strong_count(&self.data) != 1 {
             return;
         }
-        let Value::Array(a) = std::mem::replace(&mut self.value, Value::Null) else {
-            return;
-        };
-        let Ok(cell) = Rc::try_unwrap(a.data) else {
+        let data = std::mem::replace(&mut self.data, EMPTY_STORE.with(Rc::clone));
+        let Ok(cell) = Rc::try_unwrap(data) else {
             return;
         };
         let mut pending = cell.into_inner();
-        while let Some(mut obj) = pending.pop() {
-            if let Value::Array(inner) = &obj.value
-                && Rc::strong_count(inner.data_rc()) == 1
-                && let Value::Array(inner) = std::mem::replace(&mut obj.value, Value::Null)
-                && let Ok(cell) = Rc::try_unwrap(inner.data)
+        while let Some(obj) = pending.pop() {
+            // `Object` has no Drop of its own, so the value can be
+            // moved out and destructured freely.
+            if let Value::Array(mut inner) = obj.value
+                && Rc::strong_count(&inner.data) == 1
             {
-                pending.extend(cell.into_inner());
+                let d = std::mem::replace(&mut inner.data, EMPTY_STORE.with(Rc::clone));
+                if let Ok(cell) = Rc::try_unwrap(d) {
+                    pending.extend(cell.into_inner());
+                }
             }
         }
     }
@@ -529,6 +541,7 @@ impl Dict {
 
     /// String-keyed convenience lookup. Uses the interner's read-only
     /// probe so misses don't grow the name table.
+    #[inline]
     pub fn get(&self, key: &str) -> Option<Object> {
         self.names.get(&name::lookup(key)?).cloned()
     }
@@ -538,6 +551,7 @@ impl Dict {
         self.names.get(&key.id()).cloned()
     }
 
+    #[inline]
     pub(crate) fn get_id(&self, id: u32) -> Option<Object> {
         self.names.get(&id).cloned()
     }

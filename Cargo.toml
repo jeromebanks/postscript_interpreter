@@ -8,6 +8,10 @@ description = "A PostScript interpreter for watching programs draw, live"
 name = "perf"
 harness = false
 
+[[bench]]
+name = "vs_gs"
+harness = false
+
 [dependencies]
 softbuffer = "0.4.8"
 thiserror = "2"

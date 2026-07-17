@@ -40,12 +40,13 @@ notice; a conformance-test suite someday might, and can be revisited then.
 language, and real-world files aren't reliably UTF-8. The lexer operates
 on bytes throughout for the same reason.
 
-**Objects tear down iteratively**: `Drop for Object` drains last-owner
-arrays through a worklist instead of letting `Rc` trees drop recursively
-— 10k levels of `[` used to abort the process via Rust stack overflow
-(found by the Stage 4 fuzz tests). Consequence for contributors: you
-can't move out of `obj.value` (E0509); match on `&obj.value` and clone
-the cheap `Rc` handle instead.
+**Arrays tear down iteratively**: `Drop for PsArray` drains last-owner
+storage through a worklist instead of letting `Rc` trees drop
+recursively — 10k levels of `[` used to abort the process via Rust
+stack overflow (found by the Stage 4 fuzz tests). The impl originally
+sat on `Object`; Stage 11 profiling showed that taxing every popped
+operand (~18% of fib) and moved it to the array view, which also made
+`obj.value` freely movable.
 
 **Names are `Rc<str>`** and dictionaries are `HashMap<Rc<str>, Object>`.
 Interning names to integer symbols (making dict lookup a small-int hash or

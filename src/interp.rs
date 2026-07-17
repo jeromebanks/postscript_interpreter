@@ -896,6 +896,7 @@ impl Interp {
 
     /// The interned fast path for the same walk — what name execution
     /// uses (one integer hash per dictionary probed, no Rc traffic).
+    #[inline]
     pub(crate) fn load_id(&self, id: u32) -> Option<Object> {
         self.dstack.iter().rev().find_map(|d| d.borrow().get_id(id))
     }
