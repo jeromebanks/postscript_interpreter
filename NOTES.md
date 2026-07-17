@@ -3,6 +3,39 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 10 — spool mode (2026-07-17)
+
+`pscat --spool DIR`: the live window becomes the printer in the
+corner of the lab. It opens on a blank page, polls the directory
+every 400ms while idle, and renders each new `.ps`/`.eps` that lands
+there — page by page, at the usual `--speed`, with arrow-key page
+browsing between jobs. Every job runs in a **fresh interpreter** at
+the session's page size and dpi, so one job's redefinitions (or
+crash) can't poison the next; job errors go to stderr and printing
+continues, like a printer that just moves on to the next document.
+
+The queue policy lives in `src/spool.rs` (`Watcher`), separated from
+the window so it's testable headlessly (six in-module tests):
+`.ps`/`.eps` only; files present at startup are *not* printed (the
+printer coming online doesn't reprint the tray); a new file must
+hold the same size+mtime across two consecutive polls before
+queueing, so files still being copied in aren't printed
+half-written; rewriting an already-printed file queues it again.
+Same-poll arrivals print in name order.
+
+Window integration rides the existing step-driven loop: idle control
+flow becomes `WaitUntil(now + 400ms)` instead of `Wait` (re-armed
+every pass — a stored past instant would spin), and `about_to_wait`
+does the polling and job swap. End-to-end verified by scenario: a
+pre-existing file is skipped, a dropped bad job reports its
+undefined error to stderr, and two successive good jobs print in
+order from separate interpreters.
+
+Deferred: the "or listen on a port" variant (add when something
+actually wants to netcat jobs in); a spool-specific test of the
+window half (the watcher is tested, the window loop is exercised
+manually — same standing as the rest of window.rs).
+
 ## Stage 10 — Gallery II opens: Hundred Lines (2026-07-17)
 
 `gallery/hundred_lines.ps` — the first Gallery II piece, and the

@@ -18,8 +18,13 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
 use crate::Interp;
+use crate::spool::Watcher;
 
 const FRAME: Duration = Duration::from_millis(16);
+/// How often spool mode looks at its directory while idle. Also the
+/// spacing between the two sightings a new file must survive, so it
+/// doubles as the settling time for files still being copied in.
+const POLL: Duration = Duration::from_millis(400);
 
 pub struct WindowOptions {
     pub title: String,
@@ -40,6 +45,7 @@ pub fn run_windowed(interp: Interp, options: WindowOptions) -> Result<(), String
         running: true,
         had_error: false,
         back: 0,
+        spool: None,
     };
     event_loop
         .run_app(&mut app)
@@ -48,6 +54,49 @@ pub fn run_windowed(interp: Interp, options: WindowOptions) -> Result<(), String
         return Err("program stopped with an error (canvas left on screen)".to_string());
     }
     Ok(())
+}
+
+/// Spool mode: the window idles like the printer in the corner of the
+/// lab, polling `watcher`'s directory, and prints each job that lands
+/// there in a fresh interpreter (jobs must not poison each other).
+/// Runs until the window closes; job errors go to stderr and printing
+/// continues, so they don't fail the session.
+pub fn run_spool(
+    watcher: Watcher,
+    page: (u32, u32),
+    scale: f32,
+    options: WindowOptions,
+) -> Result<(), String> {
+    let interp = Interp::with_page_scaled(page.0, page.1, scale)
+        .ok_or_else(|| format!("unusable page size {}x{}", page.0, page.1))?;
+    let event_loop = EventLoop::new().map_err(|e| format!("cannot create event loop: {e}"))?;
+    let base_title = options.title.clone();
+    let mut app = App {
+        interp,
+        options,
+        view: None,
+        running: false,
+        had_error: false,
+        back: 0,
+        spool: Some(SpoolState {
+            watcher,
+            page,
+            scale,
+            base_title,
+        }),
+    };
+    event_loop
+        .run_app(&mut app)
+        .map_err(|e| format!("event loop error: {e}"))?;
+    Ok(())
+}
+
+struct SpoolState {
+    watcher: Watcher,
+    page: (u32, u32),
+    scale: f32,
+    /// Title while idle; jobs append their file name to it.
+    base_title: String,
 }
 
 struct View {
@@ -64,6 +113,8 @@ struct App {
     /// Page navigation (arrow keys): how many pages *back* from the
     /// live canvas is being viewed. 0 = the live canvas itself.
     back: usize,
+    /// Present in spool mode; the interpreter is replaced per job.
+    spool: Option<SpoolState>,
 }
 
 impl App {
@@ -87,6 +138,55 @@ impl App {
         if let Some(view) = &self.view {
             view.window
                 .set_title(&format!("{}{}", self.options.title, suffix));
+        }
+    }
+
+    /// Idle-time spool work: check the directory, start the next job.
+    /// One job at a time — anything else queued waits its turn.
+    fn poll_spool(&mut self) {
+        if self.running {
+            return;
+        }
+        let (page, scale, base_title) = {
+            let Some(spool) = &mut self.spool else { return };
+            if let Err(e) = spool.watcher.poll() {
+                eprintln!(
+                    "pscat: spool: cannot read {}: {e}",
+                    spool.watcher.dir().display()
+                );
+                return;
+            }
+            (spool.page, spool.scale, spool.base_title.clone())
+        };
+        loop {
+            let Some(job) = self.spool.as_mut().and_then(|s| s.watcher.next_job()) else {
+                return;
+            };
+            let source = match std::fs::read(&job) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    eprintln!("pscat: spool: cannot read {}: {e}", job.display());
+                    continue; // skip this job, try the next
+                }
+            };
+            let Some(mut interp) = Interp::with_page_scaled(page.0, page.1, scale) else {
+                return; // page size was validated at startup; unreachable in practice
+            };
+            interp.begin_source(&source);
+            let name = job
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| job.display().to_string());
+            self.options.title = format!("{base_title} — {name}");
+            self.interp = interp;
+            self.running = true;
+            self.had_error = false;
+            self.back = 0;
+            if let Some(view) = &self.view {
+                view.window.set_title(&self.options.title);
+                view.window.request_redraw();
+            }
+            return;
         }
     }
 
@@ -173,6 +273,10 @@ impl ApplicationHandler for App {
                 if self.running {
                     // ~60fps cadence while the program runs; idle after.
                     event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + FRAME));
+                } else if self.spool.is_some() {
+                    // Spool mode never truly idles: keep the poll
+                    // timer armed for the next job to land.
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + POLL));
                 } else {
                     event_loop.set_control_flow(ControlFlow::Wait);
                 }
@@ -210,11 +314,24 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if self.running
-            && let Some(view) = &self.view
-        {
-            view.window.request_redraw();
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.running {
+            if let Some(view) = &self.view {
+                view.window.request_redraw();
+            }
+            return;
+        }
+        if self.spool.is_some() {
+            self.poll_spool();
+            if self.running {
+                if let Some(view) = &self.view {
+                    view.window.request_redraw();
+                }
+            } else {
+                // Re-arm the timer each pass: a stored WaitUntil
+                // instant in the past would spin the loop.
+                event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + POLL));
+            }
         }
     }
 }

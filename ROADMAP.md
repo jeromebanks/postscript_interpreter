@@ -213,9 +213,12 @@ rasterization of our own output.
 
 ## Stage 10 — The LaserWriter experience (stretch/fun)
 
-- **Spool mode**: watch a directory (or listen on a port) and render
-  whatever lands there, page by page, like the printer in the corner of
-  the lab. [sonnet]
+- ✅ **Spool mode** (2026-07-17): `--spool DIR` — the window idles
+  like the printer in the corner of the lab, polls the directory
+  (400ms), and renders each new `.ps`/`.eps` in a fresh interpreter;
+  files must hold size+mtime across two polls (no half-copied jobs),
+  startup contents don't reprint, rewrites do. `src/spool.rs` is the
+  testable watcher; port listening deferred until wanted. [sonnet]
 - **Halftone screens**: classic `setscreen`-style dots for an authentic
   300dpi-printer look as an optional render mode. [sonnet]
 - **Gallery II**: new pieces exploiting Stage 5/6 features (text art,

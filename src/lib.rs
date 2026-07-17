@@ -15,6 +15,7 @@ pub mod name;
 pub mod object;
 pub mod ops;
 pub mod pdf;
+pub mod spool;
 pub mod svg;
 pub(crate) mod type1;
 pub mod window;

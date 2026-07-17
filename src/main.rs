@@ -3,7 +3,8 @@ use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 
 use pscat::lexer::{Lexer, Token};
-use pscat::window::{WindowOptions, run_windowed};
+use pscat::spool::Watcher;
+use pscat::window::{WindowOptions, run_spool, run_windowed};
 use pscat::{Interp, PsError, gfx};
 
 struct Options {
@@ -21,6 +22,8 @@ struct Options {
     pdf: Option<String>,
     /// Print the operand stack after an error (REPL and headless).
     pstack_on_error: bool,
+    /// Watch a directory and render whatever lands there (Stage 10).
+    spool: Option<String>,
 }
 
 fn main() -> ExitCode {
@@ -32,6 +35,37 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    if let Some(dir) = &options.spool {
+        if options.file.is_some()
+            || options.eval.is_some()
+            || options.headless
+            || options.png.is_some()
+            || options.svg.is_some()
+            || options.pdf.is_some()
+        {
+            eprintln!("pscat: --spool runs alone (no file argument or output flags)");
+            return ExitCode::FAILURE;
+        }
+        let watcher = match Watcher::new(std::path::Path::new(dir)) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("pscat: cannot watch {dir}: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let window_options = WindowOptions {
+            title: format!("pscat spool — {dir}"),
+            steps_per_frame: options.steps_per_frame,
+        };
+        return match run_spool(watcher, options.page, options.dpi / 72.0, window_options) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(msg) => {
+                eprintln!("pscat: {msg}");
+                ExitCode::FAILURE
+            }
+        };
+    }
 
     let Some(mut interp) =
         Interp::with_page_scaled(options.page.0, options.page.1, options.dpi / 72.0)
@@ -201,6 +235,7 @@ fn parse_args() -> Result<Options, String> {
         svg: None,
         pdf: None,
         pstack_on_error: false,
+        spool: None,
     };
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -230,6 +265,9 @@ fn parse_args() -> Result<Options, String> {
             }
             "--pdf" => {
                 options.pdf = Some(args.next().ok_or("missing path after --pdf")?);
+            }
+            "--spool" => {
+                options.spool = Some(args.next().ok_or("missing directory after --spool")?);
             }
             "--speed" => {
                 let n = args.next().ok_or("missing value after --speed")?;
@@ -277,6 +315,7 @@ fn print_usage() {
     println!("      --svg PATH      write the page(s) as SVG (implies --headless)");
     println!("      --pdf PATH      write the document as PDF (implies --headless)");
     println!("      --dpi N         device resolution (default 72 = 1 pixel per point)");
+    println!("      --spool DIR     watch DIR and render each .ps/.eps that lands there");
     println!("      --pstack-on-error  print the operand stack after an error");
 }
 
