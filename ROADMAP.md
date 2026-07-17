@@ -222,6 +222,57 @@ rasterization of our own output.
   clipped compositions, image-based collage). Any model with taste — the
   constraint-driven format in `gallery/README.md` is the brief. [any]
 
+## Stage 11 — Performance parity with Ghostscript
+
+Goal: know exactly where pscat stands against gs on speed, memory,
+and overall resource usage — with a repeatable harness, not anecdotes
+— and close the gaps worth closing.
+
+1. **Comparison harness** — extend `benches/` with a pscat-vs-gs
+   runner: identical workloads through both binaries, measuring wall
+   time and peak RSS (`/usr/bin/time -l` on macOS), reporting a
+   table with gs's startup cost netted out. Workloads: the existing
+   four (fib/defloop/sierpinski/fern) plus a text-heavy page, an
+   image/filter-heavy page, and a save/restore-heavy loop. [sonnet]
+2. **Investigation** — profile the biggest gaps the harness reports;
+   record findings in NOTES.md before optimizing (the interning task
+   set the pattern: measure, fix, re-measure). Known suspects going
+   in: the frame loop's per-element RefCell borrow + Object clone,
+   dstack walking on every unbound name, per-glyph rasterization.
+   [opus]
+3. **Targeted optimizations** — whatever #2 justifies, each with
+   before/after bench numbers in the commit. Candidate levers:
+   generation-stamped name-lookup cache (invalidated on dict writes
+   and dstack changes), cheaper Frame::Proc element stepping, glyph
+   bitmap cache (deferred since Stage 6 task 7). Memory: page
+   snapshots, journal growth under long-lived saves, name-table and
+   font-cache footprints. [opus]
+
+## Stage 12 — Handwritten text (dynamic glyph generation)
+
+Goal: `(hello) show` in a handwriting font where every glyph instance
+is generated fresh with small random perturbations — jittered control
+points, wobbling baseline, varying slant and stroke width — so
+repeated characters never render identically and a page reads like a
+human actually wrote it.
+
+1. **Stroke-skeleton font data** — single-stroke letterforms
+   (lowercase, uppercase, digits, basic punctuation) as polyline/
+   curve skeletons on a design grid, the raw material the jitter
+   works on. [sonnet]
+2. **The dynamic font** — a Type 3 font whose BuildChar draws the
+   skeleton through the interpreter's own `rand` (deterministic seed
+   = reproducible pages, still per-instance variation because
+   BuildChar runs per glyph drawn — Type 3 glyphs are deliberately
+   uncached). Round caps/joins, jittered points, per-glyph slant and
+   baseline drift. Pure PostScript riding on existing machinery —
+   the font is itself a demo that the interpreter is complete enough
+   to host it. [sonnet]
+3. **Demo + gallery piece** — an example page (a handwritten letter,
+   naturally) in the golden-style visual checks (structure asserted;
+   pixel comparison excluded like the other rand-driven art), plus a
+   Gallery II entry. [any]
+
 ---
 
 ## Standing gaps not tied to a stage
