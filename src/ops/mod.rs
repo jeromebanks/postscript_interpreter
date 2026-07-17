@@ -2,6 +2,7 @@
 //! groups them. Each module installs its operators into systemdict.
 
 pub mod arith;
+pub mod color;
 pub mod control;
 pub mod convert;
 pub mod data;
@@ -42,6 +43,7 @@ pub fn install_all(dict: &mut Dict) {
     logic::install(dict);
     misc::install(dict);
     vm::install(dict);
+    color::install(dict);
 
     // Constants: executing a name bound to a literal object pushes the
     // object, which is exactly the behavior `true`, `mark`, etc. need —

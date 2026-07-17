@@ -187,7 +187,7 @@ fn setgray(it: &mut Interp) -> Result<(), PsError> {
     it.gfx.set_rgb(g, g, g);
     // The color operators select their color space implicitly, per the
     // PLRM — the image dict form reads it for its component count.
-    it.gfx.set_colorspace(1);
+    it.gfx.set_colorspace(crate::gfx::ColorSpace::Gray);
     Ok(())
 }
 
@@ -196,7 +196,7 @@ fn setrgbcolor(it: &mut Interp) -> Result<(), PsError> {
     let g = it.pop_f64()?;
     let r = it.pop_f64()?;
     it.gfx.set_rgb(r, g, b);
-    it.gfx.set_colorspace(3);
+    it.gfx.set_colorspace(crate::gfx::ColorSpace::Rgb);
     Ok(())
 }
 
@@ -269,7 +269,7 @@ fn setcmykcolor(it: &mut Interp) -> Result<(), PsError> {
     let m = it.pop_f64()?;
     let c = it.pop_f64()?;
     it.gfx.set_cmyk(c, m, y, k);
-    it.gfx.set_colorspace(4);
+    it.gfx.set_colorspace(crate::gfx::ColorSpace::Cmyk);
     Ok(())
 }
 

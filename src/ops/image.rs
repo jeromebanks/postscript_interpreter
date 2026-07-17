@@ -3,7 +3,8 @@
 //! `crate::image`.
 
 use crate::error::PsError;
-use crate::image::{ImageCtx, ImageSource};
+use crate::gfx::ColorSpace;
+use crate::image::{ImageColor, ImageCtx, ImageSource};
 use crate::interp::Interp;
 use crate::object::{Dict, Object, Value};
 
@@ -12,8 +13,7 @@ pub fn install(dict: &mut Dict) {
     op(dict, "image", image);
     op(dict, "imagemask", imagemask);
     op(dict, "colorimage", colorimage);
-    op(dict, "setcolorspace", setcolorspace);
-    op(dict, "currentcolorspace", currentcolorspace);
+    // setcolorspace/currentcolorspace/setcolor live in ops::color.
 }
 
 fn read_matrix6(obj: &Object) -> Result<[f64; 6], PsError> {
@@ -83,6 +83,7 @@ fn image(it: &mut Interp) -> Result<(), PsError> {
         default_decode(1),
         matrix,
         None,
+        ImageColor::Direct,
         source,
     ))
 }
@@ -109,6 +110,7 @@ fn imagemask(it: &mut Interp) -> Result<(), PsError> {
         default_decode(1),
         matrix,
         Some(polarity),
+        ImageColor::Direct,
         source,
     ))
 }
@@ -142,6 +144,7 @@ fn colorimage(it: &mut Interp) -> Result<(), PsError> {
         default_decode(ncomp as u32),
         matrix,
         None,
+        ImageColor::Direct,
         source,
     ))
 }
@@ -175,7 +178,23 @@ fn dict_image(
     }
     let matrix = read_matrix6(&d.get("ImageMatrix").ok_or(PsError::Typecheck)?)?;
     let source = data_source(&d.get("DataSource").ok_or(PsError::Typecheck)?)?;
-    let mut decode = default_decode(ncomp);
+    // Color interpretation comes from the current space (masks stencil
+    // the current color and ignore it). Indexed images default Decode
+    // to [0, 2^bits-1] — the sample *is* an index, per the PLRM.
+    let color = if mask.is_some() {
+        ImageColor::Direct
+    } else {
+        match it.gfx.colorspace() {
+            ColorSpace::Indexed { table, .. } => ImageColor::Indexed(table.clone()),
+            ColorSpace::Separation { .. } => ImageColor::SeparationApprox,
+            _ => ImageColor::Direct,
+        }
+    };
+    let mut decode = if matches!(color, ImageColor::Indexed(_)) {
+        vec![0.0, ((1u32 << bits) - 1) as f32]
+    } else {
+        default_decode(ncomp)
+    };
     if let Some(Value::Array(a)) = d.get("Decode").as_ref().map(|o| &o.value) {
         decode.clear();
         for i in 0..a.len() {
@@ -197,39 +216,7 @@ fn dict_image(
         decode,
         matrix,
         mask,
+        color,
         source,
     ))
-}
-
-/// Minimal Level 2 color-space selection: the three device spaces,
-/// name or one-element-array form. Images in dict form need this to
-/// know their component count.
-fn setcolorspace(it: &mut Interp) -> Result<(), PsError> {
-    let obj = it.pop()?;
-    let name = match &obj.value {
-        Value::Name(n) => n.clone(),
-        Value::Array(a) => match a.get(0).as_ref().map(|o| &o.value) {
-            Some(Value::Name(n)) => n.clone(),
-            _ => return Err(PsError::Typecheck),
-        },
-        _ => return Err(PsError::Typecheck),
-    };
-    let ncomp = match &*name {
-        "DeviceGray" => 1,
-        "DeviceRGB" => 3,
-        "DeviceCMYK" => 4,
-        _ => return Err(PsError::Undefined(name.to_string())),
-    };
-    it.gfx.set_colorspace(ncomp);
-    Ok(())
-}
-
-fn currentcolorspace(it: &mut Interp) -> Result<(), PsError> {
-    let name = match it.gfx.colorspace_ncomp() {
-        3 => "DeviceRGB",
-        4 => "DeviceCMYK",
-        _ => "DeviceGray",
-    };
-    it.push(Object::array(vec![Object::name(name)]));
-    Ok(())
 }

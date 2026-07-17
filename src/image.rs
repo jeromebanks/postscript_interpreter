@@ -12,8 +12,22 @@
 
 use crate::error::PsError;
 use crate::file::FileHandle;
-use crate::gfx::Gfx;
+use crate::gfx::{Gfx, IndexedTable};
 use crate::object::Object;
+
+/// How decoded samples become colors. `Direct` is the ncomp-driven
+/// gray/RGB/CMYK interpretation; the other two come from the current
+/// color space when the dict form starts.
+pub(crate) enum ImageColor {
+    Direct,
+    /// Samples are indices into an Indexed lookup table.
+    Indexed(std::rc::Rc<IndexedTable>),
+    /// Samples are Separation tints, rendered as `1 - tint` gray —
+    /// a documented approximation (running the tint transform per
+    /// pixel through the machine is not feasible; most separations
+    /// are dark inks, for which this is close).
+    SeparationApprox,
+}
 
 pub(crate) enum ImageSource {
     /// A procedure returning strings; empty string = end of data.
@@ -42,6 +56,7 @@ pub(crate) struct ImageCtx {
     pub matrix: [f64; 6],
     /// Some(paint_ones): imagemask stenciling the current color.
     pub mask: Option<bool>,
+    pub color: ImageColor,
     pub source: ImageSource,
     pub data: Vec<u8>,
     waiting: bool,
@@ -59,6 +74,7 @@ impl ImageCtx {
         decode: Vec<f32>,
         matrix: [f64; 6],
         mask: Option<bool>,
+        color: ImageColor,
         source: ImageSource,
     ) -> Self {
         ImageCtx {
@@ -69,6 +85,7 @@ impl ImageCtx {
             decode,
             matrix,
             mask,
+            color,
             source,
             data: Vec::new(),
             waiting: false,
@@ -177,6 +194,24 @@ impl ImageCtx {
     }
 
     fn rgb_at(&self, ix: usize, iy: usize) -> (f32, f32, f32) {
+        match &self.color {
+            ImageColor::Indexed(t) => {
+                // Decode maps the sample straight to an index (default
+                // [0, 2^bits-1]) — deliberately not the unit-clamped
+                // `decoded()` path.
+                let maxval = ((1u32 << self.bits) - 1) as f32;
+                let v = self.sample(ix, iy, 0) as f32 / maxval;
+                let d0 = self.decode.first().copied().unwrap_or(0.0);
+                let d1 = self.decode.get(1).copied().unwrap_or(maxval);
+                let idx = (d0 + v * (d1 - d0)).round().max(0.0) as u32;
+                return t.rgb_at(idx.min(t.hival) as usize);
+            }
+            ImageColor::SeparationApprox => {
+                let g = 1.0 - self.decoded(ix, iy, 0);
+                return (g, g, g);
+            }
+            ImageColor::Direct => {}
+        }
         match self.ncomp {
             1 => {
                 let g = self.decoded(ix, iy, 0);

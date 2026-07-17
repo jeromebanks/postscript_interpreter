@@ -3,6 +3,24 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 8 task 4 — Indexed and Separation color spaces (2026-07-16)
+
+`ops/color.rs` + a real `ColorSpace` enum in the graphics state
+(replacing the bare component count; part of the gsave snapshot, so
+spaces roll back). `setcolor` dispatches on the current space.
+Indexed: string lookup tables, index-0 initial color, out-of-range
+indices *clamp* (gs renders where the PLRM says rangecheck — pinned);
+indexed images map samples straight to palette entries with the
+[0, 2^bits−1] default Decode. Separation: the tint transform is a
+real PostScript procedure run through the machine via a new generic
+continuation frame (`Frame::PostOp` — the reusable "operator needs a
+proc's result" pattern the HANDOFF said to copy from ShowCtx; holds
+no external state, so unwinding is free; `exit` can't cross it).
+
+Gaps (documented in `ops/color.rs`): Indexed lookup procedures and
+nested bases (typecheck); CIE spaces (undefined); Separation *images*
+render as 1−tint gray, an approximation noted in `image.rs`.
+
 ## Stage 8 task 2 — name interning (2026-07-16)
 
 `src/name.rs`: a `PsName` is an interned id plus the shared text

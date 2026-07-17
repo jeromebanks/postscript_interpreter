@@ -126,6 +126,67 @@ impl PsPath {
     }
 }
 
+/// The current color space — what `setcolor` and the dict-form image
+/// operator consult. Device spaces carry no payload; Indexed carries
+/// its lookup table; Separation carries the tint-transform procedure
+/// (run as a `Frame::PostOp` continuation — never recursively).
+#[derive(Clone)]
+pub(crate) enum ColorSpace {
+    Gray,
+    Rgb,
+    Cmyk,
+    Indexed {
+        table: std::rc::Rc<IndexedTable>,
+        /// The original setcolorspace operand, for currentcolorspace.
+        src: crate::object::Object,
+    },
+    Separation {
+        alt_ncomp: u32,
+        tint_proc: crate::object::Object,
+        src: crate::object::Object,
+    },
+}
+
+pub(crate) struct IndexedTable {
+    pub base_ncomp: u32,
+    pub hival: u32,
+    /// (hival+1) * base_ncomp bytes, one 0..255 value per component.
+    pub lookup: Vec<u8>,
+}
+
+impl IndexedTable {
+    /// The base-space color at `idx`, as RGB (CMYK converted the same
+    /// way the image path converts it).
+    pub fn rgb_at(&self, idx: usize) -> (f32, f32, f32) {
+        let n = self.base_ncomp as usize;
+        let comp = |k: usize| f32::from(self.lookup.get(idx * n + k).copied().unwrap_or(0)) / 255.0;
+        match self.base_ncomp {
+            1 => (comp(0), comp(0), comp(0)),
+            3 => (comp(0), comp(1), comp(2)),
+            _ => {
+                let (c, m, y, k) = (comp(0), comp(1), comp(2), comp(3));
+                (
+                    (1.0 - c) * (1.0 - k),
+                    (1.0 - m) * (1.0 - k),
+                    (1.0 - y) * (1.0 - k),
+                )
+            }
+        }
+    }
+}
+
+impl ColorSpace {
+    /// Components per sample as image data sees it (Indexed samples
+    /// are single indices; Separation samples are single tints).
+    pub fn ncomp(&self) -> u32 {
+        match self {
+            ColorSpace::Gray | ColorSpace::Indexed { .. } | ColorSpace::Separation { .. } => 1,
+            ColorSpace::Rgb => 3,
+            ColorSpace::Cmyk => 4,
+        }
+    }
+}
+
 /// Everything `gsave`/`grestore` snapshots. The current path is part of
 /// the graphics state per the PLRM — that's what makes the
 /// `gsave fill grestore stroke` idiom work.
@@ -133,10 +194,10 @@ impl PsPath {
 pub struct GraphicsState {
     pub ctm: Transform,
     pub rgb: (f32, f32, f32),
-    /// Component count of the current color space (1/3/4 for the
-    /// device spaces) — the Level 2 image dict form reads it. Set
-    /// implicitly by the color operators, per the PLRM.
-    colorspace_ncomp: u32,
+    /// Set implicitly by the color operators and explicitly by
+    /// setcolorspace, per the PLRM; the Level 2 image dict form and
+    /// setcolor read it.
+    colorspace: ColorSpace,
     /// In user-space units, per the spec; converted at stroke time.
     pub line_width: f64,
     pub line_cap: LineCap,
@@ -191,7 +252,7 @@ impl Gfx {
             state: GraphicsState {
                 ctm: base_ctm,
                 rgb: (0.0, 0.0, 0.0),
-                colorspace_ncomp: 1,
+                colorspace: ColorSpace::Gray,
                 line_width: 1.0,
                 line_cap: LineCap::Butt,
                 line_join: LineJoin::Miter,
@@ -214,7 +275,11 @@ impl Gfx {
     }
 
     pub(crate) fn colorspace_ncomp(&self) -> u32 {
-        self.state.colorspace_ncomp
+        self.state.colorspace.ncomp()
+    }
+
+    pub(crate) fn colorspace(&self) -> &ColorSpace {
+        &self.state.colorspace
     }
 
     // --- coordinate plumbing -------------------------------------------
@@ -502,8 +567,8 @@ impl Gfx {
         self.state.rgb = (clamp01(r), clamp01(g), clamp01(b));
     }
 
-    pub(crate) fn set_colorspace(&mut self, ncomp: u32) {
-        self.state.colorspace_ncomp = ncomp;
+    pub(crate) fn set_colorspace(&mut self, cs: ColorSpace) {
+        self.state.colorspace = cs;
     }
 
     pub fn set_line_width(&mut self, w: f64) {

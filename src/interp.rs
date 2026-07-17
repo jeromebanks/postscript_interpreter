@@ -57,6 +57,19 @@ enum Frame {
     /// image/imagemask/colorimage accumulating sample data; procedure
     /// data sources run as frames above (see `crate::image`).
     Image(Box<ImageCtx>),
+    /// A one-shot continuation: an operator that must run a PostScript
+    /// procedure mid-flight (a Separation tint transform) parks its
+    /// completion here and pushes the procedure above; when the
+    /// procedure finishes, the continuation consumes its results.
+    /// Holds no external state, so unwinding needs no cleanup.
+    PostOp(PostOp),
+}
+
+pub(crate) enum PostOp {
+    /// A Separation tint transform finished: pop the alt-space
+    /// components it produced and make them the current color (the
+    /// color space itself stays Separation).
+    SeparationColor { alt_ncomp: u32 },
 }
 
 pub(crate) enum ForallSrc {
@@ -454,6 +467,28 @@ impl Interp {
                         ShowStep::Exec { operands, target } => Action::ExecWith(operands, target),
                         ShowStep::Again => Action::Nothing,
                     },
+                    Frame::PostOp(op) => {
+                        match op {
+                            PostOp::SeparationColor { alt_ncomp } => {
+                                let n = *alt_ncomp as usize;
+                                let mut comps = [0f64; 4];
+                                for slot in comps[..n].iter_mut().rev() {
+                                    let o = ostack.pop().ok_or(PsError::StackUnderflow)?;
+                                    *slot = match o.value {
+                                        Value::Integer(i) => i as f64,
+                                        Value::Real(r) => r,
+                                        _ => return Err(PsError::Typecheck),
+                                    };
+                                }
+                                match n {
+                                    1 => gfx.set_rgb(comps[0], comps[0], comps[0]),
+                                    3 => gfx.set_rgb(comps[0], comps[1], comps[2]),
+                                    _ => gfx.set_cmyk(comps[0], comps[1], comps[2], comps[3]),
+                                }
+                            }
+                        }
+                        Action::Pop
+                    }
                     Frame::Image(ctx) => {
                         if ctx.waiting() {
                             // The data-source procedure's result.
@@ -588,6 +623,28 @@ impl Interp {
         }
         self.estack.push(Frame::Proc { body, pc: 0 });
         Ok(())
+    }
+
+    /// Park `post` as a continuation, put `operands` on the operand
+    /// stack, and run `proc` above it — the pattern for any operator
+    /// that needs a PostScript procedure's result (never recurse).
+    pub(crate) fn begin_postop(
+        &mut self,
+        post: PostOp,
+        operands: Vec<Object>,
+        proc: &Object,
+    ) -> Result<(), PsError> {
+        let Value::Array(body) = &proc.value else {
+            return Err(PsError::Typecheck);
+        };
+        if !proc.executable {
+            return Err(PsError::Typecheck);
+        }
+        self.push_frame(Frame::PostOp(post))?;
+        for o in operands {
+            self.push(o);
+        }
+        self.push_proc_frame(body.clone())
     }
 
     fn push_frame(&mut self, frame: Frame) -> Result<(), PsError> {
@@ -730,7 +787,13 @@ impl Interp {
         loop {
             match self.estack.last() {
                 None
-                | Some(Frame::Scanner(_) | Frame::StopMark | Frame::Show(_) | Frame::Image(_)) => {
+                | Some(
+                    Frame::Scanner(_)
+                    | Frame::StopMark
+                    | Frame::Show(_)
+                    | Frame::Image(_)
+                    | Frame::PostOp(_),
+                ) => {
                     return Err(PsError::InvalidExit);
                 }
                 Some(

@@ -165,8 +165,10 @@ Goal: the semantics that separate a toy from an implementation.
 3. ✅ **Benchmark suite** (2026-07-16) — `benches/perf.rs`, four
    workloads (fib/defloop/sierpinski/fern), best-of-three wall clock
    under `cargo bench`. [haiku]
-4. **Color spaces** — `setcmykcolor` (and real CMYK→RGB), Indexed,
-   Separation as they appear in found files. [sonnet]
+4. ✅ **Color spaces** (2026-07-16) — Indexed (string lookups) and
+   Separation (tint transform via the new `Frame::PostOp`
+   continuation), `setcolor`, spaces in the gsave snapshot;
+   `setcmykcolor` predated this. Gaps in `ops/color.rs` docs. [sonnet]
 5. **`packedarray`, `usertime`/`realtime`, `languagelevel`, resource
    category basics** (`defineresource findresource`). [sonnet]
 6. **Interactive niceties** — `pstack`-on-error option in the REPL, an
