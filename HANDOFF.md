@@ -1,17 +1,23 @@
 # HANDOFF.md — state of the interpreter and how to continue
 
-Written 2026-07-13, at the completion of Stages 6 (text and fonts) and
-7 (images and filters); DCTDecode closed the stage's one gap on
-2026-07-16. Written for whichever model
+Written 2026-07-13 at the completion of Stages 6–7; last updated
+2026-07-16 after Stage 8's opening chunk. Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
 `NOTES.md` has per-stage histories; this file is the *orientation*.
 
 ## Where things stand
 
-**196 tests across 17 suites, clippy clean.** Stages 1–7 are done,
-and Stage 8's save/restore + benches landed (see below), with the
-explicit gaps noted. The interpreter runs found PostScript
+**196 tests across 17 suites, clippy clean.** Stages 1–7 are done.
+Stage 8 is underway: **save/restore** (the feature flagged since
+Stage 1 as the object-model risk) landed as object-granularity
+copy-on-write journaling — `VM.md` is the design doc and gs-pin
+record — along with `vmstatus`, `grestoreall`, `savetype`, and the
+**perf yardstick** (`benches/perf.rs`, `cargo bench`). A fourth
+architecture doc now exists: read `VM.md` before touching any
+operator that mutates array/dict contents (new mutators must call
+`Interp::journal_array`/`journal_dict` first; strings are exempt by
+spec). The interpreter runs found PostScript
 with data structures, error recovery, text in three font technologies
 (bundled TrueType via ttf-parser, Type 3 glyph procedures, Type 1
 charstrings), file objects and decode filters, and sampled images.
@@ -88,20 +94,21 @@ renders eight examples in both and compares block-downsampled output).
 
 1. ✅ **DCTDecode** — done 2026-07-16 (`Decoder::Dct`, zune-jpeg;
    marker-aware buffering, exact EOI consumption; see NOTES.md).
-2. **Found-file corpus round 2** ([sonnet]): pull 3–5 real EPS files
-   with embedded images and Type 1 fonts; add per-file status notes
-   like Stage 5's testcard. This will surface the next real gaps
-   (probably `save`/`restore` and DSC-comment tolerance).
-3. ✅ **Stage 8 task 1, `save`/`restore`** — done 2026-07-16.
-   Object-granularity COW journaling; design + gs pins + deviations
-   in `VM.md`; tests in `tests/vm.rs`. New mutating operators must
-   call `Interp::journal_array`/`journal_dict` before writing
-   program-visible array/dict contents (strings are exempt by spec).
-4. **Stage 8 task 2, name interning** ([opus]): `benches/` exists now
-   (task 3, done) and puts the fib-27 gap vs gs at ~7× on an M-series
-   (214ms vs ~30ms), attributed to hashing `Rc<str>` names per
-   lookup. Touches lexer, object model, dicts.
-5. Stage 8 remainder (color spaces, packedarray/resources,
+2. ✅ **Stage 8 tasks 1 + 3** — done 2026-07-16: save/restore
+   (design + gs pins + deviations in `VM.md`; tests in `tests/vm.rs`)
+   and `benches/perf.rs`.
+3. **Stage 8 task 2, name interning** ([opus]): benches put the
+   fib-27 gap vs gs at ~7× on an M-series (214ms vs ~30ms),
+   attributed to hashing `Rc<str>` names per dict lookup. Touches
+   lexer, object model, dicts. Measure with `cargo bench` before and
+   after.
+4. **Found-file corpus round 2** ([sonnet]): real EPS files with
+   embedded images and Type 1 fonts; per-file status notes like
+   Stage 5's testcard. save/restore is in now, so these should get
+   much further. (The gs install's own `examples/` directory —
+   tiger.eps and friends — is a license-safe local source: test
+   against it and skip when absent, same as the golden suite.)
+5. Stage 8 remainder (color spaces; packedarray/time/resources;
    interactive niceties), then Stage 9 (multi-page, PDF/SVG export)
    per ROADMAP.
 
