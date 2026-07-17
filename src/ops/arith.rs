@@ -18,6 +18,12 @@ pub fn install(dict: &mut Dict) {
     op(dict, "idiv", idiv);
     op(dict, "mod", ps_mod);
     op(dict, "neg", neg);
+    // Not PLRM operators, but gs defines them (min/max in its init
+    // file, .min/.max internally) and found files use all four.
+    op(dict, "min", min);
+    op(dict, "max", max);
+    op(dict, ".min", min);
+    op(dict, ".max", max);
     op(dict, "abs", abs);
     op(dict, "ceiling", ceiling);
     op(dict, "floor", floor);
@@ -94,6 +100,14 @@ fn binary(
     };
     it.push(result);
     Ok(())
+}
+
+fn min(it: &mut Interp) -> Result<(), PsError> {
+    binary(it, |x, y| Some(x.min(y)), f64::min)
+}
+
+fn max(it: &mut Interp) -> Result<(), PsError> {
+    binary(it, |x, y| Some(x.max(y)), f64::max)
 }
 
 fn add(it: &mut Interp) -> Result<(), PsError> {

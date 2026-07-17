@@ -200,6 +200,9 @@ pub struct GraphicsState {
     colorspace: ColorSpace,
     /// In user-space units, per the spec; converted at stroke time.
     pub line_width: f64,
+    /// `setflat` hint; stored for round-tripping only — tiny-skia
+    /// does its own curve flattening.
+    pub flatness: f64,
     pub line_cap: LineCap,
     pub line_join: LineJoin,
     pub miter_limit: f32,
@@ -254,6 +257,7 @@ impl Gfx {
                 rgb: (0.0, 0.0, 0.0),
                 colorspace: ColorSpace::Gray,
                 line_width: 1.0,
+                flatness: 1.0,
                 line_cap: LineCap::Butt,
                 line_join: LineJoin::Miter,
                 miter_limit: 10.0,
@@ -272,6 +276,10 @@ impl Gfx {
 
     pub fn state(&self) -> &GraphicsState {
         &self.state
+    }
+
+    pub(crate) fn state_mut(&mut self) -> &mut GraphicsState {
+        &mut self.state
     }
 
     pub(crate) fn colorspace_ncomp(&self) -> u32 {

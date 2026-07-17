@@ -35,6 +35,8 @@ pub fn install(dict: &mut Dict) {
     op(dict, "setgray", setgray);
     op(dict, "setrgbcolor", setrgbcolor);
     op(dict, "setlinewidth", setlinewidth);
+    op(dict, "setflat", setflat);
+    op(dict, "currentflat", currentflat);
     op(dict, "setlinecap", setlinecap);
     op(dict, "setlinejoin", setlinejoin);
     op(dict, "setmiterlimit", setmiterlimit);
@@ -197,6 +199,20 @@ fn setrgbcolor(it: &mut Interp) -> Result<(), PsError> {
     let r = it.pop_f64()?;
     it.gfx.set_rgb(r, g, b);
     it.gfx.set_colorspace(crate::gfx::ColorSpace::Rgb);
+    Ok(())
+}
+
+/// Flatness is a curve-approximation hint; we store it (clamped to
+/// the PLRM's 0.2..100) and let tiny-skia flatten as it pleases.
+fn setflat(it: &mut Interp) -> Result<(), PsError> {
+    let f = it.pop_f64()?;
+    it.gfx.state_mut().flatness = f.clamp(0.2, 100.0);
+    Ok(())
+}
+
+fn currentflat(it: &mut Interp) -> Result<(), PsError> {
+    let f = it.gfx.state().flatness;
+    it.push(Object::real(f));
     Ok(())
 }
 
