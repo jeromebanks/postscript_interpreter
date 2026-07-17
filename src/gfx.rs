@@ -112,6 +112,40 @@ impl PsPath {
         }
     }
 
+    /// SVG path-data form of the same device-space segments.
+    pub(crate) fn to_svg_data(&self) -> String {
+        use std::fmt::Write as _;
+        let mut d = String::new();
+        let f = |v: f32| {
+            let s = format!("{v:.3}");
+            s.trim_end_matches('0').trim_end_matches('.').to_string()
+        };
+        for seg in &self.segs {
+            match *seg {
+                Seg::Move(p) => {
+                    let _ = write!(d, "M{} {}", f(p.x), f(p.y));
+                }
+                Seg::Line(p) => {
+                    let _ = write!(d, "L{} {}", f(p.x), f(p.y));
+                }
+                Seg::Curve(c1, c2, p) => {
+                    let _ = write!(
+                        d,
+                        "C{} {} {} {} {} {}",
+                        f(c1.x),
+                        f(c1.y),
+                        f(c2.x),
+                        f(c2.y),
+                        f(p.x),
+                        f(p.y)
+                    );
+                }
+                Seg::Close => d.push('Z'),
+            }
+        }
+        d
+    }
+
     fn to_skia(&self) -> Option<tiny_skia::Path> {
         let mut pb = PathBuilder::new();
         for seg in &self.segs {
@@ -221,7 +255,16 @@ pub struct GraphicsState {
 #[derive(Clone)]
 struct ClipState {
     mask: std::rc::Rc<tiny_skia::Mask>,
-    path: PsPath,
+    /// The chain of clip paths whose intersection this mask is —
+    /// `clippath` reads the newest link; SVG export walks them all.
+    node: std::rc::Rc<ClipNode>,
+}
+
+/// One link in the clip chain (newest first).
+pub(crate) struct ClipNode {
+    pub(crate) path: PsPath,
+    pub(crate) rule: FillRule,
+    pub(crate) parent: Option<std::rc::Rc<ClipNode>>,
 }
 
 pub struct Gfx {
@@ -250,6 +293,8 @@ pub struct Gfx {
     /// (stringwidth/charpath): painting operators consume their paths
     /// but leave the pixels alone. A counter, not a flag — shows nest.
     suppress_paint: u32,
+    /// SVG export recorder (`--svg`); mirrors every paint when on.
+    svg: Option<Box<crate::svg::SvgRecorder>>,
 }
 
 impl Gfx {
@@ -291,6 +336,7 @@ impl Gfx {
             completed: Vec::new(),
             pending_erase: false,
             painted_since_page: false,
+            svg: None,
             suppress_paint: 0,
         })
     }
@@ -503,6 +549,9 @@ impl Gfx {
         if self.pending_erase {
             self.pending_erase = false;
             self.pixmap.fill(tiny_skia::Color::WHITE);
+            if let Some(svg) = &mut self.svg {
+                svg.erase();
+            }
             self.dirty = true;
         }
         self.painted_since_page = true;
@@ -517,6 +566,14 @@ impl Gfx {
             let mask = self.clip_mask();
             self.pixmap
                 .fill_path(&path, &paint, rule, Transform::identity(), mask.as_deref());
+            if self.svg.is_some() {
+                let d = self.state.path.to_svg_data();
+                let rgb = self.state.rgb;
+                let chain = self.state.clip.as_ref().map(|c| c.node.clone());
+                if let Some(svg) = &mut self.svg {
+                    svg.fill(&d, rule, rgb, &chain);
+                }
+            }
             self.dirty = true;
         }
         // Painting consumes the path (implicit newpath), filled or not.
@@ -531,11 +588,14 @@ impl Gfx {
         if let Some(path) = self.state.path.to_skia() {
             self.prepare_paint();
             let scale = self.ctm_scale();
-            let dash = self.state.dash.as_ref().and_then(|(pattern, phase)| {
+            let scaled_dash = self.state.dash.as_ref().map(|(pattern, phase)| {
                 // Dash lengths are user-space; scale them like the width.
                 let scaled: Vec<f32> = pattern.iter().map(|d| (*d * scale) as f32).collect();
-                tiny_skia::StrokeDash::new(scaled, (*phase * scale) as f32)
+                (scaled, (*phase * scale) as f32)
             });
+            let dash = scaled_dash
+                .clone()
+                .and_then(|(p, phase)| tiny_skia::StrokeDash::new(p, phase));
             let stroke = Stroke {
                 width: self.device_line_width(),
                 line_cap: self.state.line_cap,
@@ -552,6 +612,29 @@ impl Gfx {
                 Transform::identity(),
                 mask.as_deref(),
             );
+            if self.svg.is_some() {
+                let d = self.state.path.to_svg_data();
+                let rgb = self.state.rgb;
+                let chain = self.state.clip.as_ref().map(|c| c.node.clone());
+                let (w, cap, join, ml) = (
+                    stroke.width,
+                    self.state.line_cap,
+                    self.state.line_join,
+                    self.state.miter_limit,
+                );
+                if let Some(svg) = &mut self.svg {
+                    svg.stroke(
+                        &d,
+                        rgb,
+                        w,
+                        cap,
+                        join,
+                        ml,
+                        scaled_dash.as_ref().map(|(p, ph)| (p.as_slice(), *ph)),
+                        &chain,
+                    );
+                }
+            }
             self.dirty = true;
         }
         self.newpath();
@@ -582,6 +665,9 @@ impl Gfx {
         self.pending_erase = false;
         self.painted_since_page = true;
         self.pixmap.fill(tiny_skia::Color::WHITE);
+        if let Some(svg) = &mut self.svg {
+            svg.erase();
+        }
         self.dirty = true;
     }
 
@@ -592,6 +678,9 @@ impl Gfx {
     /// the operator's job.
     pub fn showpage(&mut self) {
         self.completed.push(self.pixmap.clone());
+        if let Some(svg) = &mut self.svg {
+            svg.end_page();
+        }
         self.page_shown = true;
         self.pending_erase = true;
         self.painted_since_page = false;
@@ -600,6 +689,9 @@ impl Gfx {
     /// `copypage` (Level 1): emit the page but keep canvas and state.
     pub fn copypage(&mut self) {
         self.completed.push(self.pixmap.clone());
+        if let Some(svg) = &mut self.svg {
+            svg.end_page();
+        }
         self.page_shown = true;
     }
 
@@ -612,6 +704,32 @@ impl Gfx {
     /// i.e. whether it counts as a trailing page.
     pub fn has_trailing_art(&self) -> bool {
         self.painted_since_page
+    }
+
+    /// Turn on SVG recording (`--svg`).
+    pub fn enable_svg(&mut self) {
+        self.svg = Some(Box::new(crate::svg::SvgRecorder::new(
+            self.pixmap.width(),
+            self.pixmap.height(),
+        )));
+    }
+
+    /// Finished SVG page documents (None when recording is off).
+    pub fn svg_pages(&self) -> Option<Vec<String>> {
+        self.svg
+            .as_ref()
+            .map(|svg| svg.finish(self.painted_since_page))
+    }
+
+    pub(crate) fn svg_wanted(&self) -> bool {
+        self.svg.is_some() && self.suppress_paint == 0
+    }
+
+    pub(crate) fn svg_image(&mut self, png: &[u8], w: usize, h: usize, t: [f32; 6]) {
+        let chain = self.state.clip.as_ref().map(|c| c.node.clone());
+        if let Some(svg) = &mut self.svg {
+            svg.image(png, w, h, t, &chain);
+        }
     }
 
     /// Reset everything `initgraphics` resets, per the PLRM: CTM,
@@ -754,6 +872,14 @@ impl Gfx {
                 Transform::identity(),
                 mask.as_deref(),
             );
+            if self.svg.is_some() {
+                let d = path.to_svg_data();
+                let rgb = self.state.rgb;
+                let chain = self.state.clip.as_ref().map(|c| c.node.clone());
+                if let Some(svg) = &mut self.svg {
+                    svg.fill(&d, FillRule::Winding, rgb, &chain);
+                }
+            }
             self.dirty = true;
         }
     }
@@ -801,9 +927,14 @@ impl Gfx {
                 *m = ((u16::from(*m) * u16::from(*p)) / 255) as u8;
             }
         }
+        let parent = self.state.clip.as_ref().map(|c| c.node.clone());
         self.state.clip = Some(ClipState {
             mask: std::rc::Rc::new(mask),
-            path: self.state.path.clone(),
+            node: std::rc::Rc::new(ClipNode {
+                path: self.state.path.clone(),
+                rule,
+                parent,
+            }),
         });
         Ok(())
     }
@@ -818,7 +949,7 @@ impl Gfx {
     /// approximation.)
     pub fn set_path_to_clip(&mut self) {
         match &self.state.clip {
-            Some(c) => self.state.path = c.path.clone(),
+            Some(c) => self.state.path = c.node.path.clone(),
             None => {
                 let (w, h) = (self.pixmap.width() as f32, self.pixmap.height() as f32);
                 let mut p = PsPath::default();

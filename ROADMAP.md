@@ -185,17 +185,22 @@ block-identical), `--pstack-on-error`. The one open sliver is task
 
 ## Stage 9 — Output targets
 
-1. **Multi-page documents** — `showpage` advances a page counter; window
-   gains page navigation; `--png` writes `out-001.png` etc. Resolve the
-   Stage 2 "showpage doesn't erase" deviation properly. [sonnet]
+1. ✅ **Multi-page documents** (2026-07-16) — showpage snapshots the
+   page, full initgraphics (gs-pinned), *lazy* erase (canvas keeps the
+   finished page until the next mark — the window keeps its picture);
+   copypage/initgraphics ops; `--png` numbers multi-page output;
+   arrow-key page browsing in the window. [sonnet]
 2. **PDF export** — replay executed page content into a PDF (either via
    a recording display list or by re-running per page). Design note
    first: display list vs. re-execution. [opus+review]
-3. **Print-resolution rendering** — `--dpi` flag decoupling page points
-   from device pixels (the CTM already supports it; it's mostly CLI and
-   window scaling). [haiku]
-4. **SVG export** — the path/paint pipeline maps almost 1:1; cheap win
-   for sharing gallery pieces as vectors. [sonnet]
+3. ✅ **Print-resolution rendering** (2026-07-16) — `--dpi`, verified
+   pixel-identical against gs -r144. [haiku]
+4. ✅ **SVG export** (2026-07-16) — `--svg`; `src/svg.rs` mirrors the
+   paint pipeline (device-space paths 1:1, glyphs as outlines, clip
+   chains as nested clipPath groups, images as embedded base64 PNG
+   with the exact rasterizer transform); one document per page.
+   Verified by rasterizing the output in a browser against the
+   canvas. [sonnet]
 
 ## Stage 10 — The LaserWriter experience (stretch/fun)
 

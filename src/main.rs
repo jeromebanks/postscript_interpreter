@@ -15,6 +15,8 @@ struct Options {
     page: (u32, u32),
     /// Device resolution; 72 means one pixel per point.
     dpi: f32,
+    /// Write the page(s) as SVG (implies headless).
+    svg: Option<String>,
     /// Print the operand stack after an error (REPL and headless).
     pstack_on_error: bool,
 }
@@ -39,6 +41,9 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
+    if options.svg.is_some() {
+        interp.gfx_mut().enable_svg();
+    }
     if let Some(expr) = &options.eval {
         return finish_headless(
             run_headless(&mut interp, expr.as_bytes(), &options),
@@ -57,7 +62,7 @@ fn main() -> ExitCode {
         }
     };
 
-    if options.headless || options.png.is_some() {
+    if options.headless || options.png.is_some() || options.svg.is_some() {
         return finish_headless(
             run_headless(&mut interp, &source, &options),
             &interp,
@@ -131,6 +136,30 @@ fn finish_headless(ok: bool, interp: &Interp, options: &Options) -> ExitCode {
             }
         }
     }
+    if let Some(path) = &options.svg
+        && let Some(pages) = interp.gfx().svg_pages()
+    {
+        let write = |p: &str, body: &str| -> bool {
+            if let Err(e) = std::fs::write(p, body) {
+                eprintln!("pscat: cannot write {p}: {e}");
+                false
+            } else {
+                println!("pscat: wrote {p}");
+                true
+            }
+        };
+        if pages.len() == 1 {
+            if !write(path, &pages[0]) {
+                return ExitCode::FAILURE;
+            }
+        } else {
+            for (i, body) in pages.iter().enumerate() {
+                if !write(&numbered_path(path, i + 1), body) {
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+    }
     if ok {
         ExitCode::SUCCESS
     } else {
@@ -155,6 +184,7 @@ fn parse_args() -> Result<Options, String> {
         steps_per_frame: 100,
         page: gfx::DEFAULT_PAGE,
         dpi: 72.0,
+        svg: None,
         pstack_on_error: false,
     };
     let mut args = env::args().skip(1);
@@ -179,6 +209,9 @@ fn parse_args() -> Result<Options, String> {
             }
             "--png" => {
                 options.png = Some(args.next().ok_or("missing path after --png")?);
+            }
+            "--svg" => {
+                options.svg = Some(args.next().ok_or("missing path after --svg")?);
             }
             "--speed" => {
                 let n = args.next().ok_or("missing value after --speed")?;
@@ -223,6 +256,7 @@ fn print_usage() {
     println!("      --png PATH      write the final canvas as a PNG (implies --headless)");
     println!("      --speed N       interpreter steps per frame (default 100)");
     println!("      --page WxH      canvas size in points (default 612x792, US Letter)");
+    println!("      --svg PATH      write the page(s) as SVG (implies --headless)");
     println!("      --dpi N         device resolution (default 72 = 1 pixel per point)");
     println!("      --pstack-on-error  print the operand stack after an error");
 }

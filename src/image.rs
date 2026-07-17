@@ -236,6 +236,69 @@ impl ImageCtx {
         }
     }
 
+    /// Mirror this image into the SVG recorder: the source samples as
+    /// an embedded PNG plus the exact device transform the rasterizer
+    /// applies (CTM ∘ ImageMatrix⁻¹, mapping sample coordinates to
+    /// device space).
+    fn record_svg(&self, gfx: &mut Gfx, ctm: tiny_skia::Transform) {
+        let m = self.matrix;
+        let img = tiny_skia::Transform::from_row(
+            m[0] as f32,
+            m[1] as f32,
+            m[2] as f32,
+            m[3] as f32,
+            m[4] as f32,
+            m[5] as f32,
+        );
+        let Some(inv) = img.invert() else { return };
+        let t = inv.post_concat(ctm);
+        let Some(mut pm) =
+            tiny_skia::Pixmap::new(self.width.max(1) as u32, self.height.max(1) as u32)
+        else {
+            return;
+        };
+        let paint_rgb = gfx.rgb();
+        for iy in 0..self.height {
+            for ix in 0..self.width {
+                let (r, g, b, a) = match self.mask {
+                    Some(paint_ones) => {
+                        if (self.sample(ix, iy, 0) != 0) != paint_ones {
+                            (0.0, 0.0, 0.0, 0.0)
+                        } else {
+                            (
+                                paint_rgb.0 as f32,
+                                paint_rgb.1 as f32,
+                                paint_rgb.2 as f32,
+                                1.0,
+                            )
+                        }
+                    }
+                    None => {
+                        let (r, g, b) = self.rgb_at(ix, iy);
+                        (r, g, b, 1.0)
+                    }
+                };
+                let px = tiny_skia::PremultipliedColorU8::from_rgba(
+                    (r * a * 255.0).round() as u8,
+                    (g * a * 255.0).round() as u8,
+                    (b * a * 255.0).round() as u8,
+                    (a * 255.0).round() as u8,
+                );
+                if let Some(px) = px {
+                    pm.pixels_mut()[iy * self.width + ix] = px;
+                }
+            }
+        }
+        if let Ok(png) = pm.encode_png() {
+            gfx.svg_image(
+                &png,
+                self.width,
+                self.height,
+                [t.sx, t.ky, t.kx, t.sy, t.tx, t.ty],
+            );
+        }
+    }
+
     fn rasterize(&self, gfx: &mut Gfx) {
         if self.width == 0 || self.height == 0 || self.bits == 0 {
             return;
@@ -245,6 +308,9 @@ impl ImageCtx {
             return; // singular CTM: the image has no area
         };
         gfx.prepare_paint();
+        if gfx.svg_wanted() {
+            self.record_svg(gfx, ctm);
+        }
         // Device bounding box of the user-space unit square.
         let (pw, ph) = (gfx.pixmap.width() as i64, gfx.pixmap.height() as i64);
         let mut x0 = f32::MAX;
