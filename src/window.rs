@@ -12,8 +12,9 @@ use std::time::{Duration, Instant};
 use softbuffer::{Context, Surface};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
 use crate::Interp;
@@ -38,6 +39,7 @@ pub fn run_windowed(interp: Interp, options: WindowOptions) -> Result<(), String
         view: None,
         running: true,
         had_error: false,
+        back: 0,
     };
     event_loop
         .run_app(&mut app)
@@ -59,6 +61,9 @@ struct App {
     view: Option<View>,
     running: bool,
     had_error: bool,
+    /// Page navigation (arrow keys): how many pages *back* from the
+    /// live canvas is being viewed. 0 = the live canvas itself.
+    back: usize,
 }
 
 impl App {
@@ -98,7 +103,13 @@ impl App {
             return;
         };
 
-        let pixmap = &self.interp.gfx().pixmap;
+        let gfx = self.interp.gfx();
+        let pixmap = if self.back > 0 {
+            let pages = gfx.pages();
+            &pages[pages.len() - self.back]
+        } else {
+            &gfx.pixmap
+        };
         let (pw, ph) = (pixmap.width() as usize, pixmap.height() as usize);
         let data = pixmap.data();
         let (bw, bh) = (size.width as usize, size.height as usize);
@@ -168,6 +179,30 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Resized(_) => {
                 if let Some(view) = &self.view {
+                    view.window.request_redraw();
+                }
+            }
+            // Left/Right browse completed pages; the live canvas is
+            // the newest "page".
+            WindowEvent::KeyboardInput {
+                event:
+                    KeyEvent {
+                        logical_key: Key::Named(key @ (NamedKey::ArrowLeft | NamedKey::ArrowRight)),
+                        state: ElementState::Pressed,
+                        ..
+                    },
+                ..
+            } => {
+                let npages = self.interp.gfx().pages().len();
+                self.back = match key {
+                    NamedKey::ArrowLeft => (self.back + 1).min(npages),
+                    _ => self.back.saturating_sub(1),
+                };
+                if let Some(view) = &self.view {
+                    let total = npages + 1;
+                    let showing = total - self.back;
+                    view.window
+                        .set_title(&format!("{} — page {showing}/{total}", self.options.title));
                     view.window.request_redraw();
                 }
             }

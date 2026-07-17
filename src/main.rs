@@ -99,20 +99,46 @@ fn print_pstack(interp: &Interp) {
     eprintln!();
 }
 
-/// Write the PNG (if requested) even after an error — a partial canvas is
-/// exactly what you want to see when debugging a program that died.
+/// Write the PNG(s) (if requested) even after an error — a partial
+/// canvas is exactly what you want when debugging a program that died.
+/// One page writes the exact path given; multi-page documents write
+/// out-001.png, out-002.png, ...
 fn finish_headless(ok: bool, interp: &Interp, options: &Options) -> ExitCode {
     if let Some(path) = &options.png {
-        if let Err(e) = interp.gfx().pixmap.save_png(path) {
-            eprintln!("pscat: cannot write {path}: {e}");
-            return ExitCode::FAILURE;
+        let gfx = interp.gfx();
+        let mut pages: Vec<&tiny_skia::Pixmap> = gfx.pages().iter().collect();
+        if pages.is_empty() || gfx.has_trailing_art() {
+            pages.push(&gfx.pixmap);
         }
-        println!("pscat: wrote {path}");
+        if pages.len() == 1 {
+            if let Err(e) = pages[0].save_png(path) {
+                eprintln!("pscat: cannot write {path}: {e}");
+                return ExitCode::FAILURE;
+            }
+            println!("pscat: wrote {path}");
+        } else {
+            for (i, page) in pages.iter().enumerate() {
+                let numbered = numbered_path(path, i + 1);
+                if let Err(e) = page.save_png(&numbered) {
+                    eprintln!("pscat: cannot write {numbered}: {e}");
+                    return ExitCode::FAILURE;
+                }
+                println!("pscat: wrote {numbered}");
+            }
+        }
     }
     if ok {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
+    }
+}
+
+/// out.png → out-001.png (suffix before the extension).
+fn numbered_path(path: &str, n: usize) -> String {
+    match path.rsplit_once('.') {
+        Some((stem, ext)) => format!("{stem}-{n:03}.{ext}"),
+        None => format!("{path}-{n:03}"),
     }
 }
 

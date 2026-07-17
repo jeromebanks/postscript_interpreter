@@ -244,6 +244,7 @@ impl ImageCtx {
         let Some(inv) = ctm.invert() else {
             return; // singular CTM: the image has no area
         };
+        gfx.prepare_paint();
         // Device bounding box of the user-space unit square.
         let (pw, ph) = (gfx.pixmap.width() as i64, gfx.pixmap.height() as i64);
         let mut x0 = f32::MAX;

@@ -236,6 +236,16 @@ pub struct Gfx {
     /// Set by `showpage`; lets the front end know the program considers
     /// the page complete.
     pub page_shown: bool,
+    /// Pages completed by showpage/copypage, in order.
+    completed: Vec<Pixmap>,
+    /// showpage erases *lazily*: the finished page stays on the canvas
+    /// until the program paints again — watching is the point, and
+    /// single-page programs keep their final image. Multi-page
+    /// programs get the erase the moment page N+1's first mark lands.
+    pending_erase: bool,
+    /// Anything painted since the last page boundary? Decides whether
+    /// the trailing canvas counts as a final page.
+    painted_since_page: bool,
     /// Nonzero while a Type 3 BuildChar runs for metrics only
     /// (stringwidth/charpath): painting operators consume their paths
     /// but leave the pixels alone. A counter, not a flag — shows nest.
@@ -270,6 +280,9 @@ impl Gfx {
             base_ctm,
             dirty: false,
             page_shown: false,
+            completed: Vec::new(),
+            pending_erase: false,
+            painted_since_page: false,
             suppress_paint: 0,
         })
     }
@@ -476,10 +489,22 @@ impl Gfx {
         self.state.clip.as_ref().map(|c| c.mask.clone())
     }
 
+    /// Every painting entry point calls this first: consume a pending
+    /// showpage erase and note that the new page has art on it.
+    pub(crate) fn prepare_paint(&mut self) {
+        if self.pending_erase {
+            self.pending_erase = false;
+            self.pixmap.fill(tiny_skia::Color::WHITE);
+            self.dirty = true;
+        }
+        self.painted_since_page = true;
+    }
+
     pub fn fill(&mut self, rule: FillRule) {
         if self.suppress_paint == 0
             && let Some(path) = self.state.path.to_skia()
         {
+            self.prepare_paint();
             let paint = self.paint();
             let mask = self.clip_mask();
             self.pixmap
@@ -496,6 +521,7 @@ impl Gfx {
             return;
         }
         if let Some(path) = self.state.path.to_skia() {
+            self.prepare_paint();
             let scale = self.ctm_scale();
             let dash = self.state.dash.as_ref().and_then(|(pattern, phase)| {
                 // Dash lengths are user-space; scale them like the width.
@@ -545,8 +571,60 @@ impl Gfx {
         if self.suppress_paint > 0 {
             return;
         }
+        self.pending_erase = false;
+        self.painted_since_page = true;
         self.pixmap.fill(tiny_skia::Color::WHITE);
         self.dirty = true;
+    }
+
+    // --- pages ------------------------------------------------------------
+
+    /// `showpage`: snapshot the finished page and arm the lazy erase.
+    /// The graphics-state reset (initgraphics, pinned against gs) is
+    /// the operator's job.
+    pub fn showpage(&mut self) {
+        self.completed.push(self.pixmap.clone());
+        self.page_shown = true;
+        self.pending_erase = true;
+        self.painted_since_page = false;
+    }
+
+    /// `copypage` (Level 1): emit the page but keep canvas and state.
+    pub fn copypage(&mut self) {
+        self.completed.push(self.pixmap.clone());
+        self.page_shown = true;
+    }
+
+    /// Completed page snapshots, oldest first.
+    pub fn pages(&self) -> &[Pixmap] {
+        &self.completed
+    }
+
+    /// Whether the live canvas holds art not yet emitted by showpage —
+    /// i.e. whether it counts as a trailing page.
+    pub fn has_trailing_art(&self) -> bool {
+        self.painted_since_page
+    }
+
+    /// Reset everything `initgraphics` resets, per the PLRM: CTM,
+    /// path, clip, color (black, DeviceGray), line parameters. Not the
+    /// font — gs keeps it, and so do we.
+    pub fn init_graphics(&mut self) {
+        let font = self.state.font.take();
+        self.state = GraphicsState {
+            ctm: self.base_ctm,
+            rgb: (0.0, 0.0, 0.0),
+            colorspace: ColorSpace::Gray,
+            line_width: 1.0,
+            flatness: 1.0,
+            line_cap: LineCap::Butt,
+            line_join: LineJoin::Miter,
+            miter_limit: 10.0,
+            dash: None,
+            font,
+            path: PsPath::default(),
+            clip: None,
+        };
     }
 
     // --- state ----------------------------------------------------------
@@ -658,6 +736,7 @@ impl Gfx {
             return;
         }
         if let Some(p) = path.to_skia() {
+            self.prepare_paint();
             let paint = self.paint();
             let mask = self.clip_mask();
             self.pixmap.fill_path(

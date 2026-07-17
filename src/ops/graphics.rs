@@ -28,6 +28,8 @@ pub fn install(dict: &mut Dict) {
     op(dict, "stroke", stroke);
     op(dict, "erasepage", erasepage);
     op(dict, "showpage", showpage);
+    op(dict, "copypage", copypage);
+    op(dict, "initgraphics", initgraphics);
     // Graphics state
     op(dict, "gsave", gsave);
     op(dict, "grestore", grestore);
@@ -158,12 +160,27 @@ fn erasepage(it: &mut Interp) -> Result<(), PsError> {
     Ok(())
 }
 
-/// Deliberate deviation: real showpage transmits the page and erases it
-/// for the next one. We mark the page complete and leave the image up —
-/// erasing would defeat the entire point of watching it draw.
+/// showpage snapshots the finished page and resets the graphics state
+/// (full initgraphics — pinned against gs: CTM, color, width all
+/// reset). The erase is lazy: the image stays on the canvas until the
+/// next painting op, so single-page programs keep their picture and
+/// the window keeps showing it — resolving the Stage 2 deviation
+/// without defeating the point of watching.
 fn showpage(it: &mut Interp) -> Result<(), PsError> {
-    it.gfx.page_shown = true;
+    it.gfx.showpage();
+    it.gfx.init_graphics();
     it.gfx.dirty = true;
+    Ok(())
+}
+
+/// Level 1 copypage: emit the page, keep canvas and graphics state.
+fn copypage(it: &mut Interp) -> Result<(), PsError> {
+    it.gfx.copypage();
+    Ok(())
+}
+
+fn initgraphics(it: &mut Interp) -> Result<(), PsError> {
+    it.gfx.init_graphics();
     Ok(())
 }
 
