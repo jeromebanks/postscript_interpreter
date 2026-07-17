@@ -156,10 +156,12 @@ Goal: the semantics that separate a toy from an implementation.
    deviations documented there (no invalidrestore stack scan; files
    not closed by restore). `savetype` objects, `vmstatus`,
    `grestoreall` included. [opus+review]
-2. **Name interning** — replace `Rc<str>` name keys with interned
-   symbols; benchmark first (`fib 27` vs gs is the existing yardstick;
-   `benches/` now measures the gap at ~7× on an M-series). Touches
-   lexer, object model, dicts. [opus]
+2. ✅ **Name interning** (2026-07-16) — `src/name.rs`: `PsName`
+   (interned id + shared text, `Deref<Target=str>`), thread-local
+   interner, dicts keyed by id with a one-multiply hasher. fib 27
+   214ms→137ms, fern 375ms→258ms; remaining gap vs gs is the frame
+   loop's per-element RefCell borrow + Object clone (future lever).
+   [opus]
 3. ✅ **Benchmark suite** (2026-07-16) — `benches/perf.rs`, four
    workloads (fib/defloop/sierpinski/fern), best-of-three wall clock
    under `cargo bench`. [haiku]

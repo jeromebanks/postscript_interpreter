@@ -72,7 +72,7 @@ fn cvn(it: &mut Interp) -> Result<(), PsError> {
         return Err(PsError::Typecheck);
     };
     it.push(Object {
-        value: Value::Name(s.text().into()),
+        value: Value::Name(crate::name::intern(&s.text())),
         executable: obj.executable,
     });
     Ok(())

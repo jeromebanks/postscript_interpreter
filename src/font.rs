@@ -300,7 +300,7 @@ fn ctm_lin(gfx: &Gfx, (x, y): (f64, f64)) -> (f64, f64) {
 /// set-time-semantics decision; a font dict without an Encoding
 /// (hand-built) falls back to StandardEncoding. Out-of-range or
 /// non-name entries behave as .notdef.
-fn encoding_name(fs: &FontState, byte: u8) -> Rc<str> {
+fn encoding_name(fs: &FontState, byte: u8) -> crate::name::PsName {
     let enc = fs
         .dict
         .borrow()

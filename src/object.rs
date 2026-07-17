@@ -28,6 +28,7 @@ use std::rc::Rc;
 use crate::error::PsError;
 use crate::file::FileHandle;
 use crate::interp::Interp;
+use crate::name::{self, IdHashBuilder, PsName};
 
 pub type OpFn = fn(&mut Interp) -> Result<(), PsError>;
 
@@ -231,7 +232,7 @@ pub enum Value {
     Boolean(bool),
     Mark,
     Null,
-    Name(Rc<str>),
+    Name(PsName),
     String(PsString),
     Array(PsArray),
     Dict(Rc<RefCell<Dict>>),
@@ -274,7 +275,7 @@ impl Object {
     }
 
     pub fn name(n: &str) -> Self {
-        Self::lit(Value::Name(n.into()))
+        Self::lit(Value::Name(name::intern(n)))
     }
 
     pub fn array(items: Vec<Object>) -> Self {
@@ -477,7 +478,7 @@ enum ExoticKey {
 }
 
 enum KeyClass {
-    Name(Rc<str>),
+    Name(PsName),
     Exotic(ExoticKey),
 }
 
@@ -485,7 +486,7 @@ fn classify_key(key: &Object) -> Result<KeyClass, PsError> {
     Ok(match &key.value {
         Value::Name(n) => KeyClass::Name(n.clone()),
         // Strings convert to names when used as keys, per the PLRM.
-        Value::String(s) => KeyClass::Name(s.text().into()),
+        Value::String(s) => KeyClass::Name(name::intern(&s.text())),
         Value::Integer(i) => KeyClass::Exotic(ExoticKey::Int(*i)),
         Value::Real(r) => {
             if r.fract() == 0.0 && (i64::MIN as f64..=i64::MAX as f64).contains(r) {
@@ -513,7 +514,9 @@ fn classify_key(key: &Object) -> Result<KeyClass, PsError> {
 /// handles) — it's what the save/restore journal snapshots.
 #[derive(Default, Clone)]
 pub struct Dict {
-    names: HashMap<Rc<str>, Object>,
+    /// Name-keyed entries, keyed by interned id — the hot path. One
+    /// u32 multiply per probe instead of hashing the name's text.
+    names: HashMap<u32, Object, IdHashBuilder>,
     /// Exotic entries keep the original key object so `forall` and
     /// `copy` can hand it back.
     exotic: HashMap<ExoticKey, (Object, Object)>,
@@ -524,19 +527,33 @@ impl Dict {
         Self::default()
     }
 
-    /// Name-keyed fast path (operator lookup, `def`, `load`).
+    /// String-keyed convenience lookup. Uses the interner's read-only
+    /// probe so misses don't grow the name table.
     pub fn get(&self, key: &str) -> Option<Object> {
-        self.names.get(key).cloned()
+        self.names.get(&name::lookup(key)?).cloned()
+    }
+
+    /// Interned fast path (name execution, `load`).
+    pub fn get_name(&self, key: &PsName) -> Option<Object> {
+        self.names.get(&key.id()).cloned()
+    }
+
+    pub(crate) fn get_id(&self, id: u32) -> Option<Object> {
+        self.names.get(&id).cloned()
     }
 
     pub fn put(&mut self, key: Rc<str>, value: Object) {
-        self.names.insert(key, value);
+        self.names.insert(name::intern_rc(key).id(), value);
+    }
+
+    pub fn put_name(&mut self, key: &PsName, value: Object) {
+        self.names.insert(key.id(), value);
     }
 
     /// General lookup with any PostScript key object.
     pub fn get_obj(&self, key: &Object) -> Result<Option<Object>, PsError> {
         Ok(match classify_key(key)? {
-            KeyClass::Name(n) => self.names.get(&*n).cloned(),
+            KeyClass::Name(n) => self.names.get(&n.id()).cloned(),
             KeyClass::Exotic(k) => self.exotic.get(&k).map(|(_, v)| v.clone()),
         })
     }
@@ -544,7 +561,7 @@ impl Dict {
     pub fn put_obj(&mut self, key: &Object, value: Object) -> Result<(), PsError> {
         match classify_key(key)? {
             KeyClass::Name(n) => {
-                self.names.insert(n, value);
+                self.names.insert(n.id(), value);
             }
             KeyClass::Exotic(k) => {
                 self.exotic.insert(k, (key.clone(), value));
@@ -555,7 +572,7 @@ impl Dict {
 
     pub fn known(&self, key: &Object) -> Result<bool, PsError> {
         Ok(match classify_key(key)? {
-            KeyClass::Name(n) => self.names.contains_key(&*n),
+            KeyClass::Name(n) => self.names.contains_key(&n.id()),
             KeyClass::Exotic(k) => self.exotic.contains_key(&k),
         })
     }
@@ -563,7 +580,7 @@ impl Dict {
     pub fn undef(&mut self, key: &Object) -> Result<(), PsError> {
         match classify_key(key)? {
             KeyClass::Name(n) => {
-                self.names.remove(&*n);
+                self.names.remove(&n.id());
             }
             KeyClass::Exotic(k) => {
                 self.exotic.remove(&k);
@@ -587,7 +604,7 @@ impl Dict {
         let mut out: Vec<(Object, Object)> = self
             .names
             .iter()
-            .map(|(k, v)| (Object::lit(Value::Name(k.clone())), v.clone()))
+            .map(|(k, v)| (Object::lit(Value::Name(name::resolve(*k))), v.clone()))
             .collect();
         out.extend(self.exotic.values().cloned());
         out

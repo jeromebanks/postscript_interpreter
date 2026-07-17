@@ -3,6 +3,25 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 8 task 2 — name interning (2026-07-16)
+
+`src/name.rs`: a `PsName` is an interned id plus the shared text
+(`Deref<Target=str>` kept the churn tiny — 25 `Value::Name` sites,
+most untouched). The interner is thread-local (the interpreter is
+`!Send` by design; several Interps on one thread share ids
+harmlessly; the table only grows, matching PS name semantics). Dicts
+key name entries by `u32` through a one-multiply hasher; name
+*execution* carries only the id (`load_id`), so the hot path does no
+string hashing and no Rc traffic — `last_name` is now a bare id
+resolved to text only at error time. `Dict::get(&str)` probes the
+interner read-only so misses don't grow the table.
+
+Measured (`cargo bench`, M-series): fib 27 214ms→137ms, defloop
+33→25ms, fern 375→258ms. gs remains ~4.5× ahead on fib; profiling
+says the rest is the frame loop (per-element RefCell borrow +
+Object clone), noted in `benches/perf.rs` as the next lever and
+deliberately left until something feels slow.
+
 ## Stage 8 tasks 1 + 3 — save/restore and the perf yardstick (2026-07-16)
 
 **save/restore** (`VM.md` is the design doc — read it first; every

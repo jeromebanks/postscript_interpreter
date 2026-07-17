@@ -9,9 +9,10 @@
 //! The workloads, chosen to stress different subsystems:
 //! - fib 27 — procedure calls + dict lookups, zero graphics. The
 //!   standing gs comparison (`gs -dNODISPLAY -q`, minus its ~20ms
-//!   startup): ~30ms vs our 214ms at Stage 8 opening on an M-series —
-//!   a ~7× gap, worse than the ~3× recorded earlier; interning has
-//!   headroom.
+//!   startup): ~30ms vs our 214ms at Stage 8 opening on an M-series.
+//!   Name interning (task 2) brought it to ~137ms; the remaining gap
+//!   is execution machinery (per-element RefCell borrow + Object
+//!   clone in the frame loop), the next lever if it ever matters.
 //! - defloop — 200k iterations of def/load on one name: the
 //!   dict-write path.
 //! - sierpinski — examples/sierpinski.ps: recursion + small fills.

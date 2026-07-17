@@ -150,9 +150,9 @@ pub struct Interp {
     journal: Vec<JEntry>,
     save_stack: Vec<SaveRecord>,
     pub(crate) quit_requested: bool,
-    /// The most recently executed name, for `OffendingCommand` in error
-    /// reports.
-    last_name: Option<Rc<str>>,
+    /// The most recently executed name (interned id — resolving to
+    /// text only happens at error time), for `OffendingCommand`.
+    last_name: Option<u32>,
     /// State for `rand`/`srand`/`rrand`. Deterministic by default —
     /// reproducible art is a feature here, not a bug.
     pub(crate) rand_state: i64,
@@ -288,7 +288,7 @@ impl Interp {
     fn record_error(&mut self, e: &PsError) {
         let command = match e {
             PsError::Undefined(n) => Some(Rc::from(n.as_str())),
-            _ => self.last_name.clone(),
+            _ => self.last_name.map(|id| crate::name::resolve(id).text_rc()),
         };
         let error_dict = match self.load("$error") {
             Some(obj) => match &obj.value {
@@ -307,7 +307,10 @@ impl Interp {
                 Object::lit(Value::Name(e.name().into())),
             );
             if let Some(c) = command {
-                d.put("command".into(), Object::exec(Value::Name(c)));
+                d.put(
+                    "command".into(),
+                    Object::exec(Value::Name(crate::name::intern_rc(c))),
+                );
             }
         }
     }
@@ -321,7 +324,9 @@ impl Interp {
         };
         let command = match err {
             PsError::Undefined(name) => name.clone(),
-            _ => self.last_executed_name().unwrap_or("--none--").to_string(),
+            _ => self
+                .last_executed_name()
+                .unwrap_or_else(|| "--none--".to_string()),
         };
         format!("%%[ Error: {kind}; OffendingCommand: {command} ]%%")
     }
@@ -514,11 +519,11 @@ impl Interp {
     fn execute_element(&mut self, obj: Object) -> Result<(), PsError> {
         match (&obj.value, obj.executable) {
             (Value::Name(n), true) => {
-                let name = n.clone();
-                self.last_name = Some(name.clone());
+                let id = n.id();
+                self.last_name = Some(id);
                 let resolved = self
-                    .load(&name)
-                    .ok_or_else(|| PsError::Undefined(name.to_string()))?;
+                    .load_id(id)
+                    .ok_or_else(|| PsError::Undefined(n.to_string()))?;
                 self.execute_resolved(resolved)
             }
             (Value::Operator(op), true) => (op.func)(self),
@@ -559,11 +564,12 @@ impl Interp {
                     if hops > 100 {
                         return Err(PsError::Limitcheck);
                     }
-                    let n = n.clone();
-                    self.last_name = Some(n.clone());
-                    obj = self
-                        .load(&n)
+                    let id = n.id();
+                    self.last_name = Some(id);
+                    let next = self
+                        .load_id(id)
                         .ok_or_else(|| PsError::Undefined(n.to_string()))?;
+                    obj = next;
                 }
                 _ => {
                     self.push(obj);
@@ -792,6 +798,12 @@ impl Interp {
         self.dstack.iter().rev().find_map(|d| d.borrow().get(name))
     }
 
+    /// The interned fast path for the same walk — what name execution
+    /// uses (one integer hash per dictionary probed, no Rc traffic).
+    pub(crate) fn load_id(&self, id: u32) -> Option<Object> {
+        self.dstack.iter().rev().find_map(|d| d.borrow().get_id(id))
+    }
+
     /// Define a name in the topmost dictionary (what `def` will do once
     /// control flow lands; already used by tests and available to embedders).
     pub fn define(&mut self, name: &str, obj: Object) {
@@ -909,8 +921,9 @@ impl Interp {
         self.quit_requested
     }
 
-    pub fn last_executed_name(&self) -> Option<&str> {
-        self.last_name.as_deref()
+    pub fn last_executed_name(&self) -> Option<String> {
+        self.last_name
+            .map(|id| crate::name::resolve(id).to_string())
     }
 
     pub fn push(&mut self, obj: Object) {
@@ -960,8 +973,8 @@ fn token_to_object(tok: Token) -> Object {
         Token::Integer(i) => Object::int(i),
         Token::Real(r) => Object::real(r),
         Token::String(bytes) => Object::string(bytes),
-        Token::Name(n) => Object::exec(Value::Name(n.into())),
-        Token::LiteralName(n) => Object::lit(Value::Name(n.into())),
+        Token::Name(n) => Object::exec(Value::Name(crate::name::intern(&n))),
+        Token::LiteralName(n) => Object::lit(Value::Name(crate::name::intern(&n))),
         // All callers consume brace and immediate-name tokens before
         // converting, so these cannot reach here.
         Token::LBrace | Token::RBrace | Token::ImmediateName(_) => {

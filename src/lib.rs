@@ -11,6 +11,7 @@ pub mod gfx;
 pub(crate) mod image;
 pub mod interp;
 pub mod lexer;
+pub mod name;
 pub mod object;
 pub mod ops;
 pub(crate) mod type1;

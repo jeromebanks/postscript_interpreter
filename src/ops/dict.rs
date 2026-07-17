@@ -29,10 +29,10 @@ pub fn install(dict: &mut Dict) {
 
 /// def/load/store keys are names; strings convert per the PLRM. (put/get
 /// with arbitrary keys live in ops::data.)
-fn pop_key(it: &mut Interp) -> Result<Rc<str>, PsError> {
+fn pop_key(it: &mut Interp) -> Result<crate::name::PsName, PsError> {
     match &it.pop()?.value {
         Value::Name(n) => Ok(n.clone()),
-        Value::String(s) => Ok(s.text().into()),
+        Value::String(s) => Ok(crate::name::intern(&s.text())),
         _ => Err(PsError::Typecheck),
     }
 }
