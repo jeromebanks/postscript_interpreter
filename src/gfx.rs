@@ -254,12 +254,20 @@ pub struct Gfx {
 
 impl Gfx {
     pub fn new(width: u32, height: u32) -> Option<Self> {
+        Self::with_scale(width, height, 1.0)
+    }
+
+    /// A canvas of `width`x`height` device pixels where one PostScript
+    /// point maps to `scale` pixels — the `--dpi` seam (scale =
+    /// dpi/72). The CTM machinery needs nothing else; user space stays
+    /// in points throughout.
+    pub fn with_scale(width: u32, height: u32, scale: f32) -> Option<Self> {
         let mut pixmap = Pixmap::new(width, height)?;
         pixmap.fill(tiny_skia::Color::WHITE);
         // Device y grows downward; PostScript y grows upward. The base
         // CTM flips the axis so user (0,0) is the bottom-left corner, as
         // the LaserWriter intended.
-        let base_ctm = Transform::from_row(1.0, 0.0, 0.0, -1.0, 0.0, height as f32);
+        let base_ctm = Transform::from_row(scale, 0.0, 0.0, -scale, 0.0, height as f32);
         Some(Gfx {
             pixmap,
             state: GraphicsState {

@@ -189,7 +189,20 @@ impl Interp {
     /// `None` if the page dimensions are unusable (zero or too large for
     /// a pixmap).
     pub fn with_page(width: u32, height: u32) -> Option<Self> {
-        let gfx = Gfx::new(width, height)?;
+        Self::with_page_scaled(width, height, 1.0)
+    }
+
+    /// A page of `width`x`height` *points* rendered at `scale` device
+    /// pixels per point (`--dpi` divides by 72 to get this).
+    pub fn with_page_scaled(width: u32, height: u32, scale: f32) -> Option<Self> {
+        let px = |points: u32| ((points as f32 * scale).round() as u32).max(1);
+        let (pw, ph) = (px(width), px(height));
+        // Same ceiling as --page: keeps a huge dpi from attempting a
+        // multi-gigabyte canvas.
+        if pw > 8000 || ph > 8000 {
+            return None;
+        }
+        let gfx = Gfx::with_scale(pw, ph, scale)?;
         let mut system = Dict::new();
         ops::install_all(&mut system);
         // Error machinery: $error is where recovered errors are recorded;

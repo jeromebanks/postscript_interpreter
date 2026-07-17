@@ -13,6 +13,8 @@ struct Options {
     png: Option<String>,
     steps_per_frame: usize,
     page: (u32, u32),
+    /// Device resolution; 72 means one pixel per point.
+    dpi: f32,
     /// Print the operand stack after an error (REPL and headless).
     pstack_on_error: bool,
 }
@@ -27,7 +29,9 @@ fn main() -> ExitCode {
         }
     };
 
-    let Some(mut interp) = Interp::with_page(options.page.0, options.page.1) else {
+    let Some(mut interp) =
+        Interp::with_page_scaled(options.page.0, options.page.1, options.dpi / 72.0)
+    else {
         eprintln!(
             "pscat: unusable page size {}x{}",
             options.page.0, options.page.1
@@ -150,6 +154,7 @@ fn parse_args() -> Result<Options, String> {
         png: None,
         steps_per_frame: 100,
         page: gfx::DEFAULT_PAGE,
+        dpi: 72.0,
         pstack_on_error: false,
     };
     let mut args = env::args().skip(1);
@@ -164,6 +169,14 @@ fn parse_args() -> Result<Options, String> {
             }
             "--headless" => options.headless = true,
             "--pstack-on-error" => options.pstack_on_error = true,
+            "--dpi" => {
+                let n = args.next().ok_or("missing value after --dpi")?;
+                options.dpi = n
+                    .parse()
+                    .ok()
+                    .filter(|&d: &f32| (9.0..=1200.0).contains(&d))
+                    .ok_or_else(|| format!("invalid --dpi value: {n} (expected 9..1200)"))?;
+            }
             "--png" => {
                 options.png = Some(args.next().ok_or("missing path after --png")?);
             }
@@ -210,6 +223,7 @@ fn print_usage() {
     println!("      --png PATH      write the final canvas as a PNG (implies --headless)");
     println!("      --speed N       interpreter steps per frame (default 100)");
     println!("      --page WxH      canvas size in points (default 612x792, US Letter)");
+    println!("      --dpi N         device resolution (default 72 = 1 pixel per point)");
     println!("      --pstack-on-error  print the operand stack after an error");
 }
 
