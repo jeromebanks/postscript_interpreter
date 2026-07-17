@@ -291,6 +291,34 @@ machinery. Verified in both interpreters (gs runs the same file).
    (pixel comparison excluded like the other rand-driven art). A
    Gallery II entry can reuse the font wholesale. [any]
 
+## Stage 13 — handwrite: string in, handwritten PNG out
+
+Goal: `./scripts/handwrite.sh "any text"` produces a PNG of the text
+written in the Stage 12 /HandScript font, word-wrapped across
+multiple lines the way a person fills a page — and the machinery is
+reusable, not buried in the script.
+
+1. **Reusable PostScript library** — `lib/handscript.ps`: the
+   /HandScript font plus a dict-driven layout API (`hs-write` draws,
+   `hs-linecount` measures; one options dict documented in the file
+   header controls text, size, column width, margins, leading,
+   jitter, pen width, ink color, ruled/plain paper, seed). Business
+   logic lives in structured PostScript so other applications can
+   embed the file wholesale; it must run in gs unchanged. Word wrap
+   is greedy on skeleton advances (jitter never moves a line break);
+   embedded newlines force breaks. [sonnet]
+2. **Bash wrapper** — `scripts/handwrite.sh`: appearance options as
+   CLI flags mapping 1:1 onto the options dict, plus `--dpi`,
+   `--halftone`, and `-o` passthroughs. Auto-sizes the page height
+   by running a headless `hs-linecount` pre-pass, then renders the
+   PNG with pscat. Input is lowercased (the font is lowercase-only);
+   `\`, `(`, `)` escaped into the PostScript string. [sonnet]
+3. **Tests + docs** — wrap-engine tests through the interpreter
+   (width shrinks → line count grows; newlines force breaks; ink is
+   deterministic under a fixed seed; gs accepts the library), and a
+   README section documenting script usage and library reuse.
+   [sonnet]
+
 ---
 
 ## Standing gaps not tied to a stage
