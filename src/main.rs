@@ -24,6 +24,8 @@ struct Options {
     pstack_on_error: bool,
     /// Watch a directory and render whatever lands there (Stage 10).
     spool: Option<String>,
+    /// Screen raster output like a mono laser printer (Stage 10).
+    halftone: bool,
 }
 
 fn main() -> ExitCode {
@@ -57,6 +59,7 @@ fn main() -> ExitCode {
         let window_options = WindowOptions {
             title: format!("pscat spool — {dir}"),
             steps_per_frame: options.steps_per_frame,
+            halftone: options.halftone,
         };
         return match run_spool(watcher, options.page, options.dpi / 72.0, window_options) {
             Ok(()) => ExitCode::SUCCESS,
@@ -113,6 +116,7 @@ fn main() -> ExitCode {
     let window_options = WindowOptions {
         title: format!("pscat — {path}"),
         steps_per_frame: options.steps_per_frame,
+        halftone: options.halftone,
     };
     match run_windowed(interp, window_options) {
         Ok(()) => ExitCode::SUCCESS,
@@ -158,20 +162,33 @@ fn finish_headless(ok: bool, interp: &Interp, options: &Options) -> ExitCode {
         if pages.is_empty() || gfx.has_trailing_art() {
             pages.push(&gfx.pixmap);
         }
-        if pages.len() == 1 {
-            if let Err(e) = pages[0].save_png(path) {
+        // --halftone screens the raster on the way out, like a mono
+        // printer's RIP; the vector targets below stay contone.
+        let save = |page: &tiny_skia::Pixmap, path: &str| -> bool {
+            let screened;
+            let page = if options.halftone {
+                screened = pscat::halftone::screen(page);
+                &screened
+            } else {
+                page
+            };
+            if let Err(e) = page.save_png(path) {
                 eprintln!("pscat: cannot write {path}: {e}");
+                false
+            } else {
+                println!("pscat: wrote {path}");
+                true
+            }
+        };
+        if pages.len() == 1 {
+            if !save(pages[0], path) {
                 return ExitCode::FAILURE;
             }
-            println!("pscat: wrote {path}");
         } else {
             for (i, page) in pages.iter().enumerate() {
-                let numbered = numbered_path(path, i + 1);
-                if let Err(e) = page.save_png(&numbered) {
-                    eprintln!("pscat: cannot write {numbered}: {e}");
+                if !save(page, &numbered_path(path, i + 1)) {
                     return ExitCode::FAILURE;
                 }
-                println!("pscat: wrote {numbered}");
             }
         }
     }
@@ -236,6 +253,7 @@ fn parse_args() -> Result<Options, String> {
         pdf: None,
         pstack_on_error: false,
         spool: None,
+        halftone: false,
     };
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -269,6 +287,7 @@ fn parse_args() -> Result<Options, String> {
             "--spool" => {
                 options.spool = Some(args.next().ok_or("missing directory after --spool")?);
             }
+            "--halftone" => options.halftone = true,
             "--speed" => {
                 let n = args.next().ok_or("missing value after --speed")?;
                 options.steps_per_frame = n
@@ -316,6 +335,7 @@ fn print_usage() {
     println!("      --pdf PATH      write the document as PDF (implies --headless)");
     println!("      --dpi N         device resolution (default 72 = 1 pixel per point)");
     println!("      --spool DIR     watch DIR and render each .ps/.eps that lands there");
+    println!("      --halftone      screen the raster like a mono laser printer (window/PNG)");
     println!("      --pstack-on-error  print the operand stack after an error");
 }
 

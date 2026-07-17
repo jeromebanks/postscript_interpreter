@@ -31,6 +31,8 @@ pub struct WindowOptions {
     /// Interpreter steps (executed objects) per frame — the "watchability"
     /// knob. ~60 frames/second, so 100 steps/frame ≈ 6000 objects/second.
     pub steps_per_frame: usize,
+    /// Screen the canvas like a mono laser printer (`--halftone`).
+    pub halftone: bool,
 }
 
 /// Run `interp` (which must already have a program queued via
@@ -209,6 +211,13 @@ impl App {
             &pages[pages.len() - self.back]
         } else {
             &gfx.pixmap
+        };
+        let screened;
+        let pixmap = if self.options.halftone {
+            screened = crate::halftone::screen(pixmap);
+            &screened
+        } else {
+            pixmap
         };
         let (pw, ph) = (pixmap.width() as usize, pixmap.height() as usize);
         let data = pixmap.data();

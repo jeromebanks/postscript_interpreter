@@ -3,6 +3,35 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 10 — halftone screens; stage complete (2026-07-17)
+
+`--halftone` (`src/halftone.rs`): the optional "authentic laser
+printer" render mode. A render mode, not the `setscreen` operator —
+the page rasterizes normally and the finished raster is screened on
+the way out, the way a mono printer's RIP screens a contone page.
+Applied at window blit time and to `--png`; `--svg`/`--pdf` keep
+their contone art. Composes with everything, including `--spool`
+(drop files, watch them print like it's 1985) and `--dpi`.
+
+The screen: luminance (Rec. 709) → classic euclidean dot on a
+45°-rotated lattice, cell fixed at 5.66 device px (53 lpi at 300
+dpi, the LaserWriter's own numbers). Black dots grow from the cell
+center sized so coverage equals darkness; past 50% the pattern
+inverts to white holes shrinking at the cell corners. The first cut
+used the naive `r²` threshold and the in-module coverage test
+caught it overshooting: mid-gray printed at 75%, because a spot
+function's raw value isn't area-uniform (a circle holds only π/4 of
+its bounding square). Five in-module tests pin white-stays-white,
+black-stays-solid, ~50% at mid-gray, coverage monotone in darkness,
+and pure-B/W output.
+
+Deferred: the real `setscreen`/`sethalftone` operators (per-color
+screens, spot-function procedures) if a found file ever needs them;
+`--halftone` for SVG/PDF is deliberately out (they're vector).
+
+With this, spool mode, and Hundred Lines below, **Stage 10 is
+complete** — Gallery II remains open-ended for more pieces.
+
 ## Stage 10 — spool mode (2026-07-17)
 
 `pscat --spool DIR`: the live window becomes the printer in the

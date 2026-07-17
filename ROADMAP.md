@@ -219,8 +219,13 @@ rasterization of our own output.
   files must hold size+mtime across two polls (no half-copied jobs),
   startup contents don't reprint, rewrites do. `src/spool.rs` is the
   testable watcher; port listening deferred until wanted. [sonnet]
-- **Halftone screens**: classic `setscreen`-style dots for an authentic
-  300dpi-printer look as an optional render mode. [sonnet]
+- ✅ **Halftone screens** (2026-07-17): `--halftone` — `src/halftone.rs`
+  screens the finished raster (window + `--png`; vector targets stay
+  contone): euclidean dots on a 45° lattice, black dots to 50% then
+  white corner holes, coverage tracking darkness (a naive 1−r²
+  threshold overshoots midtones — caught by the coverage test). The
+  `setscreen` *operator* (per-color screens, spot procedures) stays
+  future work if a found file ever needs it. [sonnet]
 - **Gallery II**: new pieces exploiting Stage 5/6 features (text art,
   clipped compositions, image-based collage). Any model with taste — the
   constraint-driven format in `gallery/README.md` is the brief. [any]

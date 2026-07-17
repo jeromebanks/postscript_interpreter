@@ -60,12 +60,14 @@ strokes, wandering baselines, and varying pen pressure. No two
 letters ever match, every page is reproducible, and the same file
 runs in Ghostscript.
 
-**Stage 10 (the LaserWriter experience)** in progress: `--spool DIR`
+**Stage 10 (the LaserWriter experience) complete**: `--spool DIR`
 turns the window into the printer in the corner of the lab — it
 idles, watches a directory, and renders each `.ps`/`.eps` that lands
-there, page by page, each job in a fresh interpreter. Gallery II
-opened with *Hundred Lines*, the Stage 12 handwriting font writing
-punishment lines on a chalkboard.
+there, page by page, each job in a fresh interpreter. `--halftone`
+screens the raster like a mono laser printer's RIP: classic
+euclidean dots on a 45° lattice, coverage tracking darkness, for the
+window and `--png`. Gallery II opened with *Hundred Lines*, the
+Stage 12 handwriting font writing punishment lines on a chalkboard.
 
 **Stage 5 (run found PostScript) complete.** Beyond drawing live, pscat
 now executes the idioms real-world `.ps` files depend on: arrays and
@@ -111,6 +113,8 @@ cargo run -- --png out.png file.ps        # headless render to PNG
 cargo run -- --page 500x500 file.ps       # canvas size (default 612x792)
 cargo run -- --spool jobs/                # act like a lab printer: render
                                           # each .ps/.eps dropped into jobs/
+cargo run -- --halftone file.ps           # classic 45° halftone dots, like a
+                                          # mono laser printer (window/PNG)
 cargo run                                 # interactive REPL
 cargo run -- -e '3 4 add ='               # evaluate a snippet
 cargo test                                # language + pixel-level render tests

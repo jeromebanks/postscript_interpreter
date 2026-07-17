@@ -1,15 +1,15 @@
 # HANDOFF.md — state of the interpreter and how to continue
 
 Written 2026-07-13 at the completion of Stages 6–7; last updated
-2026-07-17 with Stages 8, 9, 11 (perf parity), and 12 (handwriting)
-complete. Written for whichever model
+2026-07-17 with Stages 8, 9, 10 (spool mode, halftone, Gallery II's
+Hundred Lines), 11 (perf parity), and 12 (handwriting) complete. Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
 `NOTES.md` has per-stage histories; this file is the *orientation*.
 
 ## Where things stand
 
-**248 tests across 24 suites, clippy clean.** Stages 1–9, 11, and 12
+**259 tests across 24 suites, clippy clean.** Stages 1–12
 are done
 (Stage 8's one open sliver: the `--interactive` windowed REPL,
 design note in NOTES.md). Stage 8 delivered: **save/restore** as
@@ -101,9 +101,11 @@ renders eight examples in both and compares block-downsampled output).
 
 ## Next work, in recommended order
 
-1. **Stage 10** (stretch/fun, per ROADMAP): spool mode, halftone
-   screens, Gallery II pieces — the /HandScript handwriting font
-   (examples/handwriting.ps) is ready-made material for one.
+1. **More Gallery II pieces** — the slot stays open by design;
+   `gallery/README.md` is the brief, and Hundred Lines
+   (`gallery/hundred_lines.ps`) shows the /HandScript font reused.
+   Stage 10's spool mode (`--spool`, `src/spool.rs`) and halftone
+   (`--halftone`, `src/halftone.rs`) landed 2026-07-17.
 2. Leftovers when they itch: `--interactive` (design note in
    NOTES.md), the remaining fib/fern machine-loop gap vs gs (Stage
    11 findings in NOTES.md — the untaken levers are representation
