@@ -6,6 +6,10 @@ originals date to Stage 3 — no `rand`, no `sethsbcolor`, no arrays — so
 they carry their own linear-congruential random generator and HSB→RGB
 converter as PostScript procedures. Ring of Type is the Stage 6 piece
 and leans on what that stage added: fonts, `stringwidth`, `charpath`.
+Hundred Lines opens Gallery II (Stage 10): it reuses the Stage 12
+/HandScript dynamic handwriting font wholesale, pulling two knobs the
+letter demo left alone — the jitter amplitude and pen width are
+overridden per line through the font's scratch dict.
 
 | Piece | File | Technique |
 |---|---|---|
@@ -16,6 +20,7 @@ and leans on what that stage added: fonts, `stringwidth`, `charpath`.
 | Silk Waves | `silk_waves.ps` | 66 threads displaced by two interfering sine fields |
 | Frost Mandala | `frost_mandala.ps` | Six-fold circle recursion, 11° twist per generation (1,555+ circles) |
 | Ring of Type | `ring_of_type.ps` | One sentence circling 11 shrinking rings, set glyph by glyph; charpath ampersand |
+| Hundred Lines | `hundred_lines.ps` | The Stage 12 /HandScript dynamic font writing punishment lines on a chalkboard — same sentence nine times, no two letters alike, jitter climbing line by line |
 
 ## Viewing the gallery
 

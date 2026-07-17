@@ -131,6 +131,7 @@ tree or fern grows.
 | `silk_waves.ps` | 66 threads displaced by two interfering sine fields |
 | `frost_mandala.ps` | Six-fold circle recursion, 11° twist per generation — 1,555+ circles |
 | `ring_of_type.ps` | (Stage 6) one sentence circling eleven shrinking rings, set glyph by glyph around a charpath ampersand |
+| `hundred_lines.ps` | (Stage 10) the Stage 12 /HandScript dynamic font writing punishment lines on a chalkboard — same sentence nine times, no two letters alike |
 
 View them one at a time:
 
@@ -148,6 +149,9 @@ View them one at a time:
   <img src="gallery/renders/ember_tree.png" width="30%" alt="Ember Tree"/>
   <img src="gallery/renders/fern.png" width="30%" alt="Fern, After Barnsley"/>
   <img src="gallery/renders/silk_waves.png" width="30%" alt="Silk Waves"/>
+</p>
+<p>
+  <img src="gallery/renders/hundred_lines.png" width="30%" alt="Hundred Lines"/>
 </p>
 
 Details, page sizes, and re-render instructions live in

@@ -3,6 +3,30 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 10 — Gallery II opens: Hundred Lines (2026-07-17)
+
+`gallery/hundred_lines.ps` — the first Gallery II piece, and the
+showcase demo for the Stage 12 handwriting font: a chalkboard on
+which the same sentence ("i will not cache my glyphs.") is written
+nine times in /HandScript. Because every glyph is generated fresh by
+BuildChar, no two lines — no two letters — render alike; the ninth
+line is cut off mid-word by the bell, the chalk skidding away.
+
+Two knobs the letter demo didn't pull, both exercised here: the
+jitter amplitude `J` climbs line by line (12 → 40 — the writer gets
+bored), and the pen width `W` (a small adaptation to the copied
+font: `setlinewidth` reads `/W` instead of a literal) picks a
+chalkier stroke. Both are overridden *from outside the font* by
+writing into its scratch `work` dict, which stays writable after
+definefont even in gs, where the font dict itself is locked — the
+same scratch-dict trick Stage 12 pinned, used in the other
+direction. Verified in both interpreters: gs runs the same file and
+writes the board in its own hand (its `rand` stream differs, by
+design). Still is 2× supersampled like the rest; piece is seeded
+(`1985 srand`), so pscat's board is reproducible run to run.
+
+Remaining Stage 10 items (spool mode, halftone screens) still open.
+
 ## Stage 12 — dynamic handwriting (2026-07-17)
 
 `examples/handwriting.ps`: the /HandScript Type 3 font. Letterforms

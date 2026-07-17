@@ -221,6 +221,10 @@ rasterization of our own output.
 - **Gallery II**: new pieces exploiting Stage 5/6 features (text art,
   clipped compositions, image-based collage). Any model with taste — the
   constraint-driven format in `gallery/README.md` is the brief. [any]
+  - ✅ *Hundred Lines* (2026-07-17) — `gallery/hundred_lines.ps`, the
+    /HandScript chalkboard: the Stage 12 font writing punishment
+    lines, jitter and pen width overridden per line through the
+    font's scratch dict. More pieces welcome; the slot stays open.
 
 ## Stage 11 — Performance parity with Ghostscript
 
