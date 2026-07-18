@@ -1,18 +1,19 @@
 # HANDOFF.md — state of the interpreter and how to continue
 
 Written 2026-07-13 at the completion of Stages 6–7; last updated
-2026-07-18 with Stages 8, 9, 10 (spool mode, halftone, Gallery II's
-Hundred Lines), 11 (perf parity), 12 (handwriting), and 13 (the
-handwrite string→PNG tool: `scripts/handwrite.sh` over the reusable
-`lib/handscript.ps`) complete, plus `--interactive` (the windowed
-REPL, Stage 8's last sliver). Written for whichever model
+2026-07-18. Stages 8–15 are all complete: spool/halftone/Gallery II
+(10), perf parity (11), handwriting (12), the handwrite tool (13),
+agent integration — skill, `pscat-mcp`, `pscat -` (14), and the
+font library `lib/fonts/` — /Neon, /Marquee, /Constellation,
+/Lapidary + specimen (15) — plus `--interactive` (the windowed
+REPL, Stage 8's last sliver) and the Level 2 rect operators. Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
 `NOTES.md` has per-stage histories; this file is the *orientation*.
 
 ## Where things stand
 
-**272 tests across 25 suites, clippy clean.** Stages 1–13 are done,
+**286 tests across 29 suites, clippy clean.** Stages 1–13 are done,
 including Stage 8's last sliver, the `--interactive` windowed REPL
 (`-i`; stdin reader thread → `EventLoopProxy` user events → chunks
 run on the frame budget; line accumulation shared with the terminal
@@ -108,8 +109,8 @@ renders eight examples in both and compares block-downsampled output).
 1. **More Gallery II pieces** — the slot stays open by design;
    `gallery/README.md` is the brief, and Hundred Lines
    (`gallery/hundred_lines.ps`) shows the /HandScript font reused.
-   Stage 10's spool mode (`--spool`, `src/spool.rs`) and halftone
-   (`--halftone`, `src/halftone.rs`) landed 2026-07-17.
+   The Stage 15 faces (`lib/fonts/`) are ready-made material — a
+   neon nocturne, a star-chart page, a carved inscription.
 2. Leftovers when they itch: the remaining fib/fern machine-loop gap
    vs gs (Stage 11 findings in NOTES.md — the untaken levers are
    representation changes), errordict handlers, error-time operand

@@ -1,0 +1,250 @@
+%!PS-Adobe-3.0
+%%Title: marquee.ps — /Marquee, theater-sign bulbs
+%%Creator: pscat — Stage 15, the font library
+%%EndComments
+
+% /Marquee — letters as a theater marquee: a dark sign channel with
+% warm incandescent bulbs spaced along every stroke, each bulb a
+% stack of halo disks around a hot core with an off-center specular
+% glint. About one bulb in sixteen has burnt out (rand-driven, so
+% srand makes a page reproducible — and no two signs age alike).
+% Draws nothing on load; runs unchanged in Ghostscript. Best on a
+% dark ground.
+%
+%   7 srand
+%   /Marquee findfont 90 scalefont setfont
+%   0.05 0.03 0.05 setrgbcolor clippath fill
+%   60 300 moveto (NOW SHOWING) show
+%
+% Dials, read dynamically from the scratch dict (the handscript.ps
+% trick — writable even after definefont locks the font dict):
+%   MarqueeDict /work get /Burnout 0 put    % percent dead bulbs
+%   MarqueeDict /work get /Spacing 90 put   % bulb pitch, glyph units
+
+/MarqueeDict 26 dict def
+MarqueeDict begin
+
+  /FontType 3 def
+  /FontMatrix [0.001 0 0 0.001 0 0] def
+  /FontBBox [-80 -280 790 800] def
+
+  % --- the skeletons: /name [advance [stroke] [stroke] ...] --------
+  % Shared across the Stage 15 library (each file carries its own
+  % copy — self-containment beats deduplication, per handscript.ps).
+  % Grid: baseline 0, cap height 700; doubled points pin sharp
+  % corners through the smoothing.
+  /CharDefs 50 dict def
+  CharDefs begin
+    /.notdef [340] def
+    /space   [340] def
+    /A [560 [70 0 280 700 280 700 490 0] [160 230 400 230]] def
+    /B [500 [90 0 90 700]
+            [90 700 280 700 370 640 390 540 360 440 280 400 90 400]
+            [90 400 300 400 400 330 420 210 390 80 290 0 90 0]] def
+    /C [520 [450 560 380 660 260 700 150 650 90 520 70 350 90 180 150 60 260 10 380 50 450 150]] def
+    /D [540 [90 0 90 700]
+            [90 700 250 700 380 640 450 500 470 350 450 200 380 60 250 0 90 0]] def
+    /E [460 [390 700 90 700 90 700 90 0 90 0 390 0] [90 370 330 370]] def
+    /F [440 [390 700 90 700 90 700 90 0] [90 380 320 380]] def
+    /G [560 [470 570 390 670 270 700 150 650 90 520 70 350 90 180 150 60 270 10 390 40 470 120 470 300 470 300 310 300]] def
+    /H [560 [90 0 90 700] [470 0 470 700] [90 360 470 360]] def
+    /I [220 [110 0 110 700]] def
+    /J [420 [330 700 330 140 280 40 180 10 90 60 60 160]] def
+    /K [520 [90 0 90 700] [440 700 110 330] [210 430 460 0]] def
+    /L [440 [90 700 90 0 90 0 390 0]] def
+    /M [660 [80 0 80 700 80 700 330 220 330 220 580 700 580 700 580 0]] def
+    /N [580 [90 0 90 700 90 700 490 0 490 0 490 700]] def
+    /O [580 [290 700 160 650 90 520 70 350 90 180 160 50 290 10 420 50 490 180 510 350 490 520 420 650 290 700]] def
+    /P [480 [90 0 90 700]
+            [90 700 280 700 380 640 410 520 380 400 280 340 90 340]] def
+    /Q [580 [290 700 160 650 90 520 70 350 90 180 160 50 290 10 420 50 490 180 510 350 490 520 420 650 290 700]
+            [350 180 520 -60]] def
+    /R [500 [90 0 90 700]
+            [90 700 280 700 380 640 410 520 380 400 280 340 90 340]
+            [180 340 430 0]] def
+    /S [480 [400 590 330 680 210 700 110 640 90 540 130 440 240 380 350 320 400 220 370 100 260 20 130 40 60 130]] def
+    /T [480 [60 700 420 700] [240 700 240 0]] def
+    /U [560 [90 700 90 200 130 70 280 10 430 70 470 200 470 700]] def
+    /V [540 [60 700 270 0 270 0 480 700]] def
+    /W [740 [60 700 190 0 190 0 370 520 370 520 550 0 550 0 680 700]] def
+    /X [520 [70 700 450 0] [450 700 70 0]] def
+    /Y [520 [60 700 260 330 260 330 460 700] [260 330 260 0]] def
+    /Z [500 [70 700 430 700 430 700 70 0 70 0 430 0]] def
+    /zero  [520 [260 700 150 640 100 480 90 350 100 220 150 60 260 10 370 60 420 220 430 350 420 480 370 640 260 700]] def
+    /one   [320 [90 560 200 700 200 700 200 0]] def
+    /two   [480 [90 560 140 670 260 700 370 650 400 540 360 420 90 60 90 0 90 0 410 0]] def
+    /three [480 [90 620 180 700 300 690 370 600 360 480 260 410 360 340 400 220 360 90 250 10 130 30 70 120]] def
+    /four  [500 [330 0 330 700 330 700 70 180 70 180 450 180]] def
+    /five  [480 [370 700 120 700 120 700 90 400 220 460 340 420 400 290 380 130 260 20 120 40 70 120]] def
+    /six   [500 [390 650 290 700 160 630 100 470 80 300 100 140 190 20 300 10 390 80 420 210 370 330 250 360 140 310 90 220]] def
+    /seven [460 [70 700 410 700 410 700 180 0]] def
+    /eight [500 [250 700 140 640 120 520 190 410 310 390 400 300 420 170 350 40 230 10 120 60 90 180 140 300 250 390 340 470 370 570 320 670 250 700]] def
+    /nine  [500 [410 480 360 570 260 610 150 560 110 450 140 340 250 300 360 340 410 480 400 250 340 80 220 0]] def
+    /period     [240 [120 34 120 14]] def
+    /comma      [240 [130 40 90 -110]] def
+    /hyphen     [360 [70 280 290 280]] def
+    /exclam     [260 [130 700 130 190] [130 38 130 16]] def
+    /question   [460 [80 570 140 680 260 700 370 630 390 510 330 410 240 350 230 230] [230 42 230 18]] def
+    /quoteright [200 [110 700 90 560]] def
+  end
+
+  /Encoding 256 array def
+  0 1 255 { Encoding exch /.notdef put } for
+  Encoding 32 /space put
+  /capnames [/A /B /C /D /E /F /G /H /I /J /K /L /M
+             /N /O /P /Q /R /S /T /U /V /W /X /Y /Z] def
+  0 1 25 {
+    /i exch def
+    Encoding i 65 add capnames i get put   % capitals...
+    Encoding i 97 add capnames i get put   % ...and lowercase, same glyphs
+  } for
+  [/zero /one /two /three /four /five /six /seven /eight /nine]
+  0 1 9 { /d exch def dup d get Encoding d 48 add 3 -1 roll put } for pop
+  Encoding 46 /period put
+  Encoding 44 /comma put
+  Encoding 45 /hyphen put
+  Encoding 33 /exclam put
+  Encoding 63 /question put
+  Encoding 39 /quoteright put
+
+  % --- the sign ------------------------------------------------------
+  /tracepath {
+    /p exch def
+    /n p length 2 idiv def
+    p 0 get p 1 get moveto
+    n 2 eq {
+      p 2 get p 3 get lineto
+    } {
+      /cx p 0 get def
+      /cy p 1 get def
+      1 1 n 2 sub {
+        /i exch def
+        /px p i 2 mul get def
+        /py p i 2 mul 1 add get def
+        i n 2 sub eq {
+          /ex p n 1 sub 2 mul get def
+          /ey p n 1 sub 2 mul 1 add get def
+        } {
+          /ex px p i 1 add 2 mul get add 2 div def
+          /ey py p i 1 add 2 mul 1 add get add 2 div def
+        } ifelse
+        cx px cx sub 2 mul 3 div add
+        cy py cy sub 2 mul 3 div add
+        ex px ex sub 2 mul 3 div add
+        ey py ey sub 2 mul 3 div add
+        ex ey curveto
+        /cx ex def
+        /cy ey def
+      } for
+    } ifelse
+  } def
+
+  /Spacing 118 def
+  /Burnout 6 def
+
+  % n chance -> 0..n-1, drawn from rand's high bits: successive LCG
+  % draws correlate in the low bits, and `rand 100 mod` was killing
+  % whole runs of adjacent bulbs at once (found the hard way).
+  /chance { rand 8192 idiv exch mod } def
+
+  % [x y x y ...] walkstroke -  call `x y bulb` at Spacing intervals
+  % along the raw polyline (bulbs sit on the sign, not the smoothed
+  % tube — real marquees are built from straight runs too). Doubled
+  % corner points make zero-length segments; they're skipped. The
+  % terminal gets a bulb if the pitch left it dark.
+  /walkstroke {
+    /p exch def
+    /n p length 2 idiv def
+    /rem 0 def
+    /lx p 0 get def
+    /ly p 1 get def
+    0 1 n 2 sub {
+      /i exch def
+      /x0 p i 2 mul get def
+      /y0 p i 2 mul 1 add get def
+      /x1 p i 1 add 2 mul get def
+      /y1 p i 1 add 2 mul 1 add get def
+      /dx x1 x0 sub def
+      /dy y1 y0 sub def
+      /len dx dup mul dy dup mul add sqrt def
+      len 0.001 gt {
+        /t rem def
+        {
+          t len gt { exit } if
+          /lx x0 dx t mul len div add def
+          /ly y0 dy t mul len div add def
+          lx ly bulb
+          /t t Spacing add def
+        } loop
+        /rem t len sub def
+      } if
+    } for
+    /ex p n 1 sub 2 mul get def
+    /ey p n 1 sub 2 mul 1 add get def
+    ex lx sub dup mul ey ly sub dup mul add sqrt Spacing 0.45 mul gt {
+      ex ey bulb
+    } if
+  } def
+
+  % x y bulb -  one incandescent bulb: halo disks, hot core, glint —
+  % or, Burnout percent of the time, dead glass.
+  /bulb {
+    /by exch def
+    /bx exch def
+    100 chance Burnout lt {
+      0.16 0.13 0.11 setrgbcolor
+      newpath bx by 26 0 360 arc fill
+      0.30 0.25 0.20 setrgbcolor
+      3 setlinewidth
+      newpath bx by 26 0 360 arc stroke
+    } {
+      0.42 0.22 0.07 setrgbcolor
+      newpath bx by 62 0 360 arc fill
+      0.85 0.52 0.14 setrgbcolor
+      newpath bx by 44 0 360 arc fill
+      1 0.78 0.32 setrgbcolor
+      newpath bx by 30 0 360 arc fill
+      1 0.94 0.72 setrgbcolor
+      newpath bx by 17 0 360 arc fill
+      1 1 0.97 setrgbcolor
+      newpath bx 5 sub by 6 add 7 0 360 arc fill
+    } ifelse
+  } def
+
+  % BuildChar's scratch space (real interpreters lock the font dict at
+  % definefont; every working def goes here).
+  /work 26 dict def
+
+  /BuildChar {
+    exch begin
+      work begin
+      Encoding exch get
+      CharDefs exch 2 copy known not { pop pop CharDefs /.notdef } if get
+      /g exch def
+      g 0 get 0 setcharwidth
+      % the sign channel behind the bulbs
+      0.13 0.10 0.09 setrgbcolor
+      118 setlinewidth
+      1 setlinecap
+      1 setlinejoin
+      1 1 g length 1 sub {
+        g exch get tracepath stroke
+      } for
+      % a dim channel rim so unlit stretches still read
+      0.22 0.17 0.13 setrgbcolor
+      94 setlinewidth
+      1 1 g length 1 sub {
+        g exch get tracepath stroke
+      } for
+      % the bulbs
+      1 1 g length 1 sub {
+        g exch get walkstroke
+      } for
+      end
+    end
+  } def
+
+end
+
+/Marquee MarqueeDict definefont pop
+%%EOF

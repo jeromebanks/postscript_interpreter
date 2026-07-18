@@ -1,0 +1,65 @@
+%!PS-Adobe-3.0
+%%Title: font_library.ps — the Stage 15 type specimen
+%%Creator: pscat
+%%EndComments
+
+% One poster, four materials. Each band shows one face from
+% lib/fonts/ in its natural habitat: neon against night, marquee
+% bulbs on a lobby wall, a constellation chart on the winter sky,
+% and chiseled capitals on stone. The library files are inlined by
+% the build (this file `run`s them relative to the repo root), so:
+%
+%   pscat --png specimen.png examples/font_library.ps
+%   gs -dNOPAUSE -dBATCH -sDEVICE=png16m -g612x792 -o s.png \
+%      examples/font_library.ps       (from the repo root, either way)
+
+(lib/fonts/neon.ps) run
+(lib/fonts/marquee.ps) run
+(lib/fonts/constellation.ps) run
+(lib/fonts/lapidary.ps) run
+
+11 srand
+
+% x y size (text) /Font showin -
+/showin {
+    findfont 3 -1 roll scalefont setfont
+    3 1 roll moveto show
+} def
+
+% --- band 4: NEON, 594..792 -----------------------------------------
+gsave
+0 594 moveto 612 594 lineto 612 792 lineto 0 792 lineto closepath clip
+0.03 0.03 0.06 setrgbcolor clippath fill
+36 682 96 (NEON) /Neon showin
+NeonDict /work get /Tube [0.98 0.4 0.6] put
+36 622 30 (BENT GLASS AND NOBLE GAS) /Neon showin
+NeonDict /work get /Tube [0.1 0.9 0.85] put
+grestore
+
+% --- band 3: MARQUEE, 396..594 --------------------------------------
+gsave
+0 396 moveto 612 396 lineto 612 594 lineto 0 594 lineto closepath clip
+0.10 0.04 0.05 setrgbcolor clippath fill
+36 488 74 (MARQUEE) /Marquee showin
+36 428 26 (TWO SHOWS NIGHTLY) /Marquee showin
+grestore
+
+% --- band 2: CONSTELLATION, 198..396 --------------------------------
+gsave
+0 198 moveto 612 198 lineto 612 396 lineto 0 396 lineto closepath clip
+0.012 0.02 0.07 setrgbcolor clippath fill
+36 296 64 (CONSTELLATION) /Constellation showin
+36 236 26 (STARS IN ANCIENT ORDER) /Constellation showin
+grestore
+
+% --- band 1: LAPIDARY, 0..198 ---------------------------------------
+gsave
+0 0 moveto 612 0 lineto 612 198 lineto 0 198 lineto closepath clip
+0.93 0.91 0.87 setrgbcolor clippath fill
+36 92 84 (LAPIDARY) /Lapidary showin
+LapidaryDict /work get /Stone [0.66 0.54 0.44] put
+36 34 26 (CVT IN STONE) /Lapidary showin
+grestore
+
+showpage
+%%EOF

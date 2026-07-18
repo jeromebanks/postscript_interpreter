@@ -3,6 +3,38 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 15 — the font library (2026-07-18)
+
+Four original display faces in `lib/fonts/`, each a self-contained
+Type 3 file on the handscript.ps doctrine (defines the font, draws
+nothing, runs unchanged in gs, embeddable wholesale): **/Neon**
+(five widening stroke passes, dim halo to overdriven core — glow as
+pure overdraw, no alpha), **/Marquee** (dark sign channel, bulbs
+walked along the raw polylines at fixed arc-length pitch, halo
+disks + glint, rand burnout), **/Constellation** (stars of
+rand-drawn magnitude at the skeleton anchors, hairline asterism
+chords, field-star scatter), **/Lapidary** (four chisel passes —
+shadow, face, incision, arris highlight; square caps, mitered
+joins, deliberately rand-free). One shared capital skeleton set
+(A–Z = a–z, digits, `.,-'!?`), duplicated per file. Specimen poster
+`examples/font_library.ps`; render `lib/fonts/specimen.png`;
+`tests/fontlib.rs` pins load/ink, case mapping, seeded
+reproducibility, all four bands of the specimen, and gs acceptance.
+
+Two craft findings worth keeping:
+- **Doubled skeleton points pin sharp corners.** The midpoint-
+  quadratic smoothing rounds every interior vertex; duplicating a
+  vertex collapses the midpoints onto it, so the curve passes
+  through with a true corner. A/M/N/V/W/Z etc. read as capitals only
+  after this fix — and it costs nothing in the dot/star renderers,
+  which skip zero-length segments.
+- **rand's low bits correlate across successive draws.** `rand 100
+  mod` for the 6% bulb burnout killed whole letter-length runs of
+  adjacent bulbs (letter-shaped "ghost" patches of bare channel,
+  reproduced identically in gs, whose LCG shares the trait). Drawing
+  from the high bits (`rand 8192 idiv`) scattered the failures into
+  believable ones. Both rand-driven faces use a `chance` helper now.
+
 ## Stage 14 — pscat for agents (2026-07-18)
 
 Two integration surfaces, because agents differ. Docs-readers:

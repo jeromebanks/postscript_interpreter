@@ -375,6 +375,15 @@ agents that call tools.
 
 ## Stage 15 — the font library: artistic Type 3 faces
 
+**✅ COMPLETE (2026-07-18)** — all four faces shipped
+(`lib/fonts/{neon,marquee,constellation,lapidary}.ps`), plus the
+four-band specimen (`examples/font_library.ps`, render at
+`lib/fonts/specimen.png`) and `tests/fontlib.rs` (loads/inks/case
+mapping/seeded reproducibility/gs accepts). NOTES.md records the two
+craft findings: doubled skeleton points pin sharp corners through
+the midpoint smoothing, and rand's low bits correlate across draws
+(burnt-out bulbs came in runs until the draw moved to high bits).
+
 Goal: `lib/fonts/` — a library of original display fonts, each a
 self-contained pure-PostScript file (the `lib/handscript.ps`
 doctrine: loading defines the font and draws nothing, runs unchanged

@@ -155,6 +155,33 @@ The library draws nothing on load and runs unchanged in
 Ghostscript, so other applications can embed the file wholesale;
 the options-dict schema is documented in its header.
 
+## The font library
+
+`lib/fonts/` — original display faces, each one a self-contained
+pure-PostScript file that defines a Type 3 font and draws nothing on
+load (the `lib/handscript.ps` doctrine: embeddable wholesale, runs
+unchanged in Ghostscript). Because Type 3 glyphs are programs, the
+letterforms do things outline fonts can't:
+
+| Face | Material |
+|---|---|
+| `/Neon` | Bent glass tube — the glow is five widening strokes of overdraw, no alpha anywhere |
+| `/Marquee` | Theater-sign bulbs along every stroke, halos, glints, and the occasional burnt-out bulb (seeded rand) |
+| `/Constellation` | Letters as star charts: magnitudes and tints rand-drawn, hairline asterism lines, field stars |
+| `/Lapidary` | Chiseled capitals: shadow, raised face, dark incision, and a hairline of sunlight on the arris |
+
+All four share one capital skeleton set (both cases map to the same
+capitals; digits and `.,-'!?` included) and take dials through their
+scratch dicts — retube `/Neon` in pink, dial `/Marquee`'s burnout
+rate, warm up `/Lapidary`'s stone. `examples/font_library.ps` is the
+four-band specimen poster:
+
+<p><img src="lib/fonts/specimen.png" width="60%" alt="The pscat font library specimen"/></p>
+
+```sh
+cargo run --release -- --png poster.png examples/font_library.ps
+```
+
 ## For agents
 
 pscat is easy to drive from a coding agent — Claude Code, Codex,
