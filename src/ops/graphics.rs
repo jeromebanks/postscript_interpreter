@@ -50,6 +50,10 @@ pub fn install(dict: &mut Dict) {
     op(dict, "currentrgbcolor", currentrgbcolor);
     op(dict, "currentgray", currentgray);
     op(dict, "currentlinewidth", currentlinewidth);
+    // Rectangle conveniences (Level 2)
+    op(dict, "rectfill", rectfill);
+    op(dict, "rectstroke", rectstroke);
+    op(dict, "rectclip", rectclip);
     // Clipping
     op(dict, "clip", clip);
     op(dict, "eoclip", eoclip);
@@ -323,6 +327,114 @@ fn currentgray(it: &mut Interp) -> Result<(), PsError> {
 fn currentlinewidth(it: &mut Interp) -> Result<(), PsError> {
     let w = it.gfx.line_width();
     it.push(Object::real(w));
+    Ok(())
+}
+
+/// The rect operand forms shared by rectfill/rectstroke/rectclip:
+/// `x y width height`, or a flat array of 4n numbers (each quad one
+/// rectangle; empty allowed, other lengths typecheck — gs-pinned).
+/// The PLRM's encoded-number-string form is not supported; a string
+/// typechecks, the same answer gs gives a plain string.
+fn pop_rects(it: &mut Interp) -> Result<Vec<[f64; 4]>, PsError> {
+    let top = it.pop()?;
+    match &top.value {
+        Value::Array(a) => {
+            if a.len() % 4 != 0 {
+                return Err(PsError::Typecheck);
+            }
+            let mut rects = Vec::with_capacity(a.len() / 4);
+            for q in 0..a.len() / 4 {
+                let mut r = [0.0; 4];
+                for (k, slot) in r.iter_mut().enumerate() {
+                    *slot = match a.get(q * 4 + k).as_ref().map(|o| &o.value) {
+                        Some(Value::Integer(n)) => *n as f64,
+                        Some(Value::Real(x)) => *x,
+                        _ => return Err(PsError::Typecheck),
+                    };
+                }
+                rects.push(r);
+            }
+            Ok(rects)
+        }
+        Value::Integer(n) => {
+            let h = *n as f64;
+            pop_rect_under_height(it, h)
+        }
+        Value::Real(h) => {
+            let h = *h;
+            pop_rect_under_height(it, h)
+        }
+        _ => Err(PsError::Typecheck),
+    }
+}
+
+fn pop_rect_under_height(it: &mut Interp, h: f64) -> Result<Vec<[f64; 4]>, PsError> {
+    let w = it.pop_f64()?;
+    let (x, y) = pop_xy(it)?;
+    Ok(vec![[x, y, w, h]])
+}
+
+fn append_rects(it: &mut Interp, rects: &[[f64; 4]]) -> Result<(), PsError> {
+    for &[x, y, w, h] in rects {
+        it.gfx.moveto(x, y);
+        it.gfx.lineto(x + w, y)?;
+        it.gfx.lineto(x + w, y + h)?;
+        it.gfx.lineto(x, y + h)?;
+        it.gfx.closepath();
+    }
+    Ok(())
+}
+
+/// `x y w h rectfill` / `numarray rectfill` — paint inside an implicit
+/// gsave: current path and graphics state untouched (gs-pinned).
+fn rectfill(it: &mut Interp) -> Result<(), PsError> {
+    let rects = pop_rects(it)?;
+    it.gfx.gsave();
+    it.gfx.newpath();
+    let built = append_rects(it, &rects);
+    if built.is_ok() {
+        it.gfx.fill(FillRule::Winding);
+    }
+    it.gfx.grestore();
+    built
+}
+
+/// `x y w h rectstroke` / `numarray rectstroke`, optionally with a
+/// matrix on top. gs pin: a 6-element array in top position is always
+/// the matrix, never a rect list; any other array is rects.
+fn rectstroke(it: &mut Interp) -> Result<(), PsError> {
+    let top = it.pop()?;
+    let matrix = if matches!(&top.value, Value::Array(a) if a.len() == 6) {
+        Some(super::matrix::read_matrix(&top)?)
+    } else {
+        it.push(top);
+        None
+    };
+    let rects = pop_rects(it)?;
+    it.gfx.gsave();
+    it.gfx.newpath();
+    let built = append_rects(it, &rects);
+    if built.is_ok() {
+        // The matrix concats *after* the path is built: it shapes the
+        // pen, not the rectangles (the PLRM's gsave…concat…stroke form).
+        if let Some(m) = matrix {
+            it.gfx.concat_ctm(m);
+        }
+        it.gfx.stroke();
+    }
+    it.gfx.grestore();
+    built
+}
+
+/// `x y w h rectclip` / `numarray rectclip` — intersect the clip and
+/// leave the current path empty (gs-pinned; an empty rect list clips
+/// everything away, also pinned).
+fn rectclip(it: &mut Interp) -> Result<(), PsError> {
+    let rects = pop_rects(it)?;
+    it.gfx.newpath();
+    append_rects(it, &rects)?;
+    it.gfx.clip(FillRule::Winding)?;
+    it.gfx.newpath();
     Ok(())
 }
 

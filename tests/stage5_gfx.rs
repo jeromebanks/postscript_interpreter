@@ -167,3 +167,78 @@ fn pathbbox_and_clippath() {
 fn currentlinewidth_reports() {
     assert_eq!(eval("3 setlinewidth currentlinewidth"), ["3.0"]);
 }
+
+// --- the Level 2 rectangle conveniences (gs-pinned semantics) --------
+
+#[test]
+fn rectfill_paints_and_preserves_state() {
+    let it = render("20 20 60 60 rectfill");
+    assert_eq!(pixel(&it, 50, 50), BLACK);
+    assert_eq!(pixel(&it, 10, 10), WHITE);
+    // Implicit gsave: the current path (and point) survive.
+    assert_eq!(
+        eval("newpath 5 6 moveto 20 20 10 10 rectfill currentpoint"),
+        ["5.0", "6.0"]
+    );
+    // Negative width/height: the rect is corner-defined.
+    let it = render("70 70 -40 -40 rectfill");
+    assert_eq!(pixel(&it, 50, 50), BLACK);
+}
+
+#[test]
+fn rect_array_forms() {
+    // Two quads in one flat array; empty array is a no-op.
+    let it = render("[10 10 20 20 60 60 20 20] rectfill");
+    assert_eq!(pixel(&it, 20, 80), BLACK); // device y flips: (20,20) area
+    assert_eq!(pixel(&it, 70, 30), BLACK);
+    assert_eq!(pixel(&it, 50, 50), WHITE); // between them
+    let it = render("[] rectfill");
+    assert_eq!(pixel(&it, 50, 50), WHITE);
+    assert_eq!(eval_err("[1 2 3] rectfill"), PsError::Typecheck);
+    assert_eq!(eval_err("(str) rectfill"), PsError::Typecheck);
+}
+
+#[test]
+fn rectstroke_draws_an_outline() {
+    let it = render("4 setlinewidth 20 20 60 60 rectstroke");
+    assert_eq!(pixel(&it, 20, 50), BLACK, "left edge inked");
+    assert_eq!(pixel(&it, 50, 50), WHITE, "interior open");
+    // Matrix form: a 6-array on top is always the matrix (gs pin) and
+    // shapes the pen, not the rectangles.
+    let it = render("2 setlinewidth 20 20 60 60 [4 0 0 4 0 0] rectstroke");
+    assert_eq!(pixel(&it, 20, 50), BLACK);
+    assert_eq!(pixel(&it, 50, 50), WHITE);
+    // The scaled pen spans 16..24 around the edge at x=20; an unscaled
+    // 2-unit pen would only cover 19..21, leaving x=23 white.
+    assert_eq!(
+        pixel(&it, 23, 50),
+        BLACK,
+        "matrix-scaled pen is 8 units wide"
+    );
+    // ...so a 6-element rect list under a matrix typechecks, as in gs.
+    assert_eq!(
+        eval_err("[1 2 3 4 5 6] [1 0 0 1 0 0] rectstroke"),
+        PsError::Typecheck
+    );
+    // And the state survives, matrix and all.
+    assert_eq!(
+        eval("10 10 5 5 [2 0 0 2 0 0] rectstroke 30 40 transform"),
+        ["30.0", "60.0"]
+    );
+}
+
+#[test]
+fn rectclip_clips_and_clears_the_path() {
+    let it = render(&format!("20 20 60 60 rectclip {FULL_PAGE} fill"));
+    assert_eq!(pixel(&it, 50, 50), BLACK);
+    assert_eq!(pixel(&it, 10, 10), WHITE);
+    // The current path is left empty (gs pin).
+    let mut it = Interp::with_page(100, 100).expect("page");
+    assert_eq!(
+        it.run_str("0 0 moveto 20 20 60 60 rectclip currentpoint"),
+        Err(PsError::NoCurrentPoint)
+    );
+    // An empty rect list clips everything away (gs pin).
+    let it = render(&format!("[] rectclip {FULL_PAGE} fill"));
+    assert_eq!(pixel(&it, 50, 50), WHITE);
+}

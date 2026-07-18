@@ -27,8 +27,25 @@ so `printf '...' | pscat -i` works end to end. `quit`, Ctrl-D, or
 closing the window ends the session. All window modes now share one
 `EventLoop<UserEvent>`; only interactive sends events.
 
-Found immediately by using it: `rectfill` is still undefined — the
-Level 2 rectangle conveniences are now first in the leftovers queue.
+Found immediately by using it: `rectfill` was still undefined — fixed
+the same day, below.
+
+## rectfill / rectstroke / rectclip (2026-07-18)
+
+The Level 2 rectangle conveniences, prompted by `--interactive`'s
+very first session. gs pins (all in `tests/stage5_gfx.rs`): rectfill
+and rectstroke paint inside an implicit gsave — current path, point,
+and graphics state survive; rectclip intersects the clip and leaves
+the current path *empty*; negative width/height are corner-defined;
+the flat-array form takes 4n numbers (empty = no-op for fill/stroke,
+clips-everything-away for rectclip; other lengths typecheck); and
+for rectstroke a 6-element array on top is *always* the matrix
+operand, never a rect list — it concats after the path is built, so
+it shapes the pen, not the rectangles. Not supported: the PLRM's
+encoded-number-string form (a string typechecks, same as gs gives a
+plain string). Known deviation, inherited not new: gs strokes a
+`[3 0 0 1 0 0]`-matrix pen anisotropically; our √|det CTM| width
+approximation draws it uniform (standing gap in ROADMAP.md).
 
 ## Stage 13 — handwrite: string → PNG (2026-07-17)
 

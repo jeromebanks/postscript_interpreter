@@ -12,7 +12,7 @@ touching code. `ROADMAP.md` has the task list with model routing;
 
 ## Where things stand
 
-**268 tests across 25 suites, clippy clean.** Stages 1–13 are done,
+**272 tests across 25 suites, clippy clean.** Stages 1–13 are done,
 including Stage 8's last sliver, the `--interactive` windowed REPL
 (`-i`; stdin reader thread → `EventLoopProxy` user events → chunks
 run on the frame budget; line accumulation shared with the terminal
@@ -110,13 +110,12 @@ renders eight examples in both and compares block-downsampled output).
    (`gallery/hundred_lines.ps`) shows the /HandScript font reused.
    Stage 10's spool mode (`--spool`, `src/spool.rs`) and halftone
    (`--halftone`, `src/halftone.rs`) landed 2026-07-17.
-2. Leftovers when they itch: the Level 2 rectangle conveniences
-   (`rectfill`/`rectstroke`/`rectclip` — the first thing typed into
-   `--interactive` that didn't exist), the remaining fib/fern
-   machine-loop gap vs gs (Stage 11 findings in NOTES.md — the
-   untaken levers are representation changes), errordict handlers,
-   error-time operand restoration, DSC-comment tolerance and more
-   corpus files, CCITTFax.
+2. Leftovers when they itch: the remaining fib/fern machine-loop gap
+   vs gs (Stage 11 findings in NOTES.md — the untaken levers are
+   representation changes), errordict handlers, error-time operand
+   restoration, DSC-comment tolerance and more corpus files,
+   CCITTFax. (`rectfill`/`rectstroke`/`rectclip` landed 2026-07-18,
+   found missing by `--interactive`'s first session.)
 3. Worth knowing before touching export: SVG (`src/svg.rs`) and PDF
    (`src/pdf.rs`) both mirror the paint pipeline at the same seams
    in `Gfx` (fill, stroke, glyph fill, erase, prepare_paint,
