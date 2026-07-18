@@ -3,6 +3,29 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 14 — pscat for agents (2026-07-18)
+
+Two integration surfaces, because agents differ. Docs-readers:
+`.claude/skills/pscat/SKILL.md` (Claude Code loads it as a skill;
+it's plain markdown for everyone else — Codex reaches it via the
+AGENTS.md pointer). Tool-callers: `pscat-mcp`, an MCP stdio server
+(`src/bin/pscat_mcp.rs`) with three tools — `render_postscript`
+(PNG images inline / SVG text / PDF to out_path; partial renders
+returned *with* the error text), `handwrite` (the handwrite.sh
+options), `eval_postscript` (prints back, or error name + operand
+post-mortem).
+
+The one design decision worth recording: the server **shells out to
+the pscat CLI** instead of linking the interpreter. PostScript
+programs write to stdout (`=`, `print`, `pstack`) and stdout *is*
+the JSON-RPC channel — in-process, one `=` would corrupt the
+protocol. Subprocessing also keeps tools in lock-step with the CLI
+and adds crash isolation. serde_json came in for the binary (first
+new dependency since zune-jpeg); hand-rolled base64 (same as
+svg.rs). CLI grew `pscat -` (program from stdin) with the arg parser
+special-casing a bare `-`; `tests/cli.rs` pins the CLI contract,
+`tests/mcp.rs` drives the real server binary over stdio.
+
 ## `--interactive` — the windowed REPL (2026-07-18)
 
 Stage 8 task 6's deferred sliver, built exactly as its design note

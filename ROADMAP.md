@@ -332,6 +332,10 @@ reusable, not buried in the script.
 
 ## Stage 14 — pscat for agents: skill, MCP server, CLI polish
 
+**✅ COMPLETE (2026-07-18)** — all four tasks; NOTES.md has the
+summary (the design decision: MCP shells out to the CLI so
+interpreter stdout can't corrupt the protocol channel).
+
 Goal: any coding agent — Claude Code, Codex, OpenClaw, Hermes — can
 pick up pscat as a *tool*: render PostScript, produce handwritten
 notes, and debug programs, without reading the whole repo first. Two
