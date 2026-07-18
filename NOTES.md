@@ -3,6 +3,33 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## `--interactive` — the windowed REPL (2026-07-18)
+
+Stage 8 task 6's deferred sliver, built exactly as its design note
+planned: `pscat -i` (or `--interactive`) is the terminal REPL and
+the live window at once — type PostScript at the prompt, watch it
+draw. A stdin reader thread ships raw lines into the event loop
+through `winit::EventLoopProxy` user events and never touches
+interpreter state; the loop owns the interpreter (the
+ARCHITECTURE.md threading rule) and runs each complete chunk through
+the existing `begin_source`/`step_n` frame budget, so a pasted
+fractal draws live at `--speed`, not in one frozen gulp.
+
+Mechanics: line accumulation (complete chunk vs `...>` continuation)
+moved from `main.rs` into `src/repl.rs` (`LineBuffer` +
+`source_is_complete`), shared by both REPLs and unit-tested. Chunks
+queue while one runs; errors print via `error_report` and the
+session continues (REPL semantics — `step_n` already clears the
+estack and keeps operand stack + canvas). A file argument runs first
+as a prelude (load `lib/handscript.ps`, then explore by hand). EOF
+sets a drain flag rather than exiting: everything queued still runs,
+so `printf '...' | pscat -i` works end to end. `quit`, Ctrl-D, or
+closing the window ends the session. All window modes now share one
+`EventLoop<UserEvent>`; only interactive sends events.
+
+Found immediately by using it: `rectfill` is still undefined — the
+Level 2 rectangle conveniences are now first in the leftovers queue.
+
 ## Stage 13 — handwrite: string → PNG (2026-07-17)
 
 `./scripts/handwrite.sh "any text"` → a PNG of the text written in

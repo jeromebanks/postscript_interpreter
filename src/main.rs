@@ -2,10 +2,10 @@ use std::env;
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 
-use pscat::lexer::{Lexer, Token};
+use pscat::repl::LineBuffer;
 use pscat::spool::Watcher;
-use pscat::window::{WindowOptions, run_spool, run_windowed};
-use pscat::{Interp, PsError, gfx};
+use pscat::window::{WindowOptions, run_interactive, run_spool, run_windowed};
+use pscat::{Interp, gfx};
 
 struct Options {
     file: Option<String>,
@@ -26,6 +26,9 @@ struct Options {
     spool: Option<String>,
     /// Screen raster output like a mono laser printer (Stage 10).
     halftone: bool,
+    /// The windowed REPL: type PostScript, watch it draw (Stage 8's
+    /// last sliver).
+    interactive: bool,
 }
 
 fn main() -> ExitCode {
@@ -42,11 +45,12 @@ fn main() -> ExitCode {
         if options.file.is_some()
             || options.eval.is_some()
             || options.headless
+            || options.interactive
             || options.png.is_some()
             || options.svg.is_some()
             || options.pdf.is_some()
         {
-            eprintln!("pscat: --spool runs alone (no file argument or output flags)");
+            eprintln!("pscat: --spool runs alone (no file argument or other mode flags)");
             return ExitCode::FAILURE;
         }
         let watcher = match Watcher::new(std::path::Path::new(dir)) {
@@ -92,6 +96,40 @@ fn main() -> ExitCode {
             &interp,
             &options,
         );
+    }
+    if options.interactive {
+        if options.headless
+            || options.png.is_some()
+            || options.svg.is_some()
+            || options.pdf.is_some()
+        {
+            eprintln!("pscat: --interactive needs a window (drop the headless/output flags)");
+            return ExitCode::FAILURE;
+        }
+        // A file given alongside --interactive runs as a prelude —
+        // load a library, then explore it by hand.
+        let prelude = match &options.file {
+            None => None,
+            Some(path) => match std::fs::read(path) {
+                Ok(bytes) => Some(bytes),
+                Err(e) => {
+                    eprintln!("pscat: cannot read {path}: {e}");
+                    return ExitCode::FAILURE;
+                }
+            },
+        };
+        let window_options = WindowOptions {
+            title: "pscat — interactive".to_string(),
+            steps_per_frame: options.steps_per_frame,
+            halftone: options.halftone,
+        };
+        return match run_interactive(interp, window_options, prelude) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(msg) => {
+                eprintln!("pscat: {msg}");
+                ExitCode::FAILURE
+            }
+        };
     }
     let Some(path) = &options.file else {
         return repl(&mut interp, &options);
@@ -254,6 +292,7 @@ fn parse_args() -> Result<Options, String> {
         pstack_on_error: false,
         spool: None,
         halftone: false,
+        interactive: false,
     };
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -288,6 +327,7 @@ fn parse_args() -> Result<Options, String> {
                 options.spool = Some(args.next().ok_or("missing directory after --spool")?);
             }
             "--halftone" => options.halftone = true,
+            "-i" | "--interactive" => options.interactive = true,
             "--speed" => {
                 let n = args.next().ok_or("missing value after --speed")?;
                 options.steps_per_frame = n
@@ -327,6 +367,8 @@ fn print_usage() {
     println!("Runs file.ps in a live window (watch it draw), or a REPL if no file.");
     println!();
     println!("  -e, --eval 'code'   evaluate a snippet headlessly and exit");
+    println!("  -i, --interactive   REPL + live window: type PostScript, watch it draw");
+    println!("                      (an optional file.ps runs first as a prelude)");
     println!("      --headless      run the file without a window");
     println!("      --png PATH      write the final canvas as a PNG (implies --headless)");
     println!("      --speed N       interpreter steps per frame (default 100)");
@@ -346,18 +388,18 @@ fn repl(interp: &mut Interp, options: &Options) -> ExitCode {
     );
     println!("Type PostScript; 'quit' or Ctrl-D exits. The prompt shows operand-stack depth.");
     let stdin = io::stdin();
-    let mut pending = String::new();
+    let mut buffer = LineBuffer::new();
     loop {
-        if pending.is_empty() {
+        if buffer.is_mid_input() {
+            // Mid-procedure or mid-string: keep reading.
+            print!("...> ");
+        } else {
             let depth = interp.operand_stack().len();
             if depth == 0 {
                 print!("PS> ");
             } else {
                 print!("PS<{depth}> ");
             }
-        } else {
-            // Mid-procedure or mid-string: keep reading.
-            print!("...> ");
         }
         let _ = io::stdout().flush();
 
@@ -368,11 +410,9 @@ fn repl(interp: &mut Interp, options: &Options) -> ExitCode {
                 return ExitCode::SUCCESS;
             }
             Ok(_) => {
-                pending.push_str(&line);
-                if !source_is_complete(&pending) {
+                let Some(source) = buffer.push_line(&line) else {
                     continue;
-                }
-                let source = std::mem::take(&mut pending);
+                };
                 if let Err(e) = interp.run_str(&source) {
                     eprintln!("{}", interp.error_report(&e));
                     if options.pstack_on_error {
@@ -387,26 +427,6 @@ fn repl(interp: &mut Interp, options: &Options) -> ExitCode {
                 eprintln!("pscat: read error: {e}");
                 return ExitCode::FAILURE;
             }
-        }
-    }
-}
-
-/// Whether `src` can be executed as-is, or is mid-procedure / mid-string
-/// and the REPL should keep reading lines. Errors other than "ran off the
-/// end" count as complete — the interpreter will report them properly.
-fn source_is_complete(src: &str) -> bool {
-    let mut lexer = Lexer::new(src.as_bytes().to_vec());
-    let mut brace_depth = 0i64;
-    loop {
-        match lexer.next_token() {
-            Ok(None) => return brace_depth <= 0,
-            Ok(Some(Token::LBrace)) => brace_depth += 1,
-            Ok(Some(Token::RBrace)) => brace_depth -= 1,
-            Ok(Some(_)) => {}
-            // An unterminated string (or hex string) means "keep typing";
-            // anything else is a real syntax error to surface now.
-            Err(PsError::Syntax(m)) if m.starts_with("unterminated") => return false,
-            Err(_) => return true,
         }
     }
 }

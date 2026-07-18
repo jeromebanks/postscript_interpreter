@@ -115,7 +115,9 @@ cargo run -- --spool jobs/                # act like a lab printer: render
                                           # each .ps/.eps dropped into jobs/
 cargo run -- --halftone file.ps           # classic 45° halftone dots, like a
                                           # mono laser printer (window/PNG)
-cargo run                                 # interactive REPL
+cargo run                                 # terminal REPL (headless canvas)
+cargo run -- -i                           # REPL + live window: watch what you type draw
+cargo run -- -i lib/handscript.ps         # ...with a library preloaded
 cargo run -- -e '3 4 add ='               # evaluate a snippet
 cargo test                                # language + pixel-level render tests
 ```

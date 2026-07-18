@@ -153,8 +153,8 @@ Goal: the semantics that separate a toy from an implementation.
 
 **✅ COMPLETE (2026-07-16)** — save/restore, interning, benches, color
 spaces, Level 2 odds and ends, corpus round 2 (the gs classics render
-block-identical), `--pstack-on-error`. The one open sliver is task
-6's `--interactive` windowed REPL (design note in NOTES.md).
+block-identical), `--pstack-on-error`. Task 6's last sliver, the
+`--interactive` windowed REPL, landed 2026-07-18.
 
 1. ✅ **`save`/`restore`** (2026-07-16) — object-granularity
    copy-on-write journaling; design writeup and gs pins in `VM.md`,
@@ -177,11 +177,16 @@ block-identical), `--pstack-on-error`. The one open sliver is task
 5. ✅ **`packedarray`, `usertime`/`realtime`, `languagelevel`, resource
    category basics** (2026-07-16) — `ops/level2.rs`; Font category
    delegates to findfont/definefont; writes journaled. [sonnet]
-6. **Interactive niceties** — ✅ `--pstack-on-error` (REPL + headless,
-   2026-07-16). The `--interactive` window+REPL flag remains: design
-   note in NOTES.md (stdin thread → EventLoopProxy user events →
-   run_str between frames); deferred until the windowed path can be
-   exercised for real. [sonnet]
+6. ✅ **Interactive niceties** — `--pstack-on-error` (REPL + headless,
+   2026-07-16); `--interactive` / `-i` (2026-07-18), the windowed
+   REPL, built exactly as the design note planned: a stdin reader
+   thread ships raw lines through `EventLoopProxy` user events, the
+   event loop owns the interpreter and runs each complete chunk on
+   the normal frame budget (so a pasted fractal still draws live).
+   Line accumulation (`...>` continuation) moved to `src/repl.rs`,
+   shared with the terminal REPL and unit-tested there. An optional
+   file argument runs first as a prelude; EOF drains queued input
+   before exiting, so piped sessions work. [sonnet]
 
 ## Stage 9 — Output targets
 

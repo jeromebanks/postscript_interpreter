@@ -5,6 +5,8 @@
 //! steps per frame, then blits the canvas. No locks, no channels, and
 //! pausing/slowing execution is just a smaller budget.
 
+use std::collections::VecDeque;
+use std::io::{BufRead, Write};
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -18,6 +20,7 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
 use crate::Interp;
+use crate::repl::LineBuffer;
 use crate::spool::Watcher;
 
 const FRAME: Duration = Duration::from_millis(16);
@@ -35,11 +38,22 @@ pub struct WindowOptions {
     pub halftone: bool,
 }
 
+/// Cross-thread messages into the event loop. Only `--interactive`
+/// sends any; the other modes share the type so one `App` serves all.
+enum UserEvent {
+    /// One raw line typed on stdin (reader thread → loop).
+    Line(String),
+    /// stdin closed (Ctrl-D) or became unreadable: end the session.
+    Eof,
+}
+
 /// Run `interp` (which must already have a program queued via
 /// `begin_source`) inside a live window. Returns after the window closes;
 /// `Err` carries a message suitable for stderr.
 pub fn run_windowed(interp: Interp, options: WindowOptions) -> Result<(), String> {
-    let event_loop = EventLoop::new().map_err(|e| format!("cannot create event loop: {e}"))?;
+    let event_loop = EventLoop::<UserEvent>::with_user_event()
+        .build()
+        .map_err(|e| format!("cannot create event loop: {e}"))?;
     let mut app = App {
         interp,
         options,
@@ -48,6 +62,7 @@ pub fn run_windowed(interp: Interp, options: WindowOptions) -> Result<(), String
         had_error: false,
         back: 0,
         spool: None,
+        interactive: None,
     };
     event_loop
         .run_app(&mut app)
@@ -56,6 +71,87 @@ pub fn run_windowed(interp: Interp, options: WindowOptions) -> Result<(), String
         return Err("program stopped with an error (canvas left on screen)".to_string());
     }
     Ok(())
+}
+
+/// The `--interactive` mode: the terminal REPL and the live window at
+/// once — type PostScript, watch it draw. Per the ARCHITECTURE.md
+/// threading rule the interpreter stays owned by the event loop; a
+/// reader thread ships raw stdin lines in through the loop's proxy and
+/// never touches interpreter state. Each complete chunk runs on the
+/// normal frame budget, so a long-running paste still draws live.
+/// Errors are reported and the session continues, REPL-style; `quit`,
+/// Ctrl-D, or closing the window ends it.
+pub fn run_interactive(
+    mut interp: Interp,
+    options: WindowOptions,
+    prelude: Option<Vec<u8>>,
+) -> Result<(), String> {
+    let event_loop = EventLoop::<UserEvent>::with_user_event()
+        .build()
+        .map_err(|e| format!("cannot create event loop: {e}"))?;
+    let proxy = event_loop.create_proxy();
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match stdin.lock().read_line(&mut line) {
+                Ok(0) | Err(_) => {
+                    let _ = proxy.send_event(UserEvent::Eof);
+                    return;
+                }
+                Ok(_) => {
+                    if proxy.send_event(UserEvent::Line(line.clone())).is_err() {
+                        return; // loop is gone; session over
+                    }
+                }
+            }
+        }
+    });
+    // A file named alongside --interactive runs first (load a library,
+    // then explore it); the first prompt appears when it finishes.
+    let running = if let Some(source) = &prelude {
+        interp.begin_source(source);
+        true
+    } else {
+        false
+    };
+    println!(
+        "pscat {} — interactive: type PostScript here, watch it draw in the window.",
+        env!("CARGO_PKG_VERSION")
+    );
+    println!("'quit', Ctrl-D, or closing the window exits.");
+    let mut app = App {
+        interp,
+        options,
+        view: None,
+        running,
+        had_error: false,
+        back: 0,
+        spool: None,
+        interactive: Some(InteractiveState {
+            buffer: LineBuffer::new(),
+            queue: VecDeque::new(),
+            prompt_pending: !running,
+            eof: false,
+        }),
+    };
+    event_loop
+        .run_app(&mut app)
+        .map_err(|e| format!("event loop error: {e}"))?;
+    Ok(())
+}
+
+struct InteractiveState {
+    /// Joins typed lines into complete chunks (`...>` continuation).
+    buffer: LineBuffer,
+    /// Complete chunks waiting their turn; one runs at a time.
+    queue: VecDeque<String>,
+    /// A prompt is owed as soon as the loop next goes idle.
+    prompt_pending: bool,
+    /// stdin has closed: finish whatever is queued, then exit — so
+    /// piped input (`echo ... | pscat -i`) runs to completion.
+    eof: bool,
 }
 
 /// Spool mode: the window idles like the printer in the corner of the
@@ -71,7 +167,9 @@ pub fn run_spool(
 ) -> Result<(), String> {
     let interp = Interp::with_page_scaled(page.0, page.1, scale)
         .ok_or_else(|| format!("unusable page size {}x{}", page.0, page.1))?;
-    let event_loop = EventLoop::new().map_err(|e| format!("cannot create event loop: {e}"))?;
+    let event_loop = EventLoop::<UserEvent>::with_user_event()
+        .build()
+        .map_err(|e| format!("cannot create event loop: {e}"))?;
     let base_title = options.title.clone();
     let mut app = App {
         interp,
@@ -86,6 +184,7 @@ pub fn run_spool(
             scale,
             base_title,
         }),
+        interactive: None,
     };
     event_loop
         .run_app(&mut app)
@@ -117,6 +216,9 @@ struct App {
     back: usize,
     /// Present in spool mode; the interpreter is replaced per job.
     spool: Option<SpoolState>,
+    /// Present in `--interactive` mode; the interpreter persists across
+    /// typed chunks (state accumulates, REPL-style).
+    interactive: Option<InteractiveState>,
 }
 
 impl App {
@@ -126,11 +228,24 @@ impl App {
         }
         match self.interp.step_n(self.options.steps_per_frame) {
             Ok(true) => {}
-            Ok(false) => self.finish(" — done"),
+            Ok(false) => {
+                // Interactive sessions don't retitle per chunk — the
+                // prompt is the "done" signal.
+                if self.interactive.is_some() {
+                    self.running = false;
+                } else {
+                    self.finish(" — done");
+                }
+            }
             Err(e) => {
                 eprintln!("{}", self.interp.error_report(&e));
-                self.had_error = true;
-                self.finish(" — error (see terminal)");
+                if self.interactive.is_some() {
+                    // REPL semantics: report and keep the session.
+                    self.running = false;
+                } else {
+                    self.had_error = true;
+                    self.finish(" — error (see terminal)");
+                }
             }
         }
     }
@@ -140,6 +255,50 @@ impl App {
         if let Some(view) = &self.view {
             view.window
                 .set_title(&format!("{}{}", self.options.title, suffix));
+        }
+    }
+
+    /// Interactive idle work: end the session if `quit` ran, start the
+    /// next queued chunk, or — with nothing left to do — print the
+    /// prompt the reader is waiting at. Call whenever the interpreter
+    /// might have just gone idle.
+    fn advance_interactive(&mut self, event_loop: &ActiveEventLoop) {
+        if self.running || self.interactive.is_none() {
+            return;
+        }
+        if self.interp.quit_requested() {
+            event_loop.exit();
+            return;
+        }
+        let depth = self.interp.operand_stack().len();
+        let Some(state) = &mut self.interactive else {
+            return;
+        };
+        if let Some(chunk) = state.queue.pop_front() {
+            state.prompt_pending = true;
+            self.interp.begin_source(chunk.as_bytes());
+            self.running = true;
+            self.back = 0;
+            if let Some(view) = &self.view {
+                view.window.request_redraw();
+            }
+            return;
+        }
+        if state.eof {
+            println!();
+            event_loop.exit();
+            return;
+        }
+        if state.prompt_pending {
+            state.prompt_pending = false;
+            if state.buffer.is_mid_input() {
+                print!("...> ");
+            } else if depth == 0 {
+                print!("PS> ");
+            } else {
+                print!("PS<{depth}> ");
+            }
+            let _ = std::io::stdout().flush();
         }
     }
 
@@ -239,7 +398,7 @@ impl App {
     }
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.view.is_some() {
             return;
@@ -279,6 +438,7 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 self.tick();
                 self.blit();
+                self.advance_interactive(event_loop);
                 if self.running {
                     // ~60fps cadence while the program runs; idle after.
                     event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + FRAME));
@@ -320,6 +480,31 @@ impl ApplicationHandler for App {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
+        match event {
+            UserEvent::Eof => {
+                if let Some(state) = &mut self.interactive {
+                    state.eof = true;
+                    self.advance_interactive(event_loop);
+                } else {
+                    event_loop.exit();
+                }
+            }
+            UserEvent::Line(line) => {
+                let Some(state) = &mut self.interactive else {
+                    return;
+                };
+                if let Some(chunk) = state.buffer.push_line(&line) {
+                    state.queue.push_back(chunk);
+                }
+                // Whatever happens next — chunk runs, or we're
+                // mid-procedure — the typist is owed a fresh prompt.
+                state.prompt_pending = true;
+                self.advance_interactive(event_loop);
+            }
         }
     }
 
