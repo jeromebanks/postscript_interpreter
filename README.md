@@ -155,6 +155,47 @@ The library draws nothing on load and runs unchanged in
 Ghostscript, so other applications can embed the file wholesale;
 the options-dict schema is documented in its header.
 
+## For agents
+
+pscat is easy to drive from a coding agent — Claude Code, Codex,
+OpenClaw, Hermes, or anything else. Two integration surfaces:
+
+**Docs-reading agents**: `.claude/skills/pscat/SKILL.md` is the
+one-page tool reference (Claude Code picks it up automatically as a
+skill; it's plain markdown, so any agent can read it). `AGENTS.md`
+points there too, which is where Codex looks first.
+
+**MCP-wired agents**: `pscat-mcp` (built alongside `pscat`) is an
+MCP server over stdio exposing three tools:
+
+- `render_postscript` — source in; PNG image(s) back inline (or SVG
+  text, or a PDF written to `out_path`), with page size, `dpi`, and
+  `halftone` options. Errors still return the partial render.
+- `handwrite` — text in, handwritten-note PNG back (the
+  `scripts/handwrite.sh` options: size, paper, ink, jitter, seed).
+- `eval_postscript` — run headlessly, get back what the program
+  printed, or the standard error name plus an operand-stack
+  post-mortem.
+
+Register it:
+
+```sh
+cargo build --release
+claude mcp add pscat -- $PWD/target/release/pscat-mcp     # Claude Code
+codex mcp add pscat -- $PWD/target/release/pscat-mcp      # Codex
+```
+
+For OpenClaw, Hermes, or any other MCP client, the generic stdio
+config is:
+
+```json
+{ "mcpServers": { "pscat": { "command": "/path/to/target/release/pscat-mcp" } } }
+```
+
+The server shells out to the `pscat` CLI (found next to it), so the
+tools always match the CLI's behavior; set `PSCAT_ROOT` if you move
+the binaries out of the checkout and still want `handwrite`.
+
 ## Gallery
 
 `gallery/` holds generative-art programs written in pure PostScript for

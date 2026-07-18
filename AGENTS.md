@@ -83,3 +83,11 @@ first. This file covers *how* to work, not *what* to build.
   `gallery/renders/` and a slideshow script (`show.sh`); see
   `gallery/README.md`. Art files stay within the interpreter's current
   operator set — they double as its most demanding integration tests.
+
+## Using pscat as a tool (not working on it)
+
+If you're an agent that just needs to *run* PostScript — render a
+file, debug one, generate a handwritten note — read
+`.claude/skills/pscat/SKILL.md`: it has the command recipes and
+pitfalls in one page, regardless of which agent runtime you are.
+MCP-wired agents can use `pscat-mcp` instead (README, "For agents").

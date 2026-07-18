@@ -107,7 +107,12 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
         // A file given alongside --interactive runs as a prelude —
-        // load a library, then explore it by hand.
+        // load a library, then explore it by hand. Not `-`: stdin is
+        // the REPL's own channel in this mode.
+        if options.file.as_deref() == Some("-") {
+            eprintln!("pscat: --interactive reads stdin itself; give the prelude as a file");
+            return ExitCode::FAILURE;
+        }
         let prelude = match &options.file {
             None => None,
             Some(path) => match std::fs::read(path) {
@@ -134,11 +139,22 @@ fn main() -> ExitCode {
     let Some(path) = &options.file else {
         return repl(&mut interp, &options);
     };
-    let source = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            eprintln!("pscat: cannot read {path}: {e}");
+    // `pscat -` reads the program from stdin — pipe-friendly for
+    // scripts and agents: `generate | pscat --png out.png -`.
+    let source = if path == "-" {
+        let mut buf = Vec::new();
+        if let Err(e) = io::Read::read_to_end(&mut io::stdin().lock(), &mut buf) {
+            eprintln!("pscat: cannot read stdin: {e}");
             return ExitCode::FAILURE;
+        }
+        buf
+    } else {
+        match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                eprintln!("pscat: cannot read {path}: {e}");
+                return ExitCode::FAILURE;
+            }
         }
     };
 
@@ -349,7 +365,10 @@ fn parse_args() -> Result<Options, String> {
                 }
                 options.page = (w, h);
             }
-            _ if arg.starts_with('-') => return Err(format!("unknown option: {arg}")),
+            // A bare `-` is the stdin pseudo-file, not an option.
+            _ if arg.starts_with('-') && arg != "-" => {
+                return Err(format!("unknown option: {arg}"));
+            }
             _ => {
                 if options.file.is_some() {
                     return Err("more than one input file given".to_string());
@@ -362,9 +381,10 @@ fn parse_args() -> Result<Options, String> {
 }
 
 fn print_usage() {
-    println!("usage: pscat [options] [file.ps]");
+    println!("usage: pscat [options] [file.ps | -]");
     println!();
     println!("Runs file.ps in a live window (watch it draw), or a REPL if no file.");
+    println!("'-' reads the program from stdin (use with --png/--svg/--pdf/--headless).");
     println!();
     println!("  -e, --eval 'code'   evaluate a snippet headlessly and exit");
     println!("  -i, --interactive   REPL + live window: type PostScript, watch it draw");
