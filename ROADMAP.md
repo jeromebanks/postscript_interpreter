@@ -419,6 +419,48 @@ render. [any model with taste, per gallery/README.md's brief]
 
 ---
 
+## Stage 16 — pscat in the browser: WASM + JS library
+
+Goal: the live window, but it's a `<canvas>`. Compile the
+interpreter core to `wasm32-unknown-unknown` and ship a small
+JavaScript library that renders and *executes* PostScript in the
+browser — including step-driven execution, so a page can watch a
+program draw exactly the way the winit window does.
+
+1. **Make the core cross-compile** — gate the desktop-only modules
+   (`window.rs`, `spool.rs` — winit/softbuffer and std::fs have no
+   business in wasm) behind `#[cfg(not(target_arch = "wasm32"))]`;
+   shim the two wall clocks (`usertime`/`realtime` use
+   `Instant`/`SystemTime`, which panic on wasm32-unknown-unknown —
+   return 0 there, documented deviation); add `cdylib` to the crate
+   types. Everything else is already pure Rust (tiny-skia, flate2's
+   Rust backend, ttf-parser, zune-jpeg; fonts are include_bytes).
+   No wasm-bindgen: the export surface is a hand-rolled C ABI over
+   byte buffers, in keeping with this repo's no-framework habit.
+   [sonnet]
+2. **The wasm API** (`src/wasm.rs`, cfg'd to wasm32) — exports:
+   alloc/dealloc, `ps_begin(src, w, h)`, `ps_step(n)` (1 = more
+   work, 0 = done, -1 = error and the estack is cleared, session
+   continues), `ps_pixels`/`ps_width`/`ps_height` (the live RGBA
+   canvas), `ps_error` (last error report), `ps_run` (begin + drive
+   to completion). One interpreter per module instance,
+   thread-local. [sonnet]
+3. **The JS library** (`web/pscat.js`, ES module, no dependencies) —
+   `Pscat.load(wasmUrl)` → instance with `run(source)`,
+   `begin(source)` / `step(n)`, `paintTo(canvas)` (putImageData of
+   the live pixmap), `error`. Plus `web/index.html`: a demo page
+   with editor textarea, canvas, speed slider, and a
+   requestAnimationFrame loop — the watch-it-draw window, in a
+   browser tab. `scripts/build_wasm.sh` builds and copies the .wasm
+   next to the JS. [sonnet]
+4. **Tests + docs** — a smoke test that (when the wasm target and
+   node are installed, skipping gracefully otherwise, gs-test
+   style) builds the wasm, instantiates it under node, runs a
+   program, and checks pixels land; README "In the browser"
+   section; skill note. [sonnet]
+
+---
+
 ## Standing gaps not tied to a stage
 
 - `NOTES.md` records per-stage deviations; the current standing ones are
