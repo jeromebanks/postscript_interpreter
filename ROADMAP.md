@@ -330,6 +330,82 @@ reusable, not buried in the script.
 
 ---
 
+## Stage 14 — pscat for agents: skill, MCP server, CLI polish
+
+Goal: any coding agent — Claude Code, Codex, OpenClaw, Hermes — can
+pick up pscat as a *tool*: render PostScript, produce handwritten
+notes, and debug programs, without reading the whole repo first. Two
+integration surfaces, because agents differ: instruction files for
+agents that read docs (skills / AGENTS.md), and an MCP server for
+agents that call tools.
+
+1. **CLI polish for programmatic callers** — `pscat -` reads the
+   program from stdin (pipe-friendly: `generate | pscat --png out.png -`);
+   audit that every mode has clean exit codes and stderr/stdout
+   discipline (errors → stderr, artifacts announced on stdout).
+   [haiku]
+2. **Claude Code skill** — `.claude/skills/pscat/SKILL.md`: when to
+   reach for pscat (render/preview/debug PostScript, handwritten
+   notes via `scripts/handwrite.sh`, spool/halftone modes), the
+   command recipes, and the pitfalls (showpage vs trailing art,
+   `--page` vs `--dpi`, HandScript is lowercase-only). Skills are
+   markdown with frontmatter — the same file doubles as reference
+   for any doc-reading agent; AGENTS.md gets a short "using pscat
+   as a tool" pointer so Codex finds it too. [sonnet]
+3. **MCP server** — `pscat-mcp`, a second binary speaking MCP over
+   stdio (JSON-RPC 2.0: initialize, tools/list, tools/call). Tools:
+   `render_postscript` (source in; PNG image content or SVG/PDF out,
+   page size / dpi / halftone options), `handwrite` (text in,
+   handwritten-note PNG out, the handwrite.sh options), and
+   `eval_postscript` (source in, prints and operand stack out — the
+   debugging loop). The server shells out to the pscat CLI rather
+   than linking the interpreter, so interpreter stdout (`=`, `print`)
+   can never corrupt the protocol channel, and the tools stay in
+   lock-step with the CLI. serde_json is an acceptable dependency
+   for the binary. Integration test drives the real binary over
+   stdio. [sonnet]
+4. **Client wiring docs** — README "For agents" section: one-line
+   registration for each client (`claude mcp add pscat -- <path>`,
+   `codex mcp add`, OpenClaw/Hermes generic MCP config JSON), plus
+   what each tool returns. [haiku]
+
+## Stage 15 — the font library: artistic Type 3 faces
+
+Goal: `lib/fonts/` — a library of original display fonts, each a
+self-contained pure-PostScript file (the `lib/handscript.ps`
+doctrine: loading defines the font and draws nothing, runs unchanged
+in gs, embeddable wholesale). Each font is a *concept*, not a
+digitization — Type 3 BuildChar is a program, so the letterforms can
+do things outline formats can't. Candidate faces (pick the stunning
+ones, drop the merely cute; every shipped font covers at least A–Z,
+digits, and basic punctuation):
+
+- **/Lapidary** — chiseled Roman capitals: every stroke cut twice
+  (dark incision offset from a lit face) so the letters read as
+  carved into the page. [sonnet]
+- **/Constellation** — letters as star charts: bright stars of
+  varying magnitude at the skeleton's anchor points, hairline
+  great-circle segments between them, faint scatter of field stars —
+  best on a midnight ground. [sonnet]
+- **/Marquee** — theater-sign bulbs: evenly spaced glowing dots
+  along the stroke skeletons, warm halos, occasional burnt-out bulb
+  (rand, seeded). [sonnet]
+- **/Neon** — glass-tube script: each stroke drawn as layered
+  strokes of descending width and rising brightness over a dark
+  ground, round caps everywhere, the glow done purely with
+  overdraw. [sonnet]
+
+Shared machinery: one capital skeleton set (polyline anchors, the
+HandScript CharDefs pattern) may be duplicated into each file —
+self-containment beats deduplication here, as documented in
+handscript.ps. Deliverables per font: the library file, a specimen
+line in a combined `examples/font_library.ps` showcase page, and a
+render for the README. Wrap-up: gs accepts every font (pinned by
+test, same policy as handwriting), plus a gallery-quality showcase
+render. [any model with taste, per gallery/README.md's brief]
+
+---
+
 ## Standing gaps not tied to a stage
 
 - `NOTES.md` records per-stage deviations; the current standing ones are
