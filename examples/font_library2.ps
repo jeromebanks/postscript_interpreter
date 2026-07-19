@@ -1,0 +1,58 @@
+%!PS-Adobe-3.0
+%%Title: font_library2.ps — the Stage 18 type specimen, second folio
+%%Creator: pscat
+%%EndComments
+
+% Three more materials for the library poster wall: copper traces on
+% a circuit board, cross-stitch on cream cloth, and a handful of
+% thrown confetti. Each band shows one face from lib/fonts/ in its
+% natural habitat. The library files are loaded relative to the repo
+% root, so:
+%
+%   pscat --png specimen2.png examples/font_library2.ps
+%   gs -dNOPAUSE -dBATCH -sDEVICE=png16m -g612x792 -o s.png \
+%      examples/font_library2.ps      (from the repo root, either way)
+
+(lib/fonts/circuitry.ps) run
+(lib/fonts/stitchwork.ps) run
+(lib/fonts/confetti.ps) run
+
+11 srand
+
+% x y size (text) /Font showin -
+/showin {
+    findfont 3 -1 roll scalefont setfont
+    3 1 roll moveto show
+} def
+
+% --- band 3: CIRCUITRY, 528..792 ------------------------------------
+gsave
+0 528 moveto 612 528 lineto 612 792 lineto 0 792 lineto closepath clip
+0.04 0.15 0.10 setrgbcolor clippath fill
+CircuitryDict /work get /Hole [0.04 0.15 0.10] put
+36 668 78 (CIRCUITRY) /Circuitry showin
+CircuitryDict /work get /Copper [0.80 0.82 0.84] put   % tinned run
+36 578 30 (COPPER ROUTES A WORD) /Circuitry showin
+CircuitryDict /work get /Copper [0.86 0.58 0.20] put
+grestore
+
+% --- band 2: STITCHWORK, 264..528 -----------------------------------
+gsave
+0 264 moveto 612 264 lineto 612 528 lineto 0 528 lineto closepath clip
+0.96 0.93 0.86 setrgbcolor clippath fill
+36 404 74 (STITCHWORK) /Stitchwork showin
+StitchworkDict /work get /Thread [0.2 0.35 0.6] put
+36 314 30 (EVERY X A KISS OF FLOSS) /Stitchwork showin
+StitchworkDict /work get /Thread [0.78 0.22 0.28] put
+grestore
+
+% --- band 1: CONFETTI, 0..264 ---------------------------------------
+gsave
+0 0 moveto 612 0 lineto 612 264 lineto 0 264 lineto closepath clip
+0.10 0.08 0.14 setrgbcolor clippath fill
+36 140 84 (CONFETTI) /Confetti showin
+36 50 30 (THROWN AND STILL FALLING) /Confetti showin
+grestore
+
+showpage
+%%EOF

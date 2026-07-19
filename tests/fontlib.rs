@@ -1,18 +1,21 @@
-//! The Stage 15 font library (lib/fonts/): every face loads, inks,
-//! reproduces under a seed, and is accepted by Ghostscript. The art
-//! itself is rand-driven for two of the four faces, so pixel
-//! comparison with gs is excluded (the corpus policy); Lapidary is
-//! deliberately rand-free but stays under the same structural tests.
+//! The font library (lib/fonts/, Stages 15 and 18): every face loads,
+//! inks, reproduces under a seed, and is accepted by Ghostscript. The
+//! art itself is rand-driven for several faces, so pixel comparison
+//! with gs is excluded (the corpus policy); Lapidary and Circuitry are
+//! deliberately rand-free but stay under the same structural tests.
 
 use pscat::Interp;
 
 // (file, font name, minimum inked pixels for the AWX9! probe — stars
 // are points, so Constellation legitimately inks far less than tubes)
-const FONTS: [(&str, &str, usize); 4] = [
+const FONTS: [(&str, &str, usize); 7] = [
     ("lib/fonts/neon.ps", "Neon", 400),
     ("lib/fonts/marquee.ps", "Marquee", 400),
     ("lib/fonts/constellation.ps", "Constellation", 80),
     ("lib/fonts/lapidary.ps", "Lapidary", 400),
+    ("lib/fonts/circuitry.ps", "Circuitry", 400),
+    ("lib/fonts/stitchwork.ps", "Stitchwork", 400),
+    ("lib/fonts/confetti.ps", "Confetti", 400),
 ];
 
 fn ink_count(it: &Interp, dark_ground: bool) -> usize {
@@ -37,7 +40,7 @@ fn every_font_loads_and_inks() {
         let mut it = Interp::with_page(400, 200).expect("page");
         it.run_source(&src)
             .unwrap_or_else(|e| panic!("{path} failed to load: {}", it.error_report(&e)));
-        let dark = name != "Lapidary";
+        let dark = !matches!(name, "Lapidary" | "Stitchwork");
         let ground = if dark {
             "0.02 0.02 0.05 setrgbcolor clippath fill"
         } else {
@@ -77,7 +80,7 @@ fn both_cases_render_the_same_capitals() {
 fn seeded_pages_reproduce() {
     // Marquee and Constellation are rand-driven; under srand the same
     // page must come back (the reproducible-art doctrine).
-    for font in ["Marquee", "Constellation"] {
+    for font in ["Marquee", "Constellation", "Stitchwork", "Confetti"] {
         let path = format!("lib/fonts/{}.ps", font.to_lowercase());
         let src = std::fs::read(&path).expect("font file");
         let render = || {
@@ -120,6 +123,32 @@ fn the_specimen_poster_renders_all_four_bands() {
     assert!(band_has(198, 396, &lit), "marquee band lit");
     assert!(band_has(396, 594, &lit), "constellation band lit");
     assert!(band_has(594, 792, &carved), "lapidary band carved");
+}
+
+#[test]
+fn the_second_folio_renders_all_three_bands() {
+    let src = std::fs::read("examples/font_library2.ps").expect("specimen present");
+    let mut it = Interp::with_page(612, 792).expect("page");
+    it.run_source(&src)
+        .unwrap_or_else(|e| panic!("font_library2.ps failed: {}", it.error_report(&e)));
+    assert_eq!(it.gfx().pages().len(), 1);
+    let page = &it.gfx().pages()[0];
+    let band_has = |y0: u32, y1: u32, pred: &dyn Fn(u8, u8, u8) -> bool| {
+        for y in (y0..y1).step_by(2) {
+            for x in (0..612).step_by(2) {
+                let p = page.pixel(x, y).expect("in bounds");
+                if pred(p.red(), p.green(), p.blue()) {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+    let lit = |r: u8, g: u8, b: u8| r > 120 || g > 120 || b > 120;
+    let stitched = |_r: u8, g: u8, _b: u8| g < 120; // floss on cream cloth
+    assert!(band_has(0, 264, &lit), "circuitry band lit");
+    assert!(band_has(264, 528, &stitched), "stitchwork band sewn");
+    assert!(band_has(528, 792, &lit), "confetti band lit");
 }
 
 #[test]
