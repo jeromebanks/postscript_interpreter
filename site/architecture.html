@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pscat — architecture</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="index.html">pscat</a>
+  <nav>
+    <a href="index.html">Home</a>
+    <a href="playground.html">Playground</a>
+    <a href="gallery.html">Gallery</a>
+    <a class="here" href="architecture.html">Architecture</a>
+    <a href="extending.html">Extending</a>
+    <a href="javascript.html">JavaScript</a>
+    <a href="agents.html">Agents</a>
+    <a href="https://github.com/jeromebanks/postscript_interpreter">GitHub</a>
+  </nav>
+</header>
+<main>
+  <h1>Architecture</h1>
+  <p class="sub">Three load-bearing ideas explain most of the code.
+  The full design writeups live in the repo —
+  <a href="https://github.com/jeromebanks/postscript_interpreter/blob/main/ARCHITECTURE.md">ARCHITECTURE.md</a>,
+  <a href="https://github.com/jeromebanks/postscript_interpreter/blob/main/VM.md">VM.md</a>,
+  <a href="https://github.com/jeromebanks/postscript_interpreter/blob/main/FONTS.md">FONTS.md</a> —
+  this page is the orientation.</p>
+
+  <h2>1. The machine is an explicit frame stack</h2>
+  <p>The interpreter (<code>src/interp.rs</code>) never calls itself.
+  Anything that must interleave with PostScript execution is a
+  <code>Frame</code> on an explicit execution stack: scanner frames,
+  loops, <code>stopped</code> boundaries, the show family, images,
+  and a generic <code>PostOp</code> continuation for operators that
+  need a PostScript procedure's result (Separation tint transforms
+  use it). Frame order <em>is</em> program order.</p>
+  <p>That single decision buys the things pscat is for:
+  <code>stringwidth</code> pushes its result at frame-pop; Type 3
+  BuildChar and <code>kshow</code> procedures nest arbitrarily;
+  runaway recursion is a catchable <code>execstackoverflow</code>
+  instead of a blown Rust stack; and — the point — the live window
+  and the browser build execute a step <em>budget</em> per frame, so
+  you watch programs draw glyph by glyph. The same
+  <code>begin_source</code>/<code>step_n</code> API drives the winit
+  window, the wasm build, spool mode, and the windowed REPL.</p>
+
+  <h2>2. Files share one read cursor</h2>
+  <p>The scanner pulls bytes through a file handle;
+  <code>currentfile</code> returns <em>the same handle</em>; filters
+  are files layered on files, decoding on demand so each layer
+  consumes exactly the source bytes its consumer needed
+  (<code>src/file.rs</code>). This one property is what makes real
+  PostScript run: <code>currentfile eexec</code> (Type 1 fonts),
+  the <code>N RD &lt;binary&gt;</code> charstring idiom,
+  <code>currentfile buf readhexstring</code> prologs, and inline
+  image data all fall out of it.</p>
+  <p>Two conventions were pinned against Ghostscript and must not
+  regress: a token terminated by whitespace consumes exactly that one
+  delimiter byte, and <code>image</code> drains a filter-chain source
+  layer by layer to each end-of-data marker on completion.</p>
+
+  <h2>3. Every glyph source feeds one transform pipeline</h2>
+  <p>Glyph-space outline → FontMatrix (composed by
+  <code>scalefont</code>/<code>makefont</code>, cached at
+  <code>setfont</code>) → CTM at the pen → a device-space path → the
+  ordinary fill/clip machinery. TrueType outlines (the bundled
+  metric-compatible base fonts), Type 1 charstrings (a hint-ignoring
+  interpreter with flex and seac), and Type 3 glyph procedures all
+  end in the same place. A new glyph source should too.</p>
+
+  <h2>The VM: save/restore as journaling</h2>
+  <p><code>save</code>/<code>restore</code> is object-granularity
+  copy-on-write journaling, not snapshotting: the first mutation of
+  an array or dict after a <code>save</code> records the old value;
+  <code>restore</code> replays the journal backwards and does a
+  <code>grestoreall</code> to the save point. Strings are exempt by
+  spec (PLRM §3.7.3.2 — pinned in Ghostscript first, like everything
+  else). Names are interned (<code>src/name.rs</code>): dicts key by
+  a u32 through a one-multiply hasher, and name execution carries
+  only the id.</p>
+
+  <h2>Crate map</h2>
+  <table>
+    <tr><th>Module</th><th>What it is</th></tr>
+    <tr><td><code>src/lexer.rs</code></td><td>tokenizer (unit tests in-module)</td></tr>
+    <tr><td><code>src/object.rs</code></td><td><code>Object</code>/<code>Value</code>/<code>Dict</code>; PsArray owns the iterative deep-drop</td></tr>
+    <tr><td><code>src/interp.rs</code></td><td>the frame-stack machine; <code>begin_source</code>/<code>step_n</code>; the save/restore journal</td></tr>
+    <tr><td><code>src/ops/</code></td><td>operators, grouped like the PLRM's operator summary</td></tr>
+    <tr><td><code>src/gfx.rs</code></td><td>graphics state, paths, clip chains, tiny-skia rasterization, multi-page</td></tr>
+    <tr><td><code>src/file.rs</code></td><td>file objects and the decode-filter stack</td></tr>
+    <tr><td><code>src/font.rs</code>, <code>src/type1.rs</code></td><td>the show machinery and the three glyph sources</td></tr>
+    <tr><td><code>src/svg.rs</code>, <code>src/pdf.rs</code></td><td>export recorders mirroring the paint pipeline</td></tr>
+    <tr><td><code>src/window.rs</code>, <code>src/spool.rs</code></td><td>the live window, spool mode, the windowed REPL (desktop only)</td></tr>
+    <tr><td><code>src/wasm.rs</code>, <code>web/pscat.js</code></td><td>the browser build — see <a href="javascript.html">JavaScript</a></td></tr>
+    <tr><td><code>src/halftone.rs</code></td><td>clustered-dot screening for the laser-printer look</td></tr>
+  </table>
+
+  <h2>Deliberate deviations</h2>
+  <p>All documented in place and in
+  <a href="https://github.com/jeromebanks/postscript_interpreter/blob/main/NOTES.md">NOTES.md</a>;
+  the standing ones: stroke width approximates anisotropic pens as
+  √|det CTM|; access control (<code>executeonly</code>) isn't
+  modeled; Type 1 hints are ignored; <code>errordict</code> handlers
+  aren't consulted; integers are i64; on wasm the clocks read 0.
+  Where the PLRM allows latitude, found files should <em>render</em>,
+  not error — and every such choice is recorded.</p>
+</main>
+<footer>pscat — built by hand, tested against Ghostscript, drawn live.</footer>
+</body>
+</html>

@@ -467,6 +467,10 @@ program draw exactly the way the winit window does.
 
 ## Stage 17 — the website: GitHub Pages + publish pipeline
 
+**✅ COMPLETE (2026-07-18)** — all four tasks; NOTES.md has the
+summary. One manual step to go live: repo Settings → Pages →
+Build and deployment → source = "GitHub Actions", then push.
+
 Goal: a public home for the project — documentation site, gallery,
 and a live playground, published automatically. Everything an agent
 (or a person) needs to pick pscat up as a tool, browsable at

@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pscat — for coding agents</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="index.html">pscat</a>
+  <nav>
+    <a href="index.html">Home</a>
+    <a href="playground.html">Playground</a>
+    <a href="gallery.html">Gallery</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="extending.html">Extending</a>
+    <a href="javascript.html">JavaScript</a>
+    <a class="here" href="agents.html">Agents</a>
+    <a href="https://github.com/jeromebanks/postscript_interpreter">GitHub</a>
+  </nav>
+</header>
+<main>
+  <h1>pscat as a tool for agents</h1>
+  <p class="sub">Everything a coding agent — Claude Code, Codex,
+  OpenClaw, Hermes, or anything else — needs to render, debug, and
+  generate PostScript with pscat. Two integration surfaces, because
+  agents differ: instruction files for agents that read docs, and an
+  MCP server for agents that call tools.</p>
+
+  <h2>Build once</h2>
+<pre><code>git clone https://github.com/jeromebanks/postscript_interpreter
+cd postscript_interpreter
+cargo build --release      # → target/release/pscat and target/release/pscat-mcp</code></pre>
+
+  <h2>Surface 1 — the docs path (skill)</h2>
+  <p><code>.claude/skills/pscat/SKILL.md</code> is a one-page tool
+  reference: command recipes for rendering (PNG/SVG/PDF, page size,
+  dpi, halftone), debugging (<code>--headless</code>,
+  <code>--pstack-on-error</code>, exit codes), handwritten-note
+  generation, and the pitfalls. Claude Code picks it up automatically
+  as a skill; it's plain markdown, so any docs-reading agent can use
+  it — <code>AGENTS.md</code> points there, which is where Codex
+  looks first.</p>
+
+  <h2>Surface 2 — the MCP server</h2>
+  <p><code>pscat-mcp</code> speaks MCP over stdio and exposes three
+  tools. It shells out to the pscat CLI (found next to it) rather
+  than linking the interpreter — PostScript's <code>=</code> and
+  <code>print</code> write to stdout, which is the JSON-RPC channel,
+  so in-process execution could corrupt the protocol. The tools stay
+  in lock-step with the CLI by construction.</p>
+  <table>
+    <tr><th>Tool</th><th>In</th><th>Out</th></tr>
+    <tr><td><code>render_postscript</code></td>
+        <td>source; optional width/height (points), dpi, format
+        (png/svg/pdf), halftone, out_path</td>
+        <td>PNG page images inline (or SVG text; PDF written to
+        out_path). A program that errors still returns the partial
+        render, with the error text alongside.</td></tr>
+    <tr><td><code>handwrite</code></td>
+        <td>text; optional size, width, paper (plain/ruled), ink
+        "r,g,b", jitter, seed, dpi, out_path</td>
+        <td>a handwritten-note PNG — the /HandScript dynamic font,
+        word-wrapped and auto-sized; same seed, same page</td></tr>
+    <tr><td><code>eval_postscript</code></td>
+        <td>source</td>
+        <td>what the program printed; on error, the standard
+        PostScript error name plus a gs-style operand-stack
+        post-mortem</td></tr>
+  </table>
+
+  <h3>Registering it</h3>
+<pre><code># Claude Code
+claude mcp add pscat -- $PWD/target/release/pscat-mcp
+
+# Codex
+codex mcp add pscat -- $PWD/target/release/pscat-mcp</code></pre>
+  <p>For OpenClaw, Hermes, or any other MCP client, the generic
+  stdio config:</p>
+<pre><code>{ "mcpServers": { "pscat": { "command": "/path/to/target/release/pscat-mcp" } } }</code></pre>
+  <p>Set <code>PSCAT_ROOT</code> to the checkout if you relocate the
+  binaries and still want the <code>handwrite</code> tool (it runs
+  <code>scripts/handwrite.sh</code>).</p>
+
+  <h2>The CLI, for direct shelling</h2>
+<pre><code>pscat --png out.png file.ps              # render (also --svg / --pdf)
+pscat --page 500x500 --dpi 300 ...       # canvas in points; dpi scales pixels
+generate | pscat --png out.png -         # '-' reads the program from stdin
+pscat --headless --pstack-on-error f.ps  # debug: error name + stack post-mortem
+pscat -e '3 4 add ='                     # one-liner eval
+./scripts/handwrite.sh "note text"       # string → handwritten PNG</code></pre>
+  <p>Exit code 0 means a clean run; nonzero means a PostScript error,
+  named on stderr. <code>--png</code> writes the partial canvas even
+  after an error — usually exactly what you want when debugging.</p>
+
+  <h2>Working <em>on</em> pscat with an agent</h2>
+  <p>The repo itself is agent-first: <code>HANDOFF.md</code> orients
+  a fresh session, <code>ROADMAP.md</code> routes every task to a
+  model tier, <code>AGENTS.md</code> holds the working conventions,
+  and the whole history was built stage by stage this way. See
+  <a href="extending.html">Extending</a>.</p>
+</main>
+<footer>pscat — built by hand, tested against Ghostscript, drawn live.</footer>
+</body>
+</html>

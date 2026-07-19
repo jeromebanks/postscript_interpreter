@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pscat — extending the interpreter</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="index.html">pscat</a>
+  <nav>
+    <a href="index.html">Home</a>
+    <a href="playground.html">Playground</a>
+    <a href="gallery.html">Gallery</a>
+    <a href="architecture.html">Architecture</a>
+    <a class="here" href="extending.html">Extending</a>
+    <a href="javascript.html">JavaScript</a>
+    <a href="agents.html">Agents</a>
+    <a href="https://github.com/jeromebanks/postscript_interpreter">GitHub</a>
+  </nav>
+</header>
+<main>
+  <h1>Extending the interpreter</h1>
+  <p class="sub">The repo is built to be picked up mid-stream — by a
+  person or by a coding agent. Start with
+  <a href="https://github.com/jeromebanks/postscript_interpreter/blob/main/HANDOFF.md">HANDOFF.md</a>
+  (orientation + gotchas), then
+  <a href="https://github.com/jeromebanks/postscript_interpreter/blob/main/ROADMAP.md">ROADMAP.md</a>
+  (the task list) and
+  <a href="https://github.com/jeromebanks/postscript_interpreter/blob/main/AGENTS.md">AGENTS.md</a>
+  (working conventions).</p>
+
+  <h2>Ghostscript is the oracle</h2>
+  <p>Every semantics question gets settled the same way: write a
+  minimal snippet, run it in <code>gs</code>, pin the answer in a
+  test comment, <em>then</em> implement. This workflow caught real
+  design errors more than once — glyph caching by encoded name, the
+  token-delimiter rule, <code>rectclip</code> clearing the current
+  path. When pscat and gs disagree, the disagreement gets a minimal
+  repro in <code>tests/</code> before it gets a fix.</p>
+<pre><code>gs -dNODISPLAY -q &lt;&lt;'EOF'
+newpath 100 100 moveto  5 5 10 20 rectfill
+{currentpoint} stopped { (path lost) = } { (path kept) = pop pop } ifelse
+EOF</code></pre>
+
+  <h2>Adding an operator</h2>
+  <p>The <code>src/ops/</code> modules are deliberately formulaic —
+  copying the shape of <code>ops/arith.rs</code> is most of the job:</p>
+  <ol>
+    <li>Pick the module matching the PLRM's operator grouping (or add
+      one); register in its <code>install</code> with
+      <code>op(dict, "name", func)</code>.</li>
+    <li>Operators are <code>fn(&amp;mut Interp) -&gt; Result&lt;(), PsError&gt;</code>;
+      pop operands (<code>pop_f64</code>, <code>pop_int</code>,
+      <code>pop</code> + match on <code>Value</code>), do the work,
+      push results. Errors use the standard PostScript names.</li>
+    <li><b>If the operator mutates an array or dict</b>, call
+      <code>journal_array</code>/<code>journal_dict</code> first so
+      <code>restore</code> can roll it back (strings exempt by spec —
+      read VM.md before touching mutators).</li>
+    <li><b>If it needs to run a PostScript procedure mid-operator</b>
+      (callbacks, tint transforms), do <em>not</em> call the machine
+      recursively — push a <code>Frame::PostOp</code> continuation.
+      The Separation color implementation is the pattern.</li>
+    <li>Tests: <code>tests/eval.rs</code>-style operand-stack cases
+      for language ops, pixel tests for rendering, and a gs pin for
+      anything with semantic latitude.</li>
+  </ol>
+
+  <h2>The gates</h2>
+  <p>Before calling anything done:</p>
+<pre><code>cargo test                      # all suites, including gs cross-checks where installed
+cargo clippy --all-targets      # clean, no exceptions
+cargo fmt --check</code></pre>
+  <p>Rendering changes get pixel or golden tests
+  (<code>tests/golden.rs</code> renders the examples in both pscat
+  and gs and compares block-downsampled output). Commit per coherent
+  chunk with stage-prefixed messages; sync
+  README/NOTES/ROADMAP/HANDOFF in the same or a closing commit.</p>
+
+  <h2>Model routing (for agent sessions)</h2>
+  <p>Every ROADMAP task is tagged with the least-capable model
+  expected to do it well — <code>[haiku]</code> for mechanical,
+  well-specified work; <code>[sonnet]</code> for the workhorse
+  middle; <code>[opus]</code> for anything touching the object
+  model, the machine's control flow, or profiling-guided rewrites.
+  The escalation rule: if a smaller-tagged task turns out to touch
+  <code>object.rs</code> or the frame machinery, stop and record the
+  finding in NOTES.md rather than improvising.</p>
+
+  <h2>Gotchas that will bite you</h2>
+  <ul>
+    <li>Don't reintroduce <code>Drop for Object</code> — profiling
+      showed it taxing every popped operand (~18% of a fib run). The
+      iterative teardown lives on <code>PsArray</code>.</li>
+    <li>Frames holding external state must clean up in <em>three</em>
+      unwind paths: normal pop, <code>stop</code>, and abort.
+      <code>ShowCtx::cleanup</code> is the pattern.</li>
+    <li>Ghostscript makes font dicts read-only at
+      <code>definefont</code> — Type 3 BuildChar working storage goes
+      in a scratch dict (every font in <code>lib/fonts/</code> shows
+      the idiom).</li>
+    <li><code>rand</code>'s low bits correlate across successive
+      draws; art that samples small moduli should draw from the high
+      bits (see the <code>chance</code> helper in the marquee
+      font).</li>
+  </ul>
+</main>
+<footer>pscat — built by hand, tested against Ghostscript, drawn live.</footer>
+</body>
+</html>

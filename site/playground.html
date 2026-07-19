@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pscat playground — PostScript in the browser</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="index.html">pscat</a>
+  <nav>
+    <a href="index.html">Home</a>
+    <a class="here" href="playground.html">Playground</a>
+    <a href="gallery.html">Gallery</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="extending.html">Extending</a>
+    <a href="javascript.html">JavaScript</a>
+    <a href="agents.html">Agents</a>
+    <a href="https://github.com/jeromebanks/postscript_interpreter">GitHub</a>
+  </nav>
+</header>
+<div id="play">
+  <div id="play-left">
+    <textarea id="src" spellcheck="false">%!PS
+% A golden spiral of squares - edit me and press Run.
+/rects 90 def
+306 396 translate
+0.9 0.9 scale
+0 1 rects 1 sub {
+    /i exch def
+    gsave
+    i 11 mul rotate
+    i 4.2 mul dup translate
+    i rects div dup dup 0.25 add 0.9 sethsbcolor
+    -140 -140 280 280 rectstroke
+    grestore
+} for
+showpage</textarea>
+    <div id="controls">
+      <button id="run">Run</button>
+      <select id="examples">
+        <option value="">— load an example —</option>
+        <option value="sierpinski.ps">Sierpinski triangle</option>
+        <option value="koch_snowflake.ps">Koch snowflake</option>
+        <option value="golden_spiral.ps">Golden spiral</option>
+        <option value="specimen.ps">Type specimen</option>
+        <option value="testcard.ps">Test card</option>
+        <option value="handwriting.ps">Handwritten letter (/HandScript)</option>
+        <option value="hundred_lines.ps">Hundred Lines (chalkboard)</option>
+        <option value="fern.ps">Fern, after Barnsley (48k points)</option>
+        <option value="golden_bloom.ps">Golden Bloom (phyllotaxis)</option>
+        <option value="cathedral_rose.ps">Cathedral Rose (Maurer rose)</option>
+      </select>
+      <label>speed <input id="speed" type="range" min="1" max="4000" value="220"></label>
+      <span id="status"></span>
+    </div>
+    <div id="err"></div>
+  </div>
+  <div id="play-right"><canvas id="page" width="612" height="792"></canvas></div>
+</div>
+
+<script type="module">
+import { Pscat } from './pscat.js';
+
+const canvas = document.getElementById('page');
+const err = document.getElementById('err');
+const status = document.getElementById('status');
+const speed = document.getElementById('speed');
+const srcBox = document.getElementById('src');
+const ps = await Pscat.load();
+let raf = 0;
+
+// Examples carry their page size in the DSC BoundingBox when they
+// have one; default to US Letter otherwise.
+function pageSize(source) {
+  const m = source.match(/%%BoundingBox:\s*0\s+0\s+(\d+)\s+(\d+)/);
+  return m ? [Number(m[1]), Number(m[2])] : [612, 792];
+}
+
+function start() {
+  cancelAnimationFrame(raf);
+  err.textContent = '';
+  const [w, h] = pageSize(srcBox.value);
+  let steps = 0;
+  try {
+    ps.begin(srcBox.value, w, h);
+  } catch (e) {
+    err.textContent = String(e);
+    return;
+  }
+  const frame = () => {
+    const more = ps.step(Number(speed.value));
+    steps += Number(speed.value);
+    ps.paintTo(canvas);
+    if (more === 1) {
+      status.textContent = `running… ${steps.toLocaleString()} steps`;
+      raf = requestAnimationFrame(frame);
+    } else if (more === -1) {
+      err.textContent = ps.error;
+      status.textContent = 'stopped on error';
+    } else {
+      status.textContent = 'done';
+    }
+  };
+  raf = requestAnimationFrame(frame);
+}
+
+document.getElementById('run').addEventListener('click', start);
+document.getElementById('examples').addEventListener('change', async (e) => {
+  if (!e.target.value) return;
+  const resp = await fetch(`examples/${e.target.value}`);
+  srcBox.value = await resp.text();
+  start();
+});
+start();
+</script>
+</body>
+</html>

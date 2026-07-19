@@ -1,11 +1,11 @@
 # HANDOFF.md — state of the interpreter and how to continue
 
 Written 2026-07-13 at the completion of Stages 6–7; last updated
-2026-07-18. Stages 8–16 are all complete: spool/halftone/Gallery II
+2026-07-18. Stages 8–17 are all complete: spool/halftone/Gallery II
 (10), perf parity (11), handwriting (12), the handwrite tool (13),
 agent integration — skill, `pscat-mcp`, `pscat -` (14), and the
 font library `lib/fonts/` — /Neon, /Marquee, /Constellation,
-/Lapidary + specimen (15), and the browser build — wasm + web/pscat.js (16) — plus `--interactive` (the windowed
+/Lapidary + specimen (15), and the browser build — wasm + web/pscat.js (16), and the Pages site + pipeline — site/, scripts/build_site.sh, .github/workflows/pages.yml (17) — plus `--interactive` (the windowed
 REPL, Stage 8's last sliver) and the Level 2 rect operators. Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
@@ -13,7 +13,7 @@ touching code. `ROADMAP.md` has the task list with model routing;
 
 ## Where things stand
 
-**287 tests across 30 suites, clippy clean.** Stages 1–16 are done,
+**288 tests across 31 suites, clippy clean.** Stages 1–17 are done,
 including Stage 8's last sliver, the `--interactive` windowed REPL
 (`-i`; stdin reader thread → `EventLoopProxy` user events → chunks
 run on the frame budget; line accumulation shared with the terminal

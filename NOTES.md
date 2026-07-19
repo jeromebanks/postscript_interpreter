@@ -3,6 +3,29 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 17 — the website (2026-07-18)
+
+A GitHub Pages site, hand-authored per the no-framework habit:
+seven pages in `site/` (landing, playground, gallery, architecture,
+extending, javascript, agents) over one shared stylesheet.
+`scripts/build_site.sh` assembles `_site/`: copies the pages,
+builds and stages the wasm + JS library, stages the playground's
+example sources (self-contained files only — no filesystem in
+wasm), copies the pre-rendered gallery stills, and renders every
+example page with pscat itself at its canonical size (DSC
+BoundingBox where declared). The playground grew an example picker
+that reads the BoundingBox to size the page.
+
+`.github/workflows/pages.yml` publishes on push to main (rust +
+wasm target → build_site.sh → upload-pages-artifact →
+deploy-pages). One repo-settings step remains manual: Settings →
+Pages → source = "GitHub Actions". `tests/site.rs` runs the same
+build and cross-checks the site against itself — every example the
+picker offers must be staged, every render the gallery shows must
+exist. Verified live in a browser (Playwright): landing, gallery
+(all 17 renders), and the playground drawing Cathedral Rose from
+the picker.
+
 ## Stage 16 — pscat in the browser (2026-07-18)
 
 The interpreter core cross-compiles to wasm32-unknown-unknown with

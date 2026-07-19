@@ -182,6 +182,14 @@ four-band specimen poster:
 cargo run --release -- --png poster.png examples/font_library.ps
 ```
 
+## The website
+
+The project site — docs, the full gallery, and a live playground
+running the wasm interpreter — is published from this repo by
+`.github/workflows/pages.yml` (GitHub Pages, "GitHub Actions"
+source). Sources in `site/`; `./scripts/build_site.sh` assembles
+`_site/` for local preview (`python3 -m http.server -d _site`).
+
 ## In the browser
 
 The interpreter core compiles to WebAssembly, and `web/pscat.js` is

@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pscat — the JavaScript library</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="index.html">pscat</a>
+  <nav>
+    <a href="index.html">Home</a>
+    <a href="playground.html">Playground</a>
+    <a href="gallery.html">Gallery</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="extending.html">Extending</a>
+    <a class="here" href="javascript.html">JavaScript</a>
+    <a href="agents.html">Agents</a>
+    <a href="https://github.com/jeromebanks/postscript_interpreter">GitHub</a>
+  </nav>
+</header>
+<main>
+  <h1>PostScript in the browser</h1>
+  <p class="sub">The interpreter core compiles to WebAssembly, and
+  <code>web/pscat.js</code> is a dependency-free ES module that
+  renders — and <em>executes</em> — PostScript in a page. The
+  <a href="playground.html">playground</a> is this library and
+  nothing else.</p>
+
+  <h2>Setup</h2>
+<pre><code>git clone https://github.com/jeromebanks/postscript_interpreter
+cd postscript_interpreter
+rustup target add wasm32-unknown-unknown
+./scripts/build_wasm.sh          # → web/pscat.wasm (~5.5 MB; mostly the bundled base fonts)
+python3 -m http.server -d web    # open http://localhost:8000</code></pre>
+  <p>Copy <code>web/pscat.js</code> and <code>web/pscat.wasm</code>
+  side by side into any site — there is no bundler, no npm package,
+  no dependency. <code>Pscat.load()</code> fetches the module from
+  next to the JS file by default.</p>
+
+  <h2>Run to completion</h2>
+<pre><code>import { Pscat } from './pscat.js';
+
+const ps = await Pscat.load();
+const status = ps.run(source, 612, 792);   // 0 = done, -1 = error
+if (status === -1) console.error(ps.error);
+ps.paintTo(canvas);                        // putImageData onto a &lt;canvas&gt;</code></pre>
+
+  <h2>Watch it draw</h2>
+  <p>The wasm exports expose the same step-budget execution the
+  desktop window uses — <code>begin</code> queues the program,
+  <code>step(n)</code> runs up to n objects. Drive it from
+  requestAnimationFrame and the page renders the program drawing
+  itself:</p>
+<pre><code>ps.begin(source, 612, 792);
+function frame() {
+  const more = ps.step(300);        // objects per frame — the speed knob
+  ps.paintTo(canvas);
+  if (more === 1) requestAnimationFrame(frame);
+  else if (more === -1) console.error(ps.error);
+}
+requestAnimationFrame(frame);</code></pre>
+
+  <h2>API</h2>
+  <table>
+    <tr><th>Member</th><th>What it does</th></tr>
+    <tr><td><code>Pscat.load(url?)</code></td><td>fetch + instantiate (browser)</td></tr>
+    <tr><td><code>Pscat.instantiate(bytes)</code></td><td>instantiate from bytes in hand (node)</td></tr>
+    <tr><td><code>begin(src, w?, h?)</code></td><td>fresh page (default 612×792 points), program queued</td></tr>
+    <tr><td><code>step(n?)</code></td><td>run ≤ n objects → 1 more work · 0 done · −1 error</td></tr>
+    <tr><td><code>run(src, w?, h?)</code></td><td>begin + drive to completion → 0 or −1</td></tr>
+    <tr><td><code>paintTo(canvas)</code></td><td>blit the live page (resizes the canvas to match)</td></tr>
+    <tr><td><code>pixels()</code></td><td>copied RGBA bytes — node-friendly</td></tr>
+    <tr><td><code>width</code>, <code>height</code></td><td>current page size in pixels</td></tr>
+    <tr><td><code>error</code></td><td>last error report ('' when clean) — standard PostScript error names</td></tr>
+  </table>
+  <p>Errors are REPL-style: the machine unwinds but the page and
+  operand stack survive, and the instance stays usable for the next
+  <code>run</code>.</p>
+
+  <h2>Under the hood</h2>
+  <p>No wasm-bindgen — the export surface
+  (<code>src/wasm.rs</code>) is a hand-rolled C ABI over byte
+  buffers: <code>ps_alloc</code>/<code>ps_dealloc</code>,
+  <code>ps_begin</code>, <code>ps_step</code>, <code>ps_pixels</code>,
+  <code>ps_error_*</code>, <code>ps_run</code>. The JS class is a thin
+  wrapper you could re-implement in any language with a wasm runtime.
+  It works under node the same way — the repo's smoke test
+  instantiates the module in node, renders, and counts pixels through
+  this exact library.</p>
+  <p>What the wasm build doesn't have: a window, a filesystem
+  (<code>run</code>-ing other files, spool mode), or a clock
+  (<code>usertime</code>/<code>realtime</code> read 0 — the one
+  documented deviation). Everything else — the full language, fonts,
+  filters, images, multi-page — is the same interpreter, compiled
+  from the same sources.</p>
+</main>
+<footer>pscat — built by hand, tested against Ghostscript, drawn live.</footer>
+</body>
+</html>

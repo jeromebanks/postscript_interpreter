@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pscat — gallery</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="index.html">pscat</a>
+  <nav>
+    <a href="index.html">Home</a>
+    <a href="playground.html">Playground</a>
+    <a class="here" href="gallery.html">Gallery</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="extending.html">Extending</a>
+    <a href="javascript.html">JavaScript</a>
+    <a href="agents.html">Agents</a>
+    <a href="https://github.com/jeromebanks/postscript_interpreter">GitHub</a>
+  </nav>
+</header>
+<main class="wide">
+  <h1>Gallery</h1>
+  <p class="sub">Everything below is pure PostScript, rendered by pscat
+  itself. The generative pieces are deterministic — change a
+  <code>/seed</code> and a different tree grows. Many run live in the
+  <a href="playground.html">playground</a>.</p>
+
+  <h2>Generative art</h2>
+  <p>Written for this interpreter, each piece <em>within the operator
+  set it had at the time</em> — the Stage 3 originals predate
+  <code>rand</code> and arrays, so they carry their own LCG and HSB
+  converter as PostScript procedures.</p>
+  <div class="cards">
+    <div class="card"><img src="assets/renders/golden_bloom.png" alt="Golden Bloom" loading="lazy">
+      <div class="body"><b>Golden Bloom</b><span>Phyllotaxis — 1,300 florets at the golden angle, √-spaced like a sunflower</span></div></div>
+    <div class="card"><img src="assets/renders/cathedral_rose.png" alt="Cathedral Rose" loading="lazy">
+      <div class="body"><b>Cathedral Rose</b><span>Maurer rose — straight chords walking r = sin 6θ in 71° / 97° strides weave lace</span></div></div>
+    <div class="card"><img src="assets/renders/ember_tree.png" alt="Ember Tree" loading="lazy">
+      <div class="body"><b>Ember Tree</b><span>Recursive branching from an LCG, banded dusk gradient, layered sun glow</span></div></div>
+    <div class="card"><img src="assets/renders/fern.png" alt="Fern, After Barnsley" loading="lazy">
+      <div class="body"><b>Fern, After Barnsley</b><span>Chaos game — 48,000 points over four affine maps, no outline drawn</span></div></div>
+    <div class="card"><img src="assets/renders/silk_waves.png" alt="Silk Waves" loading="lazy">
+      <div class="body"><b>Silk Waves</b><span>66 threads displaced by two interfering sine fields</span></div></div>
+    <div class="card"><img src="assets/renders/frost_mandala.png" alt="Frost Mandala" loading="lazy">
+      <div class="body"><b>Frost Mandala</b><span>Six-fold circle recursion, 11° twist per generation — 1,555+ circles</span></div></div>
+    <div class="card"><img src="assets/renders/ring_of_type.png" alt="Ring of Type" loading="lazy">
+      <div class="body"><b>Ring of Type</b><span>One sentence circling eleven shrinking rings, set glyph by glyph around a charpath ampersand</span></div></div>
+    <div class="card"><img src="assets/renders/hundred_lines.png" alt="Hundred Lines" loading="lazy">
+      <div class="body"><b>Hundred Lines</b><span>The /HandScript chalkboard — "i will not cache my glyphs", no two lines alike</span></div></div>
+  </div>
+
+  <h2>The font library</h2>
+  <p>Original Type 3 display faces (<code>lib/fonts/</code>) — every
+  glyph is a program, so the letterforms do things outlines can't.
+  Self-contained files; each runs unchanged in Ghostscript.</p>
+  <div class="cards">
+    <div class="card"><img src="assets/renders/font_library.png" alt="Font library specimen" loading="lazy">
+      <div class="body"><b>The specimen poster</b><span>/Neon (glow by overdraw), /Marquee (bulbs, glints, burnouts), /Constellation (star charts), /Lapidary (chiseled stone)</span></div></div>
+    <div class="card"><img src="assets/renders/handwriting.png" alt="Handwritten letter" loading="lazy">
+      <div class="body"><b>/HandScript</b><span>Dynamic handwriting — rand-jittered strokes, wandering baseline, varying pen pressure; no two letters ever match</span></div></div>
+  </div>
+
+  <h2>Examples</h2>
+  <p>The demo files that grew up with the interpreter — fractals from
+  the early graphics stages, found-file-style test pages, and the
+  font-technology showcases.</p>
+  <div class="cards">
+    <div class="card"><img src="assets/renders/sierpinski.png" alt="Sierpinski triangle" loading="lazy">
+      <div class="body"><b>Sierpinski triangle</b><span>The original watch-it-draw demo — recursive subdivision</span></div></div>
+    <div class="card"><img src="assets/renders/koch_snowflake.png" alt="Koch snowflake" loading="lazy">
+      <div class="body"><b>Koch snowflake</b><span>Recursive edge replacement</span></div></div>
+    <div class="card"><img src="assets/renders/golden_spiral.png" alt="Golden spiral" loading="lazy">
+      <div class="body"><b>Golden spiral</b><span>Fibonacci arcs and a radial burst</span></div></div>
+    <div class="card"><img src="assets/renders/testcard.png" alt="Test card" loading="lazy">
+      <div class="body"><b>Test card</b><span>Written like a found file — shortcut prolog and all; renders identically in Ghostscript</span></div></div>
+    <div class="card"><img src="assets/renders/specimen.png" alt="Type specimen" loading="lazy">
+      <div class="body"><b>Type specimen</b><span>The base fonts through the full operator set</span></div></div>
+    <div class="card"><img src="assets/renders/postcard.png" alt="Postcard" loading="lazy">
+      <div class="body"><b>Postcard</b><span>Files, filters, and sampled images, inline in one page</span></div></div>
+    <div class="card"><img src="assets/renders/type3_ransom.png" alt="Ransom note" loading="lazy">
+      <div class="body"><b>Ransom note</b><span>Type 3 fonts where every glyph is invented fresh at show time</span></div></div>
+  </div>
+</main>
+<footer>pscat — built by hand, tested against Ghostscript, drawn live.</footer>
+</body>
+</html>
