@@ -317,6 +317,12 @@ fn parse_args() -> Result<Options, String> {
                 print_usage();
                 std::process::exit(0);
             }
+            "--fonts" => {
+                for name in pscat::font::available_fonts() {
+                    println!("{name}");
+                }
+                std::process::exit(0);
+            }
             "-e" | "--eval" => {
                 options.eval = Some(args.next().ok_or("missing expression after -e")?);
             }
@@ -399,6 +405,7 @@ fn print_usage() {
     println!("      --spool DIR     watch DIR and render each .ps/.eps that lands there");
     println!("      --halftone      screen the raster like a mono laser printer (window/PNG)");
     println!("      --pstack-on-error  print the operand stack after an error");
+    println!("      --fonts         list every findfont-reachable face and alias, then exit");
 }
 
 fn repl(interp: &mut Interp, options: &Options) -> ExitCode {

@@ -91,7 +91,7 @@ pub(crate) fn findfont(it: &mut Interp) -> Result<(), PsError> {
                 Value::String(s) => s.text(),
                 _ => String::new(),
             };
-            let fid = font::builtin_index(&requested).unwrap_or(font::SUBSTITUTE);
+            let fid = font::resolve(&requested);
             let d = font::build_builtin_dict(fid)?;
             it.journal_dict(&dir);
             dir.borrow_mut()

@@ -93,6 +93,215 @@ pub(crate) fn builtin_index(name: &str) -> Option<i64> {
         .map(|i| i as i64)
 }
 
+/// Which Encoding array a catalog face's font dict gets. The two URW
+/// symbol faces carry their own PLRM encodings; everything else is
+/// StandardEncoding like the builtins.
+#[derive(Clone, Copy)]
+enum CatalogEncoding {
+    Standard,
+    Symbol,
+    Dingbats,
+}
+
+/// A face loaded from `fonts/catalog/` at findfont time. The file bytes
+/// and the parsed `Face` are deliberately leaked: a catalog font loads
+/// once and lives for the process, giving it the same `'static` shape
+/// as the builtins (the systemdict-cycle doctrine — bounded,
+/// process-lifetime, not a churn leak).
+struct CatalogFace {
+    /// File stem, the lookup key (`texgyrepagella-regular`,
+    /// `EBGaramond-Regular`, …). Matched case-insensitively.
+    key: String,
+    /// The face's real PostScript name (name table id 6) when present,
+    /// else the stem; becomes `FontName` in the font dict.
+    ps_name: String,
+    face: &'static Face<'static>,
+    encoding: CatalogEncoding,
+}
+
+/// Loaded catalog faces; index i is FID `BUILTINS.len() + i`. RwLock
+/// only because statics must be Sync — the interpreter is
+/// single-threaded.
+static CATALOG: std::sync::RwLock<Vec<CatalogFace>> = std::sync::RwLock::new(Vec::new());
+
+/// Requested-name → catalog file stem for the names found PostScript
+/// actually uses: the rest of the standard 35 (Palatino, Bookman,
+/// New Century Schoolbook, Avant Garde, Zapf Chancery,
+/// Helvetica-Narrow, Symbol, ZapfDingbats — backed by the TeX Gyre and
+/// URW libre metric-compatible faces), plus a few tasteful shorthands.
+static ALIASES: &[(&str, &str)] = &[
+    ("Palatino-Roman", "texgyrepagella-regular"),
+    ("Palatino-Bold", "texgyrepagella-bold"),
+    ("Palatino-Italic", "texgyrepagella-italic"),
+    ("Palatino-BoldItalic", "texgyrepagella-bolditalic"),
+    ("Palatino", "texgyrepagella-regular"),
+    ("Bookman-Light", "texgyrebonum-regular"),
+    ("Bookman-Demi", "texgyrebonum-bold"),
+    ("Bookman-LightItalic", "texgyrebonum-italic"),
+    ("Bookman-DemiItalic", "texgyrebonum-bolditalic"),
+    ("Bookman", "texgyrebonum-regular"),
+    ("NewCenturySchlbk-Roman", "texgyreschola-regular"),
+    ("NewCenturySchlbk-Bold", "texgyreschola-bold"),
+    ("NewCenturySchlbk-Italic", "texgyreschola-italic"),
+    ("NewCenturySchlbk-BoldItalic", "texgyreschola-bolditalic"),
+    ("NewCenturySchoolbook", "texgyreschola-regular"),
+    ("AvantGarde-Book", "texgyreadventor-regular"),
+    ("AvantGarde-Demi", "texgyreadventor-bold"),
+    ("AvantGarde-BookOblique", "texgyreadventor-italic"),
+    ("AvantGarde-DemiOblique", "texgyreadventor-bolditalic"),
+    ("AvantGarde", "texgyreadventor-regular"),
+    ("ZapfChancery-MediumItalic", "texgyrechorus-mediumitalic"),
+    ("ZapfChancery", "texgyrechorus-mediumitalic"),
+    ("Helvetica-Narrow", "texgyreheroscn-regular"),
+    ("Helvetica-Narrow-Bold", "texgyreheroscn-bold"),
+    ("Helvetica-Narrow-Oblique", "texgyreheroscn-italic"),
+    ("Helvetica-Narrow-BoldOblique", "texgyreheroscn-bolditalic"),
+    ("Symbol", "StandardSymbolsPS"),
+    ("ZapfDingbats", "D050000L"),
+    ("Garamond", "EBGaramond-Regular"),
+    ("Baskerville", "LibreBaskerville-Regular"),
+    ("UnifrakturMaguntia", "UnifrakturMaguntia-Book"),
+];
+
+/// findfont's name resolution: builtins, then the disk catalog (via
+/// aliases and file stems), then the substitute face. The catalog is
+/// filesystem-backed, so wasm builds resolve builtins-or-substitute
+/// only.
+pub(crate) fn resolve(requested: &str) -> i64 {
+    if let Some(fid) = builtin_index(requested) {
+        return fid;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(fid) = catalog_fid(requested) {
+        return fid;
+    }
+    SUBSTITUTE
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn catalog_root() -> Option<std::path::PathBuf> {
+    let candidates = [
+        std::env::var("PSCAT_ROOT")
+            .ok()
+            .map(std::path::PathBuf::from),
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.ancestors().nth(3).map(std::path::Path::to_path_buf)),
+        Some(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))),
+        Some(std::path::PathBuf::from(".")),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .map(|p| p.join("fonts/catalog"))
+        .find(|p| p.is_dir())
+}
+
+/// Find (loading if necessary) the catalog face for a requested name.
+/// Lookup: alias → stem, already-loaded (by key or PostScript name),
+/// then a directory scan for `<stem>.ttf`/`.otf`, with a `-Regular`
+/// fallback so `/Bangers findfont` means the family's regular face.
+#[cfg(not(target_arch = "wasm32"))]
+fn catalog_fid(requested: &str) -> Option<i64> {
+    let stem = ALIASES
+        .iter()
+        .find(|(k, _)| *k == requested)
+        .map_or(requested, |(_, v)| *v);
+    {
+        let cat = CATALOG.read().unwrap();
+        if let Some(i) = cat
+            .iter()
+            .position(|c| c.key.eq_ignore_ascii_case(stem) || c.ps_name == requested)
+        {
+            return Some((BUILTINS.len() + i) as i64);
+        }
+    }
+    let root = catalog_root()?;
+    let fallback = format!("{stem}-Regular");
+    let mut found: Option<std::path::PathBuf> = None;
+    'outer: for want in [stem, fallback.as_str()] {
+        for family in std::fs::read_dir(&root).ok()?.flatten() {
+            let dir = family.path();
+            if !dir.is_dir() {
+                continue;
+            }
+            for entry in std::fs::read_dir(&dir).ok()?.flatten() {
+                let path = entry.path();
+                let ext = path.extension().and_then(|e| e.to_str());
+                if !matches!(ext, Some("ttf" | "otf")) {
+                    continue;
+                }
+                let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                if file_stem.eq_ignore_ascii_case(want) {
+                    found = Some(path);
+                    break 'outer;
+                }
+            }
+        }
+    }
+    load_catalog_face(&found?)
+}
+
+/// Read, leak, parse, register. Returns None (→ substitution) on any
+/// I/O or parse failure — catalog fonts are data, and found files
+/// should render regardless.
+#[cfg(not(target_arch = "wasm32"))]
+fn load_catalog_face(path: &std::path::Path) -> Option<i64> {
+    let key = path.file_stem()?.to_str()?.to_string();
+    let data: &'static [u8] = Box::leak(std::fs::read(path).ok()?.into_boxed_slice());
+    let face: &'static Face<'static> = Box::leak(Box::new(Face::parse(data, 0).ok()?));
+    let ps_name = face
+        .names()
+        .into_iter()
+        .find(|n| n.name_id == ttf_parser::name_id::POST_SCRIPT_NAME)
+        .and_then(|n| n.to_string())
+        .unwrap_or_else(|| key.clone());
+    let encoding = match key.as_str() {
+        "StandardSymbolsPS" => CatalogEncoding::Symbol,
+        "D050000L" => CatalogEncoding::Dingbats,
+        _ => CatalogEncoding::Standard,
+    };
+    let mut cat = CATALOG.write().unwrap();
+    cat.push(CatalogFace {
+        key,
+        ps_name,
+        face,
+        encoding,
+    });
+    Some((BUILTINS.len() + cat.len() - 1) as i64)
+}
+
+/// Names of every face findfont can currently reach without
+/// substitution: builtins, loadable catalog files, and aliases (for
+/// `--fonts`).
+pub fn available_fonts() -> Vec<String> {
+    let mut names: Vec<String> = BUILTINS.iter().map(|b| b.ps_name.to_string()).collect();
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(root) = catalog_root() {
+        let mut stems = Vec::new();
+        for family in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+            let dir = family.path();
+            if !dir.is_dir() {
+                continue;
+            }
+            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if matches!(
+                    path.extension().and_then(|e| e.to_str()),
+                    Some("ttf" | "otf")
+                ) && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                {
+                    stems.push(stem.to_string());
+                }
+            }
+        }
+        stems.sort();
+        names.extend(stems);
+        names.extend(ALIASES.iter().map(|(k, v)| format!("{k} -> {v}")));
+    }
+    names
+}
+
 /// Parsed faces, once per process — the bundled data is `'static`, so
 /// the zero-copy `Face` views can live forever. (Stage 6 task 7:
 /// measured before/after; numbers in NOTES.md.)
@@ -100,6 +309,13 @@ static FACES: std::sync::OnceLock<Vec<Face<'static>>> = std::sync::OnceLock::new
 
 fn face_for(fid: i64) -> Result<&'static Face<'static>, PsError> {
     let idx = usize::try_from(fid).map_err(|_| PsError::InvalidFont)?;
+    if idx >= BUILTINS.len() {
+        let cat = CATALOG.read().unwrap();
+        return cat
+            .get(idx - BUILTINS.len())
+            .map(|c| c.face)
+            .ok_or(PsError::InvalidFont);
+    }
     let faces = FACES.get_or_init(|| {
         BUILTINS
             .iter()
@@ -131,8 +347,24 @@ pub(crate) fn build_builtin_dict(fid: i64) -> Result<Rc<RefCell<Dict>>, PsError>
     let k = 1000.0 / f64::from(face.units_per_em());
     let bbox = face.global_bounding_box();
 
+    let (font_name, encoding) = if idx < BUILTINS.len() {
+        (
+            BUILTINS[idx].ps_name.to_string(),
+            encodings::standard_encoding(),
+        )
+    } else {
+        let cat = CATALOG.read().unwrap();
+        let c = &cat[idx - BUILTINS.len()];
+        let enc = match c.encoding {
+            CatalogEncoding::Standard => encodings::standard_encoding(),
+            CatalogEncoding::Symbol => encodings::symbol_encoding(),
+            CatalogEncoding::Dingbats => encodings::dingbats_encoding(),
+        };
+        (c.ps_name.clone(), enc)
+    };
+
     let mut d = Dict::new();
-    d.put("FontName".into(), Object::name(BUILTINS[idx].ps_name));
+    d.put("FontName".into(), Object::name(&font_name));
     // Honest about the outline source: Type 42 is PostScript's name for
     // TrueType-backed fonts.
     d.put("FontType".into(), Object::int(42));
@@ -161,12 +393,7 @@ pub(crate) fn build_builtin_dict(fid: i64) -> Result<Rc<RefCell<Dict>>, PsError>
     );
     d.put(
         "Encoding".into(),
-        Object::array(
-            encodings::standard_encoding()
-                .into_iter()
-                .map(Object::name)
-                .collect(),
-        ),
+        Object::array(encoding.into_iter().map(Object::name).collect()),
     );
     d.put("FID".into(), Object::int(fid));
     Ok(Rc::new(RefCell::new(d)))
