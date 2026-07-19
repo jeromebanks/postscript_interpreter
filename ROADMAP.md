@@ -516,6 +516,48 @@ and a live playground, published automatically. Everything an agent
 
 ---
 
+## Stage 18 — the font catalog: a face for every occasion
+
+Goal: pscat ships with typography for anything a PostScript program
+might want to say — the *complete* standard 35 resolved to libre
+metric-compatible faces, a wide runtime catalog of curated open fonts
+across genres and moods, and new original Type 3 display faces filling
+the gaps only glyphs-as-programs can fill.
+
+1. **Curate + acquire** — research the libre-font landscape and bring
+   the chosen faces into `fonts/catalog/` with per-family license
+   files: TeX Gyre (GFL) for the remaining standard-35 families
+   (Pagella/Palatino, Bonum/Bookman, Schola/New Century Schoolbook,
+   Adventor/Avant Garde, Chorus/Zapf Chancery, Heros Cn/
+   Helvetica-Narrow), URW StandardSymbolsPS + D050000L (AGPL+font
+   exception) for Symbol and ZapfDingbats, and ~35 OFL/Apache faces
+   from the Google Fonts collection covering serif, sans, slab, mono,
+   script, blackletter, western, horror, pixel, typewriter, sci-fi,
+   stencil, comic, and deco. [any]
+2. **Runtime loader** — catalog faces load from disk at findfont
+   time (never compiled in; binary and wasm stay lean): leaked
+   `'static` faces behind the existing FID seam, an alias table for
+   the standard-35 names, file-stem lookup with a `-Regular` family
+   fallback, Ghostscript-style substitution unchanged. Symbol/
+   Dingbats encodings dumped from gs into `src/encodings.rs`.
+   `--fonts` lists every reachable face. fs access target-gated off
+   wasm. [sonnet]
+3. **Tests** — alias/stem/shorthand resolution, both special
+   encodings, gs-pinned metrics (TeX Gyre and URW are
+   metric-compatible with the Adobe originals), CFF-outline ink
+   tests (the OTFs exercise a different ttf-parser table than the
+   builtins' glyf). [sonnet]
+4. **Original Type 3 faces** — new artistic faces in `lib/fonts/`
+   on the shared capital skeleton, filling moods the outline catalog
+   can't: letterforms as programs. Follow the Stage 15 doctrine
+   (self-contained, draw nothing on load, run unchanged in gs,
+   dials via scratch dict). [any model with taste]
+5. **Specimen + docs** — catalog specimen sheet(s), FONTS.md
+   catalog section, README, site gallery update, NOTES entry.
+   [haiku]
+
+---
+
 ## Standing gaps not tied to a stage
 
 - `NOTES.md` records per-stage deviations; the current standing ones are
