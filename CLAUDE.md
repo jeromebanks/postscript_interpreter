@@ -6,10 +6,11 @@ this repo.
 - **Project vision, priorities, and staged milestones:** see `INIT.md`.
 - **Operational conventions** (build/test commands, commit hygiene,
   workflow, code quality bar): see `AGENTS.md`.
-- **Stages 1–7 are complete** (see `NOTES.md` for what shipped in each).
-  **Read `HANDOFF.md` first when picking up new work** — it orients you
-  in the architecture, lists the gotchas, and orders the remaining
-  tasks. `ROADMAP.md` has the full plan with per-task model routing.
+- **All roadmap stages (1–17) are complete** (see `NOTES.md` for what
+  shipped in each). **Read `HANDOFF.md` first when picking up new
+  work** — it orients you in the architecture, lists the gotchas, and
+  orders the remaining open-ended work (Gallery II, leftovers).
+  `ROADMAP.md` has the full plan with per-task model routing.
 
 Read both before writing any code. If this is the very first session on
 this repo, `INIT.md`'s "First task" section is where to begin.

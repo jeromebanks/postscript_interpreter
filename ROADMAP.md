@@ -6,6 +6,10 @@ after, with **model routing per task** so work can continue on whatever
 Claude model is at hand. Read `AGENTS.md` for working conventions before
 starting any task here.
 
+**Status (2026-07-18): every stage below (5–17) is ✅ COMPLETE.** What
+remains is open-ended by design: the Gallery II slot (Stage 10), the
+standing gaps listed at the bottom, and whatever new stages get added.
+
 ## Model routing — how to read the tags
 
 Each task is tagged with the *least capable* model expected to do it well.
@@ -528,6 +532,7 @@ and a live playground, published automatically. Everything an agent
 
 Each stage: architecture note (if tagged for one) → implementation in
 PLRM-grouped chunks with tests → gs cross-check → `NOTES.md` summary +
-commit per chunk. Stage 5 is the next thing to start; its task 1 and
-task 6 are the two [opus] gates — everything else in the stage can
-proceed on [sonnet]/[haiku] once those two land.
+commit per chunk. All planned stages are complete; the cadence above
+still applies to any new stage added to this file. The open-ended work
+is the Gallery II slot (`gallery/README.md` is the brief) and the
+standing gaps above, in whatever order they itch.
