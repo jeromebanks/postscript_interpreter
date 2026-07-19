@@ -35,6 +35,9 @@ done
 # render here at their canonical sizes (BoundingBox where declared).
 cp "$ROOT"/gallery/renders/*.png "$OUT/assets/renders/"
 cp "$ROOT/lib/fonts/specimen.png" "$OUT/assets/renders/font_library.png"
+cp "$ROOT/lib/fonts/specimen2.png" "$OUT/assets/renders/font_library2.png"
+cp "$ROOT/fonts/catalog/specimen-1.png" "$OUT/assets/renders/font_catalog1.png"
+cp "$ROOT/fonts/catalog/specimen-2.png" "$OUT/assets/renders/font_catalog2.png"
 
 cargo build --release --manifest-path "$ROOT/Cargo.toml"
 BIN="$ROOT/target/release/pscat"

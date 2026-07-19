@@ -7,8 +7,8 @@ time.
 
 ## Status
 
-**All seventeen roadmap stages are complete** (2026-07-18): 288 tests
-across 31 suites, clippy clean, golden-checked against Ghostscript.
+**All eighteen roadmap stages are complete** (2026-07-18): 300+ tests
+across 32 suites, clippy clean, golden-checked against Ghostscript.
 What follows is the tour, roughly in the order it was built.
 
 **Stages 1–4 (the core)**: the language (tokenizer, object model,
@@ -94,9 +94,9 @@ strokes, wandering baselines, and varying pen pressure. No two
 letters ever match, every page is reproducible, and the same file
 runs in Ghostscript.
 
-Stages 13–17 each have their own section below: the handwrite tool,
+Stages 13–18 each have their own section below: the handwrite tool,
 agent integration (skill + MCP server), the Type 3 font library, the
-browser/WASM build, and the GitHub Pages site.
+browser/WASM build, the GitHub Pages site, and the font catalog.
 
 Try `cargo run -- --page 500x500 examples/sierpinski.ps` and watch the
 triangles appear.
@@ -172,18 +172,50 @@ letterforms do things outline fonts can't:
 | `/Marquee` | Theater-sign bulbs along every stroke, halos, glints, and the occasional burnt-out bulb (seeded rand) |
 | `/Constellation` | Letters as star charts: magnitudes and tints rand-drawn, hairline asterism lines, field stars |
 | `/Lapidary` | Chiseled capitals: shadow, raised face, dark incision, and a hairline of sunlight on the arris |
+| `/Circuitry` | Copper PCB runs — solder-mask channel, specular seam, through-hole pads at every terminal, vias at pitch |
+| `/Stitchwork` | Cross-stitch X's pinned to the 45° aida grid, three passes of floss, a seeded-jitter hand |
+| `/Confetti` | A thrown handful — paper slips and dots in a six-color party palette, still falling |
 
-All four share one capital skeleton set (both cases map to the same
+All seven share one capital skeleton set (both cases map to the same
 capitals; digits and `.,-'!?` included) and take dials through their
 scratch dicts — retube `/Neon` in pink, dial `/Marquee`'s burnout
-rate, warm up `/Lapidary`'s stone. `examples/font_library.ps` is the
-four-band specimen poster:
+rate, warm up `/Lapidary`'s stone, re-spool `/Stitchwork` in blue
+floss. `examples/font_library.ps` and `examples/font_library2.ps`
+are the specimen posters:
 
-<p><img src="lib/fonts/specimen.png" width="60%" alt="The pscat font library specimen"/></p>
+<p><img src="lib/fonts/specimen.png" width="45%" alt="The pscat font library specimen"/>
+<img src="lib/fonts/specimen2.png" width="45%" alt="The second folio"/></p>
 
 ```sh
 cargo run --release -- --png poster.png examples/font_library.ps
+cargo run --release -- --png poster2.png examples/font_library2.ps
 ```
+
+## The font catalog
+
+`fonts/catalog/` — 58 libre outline faces loaded from disk at
+`findfont` time (never compiled in; the binary and wasm stay lean).
+With it, **every name in the classic LaserWriter 35 resolves to a
+metric-compatible libre face**: the bundled Liberation faces cover
+Helvetica/Times/Courier, TeX Gyre covers Palatino, Bookman, New
+Century Schoolbook, Avant Garde, Zapf Chancery, and
+Helvetica-Narrow, and the URW symbol faces give `/Symbol` and
+`/ZapfDingbats` real glyphs with their proper PLRM encodings. On
+top of that: 35 curated display and text families — Garamond to
+Playfair, Poppins to Oswald, Great Vibes to Permanent Marker,
+fraktur, western, horror, arcade, terminal, sci-fi, stencil, comic.
+
+```sh
+cargo run -- --fonts                 # list every reachable face and alias
+cargo run -- -e '/Palatino-Roman findfont 24 scalefont setfont ...'
+cargo run -- --png sheets.png examples/font_catalog.ps   # the specimen sheets
+```
+
+`fonts/catalog/README.md` is the manifest (families, genres,
+licenses — all OFL, Apache 2.0, GUST, or AGPL-with-font-exception;
+per-family license files ride alongside the fonts). Drop your own
+`.ttf`/`.otf` into any subdirectory and `/<FileStem> findfont`
+finds it.
 
 ## The website
 

@@ -53,6 +53,24 @@ lowercased, and characters outside a–z 0–9 `.,-'!?` advance
 invisibly. The underlying library `lib/handscript.ps` is embeddable
 (one options dict; see its header for the schema).
 
+## Fonts
+
+```sh
+pscat --fonts                          # list every findfont-reachable face
+```
+
+The complete LaserWriter 35 resolves libre (Palatino, Bookman,
+AvantGarde, ZapfChancery, NewCenturySchlbk, Helvetica-Narrow,
+Symbol, ZapfDingbats included), and `fonts/catalog/` adds ~35
+display/text families — `/EBGaramond-Regular`, `/Bangers`,
+`/GreatVibes-Regular`, `/PressStart2P-Regular`, … (a bare family
+name means its `-Regular` cut). `lib/fonts/` holds the Type 3
+program-faces — /Neon, /Marquee, /Constellation, /Lapidary,
+/Circuitry, /Stitchwork, /Confetti — load one with
+`(lib/fonts/neon.ps) run` from the repo root. Unknown names
+substitute Helvetica rather than erroring;
+`examples/font_catalog.ps` renders the specimen sheets.
+
 ## Watch it draw (needs a display)
 
 ```sh

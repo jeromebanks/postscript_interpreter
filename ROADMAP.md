@@ -6,7 +6,7 @@ after, with **model routing per task** so work can continue on whatever
 Claude model is at hand. Read `AGENTS.md` for working conventions before
 starting any task here.
 
-**Status (2026-07-18): every stage below (5–17) is ✅ COMPLETE.** What
+**Status (2026-07-18): every stage below (5–18) is ✅ COMPLETE.** What
 remains is open-ended by design: the Gallery II slot (Stage 10), the
 standing gaps listed at the bottom, and whatever new stages get added.
 
@@ -517,6 +517,10 @@ and a live playground, published automatically. Everything an agent
 ---
 
 ## Stage 18 — the font catalog: a face for every occasion
+
+**✅ COMPLETE (2026-07-18)** — all five tasks; NOTES.md has the
+summary, `fonts/catalog/README.md` the manifest, and
+`pscat --fonts` the living inventory.
 
 Goal: pscat ships with typography for anything a PostScript program
 might want to say — the *complete* standard 35 resolved to libre

@@ -3,6 +3,65 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 18 — the font catalog (2026-07-18)
+
+Typography for every occasion, in two movements.
+
+**The outline catalog** (`fonts/catalog/`, 58 files, ~10 MB): TeX
+Gyre (GUST Font License) completes the LaserWriter 35 — Pagella,
+Bonum, Schola, Adventor, Chorus, Heros Cn behind the classic
+Palatino/Bookman/NewCenturySchlbk/AvantGarde/ZapfChancery/
+Helvetica-Narrow names; URW StandardSymbolsPS and D050000L (AGPL
+with font exception, the Ghostscript faces) finally give `/Symbol`
+and `/ZapfDingbats` real glyphs, closing the oldest documented
+deviation; and 35 OFL/Apache single-style families from the Google
+Fonts collection cover the genres — garalde to didone, geometric to
+condensed, slab, mono, copperplate to marker, fraktur, western,
+horror, arcade, terminal, typewriter, sci-fi, stencil, comic.
+Licenses ride per-family; `fonts/catalog/README.md` is the manifest.
+
+Design: catalog faces are **runtime-loaded, never compiled in** —
+the binary and the wasm stay lean (fs access is target-gated off
+wasm, which keeps its 12 builtins). `findfont` resolution order:
+builtins → alias table (standard-35 names + a few shorthands) →
+file-stem scan of `fonts/catalog/*/` (case-insensitive, with a
+`-Regular` family fallback so `/Bangers` means Bangers-Regular) →
+Ghostscript-style substitution, unchanged. Loaded faces are leaked
+`Box::leak` bytes + `Face` — bounded, process-lifetime, the
+systemdict-cycle doctrine — registered behind the existing FID seam
+(FIDs ≥ 12 index the catalog). The TeX Gyre/URW faces are
+CFF-flavored OTFs; ttf-parser outlines them through the same
+`outline_glyph` path as the builtins' glyf (the variable-font
+Google files render their default instances — Montserrat's default
+turned out to be Thin, so Poppins took its slot). Symbol/Dingbats
+encodings were dumped from gs (`SymbolEncoding`/`DingbatsEncoding`)
+into `src/encodings.rs`. `pscat --fonts` lists builtins, catalog
+stems, and aliases. `tests/catalog.rs`: resolution, encodings,
+gs-pinned metrics (Palatino width within 0.03% of gs's URW cut),
+CFF ink. Catalog root discovery: `$PSCAT_ROOT` → exe-relative →
+build-time checkout → cwd.
+
+**Three new Type 3 faces** (`lib/fonts/`, the Stage 15 skeleton and
+doctrine): `/Circuitry` — PCB copper runs (solder-mask channel,
+copper, specular seam) with through-hole pads at stroke terminals
+and vias at 240-unit pitch; rand-free. `/Stitchwork` — cross-stitch
+X's walked at 92-unit pitch but pinned to the ±45° aida grid the
+way counted stitchwork actually sits, three sewing passes
+(underthread/floss/sheen), seeded-jitter hand. `/Confetti` —
+paper slips and dots in a six-color party palette scattered about
+the stroke, dense enough to read. All three verified in gs;
+`examples/font_library2.ps` is the second folio poster
+(`lib/fonts/specimen2.png`), `examples/font_catalog.ps` renders the
+two catalog sheets (`fonts/catalog/specimen-{1,2}.png`; page one is
+gs-compatible — standard names only). Site gallery carries all
+three new renders.
+
+Deferred: full weight/italic sets for the display families (one
+tasteful style each, by design); TeX Gyre Termes/Heros/Cursor
+(Liberation already owns those names); embedding catalog faces in
+the wasm build; a `/Symbol` fallback when the catalog is absent
+(wasm and moved binaries still substitute Helvetica there).
+
 ## Stage 17 — the website (2026-07-18)
 
 A GitHub Pages site, hand-authored per the no-framework habit:

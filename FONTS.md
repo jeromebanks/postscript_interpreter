@@ -1,4 +1,4 @@
-# FONTS.md — Stage 6 font architecture
+# FONTS.md — font architecture (Stage 6; catalog addendum, Stage 18)
 
 The `ROADMAP.md` Stage 6 item 1 writeup: how fonts plug into the object
 model, the execution machine, and the rendering pipeline. Like
@@ -43,7 +43,9 @@ Type 1 parsing is its own later line item (Stage 6 task 6).
   Liberation Sans rather than raising `invalidfont` — Ghostscript-style
   substitution keeps found files running, which is this project's
   priority. Documented deviation; a real Symbol source (URW Standard
-  Symbols, Type 1) can ride in with the Type 1 work.
+  Symbols, Type 1) can ride in with the Type 1 work. *(Superseded in
+  Stage 18: the runtime catalog maps `/Symbol` and `/ZapfDingbats` to
+  the URW OTFs — see the addendum below.)*
 
 ## Decision 2 — the font dict / Rust seam is `FID`
 
@@ -217,3 +219,40 @@ paints as paths is not attempted; documented deviation).
 - **Symbol** — substituted, not mapped; revisit with Type 1.
 - **`rootfont`/composite (Type 0) fonts, CID fonts** — Level 2/3
   machinery, far beyond found-file needs.
+
+## Stage 18 addendum — the runtime catalog
+
+Stage 18 widened the registry without touching the seam: `findfont`
+still hands `show` an `FID`, but the integer space now extends past
+the twelve builtins into a **runtime catalog** loaded from
+`fonts/catalog/` on first use.
+
+- **Resolution order** (`font::resolve`): builtin names → an alias
+  table (the rest of the standard 35 — Palatino, Bookman,
+  NewCenturySchlbk, AvantGarde, ZapfChancery, Helvetica-Narrow,
+  Symbol, ZapfDingbats — plus a few shorthands like `/Garamond`) →
+  a case-insensitive file-stem scan of `fonts/catalog/*/`, with a
+  `-Regular` fallback so a bare family name means its regular cut →
+  the Stage 6 substitution, unchanged. wasm builds have no
+  filesystem and stop at the builtins.
+- **Never compiled in.** Catalog bytes are read at findfont time,
+  leaked (`Box::leak`) so the parsed `Face<'static>` matches the
+  builtins' shape, and registered once per process — bounded,
+  process-lifetime, the systemdict-cycle doctrine. The binary and
+  the ~5.5 MB wasm are unchanged by however many faces the catalog
+  holds.
+- **CFF just works**: the TeX Gyre and URW faces are CFF-flavored
+  OTFs; `ttf-parser` outlines them through the same
+  `outline_glyph`/`PathSink` pipeline as the builtins' glyf tables.
+- **Encodings**: catalog dicts get StandardEncoding except
+  StandardSymbolsPS and D050000L, which carry SymbolEncoding and
+  DingbatsEncoding (dumped from Ghostscript into
+  `src/encodings.rs`) so `(a)` in `/Symbol` is α, per the PLRM.
+- **Discovery**: `$PSCAT_ROOT`, then exe-relative, then the
+  build-time checkout, then the cwd (`font::catalog_root`).
+  `pscat --fonts` lists everything reachable.
+
+`fonts/catalog/README.md` is the curated manifest with licenses;
+`examples/font_catalog.ps` renders the specimen sheets. The library
+of *programmatic* faces lives on in `lib/fonts/` (seven now: Neon,
+Marquee, Constellation, Lapidary, Circuitry, Stitchwork, Confetti).
