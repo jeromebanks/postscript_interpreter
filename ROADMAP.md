@@ -465,6 +465,49 @@ program draw exactly the way the winit window does.
 
 ---
 
+## Stage 17 — the website: GitHub Pages + publish pipeline
+
+Goal: a public home for the project — documentation site, gallery,
+and a live playground, published automatically. Everything an agent
+(or a person) needs to pick pscat up as a tool, browsable at
+`jeromebanks.github.io/postscript_interpreter`.
+
+1. **The site** (`site/` — hand-authored static HTML + one shared
+   stylesheet, no generator, per the no-framework habit; the build
+   assembles `_site/`):
+   - `index.html` — what pscat is, quick start, the hero renders;
+   - `playground.html` — the Stage 16 wasm playground with an
+     example picker (self-contained `.ps` sources only — the wasm
+     build has no filesystem, so anything that `run`s other files
+     stays out);
+   - `gallery.html` — every gallery piece, example render, and the
+     font-library specimen, with the technique one-liners;
+   - `architecture.html` — the interpreter's three load-bearing
+     ideas (frame-stack machine, shared file cursor, one glyph
+     pipeline), the crate map, deviations;
+   - `extending.html` — how to add operators/features: the ops
+     module pattern, gs-as-oracle workflow, the test gates, model
+     routing;
+   - `javascript.html` — the JS library and wasm ABI, setup, the
+     step-driven drawing loop;
+   - `agents.html` — the skill, the MCP server and its three tools,
+     CLI recipes, per-client registration (Claude Code, Codex,
+     OpenClaw, Hermes). [sonnet]
+2. **The build** — `scripts/build_site.sh`: build the wasm, copy
+   the JS library, render the example pages to PNGs at their
+   canonical sizes, copy gallery renders and the fonts specimen,
+   stage playground sources into `_site/examples/`. Runnable
+   locally (`python3 -m http.server -d _site`). [sonnet]
+3. **The pipeline** — `.github/workflows/pages.yml`: on push to
+   main, rust + wasm target, `build_site.sh`, upload-pages-artifact,
+   deploy-pages (the modern Pages actions flow; needs Pages enabled
+   with "GitHub Actions" as the source in repo settings). [haiku]
+4. **Tests + docs** — a build-verification test (skips without the
+   wasm target, gs-test style) asserting the assembled site has its
+   key files; README pointer; NOTES entry. [haiku]
+
+---
+
 ## Standing gaps not tied to a stage
 
 - `NOTES.md` records per-stage deviations; the current standing ones are
