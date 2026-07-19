@@ -173,7 +173,7 @@ pub struct Interp {
     /// arrays here (ops/level2.rs).
     pub(crate) packing: bool,
     /// `usertime`'s zero point.
-    pub(crate) start_instant: std::time::Instant,
+    pub(crate) clock: crate::clock::Clock,
     /// Non-Font resource categories (ops/level2.rs). Font shares
     /// FontDirectory instead.
     resources: crate::ops::level2::CategoryMap,
@@ -242,7 +242,7 @@ impl Interp {
             last_name: None,
             rand_state: 1,
             packing: false,
-            start_instant: std::time::Instant::now(),
+            clock: crate::clock::Clock::start(),
             resources: Default::default(),
             gfx,
         })

@@ -3,6 +3,7 @@
 //! See `ARCHITECTURE.md` at the repo root for the design writeup and
 //! `INIT.md` for the project vision and staged roadmap.
 
+pub(crate) mod clock;
 pub mod encodings;
 pub mod error;
 pub mod file;
@@ -17,9 +18,13 @@ pub mod object;
 pub mod ops;
 pub mod pdf;
 pub mod repl;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod spool;
 pub mod svg;
 pub(crate) mod type1;
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod window;
 
 pub use error::PsError;

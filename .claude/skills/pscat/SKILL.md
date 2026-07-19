@@ -80,3 +80,8 @@ Arrow keys browse completed pages in any window mode.
   `render_postscript`, `handwrite`, and `eval_postscript` as MCP
   tools over stdio, for agents wired that way. See README "For
   agents".
+- Browser/JS alternative: `./scripts/build_wasm.sh` then serve
+  `web/` — `web/pscat.js` runs and renders PostScript in a page
+  (`Pscat.load()`, `run`/`begin`/`step`, `paintTo(canvas)`);
+  `web/index.html` is a ready playground. No filesystem or clock in
+  the wasm build.

@@ -3,6 +3,35 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 16 — pscat in the browser (2026-07-18)
+
+The interpreter core cross-compiles to wasm32-unknown-unknown with
+three small moves: winit/softbuffer became target-gated deps (with
+`window.rs`/`spool.rs` cfg'd out — no window, no filesystem in a
+tab), the two wall clocks moved behind `src/clock.rs` (Instant and
+SystemTime *panic* on bare wasm32; there they read 0, the one new
+deviation), and the crate grew a `cdylib` type. Everything else —
+tiny-skia, flate2's Rust backend, ttf-parser, zune-jpeg, the
+include_bytes fonts — was already portable. The module is ~5.5 MB,
+almost all of it the four bundled Liberation faces.
+
+No wasm-bindgen, in keeping with the no-framework habit: the export
+surface (`src/wasm.rs`) is a hand-rolled C ABI over byte buffers —
+alloc/dealloc, `ps_begin`, `ps_step(n)` (the same
+`begin_source`/`step_n` budget the winit window uses, so a page can
+*watch the program draw*), `ps_pixels`, `ps_error`, `ps_run`. One
+interpreter per instance in a thread_local; errors unwind the
+machine but keep page and stacks, REPL-style.
+
+`web/pscat.js` (dependency-free ES module) wraps it: `run`,
+`begin`/`step`, `paintTo(canvas)` via putImageData, `error`.
+`web/index.html` is the playground — editor, speed slider, rAF
+loop: the watch-it-draw window in a browser tab, with the golden
+spiral of rectstrokes as the default program. `tests/wasm.rs`
+builds the module and drives it under node *through the real JS
+library* (render + pixel count + error path + session reuse),
+skipping gracefully when the target or node is absent.
+
 ## Stage 15 — the font library (2026-07-18)
 
 Four original display faces in `lib/fonts/`, each a self-contained

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>pscat — PostScript in the browser</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; display: flex; height: 100vh; gap: 0;
+    background: #14161c; color: #d8dbe2;
+    font: 14px/1.45 ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  #left { flex: 1; display: flex; flex-direction: column; padding: 16px; min-width: 0; }
+  h1 { font-size: 16px; margin: 0 0 4px; font-weight: 600; }
+  h1 small { color: #8a90a0; font-weight: 400; }
+  #src {
+    flex: 1; resize: none; background: #1c1f27; color: #d8dbe2;
+    border: 1px solid #2c3040; border-radius: 6px; padding: 12px;
+    font: inherit; tab-size: 4; white-space: pre; overflow: auto;
+  }
+  #controls { display: flex; gap: 10px; align-items: center; margin: 12px 0 0; }
+  button {
+    background: #3b4a7a; color: #eef; border: 0; border-radius: 6px;
+    padding: 8px 18px; font: inherit; cursor: pointer;
+  }
+  button:hover { background: #48598f; }
+  label { color: #8a90a0; }
+  #speed { width: 140px; }
+  #status { color: #8a90a0; margin-left: auto; white-space: nowrap; }
+  #err { color: #e07a7a; white-space: pre-wrap; margin-top: 8px; max-height: 7em; overflow: auto; }
+  #right {
+    display: flex; align-items: center; justify-content: center;
+    padding: 16px; background: #0e1013;
+  }
+  canvas {
+    max-height: calc(100vh - 32px); max-width: 46vw;
+    background: #fff; border-radius: 3px;
+    box-shadow: 0 8px 40px rgba(0,0,0,.55);
+  }
+</style>
+</head>
+<body>
+<div id="left">
+  <h1>pscat <small>— type PostScript, watch it draw</small></h1>
+  <textarea id="src" spellcheck="false">%!PS
+% A golden spiral of squares - edit me and press Run.
+/rects 90 def
+306 396 translate
+0.9 0.9 scale
+0 1 rects 1 sub {
+    /i exch def
+    gsave
+    i 11 mul rotate
+    i 4.2 mul dup translate
+    i rects div dup dup 0.25 add 0.9 sethsbcolor
+    -140 -140 280 280 rectstroke
+    grestore
+} for
+showpage</textarea>
+  <div id="controls">
+    <button id="run">Run</button>
+    <label>speed <input id="speed" type="range" min="1" max="4000" value="220"></label>
+    <span id="status"></span>
+  </div>
+  <div id="err"></div>
+</div>
+<div id="right"><canvas id="page" width="612" height="792"></canvas></div>
+
+<script type="module">
+import { Pscat } from './pscat.js';
+
+const canvas = document.getElementById('page');
+const err = document.getElementById('err');
+const status = document.getElementById('status');
+const speed = document.getElementById('speed');
+const ps = await Pscat.load();
+let raf = 0;
+
+function start() {
+  cancelAnimationFrame(raf);
+  err.textContent = '';
+  let steps = 0;
+  try {
+    ps.begin(document.getElementById('src').value, 612, 792);
+  } catch (e) {
+    err.textContent = String(e);
+    return;
+  }
+  const frame = () => {
+    const more = ps.step(Number(speed.value));
+    steps += Number(speed.value);
+    ps.paintTo(canvas);
+    if (more === 1) {
+      status.textContent = `running… ${steps.toLocaleString()} steps`;
+      raf = requestAnimationFrame(frame);
+    } else if (more === -1) {
+      err.textContent = ps.error;
+      status.textContent = 'stopped on error';
+    } else {
+      status.textContent = 'done';
+    }
+  };
+  raf = requestAnimationFrame(frame);
+}
+
+document.getElementById('run').addEventListener('click', start);
+start();
+</script>
+</body>
+</html>

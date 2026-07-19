@@ -58,19 +58,16 @@ fn currentpacking(it: &mut Interp) -> Result<(), PsError> {
     Ok(())
 }
 
-/// Milliseconds of interpreter run time, per the PLRM.
+/// Milliseconds of interpreter run time, per the PLRM. (On wasm32
+/// there is no clock; both timers read 0 — see `src/clock.rs`.)
 fn usertime(it: &mut Interp) -> Result<(), PsError> {
-    it.push(Object::int(it.start_instant.elapsed().as_millis() as i64));
+    it.push(Object::int(it.clock.elapsed_ms()));
     Ok(())
 }
 
 /// Milliseconds since an arbitrary epoch (we use the Unix epoch).
 fn realtime(it: &mut Interp) -> Result<(), PsError> {
-    let ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
-    it.push(Object::int(ms));
+    it.push(Object::int(crate::clock::Clock::wall_ms()));
     Ok(())
 }
 

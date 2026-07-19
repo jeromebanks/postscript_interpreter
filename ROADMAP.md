@@ -421,6 +421,10 @@ render. [any model with taste, per gallery/README.md's brief]
 
 ## Stage 16 — pscat in the browser: WASM + JS library
 
+**✅ COMPLETE (2026-07-18)** — all four tasks; NOTES.md has the
+summary. `./scripts/build_wasm.sh`, then serve `web/` and open
+`index.html` for the playground.
+
 Goal: the live window, but it's a `<canvas>`. Compile the
 interpreter core to `wasm32-unknown-unknown` and ship a small
 JavaScript library that renders and *executes* PostScript in the
