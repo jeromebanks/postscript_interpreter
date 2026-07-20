@@ -7,8 +7,8 @@ time.
 
 ## Status
 
-**All eighteen roadmap stages are complete** (2026-07-18): 300+ tests
-across 32 suites, clippy clean, golden-checked against Ghostscript.
+**All nineteen roadmap stages are complete** (2026-07-19): 317 tests
+across 34 suites, clippy clean, golden-checked against Ghostscript.
 What follows is the tour, roughly in the order it was built.
 
 **Stages 1–4 (the core)**: the language (tokenizer, object model,
@@ -94,9 +94,10 @@ strokes, wandering baselines, and varying pen pressure. No two
 letters ever match, every page is reproducible, and the same file
 runs in Ghostscript.
 
-Stages 13–18 each have their own section below: the handwrite tool,
+Stages 13–19 each have their own section below: the handwrite tool,
 agent integration (skill + MCP server), the Type 3 font library, the
-browser/WASM build, the GitHub Pages site, and the font catalog.
+browser/WASM build, the GitHub Pages site, the font catalog, and
+the art toolkit.
 
 Try `cargo run -- --page 500x500 examples/sierpinski.ps` and watch the
 triangles appear.
@@ -217,6 +218,31 @@ per-family license files ride alongside the fonts). Drop your own
 `.ttf`/`.otf` into any subdirectory and `/<FileStem> findfont`
 finds it.
 
+## Making art
+
+`lib/artkit.ps` is the generative-art toolkit: seeded random helpers,
+eight mood palettes with color mixing, turtle graphics with a pose
+stack, an L-system engine, shapes, layout and text helpers — and the
+`pathforall`-powered brushes: `alongpath` stamps anything at even
+arc-length along any path (`charpath` text included), and `pathtext`
+sets type along a curve, each glyph rotated to the tangent. All of it
+deterministic under `srand`, all of it running unchanged in
+Ghostscript.
+
+```postscript
+(lib/artkit.ps) run
+newpath 100 400 90 thome                        % a turtle...
+(F) << (F) 0 get (F[+F]F[-F]F) >> 4 lsys        % ...an L-system...
+4.4 22 ldraw stroke                             % ...a plant.
+newpath 60 100 moveto 500 200 550 300 300 380 curveto
+(text can walk along any path now) pathtext     % type on a curve
+```
+
+`gallery/hortus.ps` is the worked example, and the `psart` skill
+(`.claude/skills/psart/SKILL.md`) teaches the whole workflow to any
+agent: the render-look-refine loop, the toolkit, type as material,
+and the composition habits that keep pieces good.
+
 ## The website
 
 The project site — docs, the full gallery, and a live playground
@@ -319,6 +345,7 @@ tree or fern grows.
 | `frost_mandala.ps` | Six-fold circle recursion, 11° twist per generation — 1,555+ circles |
 | `ring_of_type.ps` | (Stage 6) one sentence circling eleven shrinking rings, set glyph by glyph around a charpath ampersand |
 | `hundred_lines.ps` | (Stage 10) the Stage 12 /HandScript dynamic font writing punishment lines on a chalkboard — same sentence nine times, no two letters alike |
+| `hortus.ps` | (Stage 19) a herbarium plate: three L-system plants grown by turtle, blossoms stamped along each plant's own path with `pathforall` |
 
 View them one at a time:
 

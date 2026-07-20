@@ -71,6 +71,13 @@ program-faces — /Neon, /Marquee, /Constellation, /Lapidary,
 substitute Helvetica rather than erroring;
 `examples/font_catalog.ps` renders the specimen sheets.
 
+## Making art
+
+For generative pieces — palettes, turtle graphics, L-systems,
+stamping along paths, type on a curve — load `lib/artkit.ps` and see
+the `psart` skill (`.claude/skills/psart/SKILL.md`): it teaches the
+whole render-look-refine workflow.
+
 ## Watch it draw (needs a display)
 
 ```sh

@@ -1,13 +1,15 @@
 # HANDOFF.md — state of the interpreter and how to continue
 
 Written 2026-07-13 at the completion of Stages 6–7; last updated
-2026-07-18. Stages 8–18 are all complete: spool/halftone/Gallery II
+2026-07-19. Stages 8–19 are all complete: spool/halftone/Gallery II
 (10), perf parity (11), handwriting (12), the handwrite tool (13),
 agent integration — skill, `pscat-mcp`, `pscat -` (14), the
 font library `lib/fonts/` — /Neon, /Marquee, /Constellation,
 /Lapidary + specimen (15), the browser build — wasm + web/pscat.js (16), the Pages site + pipeline — site/, scripts/build_site.sh, .github/workflows/pages.yml (17), and the font catalog —
 `fonts/catalog/` runtime loader completing the standard 35, plus
-/Circuitry, /Stitchwork, /Confetti (18) — plus `--interactive` (the windowed
+/Circuitry, /Stitchwork, /Confetti (18), and the art toolkit —
+pathforall/flattenpath, lib/artkit.ps, the psart skill, Hortus
+Machinalis (19) — plus `--interactive` (the windowed
 REPL, Stage 8's last sliver) and the Level 2 rect operators. Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
@@ -15,7 +17,7 @@ touching code. `ROADMAP.md` has the task list with model routing;
 
 ## Where things stand
 
-**301 tests across 32 suites, clippy clean.** Stages 1–18 are done,
+**317 tests across 34 suites, clippy clean.** Stages 1–19 are done,
 including Stage 8's last sliver, the `--interactive` windowed REPL
 (`-i`; stdin reader thread → `EventLoopProxy` user events → chunks
 run on the frame budget; line accumulation shared with the terminal
@@ -95,7 +97,9 @@ renders eight examples in both and compares block-downsampled output).
   restoration not done (PLRM handlers see pre-error operands).
 - eexec's systemdict push isn't restored on error unwinds.
 - Stroke width ≈ √|det CTM| (anisotropic pens wrong); `showpage`
-  doesn't erase; ints are i64.
+  doesn't erase; ints are i64; `flattenpath` uses a fixed
+  quarter-pixel tolerance (`setflat` not modeled — chord counts
+  differ from gs, shapes agree).
 
 ## Working conventions that matter (beyond AGENTS.md)
 

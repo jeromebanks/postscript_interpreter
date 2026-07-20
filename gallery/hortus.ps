@@ -1,0 +1,173 @@
+%!PS-Adobe-3.0
+%%Title: Hortus Machinalis
+%%BoundingBox: 0 0 620 800
+%%EndComments
+
+% A herbarium plate from a garden that never grew: three botanical
+% specimens raised from seed and rule — Lindenmayer systems driving a
+% turtle, each plant one rewriting grammar deep in its own habit of
+% branching. The stems are stroked twice (pressed-sepia under thin
+% herbal green), and dried blossoms are stamped along the very path
+% of the plant by walking it with pathforall (Stage 19) at even
+% arc-length. Labels in Palatino, as a plate deserves. Seeded rand:
+% same file, same garden, run to run.
+%
+% Gallery II (Stage 19) — inlines its turtle and L-system engine from
+% lib/artkit.ps per the gallery's self-containment doctrine.
+%
+%   pscat --page 620x800 gallery/hortus.ps
+
+7 srand
+
+% --- the toolkit subset (from lib/artkit.ps) -------------------------
+/chance { rand 8192 idiv exch mod } def
+/TurtleState 16 dict def
+TurtleState begin /tx 0 def /ty 0 def /th 0 def /tstk 64 array def /tsp 0 def end
+/thome { TurtleState begin /th exch def /ty exch def /tx exch def /tsp 0 def tx ty moveto end } def
+/fd { TurtleState begin /tkd exch def
+      /tx tx th cos tkd mul add def /ty ty th sin tkd mul add def tx ty lineto end } def
+/tl { TurtleState begin th add /th exch def end } def
+/tr { TurtleState begin th exch sub /th exch def end } def
+/tpush { TurtleState begin tstk tsp [tx ty th] put /tsp tsp 1 add def end } def
+/tpop { TurtleState begin /tsp tsp 1 sub def tstk tsp get aload pop
+        /th exch def /ty exch def /tx exch def tx ty moveto end } def
+/lsys {
+    /lsdepth exch def /lsrules exch def /lscur exch def
+    lsdepth {
+        /lsnext 0 def
+        lscur { /lsc exch def
+            lsrules lsc known { /lsnext lsnext lsrules lsc get length add def }
+                              { /lsnext lsnext 1 add def } ifelse } forall
+        lsnext 60000 gt { exit } if
+        /lsbuf lsnext string def /lsi 0 def
+        lscur { /lsc exch def
+            lsrules lsc known {
+                /lsrep lsrules lsc get def
+                lsbuf lsi lsrep putinterval /lsi lsi lsrep length add def
+            } { lsbuf lsi lsc put /lsi lsi 1 add def } ifelse } forall
+        /lscur lsbuf def
+    } repeat lscur
+} def
+/ldraw {
+    /ldang exch def /ldstep exch def
+    { /ldc exch def
+      ldc 70 eq { ldstep fd } {
+      ldc 43 eq { ldang tl } {
+      ldc 45 eq { ldang tr } {
+      ldc 91 eq { tpush } {
+      ldc 93 eq { tpop } if } ifelse } ifelse } ifelse } ifelse
+    } forall
+} def
+/apseg {
+    /apy1 exch def /apx1 exch def
+    /apdx apx1 aplx sub def /apdy apy1 aply sub def
+    /aplen apdx dup mul apdy dup mul add sqrt def
+    aplen 0.0001 gt {
+        /apang apdy apdx atan def /apt aprem def
+        { apt aplen gt { exit } if
+          aplx apdx apt mul aplen div add
+          aply apdy apt mul aplen div add
+          apang apstamp
+          /apt apt appitch add def } loop
+        /aprem apt aplen sub def
+    } if
+    /aplx apx1 def /aply apy1 def
+} def
+/alongpath {
+    /apstamp exch def /appitch exch def
+    flattenpath
+    /aprem 0 def /aplx 0 def /aply 0 def /apsx 0 def /apsy 0 def
+    { /aply exch def /aplx exch def /apsx aplx def /apsy aply def /aprem 0 def }
+    { apseg } { pop pop pop pop pop pop } { apsx apsy apseg }
+    pathforall
+} def
+/showctr { /tky exch def /tkx exch def /tks exch def
+    tkx tks stringwidth pop 2 div sub tky moveto tks show } def
+
+% --- the paper -------------------------------------------------------
+0.955 0.925 0.845 setrgbcolor clippath fill
+% a faint mottle, like foxing on old stock
+0 1 139 {
+    pop
+    0.90 0.86 0.76 setrgbcolor
+    newpath 600 chance 10 add 780 chance 10 add 0.6 80 chance 40 div add 0 360 arc fill
+} for
+% double rule frame
+0.38 0.30 0.20 setrgbcolor
+1.4 setlinewidth newpath 22 22 moveto 598 22 lineto 598 778 lineto 22 778 lineto closepath stroke
+0.5 setlinewidth newpath 28 28 moveto 592 28 lineto 592 772 lineto 28 772 lineto closepath stroke
+
+% --- the plates ------------------------------------------------------
+% specimen: center-x, expanded string, step, angle, blossom [r g b]
+/specimen {
+    /spbloss exch def /spang exch def /spstep exch def
+    /spstr exch def /spcx exch def
+    % build the plant path once; blossoms are stamped from the same
+    % path (each stamp inside gsave, so the path survives), then the
+    % stems are stroked over them.
+    newpath
+    spcx 232 90 thome
+    spstr spstep spang ldraw
+    26 { /bang exch def /by exch def /bx exch def
+        100 chance 24 lt {
+            gsave
+            newpath bx by 1.9 100 chance 60 div add 0 360 arc
+            spbloss aload pop setrgbcolor fill
+            0.30 0.24 0.16 setrgbcolor 0.35 setlinewidth
+            newpath bx by 2.4 0 360 arc stroke
+            grestore
+        } if
+    } alongpath
+    0.30 0.24 0.16 setrgbcolor 1.5 setlinewidth
+    1 setlinecap 1 setlinejoin stroke
+    newpath
+    spcx 232 90 thome
+    spstr spstep spang ldraw
+    0.40 0.46 0.26 setrgbcolor 0.6 setlinewidth stroke
+} def
+
+% ground lines
+0.55 0.46 0.32 setrgbcolor 0.8 setlinewidth
+newpath 55 230 moveto 175 230 lineto stroke
+newpath 250 230 moveto 370 230 lineto stroke
+newpath 445 230 moveto 565 230 lineto stroke
+
+% I — a shrub
+115 (F) << (F) 0 get (FF-[-F+F+F]+[+F-F-F]) >> 3 lsys
+7.6 22.5 [0.72 0.33 0.28] specimen
+% II — a fern
+310 (X) << (X) 0 get (F-[[X]+X]+F[+FX]-X) (F) 0 get (FF) >> 5 lsys
+3.7 25 [0.83 0.62 0.30] specimen
+% III — a swaying weed
+505 (F) << (F) 0 get (F[+F]F[-F][F]) >> 4 lsys
+7.2 20 [0.55 0.42 0.58] specimen
+
+% --- the letterpress -------------------------------------------------
+0.24 0.18 0.12 setrgbcolor
+/Palatino-Roman findfont 30 scalefont setfont
+/title (HORTUS MACHINALIS) def
+title stringwidth pop title length 1 sub 5 mul add 2 div
+310 exch sub 726 moveto
+5 0 title ashow
+/Palatino-Italic findfont 14 scalefont setfont
+(three specimens, raised from seed & rule) 310 700 showctr
+
+/Palatino-Roman findfont 13 scalefont setfont
+(No. I \267 Frutex iteratus) 115 204 showctr
+(No. II \267 Filix recursiva) 310 204 showctr
+(No. III \267 Herba nutans) 505 204 showctr
+
+/Palatino-Italic findfont 8 scalefont setfont
+0.38 0.30 0.20 setrgbcolor
+(F -> FF-[-F+F+F]+[+F-F-F]) 115 190 showctr
+(X -> F-[[X]+X]+F[+FX]-X,  F -> FF) 310 190 showctr
+(F -> F[+F]F[-F][F]) 505 190 showctr
+(angle 22.5 \267 depth 3) 115 177 showctr
+(angle 25 \267 depth 5) 310 177 showctr
+(angle 20 \267 depth 4) 505 177 showctr
+
+/Palatino-Italic findfont 11 scalefont setfont
+(drawn by rule, pressed by pscat \267 seed 7) 310 52 showctr
+
+showpage
+%%EOF

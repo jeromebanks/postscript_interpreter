@@ -3,6 +3,56 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 19 — the art toolkit (2026-07-19)
+
+pscat as an instrument: everything an agent needs to *make* art, not
+just render it.
+
+**The operators.** `pathforall` joined the loop family as
+`Frame::PathForall`: the current path is snapshotted at operator
+time (the PLRM leaves mid-enumeration mutation undefined; a snapshot
+makes the charpath-then-rebuild idiom safe), each element pushes its
+user-space coordinates (inverse CTM) and runs the matching proc via
+the existing `Action::ExecWith`, and `exit` leaves it like any loop.
+`flattenpath` subdivides curves by de Casteljau to a fixed
+quarter-pixel chord tolerance — `setflat` isn't modeled, so chord
+*counts* differ from gs while shapes agree (documented deviation;
+tests pin shape). Both pinned against gs byte-for-byte on user-space
+reporting, dispatch, and exit semantics.
+
+**The library** (`lib/artkit.ps`, self-contained, nothing drawn on
+load, gs-clean, deterministic under srand): seeded random
+(chance/jit/frnd/oneof), color mixing (mix3/shade) and eight
+five-color mood palettes, a heading-and-pen turtle with a pose stack
+(`tl`/`tr`, because `lt` shadows the comparison operator — cost one
+debugging session and now a header warning), an L-system rewriter
+capped at 60k chars (PS strings max 65535) with `ldraw` driving the
+turtle, `alongpath` (stamp x/y/angle at even arc-length along any
+path — the pathforall payoff; charpath text walks like anything
+else), `pathtext` (type set glyph-by-glyph along a path, each glyph
+at its own advance, rotated to the tangent), shapes
+(ngon/star/rrect — rrect by four arcs; no arcto here), showctr /
+fitfont, and a grid driver. `tests/artkit.rs` pins turtle geometry
+and L-system growth by arithmetic, brushes by stamp counts,
+rendering by ink, the file by gs.
+
+**The skill** — `.claude/skills/psart/SKILL.md`: the
+render-look-refine loop, the toolkit reference, type-as-material
+(catalog + Type 3 dials + charpath), composition habits, a starter
+sketch.
+
+**The piece** — `gallery/hortus.ps`, *Hortus Machinalis*: a
+herbarium plate, three L-system specimens (shrub / fern / swaying
+weed, each grammar labeled with its rule, angle, and depth), dried
+blossoms stamped along each plant's own path by `alongpath`, foxed
+parchment, double-rule frame, letterspaced Palatino letterpress
+(ashow). Inlines its toolkit subset per the gallery self-containment
+doctrine; renders identically in gs.
+
+Deferred: `setflat`/flatness modeling; `pathbbox`-style access to
+the flattened path from Rust; text-on-path kerning refinements
+(pathtext advances by plain stringwidth).
+
 ## Stage 18 — the font catalog (2026-07-18)
 
 Typography for every occasion, in two movements.

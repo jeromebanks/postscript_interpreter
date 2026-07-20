@@ -6,7 +6,7 @@ after, with **model routing per task** so work can continue on whatever
 Claude model is at hand. Read `AGENTS.md` for working conventions before
 starting any task here.
 
-**Status (2026-07-18): every stage below (5–18) is ✅ COMPLETE.** What
+**Status (2026-07-19): every stage below (5–19) is ✅ COMPLETE.** What
 remains is open-ended by design: the Gallery II slot (Stage 10), the
 standing gaps listed at the bottom, and whatever new stages get added.
 
@@ -559,6 +559,38 @@ the gaps only glyphs-as-programs can fill.
 5. **Specimen + docs** — catalog specimen sheet(s), FONTS.md
    catalog section, README, site gallery update, NOTES entry.
    [haiku]
+
+---
+
+## Stage 19 — the art toolkit: pscat as an instrument
+
+**✅ COMPLETE (2026-07-19)** — NOTES.md has the summary;
+`.claude/skills/psart/SKILL.md` is the agent-facing recipe book.
+
+Goal: agents (and people) make *art* with pscat as naturally as they
+render files — the missing path operators, a generative toolkit
+library, an art skill, and a gallery piece proving the whole stack.
+
+1. **`pathforall` + `flattenpath`** — path enumeration as a
+   loop-family execution frame (user-space coords via inverse CTM,
+   snapshot semantics, exitable), curve flattening by de Casteljau
+   at fixed quarter-pixel tolerance (`setflat` not modeled —
+   documented deviation). gs-pinned byte-for-byte. Unlocks: walk any
+   path, charpath text included, and stamp along it. [opus]
+2. **`lib/artkit.ps`** — seeded random (chance/jit/frnd/oneof),
+   color mixing + eight mood palettes, a turtle with a pose stack
+   (tl/tr — lt collides with less-than), an L-system rewriter +
+   ldraw, the alongpath/pathtext brushes, shapes, centered/fit
+   text, a grid driver. Self-contained, draws nothing on load, runs
+   in gs, deterministic under srand. [sonnet]
+3. **The psart skill** — `.claude/skills/psart/SKILL.md`: the
+   render-look-refine loop, toolkit reference, type-as-material,
+   composition habits, a starter sketch. [any model with taste]
+4. **Gallery piece** — `gallery/hortus.ps`, *Hortus Machinalis*: a
+   herbarium plate of three L-system specimens, blossoms stamped
+   along the plants' own paths with alongpath, Palatino
+   letterpress. Self-contained per the gallery doctrine. [any model
+   with taste]
 
 ---
 

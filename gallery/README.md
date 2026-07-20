@@ -21,6 +21,7 @@ overridden per line through the font's scratch dict.
 | Frost Mandala | `frost_mandala.ps` | Six-fold circle recursion, 11° twist per generation (1,555+ circles) |
 | Ring of Type | `ring_of_type.ps` | One sentence circling 11 shrinking rings, set glyph by glyph; charpath ampersand |
 | Hundred Lines | `hundred_lines.ps` | The Stage 12 /HandScript dynamic font writing punishment lines on a chalkboard — same sentence nine times, no two letters alike, jitter climbing line by line |
+| Hortus Machinalis | `hortus.ps` | (Stage 19) A herbarium plate: three L-system plants grown by turtle, dried blossoms stamped along the plant's own path with `pathforall`, Palatino letterpress |
 
 ## Viewing the gallery
 
