@@ -5,9 +5,13 @@ draw live — built for personal fun rather than as a Ghostscript
 replacement, though it's meant to grow toward broad spec coverage over
 time.
 
+**[jeromebanks.github.io/postscript_interpreter](https://jeromebanks.github.io/postscript_interpreter/)**
+— docs, the full gallery, a font specimen for every face, and a live
+playground running the interpreter in your browser tab, no install.
+
 ## Status
 
-**All nineteen roadmap stages are complete** (2026-07-19): 317 tests
+**All twenty roadmap stages are complete** (2026-07-19): 317 tests
 across 34 suites, clippy clean, golden-checked against Ghostscript.
 What follows is the tour, roughly in the order it was built.
 
@@ -94,10 +98,10 @@ strokes, wandering baselines, and varying pen pressure. No two
 letters ever match, every page is reproducible, and the same file
 runs in Ghostscript.
 
-Stages 13–19 each have their own section below: the handwrite tool,
+Stages 13–20 each have their own section below: the handwrite tool,
 agent integration (skill + MCP server), the Type 3 font library, the
-browser/WASM build, the GitHub Pages site, the font catalog, and
-the art toolkit.
+browser/WASM build, the GitHub Pages site, the font catalog, the art
+toolkit, and the style packs.
 
 Try `cargo run -- --page 500x500 examples/sierpinski.ps` and watch the
 triangles appear.
@@ -216,7 +220,9 @@ cargo run -- --png sheets.png examples/font_catalog.ps   # the specimen sheets
 licenses — all OFL, Apache 2.0, GUST, or AGPL-with-font-exception;
 per-family license files ride alongside the fonts). Drop your own
 `.ttf`/`.otf` into any subdirectory and `/<FileStem> findfont`
-finds it.
+finds it. The [font gallery](https://jeromebanks.github.io/postscript_interpreter/fonts.html)
+on the project site shows every face — Type 3 library included — one
+card at a time.
 
 ## Making art
 
@@ -250,6 +256,11 @@ action bursts, speed lines, halftone `dotfill`, dripping title
 slabs). Load artkit, then the pack; `examples/style_*.ps` are the
 four specimen posters.
 
+<p><img src="lib/styles/specimen_steampunk.png" width="23%" alt="Aether &amp; Brass — the steampunk specimen"/>
+<img src="lib/styles/specimen_psychedelic.png" width="23%" alt="Turn On The Sun — the psychedelic specimen"/>
+<img src="lib/styles/specimen_scifi.png" width="23%" alt="Outer Reaches — the sci-fi specimen"/>
+<img src="lib/styles/specimen_toon.png" width="23%" alt="Splat! — the toon specimen"/></p>
+
 `gallery/hortus.ps` is the worked example, and the `psart` skill
 (`.claude/skills/psart/SKILL.md`) teaches the whole workflow to any
 agent: the render-look-refine loop, the toolkit, the style packs,
@@ -257,11 +268,18 @@ type as material, and the composition habits that keep pieces good.
 
 ## The website
 
-The project site — docs, the full gallery, and a live playground
-running the wasm interpreter — is published from this repo by
-`.github/workflows/pages.yml` (GitHub Pages, "GitHub Actions"
-source). Sources in `site/`; `./scripts/build_site.sh` assembles
-`_site/` for local preview (`python3 -m http.server -d _site`).
+**[jeromebanks.github.io/postscript_interpreter](https://jeromebanks.github.io/postscript_interpreter/)**
+— architecture and extending guides, the full art/font/example
+gallery, a dedicated [font gallery](https://jeromebanks.github.io/postscript_interpreter/fonts.html)
+(every Type 3 face and every catalog family, one card each), and a
+live playground running the wasm interpreter, all in the browser, no
+install. Published from this repo by `.github/workflows/pages.yml`
+(GitHub Pages, "GitHub Actions" source) on every push to `main`.
+Sources in `site/`; `./scripts/build_site.sh` assembles `_site/` for
+local preview (`python3 -m http.server -d _site`) — it also renders
+the font gallery cards (`scripts/build_font_gallery.sh`) and the
+example/gallery stills fresh each time, so the site never drifts from
+what the interpreter actually does.
 
 ## In the browser
 

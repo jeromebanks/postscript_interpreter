@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pscat — fonts</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="index.html">pscat</a>
+  <nav>
+    <a href="index.html">Home</a>
+    <a href="playground.html">Playground</a>
+    <a href="gallery.html">Gallery</a>
+    <a class="here" href="fonts.html">Fonts</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="extending.html">Extending</a>
+    <a href="javascript.html">JavaScript</a>
+    <a href="agents.html">Agents</a>
+    <a href="https://github.com/jeromebanks/postscript_interpreter">GitHub</a>
+  </nav>
+</header>
+<main class="wide">
+  <h1>Fonts</h1>
+  <p class="sub">Every face <code>findfont</code> can reach, rendered by
+  pscat itself. Two families: eight <b>Type3 faces</b> whose glyphs are
+  PostScript programs (<code>lib/fonts/</code>), and a 58-file
+  <b>runtime catalog</b> (<code>fonts/catalog/</code>) of libre outline
+  faces loaded from disk on first use — together they resolve every
+  classic LaserWriter 35 name plus 35 more display and text families.
+  Run <code>pscat --fonts</code> for the complete, current list of
+  names and aliases.</p>
+
+  <h2>The Type3 library</h2>
+  <p>Original display faces where every glyph is a program, so the
+  letterforms do things outline fonts can't — see
+  <a href="architecture.html">Architecture</a> for how Type3 glyph
+  procedures feed the same transform pipeline as everything else.
+  Self-contained files, draw nothing on load, run unchanged in
+  Ghostscript.</p>
+  <div class="cards">
+    <div class="card"><img src="assets/fonts/type3/neon.png" alt="/Neon specimen" loading="lazy">
+      <div class="body"><b>/Neon</b><span>Bent glass tube — five widening strokes of overdraw, no alpha anywhere</span></div></div>
+    <div class="card"><img src="assets/fonts/type3/marquee.png" alt="/Marquee specimen" loading="lazy">
+      <div class="body"><b>/Marquee</b><span>Theater-sign bulbs, halos, glints, and the occasional burnt-out bulb</span></div></div>
+    <div class="card"><img src="assets/fonts/type3/constellation.png" alt="/Constellation specimen" loading="lazy">
+      <div class="body"><b>/Constellation</b><span>Letters as star charts — magnitudes and tints rand-drawn, hairline asterisms</span></div></div>
+    <div class="card"><img src="assets/fonts/type3/lapidary.png" alt="/Lapidary specimen" loading="lazy">
+      <div class="body"><b>/Lapidary</b><span>Chiseled capitals — shadow, raised face, dark incision, a hairline of sunlight on the arris</span></div></div>
+    <div class="card"><img src="assets/fonts/type3/circuitry.png" alt="/Circuitry specimen" loading="lazy">
+      <div class="body"><b>/Circuitry</b><span>Copper PCB runs — solder-mask channel, specular seam, vias at pitch</span></div></div>
+    <div class="card"><img src="assets/fonts/type3/stitchwork.png" alt="/Stitchwork specimen" loading="lazy">
+      <div class="body"><b>/Stitchwork</b><span>Cross-stitch X's on the 45° aida grid, three passes of floss, a seeded-jitter hand</span></div></div>
+    <div class="card"><img src="assets/fonts/type3/confetti.png" alt="/Confetti specimen" loading="lazy">
+      <div class="body"><b>/Confetti</b><span>A thrown handful — paper slips and dots in a six-color party palette, still falling</span></div></div>
+    <div class="card"><img src="assets/fonts/type3/handscript.png" alt="/HandScript specimen" loading="lazy">
+      <div class="body"><b>/HandScript</b><span>Dynamic handwriting (Stage 12) — rand-jittered strokes; no two letters ever match. See <a href="index.html">Handwrite</a></span></div></div>
+  </div>
+
+  <h2>The standard thirty-five</h2>
+  <p>Every classic LaserWriter name resolves to a metric-compatible
+  libre face: the bundled Liberation faces cover Helvetica/Times/
+  Courier, TeX Gyre covers Palatino, Bookman, New Century Schoolbook,
+  Avant Garde, and Zapf Chancery, and the URW symbol faces give
+  <code>/Symbol</code> and <code>/ZapfDingbats</code> real glyphs with
+  their proper PLRM encodings.</p>
+  <div class="cards">
+    <div class="card"><img src="assets/fonts/catalog/helvetica.png" alt="Helvetica" loading="lazy"></div>
+    <div class="card"><img src="assets/fonts/catalog/times-roman.png" alt="Times-Roman" loading="lazy"></div>
+    <div class="card"><img src="assets/fonts/catalog/courier.png" alt="Courier" loading="lazy"></div>
+    <div class="card"><img src="assets/fonts/catalog/palatino-roman.png" alt="Palatino-Roman" loading="lazy"></div>
+    <div class="card"><img src="assets/fonts/catalog/bookman-light.png" alt="Bookman-Light" loading="lazy"></div>
+    <div class="card"><img src="assets/fonts/catalog/newcenturyschlbk.png" alt="NewCenturySchlbk" loading="lazy"></div>
+    <div class="card"><img src="assets/fonts/catalog/avantgarde-book.png" alt="AvantGarde-Book" loading="lazy"></div>
+    <div class="card"><img src="assets/fonts/catalog/zapfchancery.png" alt="ZapfChancery" loading="lazy"></div>
+    <div class="card"><img src="assets/fonts/catalog/helvetica-narrow.png" alt="Helvetica-Narrow" loading="lazy"></div>
+    <div class="card"><img src="assets/fonts/catalog/symbol.png" alt="Symbol" loading="lazy"></div>
+    <div class="card"><img src="assets/fonts/catalog/zapfdingbats.png" alt="ZapfDingbats" loading="lazy"></div>
+  </div>
+  <p class="sub">Bold, italic, and bold-italic cuts ride along for every
+  text family.</p>
+
+  <h2>The display shelf</h2>
+  <p>35 curated families from the Google Fonts collection (all OFL or
+  Apache 2.0) spanning garalde to arcade, script to blackletter. Drop
+  your own <code>.ttf</code>/<code>.otf</code> into any
+  <code>fonts/catalog/</code> subdirectory and <code>/&lt;FileStem&gt;
+  findfont</code> finds it —
+  <a href="https://github.com/jeromebanks/postscript_interpreter/blob/main/fonts/catalog/README.md">the
+  manifest</a> has the full family/license table.</p>
+  <div class="cards">
+    <div class="card"><img src="assets/fonts/catalog/ebgaramond.png" alt="EBGaramond" loading="lazy">
+      <div class="body"><span>old-style garalde serif</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/librebaskerville.png" alt="LibreBaskerville" loading="lazy">
+      <div class="body"><span>transitional serif</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/playfairdisplay.png" alt="PlayfairDisplay" loading="lazy">
+      <div class="body"><span>didone display serif</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/lora.png" alt="Lora" loading="lazy">
+      <div class="body"><span>contemporary text serif</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/cinzel.png" alt="Cinzel" loading="lazy">
+      <div class="body"><span>classical Roman capitals</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/poppins.png" alt="Poppins" loading="lazy">
+      <div class="body"><span>geometric sans</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/jost.png" alt="Jost" loading="lazy">
+      <div class="body"><span>Futura-spirited geometric sans</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/oswald.png" alt="Oswald" loading="lazy">
+      <div class="body"><span>condensed gothic sans</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/atkinsonhyperlegible.png" alt="AtkinsonHyperlegible" loading="lazy">
+      <div class="body"><span>high-legibility humanist sans</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/zillaslab.png" alt="ZillaSlab" loading="lazy">
+      <div class="body"><span>contemporary slab serif</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/alfaslabone.png" alt="AlfaSlabOne" loading="lazy">
+      <div class="body"><span>fat-face slab display</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/jetbrainsmono.png" alt="JetBrainsMono" loading="lazy">
+      <div class="body"><span>modern coding monospace</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/greatvibes.png" alt="GreatVibes" loading="lazy">
+      <div class="body"><span>formal copperplate script</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/pacifico.png" alt="Pacifico" loading="lazy">
+      <div class="body"><span>1950s brush script</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/caveat.png" alt="Caveat" loading="lazy">
+      <div class="body"><span>casual handwriting</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/homemadeapple.png" alt="HomemadeApple" loading="lazy">
+      <div class="body"><span>flowing pen handwriting</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/bebasneue.png" alt="BebasNeue" loading="lazy">
+      <div class="body"><span>tall condensed poster caps</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/abrilfatface.png" alt="AbrilFatface" loading="lazy">
+      <div class="body"><span>heavy didone advertising face</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/monoton.png" alt="Monoton" loading="lazy">
+      <div class="body"><span>inline neon-sign display</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/limelight.png" alt="Limelight" loading="lazy">
+      <div class="body"><span>art-deco marquee</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/bungee.png" alt="Bungee" loading="lazy">
+      <div class="body"><span>chromatic urban signage</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/unifrakturmaguntia.png" alt="UnifrakturMaguntia" loading="lazy">
+      <div class="body"><span>blackletter fraktur</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/pirataone.png" alt="PirataOne" loading="lazy">
+      <div class="body"><span>condensed blackletter</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/rye.png" alt="Rye" loading="lazy">
+      <div class="body"><span>western circus/wanted-poster</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/creepster.png" alt="Creepster" loading="lazy">
+      <div class="body"><span>horror-movie lettering</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/pressstart2p.png" alt="PressStart2P" loading="lazy">
+      <div class="body"><span>8-bit arcade pixels</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/vt323.png" alt="VT323" loading="lazy">
+      <div class="body"><span>glowing-terminal mono</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/specialelite.png" alt="SpecialElite" loading="lazy">
+      <div class="body"><span>worn typewriter</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/orbitron.png" alt="Orbitron" loading="lazy">
+      <div class="body"><span>sci-fi geometric display</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/audiowide.png" alt="Audiowide" loading="lazy">
+      <div class="body"><span>streamlined techno display</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/stardosstencil.png" alt="StardosStencil" loading="lazy">
+      <div class="body"><span>stencil serif</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/bangers.png" alt="Bangers" loading="lazy">
+      <div class="body"><span>comic-book shout</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/comicneue.png" alt="ComicNeue" loading="lazy">
+      <div class="body"><span>the casual comic sans, done right</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/medievalsharp.png" alt="MedievalSharp" loading="lazy">
+      <div class="body"><span>carved medieval lettering</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/permanentmarker.png" alt="PermanentMarker" loading="lazy">
+      <div class="body"><span>felt-tip marker</span></div></div>
+  </div>
+</main>
+<footer>pscat — built by hand, tested against Ghostscript, drawn live.</footer>
+</body>
+</html>

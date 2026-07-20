@@ -13,6 +13,7 @@
     <a href="index.html">Home</a>
     <a href="playground.html">Playground</a>
     <a class="here" href="gallery.html">Gallery</a>
+    <a href="fonts.html">Fonts</a>
     <a href="architecture.html">Architecture</a>
     <a href="extending.html">Extending</a>
     <a href="javascript.html">JavaScript</a>
@@ -53,6 +54,29 @@
       <div class="body"><b>Hortus Machinalis</b><span>A herbarium plate: three L-system specimens grown by turtle, blossoms stamped along each plant's own path with pathforall</span></div></div>
   </div>
 
+  <h2>Style packs</h2>
+  <p>Four motif libraries in <code>lib/styles/</code>, layered on the
+  generative-art toolkit
+  (<a href="https://github.com/jeromebanks/postscript_interpreter/blob/main/lib/artkit.ps">lib/artkit.ps</a>
+  — seeded random, mood palettes, turtle graphics, an L-system engine,
+  and the <code>pathforall</code>-powered <code>alongpath</code>/
+  <code>pathtext</code> brushes). Each pack adds three palettes and a
+  drawer of motifs; the <code>psart</code> skill
+  (<code>.claude/skills/psart/SKILL.md</code>) teaches the whole
+  render-look-refine workflow to any agent. Specimen posters below are
+  <code>examples/style_*.ps</code>, 620×800, deterministic under
+  <code>srand</code>.</p>
+  <div class="cards">
+    <div class="card"><img src="assets/renders/specimen_steampunk.png" alt="Aether & Brass — steampunk specimen" loading="lazy">
+      <div class="body"><b>steampunk.ps</b><span>Gears, rivets, flanged pipework, pressure gauges, riveted plate frames — /brass /verdigris /boiler</span></div></div>
+    <div class="card"><img src="assets/renders/specimen_psychedelic.png" alt="Turn On The Sun — psychedelic specimen" loading="lazy">
+      <div class="body"><b>psychedelic.ps</b><span>Sunburst rays, wobble-ring blobs, spirals, kaleidoscope repeats, hue-wheel color — /acid /blacklight /sherbet</span></div></div>
+    <div class="card"><img src="assets/renders/specimen_scifi.png" alt="Outer Reaches — sci-fi specimen" loading="lazy">
+      <div class="body"><b>scifi.ps</b><span>Starfields, a ringed planet, HUD chrome, hex shields, the synthwave grid floor — /void /hologram /synthwave</span></div></div>
+    <div class="card"><img src="assets/renders/specimen_toon.png" alt="Splat! — toon specimen" loading="lazy">
+      <div class="body"><b>toon.ps</b><span>Cel-shaded flats under fat ink, speech bubbles, action bursts, dripping title slabs — /saturday /latenight /pastelpop</span></div></div>
+  </div>
+
   <h2>The font library</h2>
   <p>Original Type 3 display faces (<code>lib/fonts/</code>) — every
   glyph is a program, so the letterforms do things outlines can't.
@@ -71,7 +95,8 @@
   libre outline faces loaded at <code>findfont</code> time — the
   complete LaserWriter 35 resolved to metric-compatible faces (TeX
   Gyre, URW symbols) plus a display shelf from garalde to arcade.
-  <code>pscat --fonts</code> lists every name.</p>
+  <code>pscat --fonts</code> lists every name. The <a href="fonts.html">Fonts</a>
+  page shows every face individually, Type 3 library included.</p>
   <div class="cards">
     <div class="card"><img src="assets/renders/font_catalog1.png" alt="The standard 35 specimen" loading="lazy">
       <div class="body"><b>The Standard Thirty-Five</b><span>Every classic name — Palatino, Bookman, Avant Garde, Zapf Chancery, Symbol, Dingbats — resolved libre</span></div></div>
