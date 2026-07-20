@@ -1,0 +1,335 @@
+%!PS-Adobe-3.0
+%%Title: artkit.ps — a toolkit for generative art in PostScript
+%%Creator: pscat — Stage 19, the art toolkit
+%%EndComments
+
+% The pscat art toolkit: the procedures a generative piece reaches for
+% before it reaches for anything else. Defines into the current dict
+% (userdict, normally), draws nothing on load, runs unchanged in
+% Ghostscript. Everything is deterministic under `N srand` — the
+% reproducible-art doctrine: same seed, same picture.
+%
+%   (lib/artkit.ps) run          % from the repo root
+%
+% What's inside (details at each section):
+%   random    n chance | j jit | frnd | arr oneof
+%   color     [rgb] [rgb] t mix3 | [rgb] k shade | /name pal | /name palpick
+%   turtle    x y h thome | d fd | d hop | a tl | a tr | tpush | tpop
+%   L-systems (axiom) <<rules>> depth lsys | (str) step angle ldraw
+%   brushes   pitch {x y ang ...} alongpath | (str) pathtext
+%   shapes    cx cy r n ngon | cx cy r1 r2 n star | x y w h r rrect
+%   text      (s) cx y showctr | (s) w fitfont
+%   layout    x y w h cols rows {x y w h ...} grid
+%
+% Convention: helper names are lowercase and short; internal scratch
+% names carry two-letter prefixes (ap-, ld-, ls-, tk-) — avoid
+% redefining those inside brush/draw procs.
+
+% --- random ----------------------------------------------------------
+% Deterministic (rand), reproducible under srand. Drawn from rand's
+% high bits — successive low bits correlate (the marquee.ps finding).
+
+/chance { rand 8192 idiv exch mod } def          % n -> 0..n-1
+/jit { dup 2 mul 1 add chance exch sub } def     % j -> -j..j
+/frnd { rand 8192 idiv 262143 and 262143 div } def  % -> 0.0..1.0
+/oneof { dup length chance get } def             % array -> element
+
+% --- color -----------------------------------------------------------
+
+% [r g b] [r g b] t mix3 -> r g b   (t=0 first color, t=1 second)
+/mix3 {
+    /tkt exch def /tkb exch def /tka exch def
+    tka 0 get tkb 0 get tka 0 get sub tkt mul add
+    tka 1 get tkb 1 get tka 1 get sub tkt mul add
+    tka 2 get tkb 2 get tka 2 get sub tkt mul add
+} def
+
+% [r g b] k shade -> r g b   (k<1 toward black, k>1 toward white)
+/shade {
+    /tkk exch def aload pop
+    tkk 1 le {
+        tkk mul exch tkk mul exch 3 -1 roll tkk mul 3 1 roll
+    } {
+        /tkm tkk 1 sub dup 1 gt { pop 1 } if def
+        /tkb exch def /tkg exch def /tkr exch def
+        tkr 1 tkr sub tkm mul add
+        tkg 1 tkg sub tkm mul add
+        tkb 1 tkb sub tkm mul add
+    } ifelse
+} def
+
+% Eight moods, five colors each. `/dusk pal` -> the array;
+% `/dusk palpick` -> one of its colors as r g b.
+/Palettes <<
+    /dusk      [[0.10 0.09 0.22] [0.23 0.16 0.36] [0.48 0.25 0.42]
+                [0.85 0.48 0.34] [0.98 0.80 0.53]]
+    /ember     [[0.09 0.05 0.05] [0.42 0.09 0.06] [0.78 0.26 0.06]
+                [0.98 0.55 0.12] [1.00 0.85 0.40]]
+    /tide      [[0.03 0.14 0.20] [0.05 0.31 0.37] [0.13 0.52 0.53]
+                [0.47 0.76 0.68] [0.89 0.94 0.87]]
+    /meadow    [[0.18 0.29 0.12] [0.36 0.51 0.19] [0.60 0.71 0.30]
+                [0.91 0.80 0.38] [0.83 0.40 0.44]]
+    /carnival  [[0.94 0.26 0.33] [1.00 0.72 0.16] [0.24 0.62 0.94]
+                [0.36 0.78 0.42] [0.72 0.42 0.90]]
+    /parchment [[0.96 0.93 0.85] [0.88 0.82 0.68] [0.62 0.51 0.36]
+                [0.38 0.29 0.20] [0.20 0.15 0.12]]
+    /nocturne  [[0.02 0.03 0.08] [0.07 0.10 0.22] [0.13 0.55 0.72]
+                [0.25 0.90 0.85] [0.95 0.35 0.65]]
+    /stone     [[0.24 0.22 0.21] [0.45 0.42 0.39] [0.65 0.61 0.56]
+                [0.82 0.78 0.72] [0.93 0.91 0.87]]
+>> def
+
+/pal { Palettes exch get } def                   % /name -> array
+/palpick { pal oneof aload pop } def             % /name -> r g b
+
+% --- turtle ----------------------------------------------------------
+% A pen with a heading. `thome` moveto's the start; `fd` draws into
+% the current path (stroke it yourself, with whatever line dress);
+% `hop` travels without drawing; `tl`/`tr` turn (NOT lt/rt — those
+% are PostScript's comparison operators). Angles in degrees, 0 = +x,
+% counterclockwise.
+% `tpush`/`tpop` save and restore pose (depth 64) — the bracket ops
+% L-systems need.
+
+/TurtleState 16 dict def
+TurtleState begin
+    /tx 0 def /ty 0 def /th 0 def
+    /tstk 64 array def /tsp 0 def
+end
+
+/thome {                                         % x y heading -
+    TurtleState begin
+        /th exch def /ty exch def /tx exch def
+        /tsp 0 def
+        tx ty moveto
+    end
+} def
+
+/fd {                                            % dist -  (draws)
+    TurtleState begin
+        /tkd exch def
+        /tx tx th cos tkd mul add def
+        /ty ty th sin tkd mul add def
+        tx ty lineto
+    end
+} def
+
+/hop {                                           % dist -  (pen up)
+    TurtleState begin
+        /tkd exch def
+        /tx tx th cos tkd mul add def
+        /ty ty th sin tkd mul add def
+        tx ty moveto
+    end
+} def
+
+/tl { TurtleState begin th add /th exch def end } def    % ang -
+/tr { TurtleState begin th exch sub /th exch def end } def
+
+/tpush {
+    TurtleState begin
+        tstk tsp [tx ty th] put
+        /tsp tsp 1 add def
+    end
+} def
+
+/tpop {
+    TurtleState begin
+        /tsp tsp 1 sub def
+        tstk tsp get aload pop
+        /th exch def /ty exch def /tx exch def
+        tx ty moveto
+    end
+} def
+
+% --- L-systems -------------------------------------------------------
+% (axiom) rules depth lsys -> (expanded)
+% Rules map *character codes* to replacement strings; write entries as
+%   << (F) 0 get (F[+F]F[-F]F) >>
+% Expansion stops early (silently) if the next pass would pass 60000
+% characters — PostScript strings cap at 65535.
+
+/lsys {
+    /lsdepth exch def /lsrules exch def /lscur exch def
+    lsdepth {
+        /lsnext 0 def
+        lscur {
+            /lsc exch def
+            lsrules lsc known
+                { /lsnext lsnext lsrules lsc get length add def }
+                { /lsnext lsnext 1 add def } ifelse
+        } forall
+        lsnext 60000 gt { exit } if
+        /lsbuf lsnext string def
+        /lsi 0 def
+        lscur {
+            /lsc exch def
+            lsrules lsc known {
+                /lsrep lsrules lsc get def
+                lsbuf lsi lsrep putinterval
+                /lsi lsi lsrep length add def
+            } {
+                lsbuf lsi lsc put
+                /lsi lsi 1 add def
+            } ifelse
+        } forall
+        /lscur lsbuf def
+    } repeat
+    lscur
+} def
+
+% (string) step angle ldraw -
+% Drive the turtle from an L-system string: F draw, f hop, + left,
+% - right, [ push, ] pop; everything else ignored (letters other than
+% F make fine no-op symbols in rules). Start with `thome` first.
+/ldraw {
+    /ldang exch def /ldstep exch def
+    {
+        /ldc exch def
+        ldc 70 eq { ldstep fd } {                % F
+        ldc 102 eq { ldstep hop } {              % f
+        ldc 43 eq { ldang tl } {                 % +
+        ldc 45 eq { ldang tr } {                 % -
+        ldc 91 eq { tpush } {                    % [
+        ldc 93 eq { tpop } if
+        } ifelse } ifelse } ifelse } ifelse } ifelse
+    } forall
+} def
+
+% --- brushes: walk any path ------------------------------------------
+% pitch {x y ang -> -} alongpath -
+% Flattens the current path, then calls the proc at even arc-length
+% stops along it — x y in user space, ang the local direction in
+% degrees. This is how a path (charpath text included!) becomes a
+% string of bulbs, stitches, leaves, or anything else you can stamp.
+% The current path survives (flattened). The proc runs between
+% newpath-building stamps, so build your stamp inside gsave/grestore
+% or on a fresh path, and don't touch ap- names.
+
+/alintern {                                      % pitchproc stampproc -
+    /apstamp exch def /appitch exch def
+    flattenpath
+    /aprem 0 def /aplx 0 def /aply 0 def /apsx 0 def /apsy 0 def
+    { /aply exch def /aplx exch def /apsx aplx def /apsy aply def
+      /aprem 0 def }
+    { apseg }
+    { pop pop pop pop pop pop }
+    { apsx apsy apseg }
+    pathforall
+} def
+
+/apseg {                                         % x y -  (segment end)
+    /apy1 exch def /apx1 exch def
+    /apdx apx1 aplx sub def /apdy apy1 aply sub def
+    /aplen apdx dup mul apdy dup mul add sqrt def
+    aplen 0.0001 gt {
+        /apang apdy apdx atan def
+        /apt aprem def
+        {
+            apt aplen gt { exit } if
+            aplx apdx apt mul aplen div add
+            aply apdy apt mul aplen div add
+            apang apstamp
+            /apt apt appitch add def
+        } loop
+        /aprem apt aplen sub def
+    } if
+    /aplx apx1 def /aply apy1 def
+} def
+
+/alongpath {                                     % pitch proc -
+    exch /aponepitch exch def
+    { aponepitch } exch alintern
+} def
+
+% (string) pathtext -
+% Set a string along the current path in the current font: each glyph
+% lands at its own advance, rotated to the path's local direction.
+% Best on gentle curves at generous point sizes.
+/pathtext {
+    /ptstr exch def
+    /pti 0 def
+    % The pitch to the *next* stop is the advance of the glyph just
+    % stamped (the pitch proc only ever runs after a stamp, so pti >= 1).
+    { pti ptstr length le pti 0 gt and {
+          ptstr pti 1 sub 1 getinterval stringwidth pop
+          dup 0.001 lt { pop 0.001 } if
+      } { 100000 } ifelse }
+    { pti ptstr length lt {
+          gsave
+              3 1 roll translate rotate
+              0 0 moveto
+              ptstr pti 1 getinterval show
+          grestore
+          /pti pti 1 add def
+      } { pop pop pop } ifelse }
+    alintern
+} def
+
+% --- shapes (appended to the current path) ---------------------------
+
+/ngon {                                          % cx cy r n -
+    /tkn exch def /tkr exch def /tky exch def /tkx exch def
+    tkx tkr add tky moveto
+    1 1 tkn 1 sub {
+        360 mul tkn div /tka exch def
+        tkx tka cos tkr mul add tky tka sin tkr mul add lineto
+    } for
+    closepath
+} def
+
+/star {                                          % cx cy r-out r-in n -
+    /tkn exch def /tkri exch def /tkro exch def
+    /tky exch def /tkx exch def
+    tkx tkro add tky moveto
+    1 1 tkn 2 mul 1 sub {
+        /tki exch def
+        /tka tki 180 mul tkn div def
+        /tkr tki 2 mod 0 eq { tkro } { tkri } ifelse def
+        tkx tka cos tkr mul add tky tka sin tkr mul add lineto
+    } for
+    closepath
+} def
+
+/rrect {                                         % x y w h r -
+    /tkr exch def /tkh exch def /tkw exch def /tky exch def /tkx exch def
+    tkx tkr add tky moveto
+    tkx tkw add tkr sub tky tkr add tkr -90 0 arc
+    tkx tkw add tkr sub tky tkh add tkr sub tkr 0 90 arc
+    tkx tkr add tky tkh add tkr sub tkr 90 180 arc
+    tkx tkr add tky tkr add tkr 180 270 arc
+    closepath
+} def
+
+% --- text ------------------------------------------------------------
+
+/showctr {                                       % (s) cx y -
+    /tky exch def /tkx exch def /tks exch def
+    tkx tks stringwidth pop 2 div sub tky moveto
+    tks show
+} def
+
+/fitfont {                                       % (s) targetwidth -
+    /tkw exch def
+    stringwidth pop /tkcur exch def
+    tkcur 0.001 gt { currentfont tkw tkcur div scalefont setfont } if
+} def
+
+% --- layout ----------------------------------------------------------
+
+/grid {                                          % x y w h cols rows proc -
+    /tkproc exch def /tkrows exch def /tkcols exch def
+    /tkh exch def /tkw exch def /tky exch def /tkx exch def
+    /tkcw tkw tkcols div def
+    /tkch tkh tkrows div def
+    0 1 tkrows 1 sub {
+        /tkj exch def
+        0 1 tkcols 1 sub {
+            /tki exch def
+            tkx tki tkcw mul add
+            tky tkj tkch mul add
+            tkcw tkch tkproc
+        } for
+    } for
+} def
+%%EOF
