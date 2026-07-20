@@ -1,0 +1,188 @@
+%!PS-Adobe-3.0
+%%Title: toon.ps — flat color, fat outlines, and comic furniture for artkit
+%%Creator: pscat — Stage 20, the style packs
+%%EndComments
+
+% Cel-animation motifs — the grown-up-cartoon look: flat fills behind
+% heavy ink outlines, speech bubbles with tails, action bursts, speed
+% lines, halftone dot shading, cartoon eyes, and dripping title slabs.
+% Load lib/artkit.ps first — this pack registers its palettes into
+% artkit's Palettes dict. Defines into the current dict, draws nothing
+% on load, runs in Ghostscript, deterministic under `N srand`.
+%
+%   (lib/artkit.ps) run  (lib/styles/toon.ps) run
+%
+% What's inside:
+%   palettes  /saturday /latenight /pastelpop
+%   dial      /tnink — the outline color (default near-black; e.g.
+%             `/tnink [0.20 0.12 0.30] def` for a softer line)
+%   painted   [r g b] w celfill    fill current path flat, ink outline
+%             at width w (the one everything else is built on)
+%             x y w h r tx ty bubble   speech bubble, tail apex at tx ty
+%             cx cy r1 r2 n a0 a1 speedlines   ink action lines in the
+%             angular sweep a0..a1
+%             pitch r dotfill    halftone dots (current color) clipped
+%             to the current path — the path survives
+%             cx cy r ang eye    cartoon eyeball looking toward ang
+%   path      cx cy r1 r2 n burst   jagged POW star (celfill it)
+%             x y w h n dripbox     rect whose bottom edge melts into n
+%             round-tipped drips (celfill it, put a title in it)
+%
+% Scratch prefix: tn- (don't redefine tn- names in your own procs).
+
+Palettes /saturday  [[0.93 0.23 0.25] [1.00 0.78 0.10] [0.20 0.60 0.93]
+                     [0.38 0.76 0.35] [0.98 0.95 0.89]] put
+Palettes /latenight [[0.16 0.17 0.21] [0.44 0.47 0.31] [0.83 0.63 0.20]
+                     [0.69 0.30 0.24] [0.90 0.87 0.78]] put
+Palettes /pastelpop [[1.00 0.72 0.80] [1.00 0.90 0.60] [0.70 0.90 0.78]
+                     [0.72 0.78 0.98] [0.99 0.98 0.94]] put
+
+/tnink [0.10 0.09 0.12] def
+
+% [r g b] w celfill -   (fills the current path flat, then strokes it
+% in tnink at width w with round joins; consumes the path)
+/celfill {
+    /tnw exch def
+    gsave aload pop setrgbcolor fill grestore
+    tnink aload pop setrgbcolor
+    tnw setlinewidth 1 setlinejoin 1 setlinecap stroke
+} def
+
+% cx cy r1 r2 n burst -   (appends a 2n-point star, radii jittered so
+% no two spikes match; r1 inner, r2 outer)
+/burst {
+    /tnn exch def /tnr2 exch def /tnr1 exch def
+    /tny exch def /tnx exch def
+    0 1 tnn 2 mul 1 sub {
+        /tni exch def
+        /tna tni 180 mul tnn div def
+        /tnr tni 2 mod 0 eq
+            { tnr2 0.78 0.22 frnd mul add mul }
+            { tnr1 0.85 0.15 frnd mul add mul } ifelse def
+        tnx tna cos tnr mul add tny tna sin tnr mul add
+        tni 0 eq { moveto } { lineto } ifelse
+    } for
+    closepath
+} def
+
+% x y w h r tx ty bubble -   (painted: white rounded bubble with an
+% ink outline and a tail whose apex is at tx ty; ink pass first, then
+% a slightly inset white pass, so bubble and tail merge seamlessly)
+/bubble {
+    /tnty exch def /tntx exch def /tnr exch def
+    /tnh exch def /tnw exch def /tny exch def /tnx exch def
+    /tnbx tnx tnw 2 div add def /tnby tny tnh 2 div add def
+    /tnlw tnw tnh add 0.014 mul def          % outline weight
+    % tail base: two points partway from bubble center toward the apex
+    /tndx tntx tnbx sub def /tndy tnty tnby sub def
+    /tnlen tndx dup mul tndy dup mul add sqrt def
+    tnlen 0.0001 lt { /tnlen 0.0001 def } if
+    /tnux tndx tnlen div def /tnuy tndy tnlen div def
+    /tnd tnw tnh add 0.22 mul tnlen 2 div 2 copy gt { exch } if pop def
+    /tng tnw tnh add 0.055 mul def
+    /tnb1x tnbx tnux tnd mul add tnuy tng mul sub def
+    /tnb1y tnby tnuy tnd mul add tnux tng mul add def
+    /tnb2x tnbx tnux tnd mul add tnuy tng mul add def
+    /tnb2y tnby tnuy tnd mul add tnux tng mul sub def
+    gsave
+    % ink silhouette
+    tnink aload pop setrgbcolor
+    newpath tnx tnlw sub tny tnlw sub tnw tnlw 2 mul add
+        tnh tnlw 2 mul add tnr tnlw add rrect fill
+    newpath tnb1x tnb1y moveto tntx tnty lineto tnb2x tnb2y lineto
+        closepath fill
+    % white interior, inset by the line weight
+    1 1 1 setrgbcolor
+    newpath tnx tnlw add tny tnlw add tnw tnlw 2 mul sub
+        tnh tnlw 2 mul sub tnr tnlw sub dup 1 lt { pop 1 } if rrect fill
+    newpath
+    tnb1x tnuy tnlw 1.4 mul mul add  tnb1y tnux tnlw 1.4 mul mul sub
+    moveto
+    tntx tnux tnlw 2.6 mul mul sub  tnty tnuy tnlw 2.6 mul mul sub
+    lineto
+    tnb2x tnuy tnlw 1.4 mul mul sub  tnb2y tnux tnlw 1.4 mul mul add
+    lineto closepath fill
+    grestore
+} def
+
+% cx cy r1 r2 n a0 a1 speedlines -   (painted: n tapering ink strokes
+% from radius r1 out to r2, spread across the sweep a0..a1 with a
+% little jitter)
+/speedlines {
+    /tna1 exch def /tna0 exch def /tnn exch def
+    /tnr2 exch def /tnr1 exch def /tny exch def /tnx exch def
+    gsave
+    tnink aload pop setrgbcolor 1 setlinecap
+    0 1 tnn 1 sub {
+        /tnt exch tnn 1 sub dup 0 eq { pop 1 } if div def
+        /tna tna0 tna1 tna0 sub tnt mul add 3 jit add def
+        /tnrr1 tnr1 1 frnd 0.25 mul add mul def
+        /tnrr2 tnr2 0.80 frnd 0.25 mul add mul def
+        0.7 frnd 1.6 mul add setlinewidth
+        newpath
+        tnx tna cos tnrr1 mul add tny tna sin tnrr1 mul add moveto
+        tnx tna cos tnrr2 mul add tny tna sin tnrr2 mul add lineto
+        stroke
+    } for
+    grestore
+} def
+
+% pitch r dotfill -   (painted: halftone dot grid in the current
+% color, clipped to the current path; alternate rows offset half a
+% pitch. The path survives — gsave/grestore brackets the clip)
+/dotfill {
+    /tndr exch def /tndp exch def
+    gsave
+    clip pathbbox
+    /tnqy2 exch def /tnqx2 exch def /tnqy1 exch def /tnqx1 exch def
+    /tnrow 0 def
+    tnqy1 tndp tnqy2 {
+        /tnyy exch def
+        tnqx1 tnrow 2 mod tndp mul 2 div add tndp tnqx2 {
+            /tnxx exch def
+            newpath tnxx tnyy tndr 0 360 arc fill
+        } for
+        /tnrow tnrow 1 add def
+    } for
+    grestore
+} def
+
+% cx cy r ang eye -   (painted: white ball, ink outline, pupil pushed
+% toward ang, a white glint in the pupil)
+/eye {
+    /tna exch def /tnr exch def /tny exch def /tnx exch def
+    gsave
+    newpath tnx tny tnr 0 360 arc 1 1 1 setrgbcolor fill
+    newpath tnx tny tnr 0 360 arc
+    tnink aload pop setrgbcolor tnr 0.13 mul setlinewidth stroke
+    /tnpx tnx tna cos tnr 0.42 mul mul add def
+    /tnpy tny tna sin tnr 0.42 mul mul add def
+    newpath tnpx tnpy tnr 0.34 mul 0 360 arc fill
+    newpath tnpx tnr 0.10 mul sub tnpy tnr 0.12 mul add tnr 0.10 mul
+    0 360 arc 1 1 1 setrgbcolor fill
+    grestore
+} def
+
+% x y w h n dripbox -   (appends a rect whose bottom edge hangs n
+% round-tipped drips of random length; celfill it)
+/dripbox {
+    /tnn exch def /tnh exch def /tnw exch def /tny exch def /tnx exch def
+    /tndw tnw tnn div def
+    tnx tny moveto
+    tnx tny tnh add lineto
+    tnx tnw add tny tnh add lineto
+    tnx tnw add tny lineto
+    % walk the bottom edge right to left, hanging a drip per cell
+    tnn 1 sub -1 0 {
+        /tni exch def
+        /tncx tnx tni 0.5 add tndw mul add def
+        /tndr tndw 0.18 mul frnd tndw 0.10 mul mul add def
+        /tndl tnh 0.25 mul frnd tnh 0.55 mul mul add def
+        tncx tndr add tny lineto
+        tncx tndr add tny tndl sub lineto
+        tncx tny tndl sub tndr 0 180 arcn
+        tncx tndr sub tny lineto
+    } for
+    closepath
+} def
+%%EOF

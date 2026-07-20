@@ -1,0 +1,176 @@
+%!PS-Adobe-3.0
+%%Title: steampunk.ps — brass, boilers, and clockwork for artkit
+%%Creator: pscat — Stage 20, the style packs
+%%EndComments
+
+% Steampunk motifs: gears, rivets, pipework, pressure gauges, riveted
+% plate frames. Load lib/artkit.ps first — this pack registers its
+% palettes into artkit's Palettes dict and leans on its helpers.
+% Defines into the current dict, draws nothing on load, runs in
+% Ghostscript, deterministic under `N srand`.
+%
+%   (lib/artkit.ps) run  (lib/styles/steampunk.ps) run
+%
+% What's inside:
+%   palettes  /brass /verdigris /boiler   (via pal / palpick, as ever)
+%   dial      /spmetal — palette name the painted stamps draw with
+%             (default /brass; e.g. `/spmetal /verdigris def`)
+%   path      cx cy r n gear        toothed wheel with bore (fill/clip it)
+%   painted   cx cy r rivet         domed rivet, rim + highlight
+%             x1 y1 x2 y2 w pipe    flanged pipe run
+%             cx cy r frac gauge    dial face, needle at frac (0..1)
+%             x y w h pitch plateframe   riveted boilerplate border
+%
+% Scratch prefix: sp- (don't redefine sp- names in your own procs).
+
+% Palette shades run dark -> light; the stamps index them by role:
+% 0 shadow/ink, 1 body-dark, 2 body, 3 trim, 4 highlight.
+Palettes /brass     [[0.13 0.09 0.06] [0.36 0.23 0.10] [0.62 0.44 0.16]
+                     [0.85 0.68 0.32] [0.96 0.88 0.66]] put
+Palettes /verdigris [[0.07 0.14 0.13] [0.16 0.38 0.33] [0.36 0.60 0.51]
+                     [0.70 0.45 0.28] [0.90 0.86 0.74]] put
+Palettes /boiler    [[0.08 0.07 0.08] [0.25 0.24 0.26] [0.47 0.15 0.10]
+                     [0.83 0.42 0.12] [0.93 0.91 0.88]] put
+
+/spmetal /brass def
+
+% cx cy r n gear -   (appends: toothed ring, bored hub)
+% Teeth to radius r, roots at 0.78r, bore at 0.32r wound the other way
+% so a plain (nonzero) fill leaves the hole open.
+/gear {
+    /spn exch def /spr exch def /spy exch def /spx exch def
+    /sprr spr 0.78 mul def
+    /sppd 360 spn div def
+    0 1 spn 1 sub {
+        /spi exch def
+        /spa spi sppd mul def
+        spx spa cos sprr mul add  spy spa sin sprr mul add
+        spi 0 eq { moveto } { lineto } ifelse
+        spx spa sppd 0.15 mul add cos sprr mul add
+        spy spa sppd 0.15 mul add sin sprr mul add lineto
+        spx spa sppd 0.25 mul add cos spr mul add
+        spy spa sppd 0.25 mul add sin spr mul add lineto
+        spx spa sppd 0.45 mul add cos spr mul add
+        spy spa sppd 0.45 mul add sin spr mul add lineto
+        spx spa sppd 0.55 mul add cos sprr mul add
+        spy spa sppd 0.55 mul add sin sprr mul add lineto
+    } for
+    closepath
+    spx spr 0.32 mul add spy moveto
+    spx spy spr 0.32 mul 360 0 arcn
+    closepath
+} def
+
+% cx cy r rivet -   (painted)
+/rivet {
+    /spr exch def /spy exch def /spx exch def
+    gsave
+    newpath spx spy spr 0 360 arc
+    spmetal pal 2 get aload pop setrgbcolor fill
+    newpath spx spy spr 0 360 arc
+    spmetal pal 0 get aload pop setrgbcolor
+    spr 0.24 mul setlinewidth stroke
+    newpath spx spr 0.32 mul sub spy spr 0.32 mul add spr 0.30 mul 0 360 arc
+    spmetal pal 4 get aload pop setrgbcolor fill
+    grestore
+} def
+
+% x1 y1 x2 y2 w pipe -   (painted: body, sheen, end flanges)
+/pipe {
+    /spw exch def /spy2 exch def /spx2 exch def
+    /spy1 exch def /spx1 exch def
+    /spang spy2 spy1 sub spx2 spx1 sub atan def
+    gsave
+    1 setlinecap
+    newpath spx1 spy1 moveto spx2 spy2 lineto
+    spmetal pal 1 get aload pop setrgbcolor spw setlinewidth stroke
+    newpath spx1 spy1 moveto spx2 spy2 lineto
+    spmetal pal 2 get aload pop setrgbcolor spw 0.64 mul setlinewidth stroke
+    % sheen line, offset toward the pipe's upper side
+    newpath
+    spx1 spang sin spw 0.18 mul mul sub  spy1 spang cos spw 0.18 mul mul add
+    moveto
+    spx2 spang sin spw 0.18 mul mul sub  spy2 spang cos spw 0.18 mul mul add
+    lineto
+    spmetal pal 4 get aload pop setrgbcolor spw 0.16 mul setlinewidth stroke
+    % flanges: short fat cross-bars at each end
+    0 setlinecap
+    spmetal pal 3 get aload pop setrgbcolor spw 0.55 mul setlinewidth
+    /spflange {
+        gsave translate spang rotate
+        newpath 0 spw 0.85 mul neg moveto 0 spw 0.85 mul lineto stroke
+        grestore
+    } def
+    spx1 spy1 spflange
+    spx2 spy2 spflange
+    grestore
+} def
+
+% cx cy r frac gauge -   (painted: face, rim, 270-degree tick sweep,
+% needle at frac in 0..1, hub)
+/gauge {
+    /spf exch def /spr exch def /spy exch def /spx exch def
+    gsave
+    newpath spx spy spr 0 360 arc
+    spmetal pal 4 get aload pop setrgbcolor fill
+    newpath spx spy spr 0 360 arc
+    spmetal pal 1 get aload pop setrgbcolor
+    spr 0.14 mul setlinewidth stroke
+    spmetal pal 0 get aload pop setrgbcolor
+    spr 0.045 mul setlinewidth
+    0 1 10 {
+        27 mul 225 exch sub /spa exch def
+        newpath
+        spx spa cos spr 0.68 mul mul add spy spa sin spr 0.68 mul mul add
+        moveto
+        spx spa cos spr 0.84 mul mul add spy spa sin spr 0.84 mul mul add
+        lineto stroke
+    } for
+    /spa 225 spf 270 mul sub def
+    newpath spx spy moveto
+    spx spa cos spr 0.62 mul mul add spy spa sin spr 0.62 mul mul add lineto
+    spmetal pal 2 get aload pop setrgbcolor
+    spr 0.07 mul setlinewidth 1 setlinecap stroke
+    newpath spx spy spr 0.10 mul 0 360 arc
+    spmetal pal 1 get aload pop setrgbcolor fill
+    grestore
+} def
+
+% x y w h pitch plateframe -   (painted: double rule + rivets on the
+% rim at roughly `pitch` spacing; corners always get one)
+% Uses spf- names throughout: it calls rivet, which owns spx/spy/spr.
+/plateframe {
+    /spfp exch def /spfh exch def /spfw exch def
+    /spfy exch def /spfx exch def
+    /spfin spfp 0.55 mul def
+    gsave
+    spmetal pal 1 get aload pop setrgbcolor
+    spfp 0.14 mul setlinewidth
+    newpath spfx spfy spfw spfh rectstroke
+    spmetal pal 3 get aload pop setrgbcolor
+    spfp 0.05 mul setlinewidth
+    newpath spfx spfin add spfy spfin add
+    spfw spfin 2 mul sub spfh spfin 2 mul sub rectstroke
+    /spfrad spfp 0.16 mul def
+    % rivet count per edge from the pitch, corners shared
+    /spfnx spfw spfin 2 mul sub spfp div round cvi 1 add
+        dup 2 lt { pop 2 } if def
+    /spfny spfh spfin 2 mul sub spfp div round cvi 1 add
+        dup 2 lt { pop 2 } if def
+    0 1 spfnx 1 sub {
+        /spft exch spfnx 1 sub div def
+        spfx spfin add spfw spfin 2 mul sub spft mul add
+        spfy spfin add spfrad rivet
+        spfx spfin add spfw spfin 2 mul sub spft mul add
+        spfy spfh add spfin sub spfrad rivet
+    } for
+    1 1 spfny 2 sub {
+        /spft exch spfny 1 sub div def
+        spfx spfin add
+        spfy spfin add spfh spfin 2 mul sub spft mul add spfrad rivet
+        spfx spfw add spfin sub
+        spfy spfin add spfh spfin 2 mul sub spft mul add spfrad rivet
+    } for
+    grestore
+} def
+%%EOF

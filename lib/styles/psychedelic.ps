@@ -1,0 +1,117 @@
+%!PS-Adobe-3.0
+%%Title: psychedelic.ps — sunbursts, wobble, and rainbow for artkit
+%%Creator: pscat — Stage 20, the style packs
+%%EndComments
+
+% Psychedelic motifs: sunburst rays, wobbling blob rings, spirals,
+% wavy lines, n-fold kaleidoscope repeats, and hue-wheel color. Load
+% lib/artkit.ps first — this pack registers its palettes into artkit's
+% Palettes dict. Defines into the current dict, draws nothing on load,
+% runs in Ghostscript, deterministic under `N srand`.
+%
+%   (lib/artkit.ps) run  (lib/styles/psychedelic.ps) run
+%
+% What's inside:
+%   palettes  /acid /blacklight /sherbet
+%   color     t rainbow            set color from hue t (0..1), full blast
+%   path      cx cy r n rays       n filled-wedge sunburst sectors
+%             cx cy r amp lobes blob    wobble-edged circle
+%             cx cy rmax turns spiral   Archimedean coil
+%             x1 y1 x2 y2 amp waves wavy   sine-displaced line
+%   layout    cx cy n {proc} kaleido    run proc n times, user space
+%             swung i*360/n about (cx,cy) each time
+%
+% The blob is the workhorse: nest them at shrinking radii with cycling
+% palette colors and you have the concentric liquid-ring look; spin
+% anything through kaleido for mandalas.
+%
+% Scratch prefix: py- (don't redefine py- names in your own procs;
+% kaleido's proc runs with py- names live).
+
+Palettes /acid       [[0.98 0.15 0.55] [1.00 0.52 0.08] [1.00 0.88 0.12]
+                      [0.35 0.85 0.25] [0.12 0.50 0.95]] put
+Palettes /blacklight [[0.10 0.02 0.18] [0.42 0.10 0.65] [0.90 0.15 0.60]
+                      [0.10 0.85 0.80] [0.85 0.95 0.20]] put
+Palettes /sherbet    [[0.99 0.55 0.60] [1.00 0.75 0.40] [1.00 0.95 0.65]
+                      [0.55 0.90 0.75] [0.55 0.65 0.95]] put
+
+% t rainbow -   (t 0..1 around the hue wheel, saturation/brightness 1)
+/rainbow { 1 1 sethsbcolor } def
+
+% cx cy r n rays -   (appends n wedge sectors, every other slice —
+% fill for a sunburst ground)
+/rays {
+    /pyn exch def /pyr exch def /pyy exch def /pyx exch def
+    /pyp 360 pyn div def
+    0 1 pyn 1 sub {
+        /pya exch pyp mul def
+        pyx pyy moveto
+        pyx pya cos pyr mul add pyy pya sin pyr mul add lineto
+        pyx pya pyp 2 div add cos pyr mul add
+        pyy pya pyp 2 div add sin pyr mul add lineto
+        closepath
+    } for
+} def
+
+% cx cy r amp lobes blob -   (appends a circle whose radius breathes
+% by amp over `lobes` sine cycles — amp 0 is a plain circle)
+/blob {
+    /pyl exch def /pyamp exch def /pyr exch def
+    /pyy exch def /pyx exch def
+    0 3 357 {
+        /pya exch def
+        /pyrr pyr pya pyl mul sin pyamp mul add def
+        pyx pya cos pyrr mul add pyy pya sin pyrr mul add
+        pya 0 eq { moveto } { lineto } ifelse
+    } for
+    closepath
+} def
+
+% cx cy rmax turns spiral -   (appends an Archimedean spiral, center
+% out; stroke it — fat, in cycling colors)
+/spiral {
+    /pyt exch def /pyr exch def /pyy exch def /pyx exch def
+    /pytot pyt 360 mul def
+    0 5 pytot {
+        /pya exch def
+        /pyrr pyr pya mul pytot div def
+        pyx pya cos pyrr mul add pyy pya sin pyrr mul add
+        pya 0 eq { moveto } { lineto } ifelse
+    } for
+} def
+
+% x1 y1 x2 y2 amp waves wavy -   (appends a line whose spine sways
+% sideways by amp over `waves` full sine cycles)
+/wavy {
+    /pywv exch def /pyamp exch def
+    /pyy2 exch def /pyx2 exch def /pyy1 exch def /pyx1 exch def
+    /pydx pyx2 pyx1 sub def /pydy pyy2 pyy1 sub def
+    /pylen pydx dup mul pydy dup mul add sqrt def
+    pylen 0.0001 lt { /pylen 0.0001 def } if
+    /pynx pydy neg pylen div def /pyny pydx pylen div def
+    /pysteps pywv 16 mul cvi def
+    0 1 pysteps {
+        /pyt exch pysteps div def
+        /pyo pyt pywv mul 360 mul sin pyamp mul def
+        pyx1 pydx pyt mul add pynx pyo mul add
+        pyy1 pydy pyt mul add pyny pyo mul add
+        pyt 0 eq { moveto } { lineto } ifelse
+    } for
+} def
+
+% cx cy n {proc} kaleido -   (runs proc n times; each pass the user
+% space is rotated i*360/n about cx,cy, so draw in ordinary
+% coordinates and the piece is swung around the center)
+/kaleido {
+    /pyproc exch def /pyn exch def /pycy exch def /pycx exch def
+    0 1 pyn 1 sub {
+        /pyi exch def
+        gsave
+        pycx pycy translate
+        pyi 360 mul pyn div rotate
+        pycx neg pycy neg translate
+        pyproc
+        grestore
+    } for
+} def
+%%EOF

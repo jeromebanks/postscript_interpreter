@@ -1,0 +1,192 @@
+%!PS-Adobe-3.0
+%%Title: scifi.ps — starfields, planets, and HUD chrome for artkit
+%%Creator: pscat — Stage 20, the style packs
+%%EndComments
+
+% Science-fiction motifs: starfields, banded planets with rings,
+% cockpit HUD corners and reticles, hex shielding, the synthwave
+% perspective floor, and the layered glow stroke that sells all of it
+% on a dark ground. Load lib/artkit.ps first — this pack registers its
+% palettes into artkit's Palettes dict. Defines into the current dict,
+% draws nothing on load, runs in Ghostscript, deterministic under
+% `N srand`.
+%
+%   (lib/artkit.ps) run  (lib/styles/scifi.ps) run
+%
+% What's inside:
+%   palettes  /void /hologram /synthwave
+%   dial      /sfworld — palette the painted planet draws with
+%             (default /void)
+%   painted   [r g b] w glowstroke   stroke current path 3x: halo,
+%             mid, bright core (path consumed; dark grounds only)
+%             x y w h n starfield    n stars in the rect, a few sparkling
+%             cx cy r planet         banded disc, terminator shadow, rim
+%             cx cy r tilt planetring   two elliptical ring strokes
+%   path      x y w h len hudcorners   four corner brackets (stroke it)
+%             cx cy r reticle           ring + ticks + gapped crosshair
+%             x y w h s hexfield        honeycomb of side-s hexes
+%             x y w h nv nh gridfloor   perspective floor: nv rays to a
+%             vanishing point at top-center, nh horizontals bunching
+%             toward the horizon
+%
+% Scratch prefix: sf- (don't redefine sf- names in your own procs).
+
+Palettes /void      [[0.02 0.02 0.07] [0.07 0.10 0.25] [0.20 0.35 0.60]
+                     [0.35 0.75 0.95] [0.90 0.97 1.00]] put
+Palettes /hologram  [[0.01 0.06 0.06] [0.04 0.25 0.24] [0.10 0.55 0.50]
+                     [0.30 0.90 0.80] [0.85 1.00 0.95]] put
+Palettes /synthwave [[0.06 0.02 0.13] [0.25 0.07 0.42] [0.85 0.15 0.55]
+                     [1.00 0.45 0.25] [1.00 0.85 0.45]] put
+
+/sfworld /void def
+
+% [r g b] w glowstroke -   (three strokes: wide dim halo, mid, bright
+% core; consumes the current path on the last one)
+/glowstroke {
+    /sfw exch def /sfc exch def
+    1 setlinecap 1 setlinejoin
+    gsave sfc 0.30 shade setrgbcolor sfw 3.2 mul setlinewidth stroke grestore
+    gsave sfc 0.70 shade setrgbcolor sfw 1.8 mul setlinewidth stroke grestore
+    sfc 1.55 shade setrgbcolor sfw 0.8 mul setlinewidth stroke
+} def
+
+% x y w h n starfield -   (painted: mostly faint points, one in twelve
+% bright with a four-ray sparkle)
+/starfield {
+    /sfn exch def /sfh exch def /sfw exch def /sfy exch def /sfx exch def
+    gsave
+    sfn {
+        /sfpx sfx frnd sfw mul add def
+        /sfpy sfy frnd sfh mul add def
+        /sfg 0.35 frnd 0.65 mul add def
+        sfg sfg sfg 0.05 add dup 1 gt { pop 1 } if setrgbcolor
+        12 chance 0 eq {
+            newpath sfpx sfpy 1.5 0 360 arc fill
+            0.5 setlinewidth
+            newpath sfpx 4 sub sfpy moveto sfpx 4 add sfpy lineto stroke
+            newpath sfpx sfpy 4 sub moveto sfpx sfpy 4 add lineto stroke
+        } {
+            newpath sfpx sfpy 0.4 frnd 0.5 mul add 0 360 arc fill
+        } ifelse
+    } repeat
+    grestore
+} def
+
+% cx cy r planet -   (painted: latitude bands clipped to the disc, a
+% terminator shadow from the lower right, thin lit rim upper left)
+/planet {
+    /sfr exch def /sfy exch def /sfx exch def
+    gsave
+    newpath sfx sfy sfr 0 360 arc clip
+    sfworld pal 1 get aload pop setrgbcolor
+    newpath sfx sfr sub sfy sfr sub sfr 2 mul sfr 2 mul rectfill
+    0 1 7 {
+        /sfi exch def
+        sfi 2 mod 0 eq
+            { sfworld pal 2 get }
+            { sfworld pal 1 get sfworld pal 3 get sfi 8 div mix3 3 array
+              astore } ifelse
+        aload pop setrgbcolor
+        newpath sfx sfr sub sfy sfr sub sfi sfr mul 4 div add
+        sfr 2 mul sfr 0.16 mul rectfill
+    } for
+    % night side: a big dark disc lapping in from the lower right
+    sfworld pal 0 get aload pop setrgbcolor
+    newpath sfx sfr 1.45 mul add sfy sfr 1.05 mul sub sfr 1.75 mul
+    0 360 arc fill
+    grestore
+    % lit rim
+    sfworld pal 4 get aload pop setrgbcolor
+    sfr 0.03 mul setlinewidth
+    newpath sfx sfy sfr 60 215 arc stroke
+} def
+
+% cx cy r tilt planetring -   (painted: two elliptical strokes around
+% a planet of radius r; draw after planet — the rings pass in front)
+/planetring {
+    /sftilt exch def /sfr exch def /sfy exch def /sfx exch def
+    /sfmat matrix currentmatrix def
+    sfx sfy translate sftilt rotate 1 0.30 scale
+    newpath 0 0 sfr 1.55 mul 0 360 arc
+    sfmat setmatrix
+    sfworld pal 3 get aload pop setrgbcolor sfr 0.05 mul setlinewidth stroke
+    /sfmat matrix currentmatrix def
+    sfx sfy translate sftilt rotate 1 0.30 scale
+    newpath 0 0 sfr 1.85 mul 0 360 arc
+    sfmat setmatrix
+    sfworld pal 2 get aload pop setrgbcolor sfr 0.03 mul setlinewidth stroke
+} def
+
+% x y w h len hudcorners -   (appends four L-brackets; stroke or
+% glowstroke them)
+/hudcorners {
+    /sfl exch def /sfh exch def /sfw exch def /sfy exch def /sfx exch def
+    sfx sfy sfl add moveto sfx sfy lineto sfx sfl add sfy lineto
+    sfx sfw add sfl sub sfy moveto sfx sfw add sfy lineto
+    sfx sfw add sfy sfl add lineto
+    sfx sfw add sfy sfh add sfl sub moveto sfx sfw add sfy sfh add lineto
+    sfx sfw add sfl sub sfy sfh add lineto
+    sfx sfl add sfy sfh add moveto sfx sfy sfh add lineto
+    sfx sfy sfh add sfl sub lineto
+} def
+
+% cx cy r reticle -   (appends: ring, four outer ticks, crosshair with
+% a hole at center)
+/reticle {
+    /sfr exch def /sfy exch def /sfx exch def
+    sfx sfr add sfy moveto
+    sfx sfy sfr 0 360 arc
+    0 90 270 {
+        /sfa exch def
+        sfx sfa cos sfr 1.08 mul mul add sfy sfa sin sfr 1.08 mul mul add
+        moveto
+        sfx sfa cos sfr 1.30 mul mul add sfy sfa sin sfr 1.30 mul mul add
+        lineto
+        sfx sfa cos sfr 0.18 mul mul add sfy sfa sin sfr 0.18 mul mul add
+        moveto
+        sfx sfa cos sfr 0.72 mul mul add sfy sfa sin sfr 0.72 mul mul add
+        lineto
+    } for
+} def
+
+% x y w h s hexfield -   (appends flat-top hexes of side s covering the
+% rect; shared edges land twice — harmless under a stroke)
+/hexfield {
+    /sfs exch def /sfh exch def /sfw exch def /sfy exch def /sfx exch def
+    /sfvs sfs 3 sqrt mul def
+    /sfnc sfw sfs 1.5 mul div cvi 1 add def
+    /sfnr sfh sfvs div cvi 2 add def
+    0 1 sfnc {
+        /sfi exch def
+        /sfhx sfx sfi sfs 1.5 mul mul add def
+        0 1 sfnr {
+            /sfj exch def
+            /sfhy sfy sfj sfvs mul add
+                sfi 2 mod 1 eq { sfvs 2 div add } if def
+            sfhy sfy sfh add le {
+                sfhx sfhy sfs 6 ngon
+            } if
+        } for
+    } for
+} def
+
+% x y w h nv nh gridfloor -   (appends the synthwave floor: nv+1 rays
+% converging on a vanishing point at top-center of the rect, nh
+% horizontals crowding quadratically toward that horizon; glowstroke)
+/gridfloor {
+    /sfnh exch def /sfnv exch def
+    /sfh exch def /sfw exch def /sfy exch def /sfx exch def
+    /sfvx sfx sfw 2 div add def
+    /sfvy sfy sfh add def
+    0 1 sfnv {
+        /sft exch sfnv div def
+        sfx sfw sft mul add sfy moveto
+        sfvx sfvy lineto
+    } for
+    1 1 sfnh {
+        /sft exch sfnh div def
+        /sfyy sfy sfh 1 sft dup mul sub mul add def
+        sfx sfyy moveto sfx sfw add sfyy lineto
+    } for
+} def
+%%EOF
