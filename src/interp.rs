@@ -47,6 +47,16 @@ enum Frame {
     For { body: PsArray, control: ForControl },
     /// `forall`: push element(s), run the body, advance.
     Forall { body: PsArray, src: ForallSrc },
+    /// `pathforall`: one path element per step — push its user-space
+    /// coordinates, run the matching proc (move/line/curve/close).
+    /// The path is snapshotted at operator time; holds no external
+    /// state, so unwinding needs no cleanup.
+    PathForall {
+        elems: Vec<PathForallEl>,
+        idx: usize,
+        /// moveto, lineto, curveto, closepath procs, in that order.
+        procs: Box<[Object; 4]>,
+    },
     /// The boundary a `stopped` context plants: reached normally, it pops
     /// and pushes `false`; `stop` (or a recoverable error) unwinds to it
     /// and pushes `true`.
@@ -70,6 +80,14 @@ pub(crate) enum PostOp {
     /// components it produced and make them the current color (the
     /// color space itself stays Separation).
     SeparationColor { alt_ncomp: u32 },
+}
+
+/// One `pathforall` element, coordinates already in user space.
+pub(crate) enum PathForallEl {
+    Move(f64, f64),
+    Line(f64, f64),
+    Curve([f64; 6]),
+    Close,
 }
 
 pub(crate) enum ForallSrc {
@@ -447,6 +465,26 @@ impl Interp {
                         }
                     }
                     Frame::Loop { body } => Action::Iterate(body.clone()),
+                    Frame::PathForall { elems, idx, procs } => match elems.get(*idx) {
+                        None => Action::Pop,
+                        Some(el) => {
+                            let (coords, proc) = match el {
+                                PathForallEl::Move(x, y) => {
+                                    (vec![Object::real(*x), Object::real(*y)], procs[0].clone())
+                                }
+                                PathForallEl::Line(x, y) => {
+                                    (vec![Object::real(*x), Object::real(*y)], procs[1].clone())
+                                }
+                                PathForallEl::Curve(c) => (
+                                    c.iter().map(|v| Object::real(*v)).collect(),
+                                    procs[2].clone(),
+                                ),
+                                PathForallEl::Close => (Vec::new(), procs[3].clone()),
+                            };
+                            *idx += 1;
+                            Action::ExecWith(coords, proc)
+                        }
+                    },
                     Frame::For { body, control } => {
                         if control.finished() {
                             Action::Pop
@@ -733,6 +771,18 @@ impl Interp {
         self.push_frame(Frame::For { body, control })
     }
 
+    pub(crate) fn begin_pathforall(
+        &mut self,
+        elems: Vec<PathForallEl>,
+        procs: [Object; 4],
+    ) -> Result<(), PsError> {
+        self.push_frame(Frame::PathForall {
+            elems,
+            idx: 0,
+            procs: Box::new(procs),
+        })
+    }
+
     pub(crate) fn begin_forall(&mut self, body: PsArray, src: ForallSrc) -> Result<(), PsError> {
         self.push_frame(Frame::Forall { body, src })
     }
@@ -824,7 +874,8 @@ impl Interp {
                     Frame::Repeat { .. }
                     | Frame::Loop { .. }
                     | Frame::For { .. }
-                    | Frame::Forall { .. },
+                    | Frame::Forall { .. }
+                    | Frame::PathForall { .. },
                 ) => {
                     self.estack.pop();
                     return Ok(());

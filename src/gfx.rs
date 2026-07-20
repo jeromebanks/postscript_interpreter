@@ -37,6 +37,16 @@ enum Seg {
     Close,
 }
 
+/// One current-path element, device space — `pathforall`'s snapshot
+/// view (the ops layer converts to user space via `device_to_user`).
+#[derive(Clone, Copy)]
+pub enum PathElement {
+    Move(DevPoint),
+    Line(DevPoint),
+    Curve(DevPoint, DevPoint, DevPoint),
+    Close,
+}
+
 /// The current path, in device space, plus the bookkeeping `currentpoint`
 /// and `closepath` need.
 #[derive(Clone, Default)]
@@ -90,6 +100,77 @@ impl PsPath {
     pub(crate) fn curve_to(&mut self, c1: DevPoint, c2: DevPoint, p: DevPoint) {
         self.segs.push(Seg::Curve(c1, c2, p));
         self.current = Some(p);
+    }
+
+    /// Snapshot for `pathforall` enumeration.
+    pub fn elements(&self) -> Vec<PathElement> {
+        self.segs
+            .iter()
+            .map(|s| match *s {
+                Seg::Move(p) => PathElement::Move(p),
+                Seg::Line(p) => PathElement::Line(p),
+                Seg::Curve(c1, c2, p) => PathElement::Curve(c1, c2, p),
+                Seg::Close => PathElement::Close,
+            })
+            .collect()
+    }
+
+    /// `flattenpath`: the same path with every curve subdivided to line
+    /// segments. Tolerance is fixed at a quarter device pixel — we
+    /// don't model `setflat`, and found files that call flattenpath
+    /// want the shape, not a particular chord count (documented
+    /// deviation; gs honors flatness).
+    pub(crate) fn flattened(&self) -> PsPath {
+        const TOL: f32 = 0.25;
+        fn mid(a: DevPoint, b: DevPoint) -> DevPoint {
+            DevPoint {
+                x: (a.x + b.x) * 0.5,
+                y: (a.y + b.y) * 0.5,
+            }
+        }
+        // Distance from p to the chord a..b.
+        fn chord_dist(p: DevPoint, a: DevPoint, b: DevPoint) -> f32 {
+            let (dx, dy) = (b.x - a.x, b.y - a.y);
+            let len2 = dx * dx + dy * dy;
+            if len2 < 1e-12 {
+                return (p.x - a.x).hypot(p.y - a.y);
+            }
+            let t = (((p.x - a.x) * dx + (p.y - a.y) * dy) / len2).clamp(0.0, 1.0);
+            (p.x - (a.x + t * dx)).hypot(p.y - (a.y + t * dy))
+        }
+        // De Casteljau: split at t=1/2 until the control points hug the
+        // chord, then emit the chord.
+        fn subdivide(
+            out: &mut PsPath,
+            p0: DevPoint,
+            c1: DevPoint,
+            c2: DevPoint,
+            p3: DevPoint,
+            depth: u8,
+        ) {
+            if depth >= 16 || (chord_dist(c1, p0, p3) <= TOL && chord_dist(c2, p0, p3) <= TOL) {
+                out.line_to(p3);
+                return;
+            }
+            let (ab, bc, cd) = (mid(p0, c1), mid(c1, c2), mid(c2, p3));
+            let (abc, bcd) = (mid(ab, bc), mid(bc, cd));
+            let m = mid(abc, bcd);
+            subdivide(out, p0, ab, abc, m, depth + 1);
+            subdivide(out, m, bcd, cd, p3, depth + 1);
+        }
+        let mut out = PsPath::default();
+        for seg in &self.segs {
+            match *seg {
+                Seg::Move(p) => out.move_to(p),
+                Seg::Line(p) => out.line_to(p),
+                Seg::Curve(c1, c2, p) => {
+                    let start = out.current().unwrap_or(p);
+                    subdivide(&mut out, start, c1, c2, p, 0);
+                }
+                Seg::Close => out.close(),
+            }
+        }
+        out
     }
 
     /// Append another path's segments (charpath splicing glyph outlines
@@ -392,6 +473,11 @@ impl Gfx {
 
     pub(crate) fn colorspace(&self) -> &ColorSpace {
         &self.state.colorspace
+    }
+
+    /// `flattenpath`: curves in the current path become chords.
+    pub(crate) fn flatten_path(&mut self) {
+        self.state.path = self.state.path.flattened();
     }
 
     // --- coordinate plumbing -------------------------------------------

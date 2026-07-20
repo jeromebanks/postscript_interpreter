@@ -60,6 +60,8 @@ pub fn install(dict: &mut Dict) {
     op(dict, "clippath", clippath);
     op(dict, "initclip", initclip);
     op(dict, "pathbbox", pathbbox);
+    op(dict, "pathforall", pathforall);
+    op(dict, "flattenpath", flattenpath);
     // Coordinate system (the matrix-operand forms live in ops::matrix)
     op(dict, "translate", translate);
     op(dict, "scale", scale);
@@ -141,6 +143,50 @@ fn currentpoint(it: &mut Interp) -> Result<(), PsError> {
     let (x, y) = it.gfx.current_user_point()?;
     it.push(Object::real(x));
     it.push(Object::real(y));
+    Ok(())
+}
+
+/// move line curve close pathforall — enumerate the current path,
+/// running the matching proc per element with its coordinates (user
+/// space) on the stack. The path is snapshotted when the operator
+/// runs; the PLRM leaves mid-enumeration path mutation undefined, and
+/// a snapshot keeps the charpath-then-rebuild idiom safe.
+fn pathforall(it: &mut Interp) -> Result<(), PsError> {
+    let mut procs: [Object; 4] = std::array::from_fn(|_| Object::lit(Value::Null));
+    for slot in procs.iter_mut().rev() {
+        let obj = it.pop()?;
+        match &obj.value {
+            Value::Array(_) if obj.executable => *slot = obj,
+            _ => return Err(PsError::Typecheck),
+        }
+    }
+    use crate::gfx::PathElement;
+    use crate::interp::PathForallEl;
+    let mut elems = Vec::new();
+    for el in it.gfx.state().path.elements() {
+        elems.push(match el {
+            PathElement::Move(p) => {
+                let (x, y) = it.gfx.device_to_user(p)?;
+                PathForallEl::Move(x, y)
+            }
+            PathElement::Line(p) => {
+                let (x, y) = it.gfx.device_to_user(p)?;
+                PathForallEl::Line(x, y)
+            }
+            PathElement::Curve(c1, c2, p) => {
+                let (x1, y1) = it.gfx.device_to_user(c1)?;
+                let (x2, y2) = it.gfx.device_to_user(c2)?;
+                let (x3, y3) = it.gfx.device_to_user(p)?;
+                PathForallEl::Curve([x1, y1, x2, y2, x3, y3])
+            }
+            PathElement::Close => PathForallEl::Close,
+        });
+    }
+    it.begin_pathforall(elems, procs)
+}
+
+fn flattenpath(it: &mut Interp) -> Result<(), PsError> {
+    it.gfx.flatten_path();
     Ok(())
 }
 
