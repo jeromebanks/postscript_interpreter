@@ -3,6 +3,55 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 20 — the style packs (2026-07-19)
+
+Four motif libraries in `lib/styles/`, layered on artkit (loaded
+first; each pack registers three palettes into artkit's `Palettes`
+dict, so `pal`/`palpick` just work). All pure PostScript: nothing
+drawn on load, deterministic under srand, gs-clean. The split
+follows artkit's grammar — *path builders* append to the current
+path for the caller to paint, *painted stamps* are self-contained
+gsave/grestore units, and per-pack dials (`/spmetal`, `/sfworld`,
+`/tnink`) steer the stamps the way the Type 3 faces' scratch dicts
+do. Scratch prefixes sp-/py-/sf-/tn- extend artkit's reserved list.
+
+- **steampunk.ps** — `gear` (tooth ring plus an `arcn`-wound bore so
+  nonzero fill leaves the hole), `rivet`, `pipe` (body/sheen/flanges
+  from one segment), `gauge`, `plateframe` (rivet counts derived
+  from pitch; corners always hit). /brass /verdigris /boiler.
+- **psychedelic.ps** — `rays`, `blob` (sine-breathing circle; the
+  concentric-nesting workhorse), `spiral`, `wavy`, `kaleido` (n
+  rotated replays about a center — the proc runs with py- names
+  live, documented), `rainbow` (sethsbcolor hue wheel). /acid
+  /blacklight /sherbet.
+- **scifi.ps** — `glowstroke` (halo/mid/core via artkit `shade`),
+  `starfield`, `planet` (bands clipped to the disc, terminator as an
+  offset dark disc), `planetring` (ellipse built under a temporary
+  matrix, restored with `setmatrix` so the stroke pen stays round —
+  gsave/grestore would discard the path with the CTM), `hudcorners`,
+  `reticle`, `hexfield` (ngon honeycomb, shared edges land twice),
+  `gridfloor` (rays to a vanishing point, horizontals bunching
+  quadratically). /void /hologram /synthwave.
+- **toon.ps** — the adult-animation cel look: `celfill` (flat fill,
+  fat round-joined ink stroke — the foundation), `burst` (jittered
+  star), `bubble` (ink-silhouette-then-inset-white two-pass, so
+  bubble and tail merge with no seam), `speedlines`, `dotfill`
+  (halftone clipped to the current path; the path survives the
+  gsave), `eye`, `dripbox` (bottom edge melting into arcn-tipped
+  drips). /saturday /latenight /pastelpop.
+
+Specimen posters in `examples/style_*.ps` (620x800, seeded, each
+exercising the whole pack plus catalog type: Rye/SpecialElite,
+Monoton, Orbitron/VT323, Bangers/ComicNeue). `tests/styles.rs` pins
+load-cleanliness, palette registration, per-motif ink, the gear
+bore, dotfill's path survival, and gs acceptance of all four packs.
+The psart skill and README grew style-pack sections.
+
+Deferred: no pattern-fill textures (would want Level 2 pattern
+dictionaries), no half-behind planet rings (painted stylized, fully
+in front), halftone dots are square-grid rather than 45-degree
+screen-angle.
+
 ## Stage 19 — the art toolkit (2026-07-19)
 
 pscat as an instrument: everything an agent needs to *make* art, not

@@ -46,6 +46,36 @@ here is *written*, rendered, looked at, and refined.
 - **Shapes/text/layout**: `ngon`, `star`, `rrect`; `(s) cx y
   showctr`, `(s) w fitfont`; `x y w h cols rows {x y w h ...} grid`.
 
+## Style packs (`lib/styles/`, load after artkit)
+
+Four motif libraries, one per aesthetic — each registers three
+palettes into artkit's `Palettes` and adds path builders (you paint
+them) and painted stamps (self-contained). Every file's header lists
+its full API; `examples/style_<name>.ps` is a worked specimen poster
+for each.
+
+- **steampunk** — `gear` (path, bored hub), `rivet`, `pipe`, `gauge`,
+  `plateframe`; palettes /brass /verdigris /boiler; `/spmetal` dial
+  picks the stamps' metal. Pair with Rye + SpecialElite.
+- **psychedelic** — `rays`, `blob` (wobble circle — nest and cycle
+  colors), `spiral`, `wavy`, `kaleido` (n-fold repeat about a
+  center), `t rainbow`; /acid /blacklight /sherbet. Monoton on an
+  `arcn` path via `pathtext` is the move.
+- **scifi** — `glowstroke` (the neon seller: halo/mid/core),
+  `starfield`, `planet` + `planetring` (`/sfworld` dial),
+  `hudcorners`, `reticle`, `hexfield`, `gridfloor` (synthwave
+  perspective floor — glowstroke it); /void /hologram /synthwave.
+  Orbitron, Audiowide, VT323, PressStart2P.
+- **toon** — the cel-cartoon look: `celfill` (flat fill + fat ink
+  outline, the foundation), `burst`, `bubble` (speech, tail toward a
+  point), `speedlines`, `dotfill` (halftone in the current path, path
+  survives), `eye`, `dripbox` (slime title slab); /saturday
+  /latenight /pastelpop; `/tnink` dial sets the line color. Bangers,
+  ComicNeue, PermanentMarker.
+
+Scratch prefixes sp-/py-/sf-/tn- join artkit's reserved list — don't
+reuse them in your own procs.
+
 ## Type is material
 
 - `pscat --fonts` lists everything. The standard 35 all resolve

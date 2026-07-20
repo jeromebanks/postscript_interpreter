@@ -238,10 +238,22 @@ newpath 60 100 moveto 500 200 550 300 300 380 curveto
 (text can walk along any path now) pathtext     % type on a curve
 ```
 
+On top of the toolkit sit four **style packs** (`lib/styles/`), one
+per aesthetic, each adding three palettes and a drawer of motifs:
+`steampunk.ps` (gears, rivets, pipework, pressure gauges, riveted
+plate frames), `psychedelic.ps` (sunburst rays, wobble-ring blobs,
+spirals, kaleidoscope repeats, hue-wheel color), `scifi.ps`
+(starfields, ringed planets, HUD chrome, hex shields, the synthwave
+grid floor, and `glowstroke` to sell it all), and `toon.ps` (the
+cel-cartoon look: `celfill` flats under fat ink, speech bubbles,
+action bursts, speed lines, halftone `dotfill`, dripping title
+slabs). Load artkit, then the pack; `examples/style_*.ps` are the
+four specimen posters.
+
 `gallery/hortus.ps` is the worked example, and the `psart` skill
 (`.claude/skills/psart/SKILL.md`) teaches the whole workflow to any
-agent: the render-look-refine loop, the toolkit, type as material,
-and the composition habits that keep pieces good.
+agent: the render-look-refine loop, the toolkit, the style packs,
+type as material, and the composition habits that keep pieces good.
 
 ## The website
 

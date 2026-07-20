@@ -1,15 +1,18 @@
 # HANDOFF.md — state of the interpreter and how to continue
 
 Written 2026-07-13 at the completion of Stages 6–7; last updated
-2026-07-19. Stages 8–19 are all complete: spool/halftone/Gallery II
+2026-07-19. Stages 8–20 are all complete: spool/halftone/Gallery II
 (10), perf parity (11), handwriting (12), the handwrite tool (13),
 agent integration — skill, `pscat-mcp`, `pscat -` (14), the
 font library `lib/fonts/` — /Neon, /Marquee, /Constellation,
 /Lapidary + specimen (15), the browser build — wasm + web/pscat.js (16), the Pages site + pipeline — site/, scripts/build_site.sh, .github/workflows/pages.yml (17), and the font catalog —
 `fonts/catalog/` runtime loader completing the standard 35, plus
-/Circuitry, /Stitchwork, /Confetti (18), and the art toolkit —
+/Circuitry, /Stitchwork, /Confetti (18), the art toolkit —
 pathforall/flattenpath, lib/artkit.ps, the psart skill, Hortus
-Machinalis (19) — plus `--interactive` (the windowed
+Machinalis (19), and the style packs — `lib/styles/`
+steampunk/psychedelic/scifi/toon motif libraries over artkit, with
+specimen posters in `examples/style_*.ps` (20) — plus
+`--interactive` (the windowed
 REPL, Stage 8's last sliver) and the Level 2 rect operators. Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
@@ -118,8 +121,11 @@ renders eight examples in both and compares block-downsampled output).
 1. **More Gallery II pieces** — the slot stays open by design;
    `gallery/README.md` is the brief, and Hundred Lines
    (`gallery/hundred_lines.ps`) shows the /HandScript font reused.
-   The Stage 15 faces (`lib/fonts/`) are ready-made material — a
-   neon nocturne, a star-chart page, a carved inscription.
+   The Stage 15 faces (`lib/fonts/`) and the Stage 20 style packs
+   (`lib/styles/` — steampunk, psychedelic, scifi, toon, with
+   specimen posters in `examples/style_*.ps`) are ready-made
+   material — a neon nocturne, a star-chart page, a carved
+   inscription, an orrery of brass.
 2. Leftovers when they itch: the remaining fib/fern machine-loop gap
    vs gs (Stage 11 findings in NOTES.md — the untaken levers are
    representation changes), errordict handlers, error-time operand
