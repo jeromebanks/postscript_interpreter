@@ -1,0 +1,63 @@
+%!PS-Adobe-3.0
+%%Title: Splat! — the toon style-pack specimen
+%%BoundingBox: 0 0 620 800
+%%EndComments
+
+% Specimen sheet for lib/styles/toon.ps — a late-night-cartoon title
+% card: dripping title slab, POW burst with speed lines, a speech
+% bubble talking to a pair of nervous eyes, halftone shading, all in
+% flat celfill color under fat ink. Run from the repo root:
+%
+%   pscat --page 620x800 examples/style_toon.ps
+
+(lib/artkit.ps) run
+(lib/styles/toon.ps) run
+9 srand
+
+% flat sky, halftone shade rolling up from the bottom
+/saturday pal 2 get aload pop setrgbcolor clippath fill
+/saturday pal 2 get 0.72 shade setrgbcolor
+newpath 0 0 moveto 620 0 lineto 620 200 lineto 0 200 lineto closepath
+13 3 dotfill
+newpath                                          % dotfill keeps the path
+
+% ground band
+newpath -8 -8 moveto 628 -8 lineto 628 96 lineto -8 96 lineto closepath
+/saturday pal 3 get 5 celfill
+
+% --- the title slab --------------------------------------------------
+newpath 70 596 480 120 7 dripbox
+/saturday pal 3 get 5 celfill
+/Bangers-Regular findfont 72 scalefont setfont
+tnink aload pop setrgbcolor
+(SPLAT!) 310 640 showctr
+
+/ComicNeue-Regular findfont 17 scalefont setfont
+tnink aload pop setrgbcolor
+(a program in questionable taste \267 lib/styles/toon.ps \267 seed 9)
+310 462 showctr
+
+% --- the action ------------------------------------------------------
+210 230 110 165 26 0 360 speedlines
+newpath 210 230 52 104 11 burst
+/saturday pal 1 get 5 celfill
+newpath 210 230 30 62 11 burst
+/saturday pal 4 get 3 celfill
+/Bangers-Regular findfont 44 scalefont setfont
+/saturday pal 0 get aload pop setrgbcolor
+(POW!) 210 216 showctr
+
+% --- the witnesses ---------------------------------------------------
+% two nervous eyes peeking over the ground band, looking at the blast
+432 132 30 155 eye
+498 132 30 160 eye
+
+% their side of the conversation, tail dropping toward the eyes
+330 310 230 96 18 452 190 bubble
+tnink aload pop setrgbcolor
+/ComicNeue-Regular findfont 19 scalefont setfont
+(did you hear) 445 370 showctr
+(something?) 445 342 showctr
+
+showpage
+%%EOF

@@ -1,0 +1,67 @@
+%!PS-Adobe-3.0
+%%Title: Turn On The Sun — the psychedelic style-pack specimen
+%%BoundingBox: 0 0 620 800
+%%EndComments
+
+% Specimen sheet for lib/styles/psychedelic.ps: a sunburst ground, a
+% twelve-fold kaleidoscope mandala of wobbling blobs, corner spirals,
+% wavy underlines, and Monoton set along an arc with artkit's
+% pathtext. Run from the repo root:
+%
+%   pscat --page 620x800 examples/style_psychedelic.ps
+
+(lib/artkit.ps) run
+(lib/styles/psychedelic.ps) run
+33 srand
+
+/blacklight pal 0 get aload pop setrgbcolor clippath fill
+
+% sunburst ground from the mandala's heart
+newpath 310 470 700 28 rays
+/blacklight pal 1 get 0.55 shade setrgbcolor fill
+
+% --- the mandala -----------------------------------------------------
+% twelve petals: each pass draws one wobble-blob petal north of the
+% center and kaleido swings it around; pyi (live inside the proc)
+% cycles the acid palette
+310 470 12 {
+    newpath 310 638 34 7 6 blob
+    /acid pal pyi 5 mod get aload pop setrgbcolor fill
+    newpath 310 638 34 7 6 blob
+    /blacklight pal 0 get aload pop setrgbcolor 1.2 setlinewidth stroke
+} kaleido
+
+% concentric liquid rings, cycling hues, wobble easing toward center
+9 -1 1 {
+    /ringi exch def
+    newpath 310 470 ringi 13 mul ringi 1.6 mul 7 blob
+    ringi 9 div 0.83 mul rainbow fill
+} for
+newpath 310 470 9 3 5 blob
+/blacklight pal 4 get aload pop setrgbcolor fill
+
+% --- corner spirals --------------------------------------------------
+newpath 92 128 78 4 spiral
+/acid pal 0 get aload pop setrgbcolor 5 setlinewidth
+1 setlinecap 1 setlinejoin stroke
+newpath 528 128 78 4 spiral
+/acid pal 4 get aload pop setrgbcolor 5 setlinewidth stroke
+
+% --- the arc of type -------------------------------------------------
+/Monoton-Regular findfont 40 scalefont setfont
+/acid pal 2 get aload pop setrgbcolor
+newpath 310 -70 300 129 51 arcn
+(TURN ON THE SUN) pathtext
+
+% wavy sign-off
+newpath 150 96 470 96 6 4 wavy
+/acid pal 1 get aload pop setrgbcolor 3 setlinewidth stroke
+newpath 170 82 450 82 5 4 wavy
+/blacklight pal 3 get aload pop setrgbcolor 2 setlinewidth stroke
+
+/Monoton-Regular findfont 13 scalefont setfont
+/blacklight pal 3 get aload pop setrgbcolor
+(lib/styles/psychedelic.ps  \267  seed 33) 310 52 showctr
+
+showpage
+%%EOF

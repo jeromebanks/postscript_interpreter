@@ -1,0 +1,80 @@
+%!PS-Adobe-3.0
+%%Title: Aether & Brass — the steampunk style-pack specimen
+%%BoundingBox: 0 0 620 800
+%%EndComments
+
+% Specimen sheet for lib/styles/steampunk.ps: a riveted boilerplate
+% frame, a meshed gear cluster, flanged pipework with pressure gauges,
+% letterpress in Rye. Run from the repo root:
+%
+%   pscat --page 620x800 examples/style_steampunk.ps
+
+(lib/artkit.ps) run
+(lib/styles/steampunk.ps) run
+42 srand
+
+% aged paper ground with a faint foxing mottle
+0.93 0.88 0.76 setrgbcolor clippath fill
+120 {
+    0.88 0.82 0.68 setrgbcolor
+    newpath 560 chance 30 add 720 chance 40 add
+    0.7 60 chance 30 div add 0 360 arc fill
+} repeat
+
+24 24 572 752 30 plateframe
+
+% --- the gear cluster ------------------------------------------------
+% body fill, dark outline, hub ring, a circle of rivets
+/cogwheel {                                      % cx cy r n palname -
+    /cwpal exch def /cwn exch def /cwr exch def
+    /cwy exch def /cwx exch def
+    newpath cwx cwy cwr cwn gear
+    cwpal pal 2 get aload pop setrgbcolor fill
+    newpath cwx cwy cwr cwn gear
+    cwpal pal 0 get aload pop setrgbcolor cwr 0.035 mul setlinewidth stroke
+    newpath cwx cwy cwr 0.55 mul 0 360 arc
+    cwpal pal 1 get aload pop setrgbcolor cwr 0.07 mul setlinewidth stroke
+    /spmetal cwpal def
+    0 60 300 {
+        /cwa exch def
+        cwx cwa cos cwr 0.55 mul mul add
+        cwy cwa sin cwr 0.55 mul mul add
+        cwr 0.09 mul rivet
+    } for
+    /spmetal /brass def
+} def
+
+310 470 110 14 /brass cogwheel
+168 562 66 10 /verdigris cogwheel
+448 392 58 9 /boiler cogwheel
+425 555 40 8 /verdigris cogwheel
+
+% --- the pipework ----------------------------------------------------
+70 160 520 160 16 pipe
+520 160 520 262 14 pipe
+70 160 70 236 14 pipe
+
+/spmetal /boiler def
+70 266 28 0.32 gauge
+/spmetal /brass def
+520 300 36 0.78 gauge
+
+% a sigh of steam rising off the high-pressure gauge
+0.97 0.96 0.93 setrgbcolor
+16 {
+    newpath 524 14 jit add 352 52 chance add
+    5 8 chance add 0 360 arc fill
+} repeat
+
+% --- the letterpress -------------------------------------------------
+/Rye-Regular findfont 46 scalefont setfont
+0.24 0.16 0.08 setrgbcolor
+(AETHER & BRASS) 310 706 showctr
+/SpecialElite-Regular findfont 15 scalefont setfont
+0.30 0.24 0.16 setrgbcolor
+(CONSOLIDATED CLOCKWORK CONCERN \267 EST. 1888) 310 672 showctr
+/SpecialElite-Regular findfont 12 scalefont setfont
+(patent pending \267 lib/styles/steampunk.ps \267 seed 42) 310 70 showctr
+
+showpage
+%%EOF
