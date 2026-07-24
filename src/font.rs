@@ -193,8 +193,9 @@ fn catalog_root() -> Option<std::path::PathBuf> {
 
 /// Find (loading if necessary) the catalog face for a requested name.
 /// Lookup: alias → stem, already-loaded (by key or PostScript name),
-/// then a directory scan for `<stem>.ttf`/`.otf`, with a `-Regular`
-/// fallback so `/Bangers findfont` means the family's regular face.
+/// then a directory scan for `<stem>.ttf`/`.otf`/`.ttc`, with a
+/// `-Regular` fallback so `/Bangers findfont` means the family's
+/// regular face.
 #[cfg(not(target_arch = "wasm32"))]
 fn catalog_fid(requested: &str) -> Option<i64> {
     let stem = ALIASES
@@ -222,7 +223,7 @@ fn catalog_fid(requested: &str) -> Option<i64> {
             for entry in std::fs::read_dir(&dir).ok()?.flatten() {
                 let path = entry.path();
                 let ext = path.extension().and_then(|e| e.to_str());
-                if !matches!(ext, Some("ttf" | "otf")) {
+                if !matches!(ext, Some("ttf" | "otf" | "ttc")) {
                     continue;
                 }
                 let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
@@ -238,7 +239,12 @@ fn catalog_fid(requested: &str) -> Option<i64> {
 
 /// Read, leak, parse, register. Returns None (→ substitution) on any
 /// I/O or parse failure — catalog fonts are data, and found files
-/// should render regardless.
+/// should render regardless. `.ttc` collections always parse face
+/// index 0 — there's no naming convention here for picking a
+/// different face out of a collection, so a multi-face `.ttc` only
+/// ever exposes its first face. Fine for every collection bundled
+/// today (there are none yet; nothing here has been exercised against
+/// a real `.ttc`), worth revisiting if one ever needs a non-zero face.
 #[cfg(not(target_arch = "wasm32"))]
 fn load_catalog_face(path: &std::path::Path) -> Option<i64> {
     let key = path.file_stem()?.to_str()?.to_string();
@@ -262,9 +268,10 @@ fn load_catalog_face(path: &std::path::Path) -> Option<i64> {
     let encoding = match key.as_str() {
         "StandardSymbolsPS" => CatalogEncoding::Symbol,
         "D050000L" => CatalogEncoding::Dingbats,
-        "NotoSansKR-Regular" | "NotoSansJP-Regular" | "NotoSansThai-Regular" => {
-            CatalogEncoding::Unicode
-        }
+        "NotoSansKR-Regular"
+        | "NotoSansJP-Regular"
+        | "NotoSansThai-Regular"
+        | "NanumBrushScript-Regular" => CatalogEncoding::Unicode,
         _ => CatalogEncoding::Standard,
     };
     // The name table's PostScript name (id 6) is a fixed string baked
@@ -326,7 +333,7 @@ pub fn available_fonts() -> Vec<String> {
                 let path = entry.path();
                 if matches!(
                     path.extension().and_then(|e| e.to_str()),
-                    Some("ttf" | "otf")
+                    Some("ttf" | "otf" | "ttc")
                 ) && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
                 {
                     stems.push(stem.to_string());

@@ -318,17 +318,27 @@ Consequences, by design:
   static string, not recomputed from variation coordinates). This is a
   general policy, not special-cased to today's three files: any future
   variable-font catalog addition gets the same Regular default.
-- **`.ttc` still isn't a recognized catalog extension** (`.ttf`/`.otf`
-  only) — irrelevant to what's bundled today, but matters if a future
-  addition ships as a TrueType Collection.
+- **`.ttc` is now a recognized catalog extension** (`catalog_fid`'s
+  scan and `available_fonts()` both accept `.ttf`/`.otf`/`.ttc`), but
+  `load_catalog_face` always parses face index 0 — there's no naming
+  convention for picking a different face out of a collection, so a
+  multi-face `.ttc` only ever exposes its first face. Untested against
+  a real collection: nothing bundled today ships as one.
+
+A fourth Unicode-mode face, **Nanum Brush Script** (issue #5), gives
+Korean a second option with a handwritten/brush-calligraphy look
+rather than Noto Sans KR's plain sans — same mechanism, no new code
+beyond the `CatalogEncoding::Unicode` match arm. It's a static font
+(no `fvar` table), so the variable-font weight-pinning above doesn't
+apply to it.
 
 Tests: `tests/catalog.rs`'s Unicode-mode section — resolution by file
-stem, ink-coverage rendering for Hangul/kana-kanji/Thai, `stringwidth`
-scaling, ASCII+Hangul mixed in one string, and a `kshow` test asserting
-the proc sees Unicode scalars rather than byte-truncated codes. The
-existing byte-mode suite (this file's tasks 2–4, Stage 18's addendum)
-is the regression gate — it must keep passing unchanged, since it's
-what would catch a mistake that let UTF-8 decoding leak into
-StandardEncoding/ISOLatin1Encoding text.
+stem, ink-coverage rendering for Hangul/kana-kanji/Thai/Nanum Brush
+Script, `stringwidth` scaling, ASCII+Hangul mixed in one string, and a
+`kshow` test asserting the proc sees Unicode scalars rather than
+byte-truncated codes. The existing byte-mode suite (this file's tasks
+2–4, Stage 18's addendum) is the regression gate — it must keep
+passing unchanged, since it's what would catch a mistake that let
+UTF-8 decoding leak into StandardEncoding/ISOLatin1Encoding text.
 
 `examples/international_text.ps` is the specimen for this addendum.

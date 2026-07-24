@@ -175,6 +175,15 @@ fn thai_family_loads_by_file_stem() {
 }
 
 #[test]
+fn korean_calligraphy_family_loads_by_file_stem() {
+    // Nanum Brush Script (#5) — a second Korean face, brush-calligraphy
+    // style rather than Noto's plain sans, reusing the same
+    // CatalogEncoding::Unicode mechanism.
+    let mut it = run("/NanumBrushScript-Regular findfont /FontName get");
+    assert_eq!(top_name(&mut it), "NanumBrushScript-Regular");
+}
+
+#[test]
 fn hangul_glyphs_paint() {
     let it = run(
         "/NotoSansKR-Regular findfont 40 scalefont setfont 5 40 moveto (\u{c548}\u{b155}) show",
@@ -196,6 +205,14 @@ fn thai_glyphs_paint() {
         "/NotoSansThai-Regular findfont 40 scalefont setfont 5 40 moveto (\u{e2a}\u{e27}\u{e31}\u{e2a}\u{e14}\u{e35}) show",
     );
     assert!(ink_count(&it) > 100, "expected Thai ink");
+}
+
+#[test]
+fn korean_calligraphy_glyphs_paint() {
+    let it = run(
+        "/NanumBrushScript-Regular findfont 40 scalefont setfont 5 40 moveto (\u{c548}\u{b155}) show",
+    );
+    assert!(ink_count(&it) > 100, "expected Nanum Brush Script ink");
 }
 
 #[test]
