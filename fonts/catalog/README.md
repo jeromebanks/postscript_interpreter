@@ -6,8 +6,9 @@ faces in `fonts/` stay the only bundled ones, so the binary and the
 wasm build stay lean). Drop a `.ttf`/`.otf`/`.ttc` into any subdirectory
 here and `/<FileStem> findfont` finds it; `/<Family> findfont` falls
 back to `<Family>-Regular`. `pscat --fonts` lists everything reachable.
-(`.ttc` collections always load face index 0 — untested against a real
-collection, since nothing bundled today ships as one.)
+(`.ttc` collections always load face index 0 — verified against a
+synthetic two-face collection, not just assumed; no collection is
+bundled today.)
 
 The catalog root is found via `$PSCAT_ROOT`, the executable's
 location, the build-time checkout path, or the working directory — see

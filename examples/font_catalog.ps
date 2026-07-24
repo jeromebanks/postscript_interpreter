@@ -55,7 +55,12 @@ showpage
 /Times-Italic findfont 15 scalefont setfont
 36 712 moveto (a face for every occasion - loaded from fonts/catalog at findfont time) show
 
-% Two columns of cells: a small gray label, the face below it.
+% Two columns of cells: a small gray label, the face below it. Capacity
+% is exactly 20 rows/column = 40 cells at this pitch (39 used below).
+% The overflow arm always resets to col 326, so a 41st cell would land
+% exactly on top of the 20th, silently — not a graceful third column.
+% If this list grows past 40, either shrink the pitch further or give
+% the reset arm real 3-column logic; don't just append another cell.
 /cy 676 def
 /col 36 def
 /cell { /smp exch def /fn exch def /lbl exch def

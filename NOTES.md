@@ -17,15 +17,25 @@ zero as first assessed — adding all 4 new faces (39 total) needed the
 row pitch tightened from 37 to 33pt to fit 20 rows/column; verified by
 actually rendering it; a first attempt at 35pt (18 free slots) still
 overflowed by one entry, caught by rendering and spotting the overlap
-before it shipped. `site/fonts.html` gained a new "International
-scripts" section and the intro paragraph's file count was corrected to
-the live count (`find fonts/catalog -type f` value) rather than
-hand-computed. `.ttc` is now a recognized catalog extension in both of
-`src/font.rs`'s directory scans — `load_catalog_face` always parses
-face index 0 (no naming convention exists for picking a different face
-out of a collection), untested against a real `.ttc` since nothing
-bundled ships as one. GPOS/shaping and full Type 0/CID support were
-re-confirmed as correctly out of scope (already documented, not
+before it shipped. The grid's overflow arm always resets to the second
+column's position, so a 41st entry would silently overprint the 20th
+rather than erroring or wrapping to a third column — a latent trap an
+advisor review caught; rather than build real 3-column logic for a
+specimen file, left a comment at the pitch line spelling out the
+40-cell ceiling so the next addition doesn't hit it blind. `site/fonts.html`
+gained a new "International scripts" section and the intro paragraph's
+file count was corrected to the live count (`find fonts/catalog -type
+f` value) rather than hand-computed. `.ttc` is now a recognized catalog
+extension in both of `src/font.rs`'s directory scans — `load_catalog_face`
+always parses face index 0 (no naming convention exists for picking a
+different face out of a collection). Verified, not just claimed: built
+a synthetic two-face `.ttc` with `fonttools` (not checked in) and
+confirmed face 0's outlines render correctly; found along the way that
+`face.names()` came back empty for the synthetic collection's sub-face,
+so a real bundled `.ttc`'s `FontName` should be spot-checked rather
+than assumed (falls back to the file stem, which is harmless but worth
+knowing). GPOS/shaping and full Type 0/CID support were re-confirmed as
+correctly out of scope (already documented, not
 actionable follow-ups) — not every item in a deferred-work issue needs
 code; some just need re-confirming the doc already covers it.
 

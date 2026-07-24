@@ -242,9 +242,14 @@ fn catalog_fid(requested: &str) -> Option<i64> {
 /// should render regardless. `.ttc` collections always parse face
 /// index 0 — there's no naming convention here for picking a
 /// different face out of a collection, so a multi-face `.ttc` only
-/// ever exposes its first face. Fine for every collection bundled
-/// today (there are none yet; nothing here has been exercised against
-/// a real `.ttc`), worth revisiting if one ever needs a non-zero face.
+/// ever exposes its first face. Verified against a synthetic two-face
+/// `.ttc` (not checked in — built with `fonttools`' `TTCollection`):
+/// face 0's outlines render correctly. One caveat found doing that:
+/// `face.names()` came back empty for the synthetic collection's
+/// sub-face, so `FontName` fell back to the file stem rather than the
+/// face's own PostScript name — cosmetic only (glyph resolution was
+/// unaffected), but means a real bundled `.ttc`'s `FontName` should be
+/// spot-checked rather than assumed. No collection is bundled today.
 #[cfg(not(target_arch = "wasm32"))]
 fn load_catalog_face(path: &std::path::Path) -> Option<i64> {
     let key = path.file_stem()?.to_str()?.to_string();

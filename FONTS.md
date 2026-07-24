@@ -322,8 +322,14 @@ Consequences, by design:
   scan and `available_fonts()` both accept `.ttf`/`.otf`/`.ttc`), but
   `load_catalog_face` always parses face index 0 — there's no naming
   convention for picking a different face out of a collection, so a
-  multi-face `.ttc` only ever exposes its first face. Untested against
-  a real collection: nothing bundled today ships as one.
+  multi-face `.ttc` only ever exposes its first face. Verified against
+  a synthetic two-face `.ttc` (built with `fonttools`, not checked in):
+  face 0's outlines render correctly. One caveat that verification
+  surfaced: `face.names()` came back empty for the synthetic
+  collection's sub-face, so `FontName` fell back to the file stem
+  rather than the face's own PostScript name — cosmetic only, but
+  means a real bundled `.ttc` should have its `FontName` spot-checked
+  rather than assumed. No collection is bundled today.
 
 A fourth Unicode-mode face, **Nanum Brush Script** (issue #5), gives
 Korean a second option with a handwritten/brush-calligraphy look
