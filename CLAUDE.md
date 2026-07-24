@@ -6,10 +6,15 @@ this repo.
 - **Project vision, priorities, and staged milestones:** see `INIT.md`.
 - **Operational conventions** (build/test commands, commit hygiene,
   workflow, code quality bar): see `AGENTS.md`.
+- **SDLC: issue → feature branch → PR**, not straight onto `main` — see
+  `AGENTS.md`'s "Software development lifecycle" section before
+  starting any nontrivial work. CI (`.github/workflows/ci.yml`) gates
+  every PR on build/test/clippy/fmt; leave merging to a human.
 - **All roadmap stages (1–20) are complete**, plus Stage 21 (standalone
-  installability, unplanned/post-roadmap) (see `NOTES.md` for what
-  shipped in each). **Read `HANDOFF.md` first when picking up new
-  work** — it orients you in the architecture, lists the gotchas, and
+  installability) and Stage 22 (Korean/Japanese/Thai fonts), both
+  unplanned/post-roadmap (see `NOTES.md` for what shipped in each).
+  **Read `HANDOFF.md` first when picking up new work** — it orients
+  you in the architecture, lists the gotchas, and
   orders the remaining open-ended work (Gallery II, leftovers).
   `ROADMAP.md` has the full plan with per-task model routing.
 

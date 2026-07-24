@@ -43,6 +43,33 @@ first. This file covers *how* to work, not *what* to build.
   stall waiting for input on things you're equipped to decide. Do flag
   decisions that are hard to reverse later.
 
+## Software development lifecycle
+
+Nontrivial work (a new stage, a feature, a fix worth more than a
+one-line diff) goes through issue → feature branch → PR, not straight
+onto `main`:
+
+1. **Issue first.** `gh issue create` describing what and why before
+   writing code — even a few sentences. This is what "what was
+   explicitly deferred" (above) should turn into next: a follow-up
+   issue, not just a `NOTES.md` line that's easy to lose track of.
+2. **Feature branch, not `main`.** `git checkout -b feature/<slug>` (or
+   `fix/<slug>` for a bugfix). Commit at the same checkpoints described
+   above; the branch is the unit of review, not the individual commit.
+3. **Quality bar before opening the PR**: `cargo build && cargo test &&
+   cargo clippy --all-targets && cargo fmt --all -- --check` all clean
+   (`.github/workflows/ci.yml` enforces this on every PR too — it's a
+   backstop, not a substitute for checking locally first). Update
+   `NOTES.md`/`HANDOFF.md`/`README.md` on the branch, not after merge.
+4. **Open the PR** with `gh pr create`, referencing the issue (`Closes
+   #N`), a summary of what changed and why, and a test plan (what you
+   ran, what a reviewer should check). CI must pass before merge.
+5. **Leave merging to a human** unless explicitly told to merge —
+   opening the PR is the deliverable, not landing it.
+
+This applies going forward; it doesn't retroactively obligate
+rewriting the stage-by-stage direct-to-`main` history that predates it.
+
 ## Code quality bar
 
 - No `unwrap()`/`expect()` on anything derived from program input (parsed
