@@ -45,7 +45,17 @@ pub fn first_existing(
 /// does.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn heuristic_roots() -> Vec<Option<PathBuf>> {
-    let exe = std::env::current_exe().ok();
+    // current_exe()'s own docs warn it may return a non-canonical
+    // path — critically, invoking a *symlink* to the binary (e.g.
+    // one dropped in ~/.local/bin or /opt/homebrew/bin pointing at
+    // the real install) can return the symlink's own location, not
+    // the real binary's, which would put lib/fonts/catalog nowhere
+    // near where this then looks. canonicalize() resolves that;
+    // fall back to the raw path only if canonicalization itself
+    // fails (e.g. the binary was removed after the process started).
+    let exe = std::env::current_exe()
+        .ok()
+        .map(|p| std::fs::canonicalize(&p).unwrap_or(p));
     vec![
         exe.as_deref().and_then(Path::parent).map(Path::to_path_buf),
         exe.as_deref()

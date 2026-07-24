@@ -82,6 +82,19 @@ echo "$FONTS" | grep -q "Bangers" ||
   { echo "FAIL: fonts/catalog/ did not resolve standalone" >&2; exit 1; }
 env -u PSCAT_ROOT "$BUNDLE/pscat" -e '(lib/artkit.ps) run' ||
   { echo "FAIL: lib/artkit.ps did not resolve standalone" >&2; exit 1; }
+
+# The other realistic install shape: a symlink into some bin/ dir
+# pointing back at the bundle (what `brew`, and this project's own
+# install.sh, do) rather than the bundle itself being on PATH.
+# current_exe() can return the symlink's own path rather than the
+# real binary's — caught a real bug here during development — so
+# this is worth pinning at packaging time, not just trusting the
+# non-symlinked case above.
+SYMLINK_DIR=$(mktemp -d)
+ln -s "$BUNDLE/pscat" "$SYMLINK_DIR/pscat"
+env -u PSCAT_ROOT "$SYMLINK_DIR/pscat" -e '(lib/artkit.ps) run' ||
+  { echo "FAIL: lib/artkit.ps did not resolve via a symlinked pscat" >&2; exit 1; }
+rm -rf "$SYMLINK_DIR"
 cd "$ROOT"
 
 echo "==> Done: $OUT_BASE/$NAME.tar.gz"
