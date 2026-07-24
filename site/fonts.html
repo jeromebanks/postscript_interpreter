@@ -25,10 +25,11 @@
   <h1>Fonts</h1>
   <p class="sub">Every face <code>findfont</code> can reach, rendered by
   pscat itself. Two families: eight <b>Type3 faces</b> whose glyphs are
-  PostScript programs (<code>lib/fonts/</code>), and a 58-file
+  PostScript programs (<code>lib/fonts/</code>), and a 62-file
   <b>runtime catalog</b> (<code>fonts/catalog/</code>) of libre outline
   faces loaded from disk on first use — together they resolve every
-  classic LaserWriter 35 name plus 35 more display and text families.
+  classic LaserWriter 35 name, plus 35 more display and text families
+  and four international-script faces (Korean, Japanese, Thai).
   Run <code>pscat --fonts</code> for the complete, current list of
   names and aliases.</p>
 
@@ -160,6 +161,27 @@
       <div class="body"><span>carved medieval lettering</span></div></div>
     <div class="card"><img src="assets/fonts/catalog/permanentmarker.png" alt="PermanentMarker" loading="lazy">
       <div class="body"><span>felt-tip marker</span></div></div>
+  </div>
+
+  <h2>International scripts</h2>
+  <p>Hangul, kana/kanji, and Thai vastly exceed the 256-slot Encoding
+  array every other face above uses, so these four are "Unicode-mode"
+  instead: <code>show</code> decodes the string as UTF-8 and maps
+  codepoints straight to glyphs via the font's own <code>cmap</code>,
+  skipping Encoding/glyph-name resolution entirely — see
+  <a href="architecture.html">Architecture</a> and
+  <a href="https://github.com/jeromebanks/postscript_interpreter/blob/main/FONTS.md">FONTS.md</a>'s
+  "Unicode-mode catalog faces" addendum for the mechanism and its
+  limits (no GPOS/mark shaping yet).</p>
+  <div class="cards">
+    <div class="card"><img src="assets/fonts/catalog/notosanskr.png" alt="NotoSansKR" loading="lazy">
+      <div class="body"><span>Korean (Hangul + Latin)</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/notosansjp.png" alt="NotoSansJP" loading="lazy">
+      <div class="body"><span>Japanese (kana + kanji + Latin)</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/notosansthai.png" alt="NotoSansThai" loading="lazy">
+      <div class="body"><span>Thai (+ Latin)</span></div></div>
+    <div class="card"><img src="assets/fonts/catalog/nanumbrushscript.png" alt="NanumBrushScript" loading="lazy">
+      <div class="body"><span>Korean, brush calligraphy</span></div></div>
   </div>
 </main>
 <footer>pscat — built by hand, tested against Ghostscript, drawn live.</footer>

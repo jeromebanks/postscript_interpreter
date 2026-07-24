@@ -175,6 +175,10 @@ Bangers|Bangers-Regular|Hamburgefonstiv|24
 ComicNeue|ComicNeue-Regular|Hamburgefonstiv|24
 MedievalSharp|MedievalSharp|Hamburgefonstiv|22
 PermanentMarker|PermanentMarker-Regular|Hamburgefonst|22
+NotoSansKR|NotoSansKR-Regular|안녕하세요, 세계|24
+NotoSansJP|NotoSansJP-Regular|こんにちは、世界|24
+NotoSansThai|NotoSansThai-Regular|สวัสดีชาวโลก|24
+NanumBrushScript|NanumBrushScript-Regular|안녕하세요|28
 TABLE
   slug=$(echo "$label" | tr 'A-Z ' 'a-z-' | tr -cd 'a-z0-9-')
   card "$slug" 440x90 catalog <<EOF

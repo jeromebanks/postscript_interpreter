@@ -3,6 +3,60 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 23 — gallery/site catch-up, `.ttc`, a second Korean face (2026-07-24)
+
+Closes issues #3 and #5, both filed as Stage 22 follow-ups. First work
+to go through the issue → feature branch → PR SDLC adopted alongside
+Stage 22.
+
+**#3 (gallery/site catch-up):** `scripts/build_font_gallery.sh`'s
+`TABLE` and `examples/font_catalog.ps`'s page-2 specimen grid gained
+rows for NotoSansKR/JP/Thai (and the new NanumBrushScript, below). The
+grid's two-column layout turned out to have exactly 2 free slots, not
+zero as first assessed — adding all 4 new faces (39 total) needed the
+row pitch tightened from 37 to 33pt to fit 20 rows/column; verified by
+actually rendering it; a first attempt at 35pt (18 free slots) still
+overflowed by one entry, caught by rendering and spotting the overlap
+before it shipped. The grid's overflow arm always resets to the second
+column's position, so a 41st entry would silently overprint the 20th
+rather than erroring or wrapping to a third column — a latent trap an
+advisor review caught; rather than build real 3-column logic for a
+specimen file, left a comment at the pitch line spelling out the
+40-cell ceiling so the next addition doesn't hit it blind. `site/fonts.html`
+gained a new "International scripts" section and the intro paragraph's
+file count was corrected to the live count (`find fonts/catalog -type
+f` value) rather than hand-computed. `.ttc` is now a recognized catalog
+extension in both of `src/font.rs`'s directory scans — `load_catalog_face`
+always parses face index 0 (no naming convention exists for picking a
+different face out of a collection). Verified, not just claimed: built
+a synthetic two-face `.ttc` with `fonttools` (not checked in) and
+confirmed face 0's outlines render correctly; found along the way that
+`face.names()` came back empty for the synthetic collection's sub-face,
+so a real bundled `.ttc`'s `FontName` should be spot-checked rather
+than assumed (falls back to the file stem, which is harmless but worth
+knowing). GPOS/shaping and full Type 0/CID support were re-confirmed as
+correctly out of scope (already documented, not
+actionable follow-ups) — not every item in a deferred-work issue needs
+code; some just need re-confirming the doc already covers it.
+
+**#5 (second Korean face):** Nanum Brush Script (OFL, `google/fonts`,
+`ofl/nanumbrushscript`) — a Korean face with a handwritten brush look,
+next to Noto Sans KR's plain sans. Reused the exact
+`CatalogEncoding::Unicode` mechanism from Stage 22 with one line added
+to `load_catalog_face`'s match; no interpreter changes. Static font (no
+`fvar` table), so the variable-font weight-pinning from Stage 22
+doesn't apply here — confirmed via `fonttools`, not assumed, same
+verification discipline as the Noto Sans KR/JP Thin discovery.
+Deferred to its own issue (#6, not attempted here): a *procedural*
+jittered-stroke Hangul face in the `lib/handscript.ps` style, which
+needs jamo-composition (11,172 syllables can't be hand-authored one at
+a time) — a real design project, not a quick follow-up.
+
+343 tests (up from 341), clippy clean, `cargo fmt --all -- --check`
+clean. `tests/site.rs` (which runs the full `scripts/build_site.sh`,
+wasm build included) passed, confirming the gallery/site changes
+integrate end to end, not just render standalone.
+
 ## Stage 22 — Korean, Japanese, Thai fonts (2026-07-24)
 
 Not on the original roadmap; came from a direct ask ("can we print out

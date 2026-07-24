@@ -23,7 +23,14 @@ so pscat can be installed and run without a git checkout; and Stage
 variant (Noto Sans KR/JP/Thai) whose `show` decodes UTF-8 and maps
 codepoints straight to glyphs via `cmap`, since Hangul/kanji exceed
 the 256-slot Encoding model everything else uses (see FONTS.md's
-"Unicode-mode catalog faces" addendum and NOTES.md's Stage 22 entry).
+"Unicode-mode catalog faces" addendum and NOTES.md's Stage 22 entry);
+and Stage 23, the Stage-22 follow-up issues (#3, #5) — gallery/site
+entries for the four international faces, `.ttc` as a recognized
+catalog extension, and a second Korean face (Nanum Brush Script,
+brush-calligraphy style) on the same Unicode-mode mechanism (NOTES.md's
+Stage 23 entry). Still open: issue #6, a procedural jittered-stroke
+Hangul face (jamo composition) — a real design project, not a quick
+follow-up.
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;

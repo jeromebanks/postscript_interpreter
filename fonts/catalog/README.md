@@ -3,9 +3,12 @@
 A wide shelf of libre faces that `findfont` loads **from disk on first
 use** — nothing here is compiled into the binary (the twelve Liberation
 faces in `fonts/` stay the only bundled ones, so the binary and the
-wasm build stay lean). Drop a `.ttf`/`.otf` into any subdirectory here
-and `/<FileStem> findfont` finds it; `/<Family> findfont` falls back to
-`<Family>-Regular`. `pscat --fonts` lists everything reachable.
+wasm build stay lean). Drop a `.ttf`/`.otf`/`.ttc` into any subdirectory
+here and `/<FileStem> findfont` finds it; `/<Family> findfont` falls
+back to `<Family>-Regular`. `pscat --fonts` lists everything reachable.
+(`.ttc` collections always load face index 0 — verified against a
+synthetic two-face collection, not just assumed; no collection is
+bundled today.)
 
 The catalog root is found via `$PSCAT_ROOT`, the executable's
 location, the build-time checkout path, or the working directory — see
@@ -100,6 +103,16 @@ instance, which is Thin for these two.
 
 Source: `github.com/google/fonts` (`ofl/notosanskr`, `ofl/notosansjp`,
 `ofl/notosansthai`).
+
+A second Korean face rides the same Unicode-mode mechanism, for a
+handwritten/brush look rather than plain sans:
+
+| Face | Script | License |
+|---|---|---|
+| NanumBrushScript | Korean, brush calligraphy | OFL |
+
+Source: `github.com/google/fonts` (`ofl/nanumbrushscript`). Static (not
+variable), so no default-instance pinning needed.
 
 For the *programmatic* faces — glyphs that are PostScript procedures,
 not outlines — see `lib/fonts/`.

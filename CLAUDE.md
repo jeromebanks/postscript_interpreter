@@ -11,7 +11,8 @@ this repo.
   starting any nontrivial work. CI (`.github/workflows/ci.yml`) gates
   every PR on build/test/clippy/fmt; leave merging to a human.
 - **All roadmap stages (1–20) are complete**, plus Stage 21 (standalone
-  installability) and Stage 22 (Korean/Japanese/Thai fonts), both
+  installability), Stage 22 (Korean/Japanese/Thai fonts), and Stage 23
+  (gallery/site catch-up, `.ttc`, a second Korean face), all
   unplanned/post-roadmap (see `NOTES.md` for what shipped in each).
   **Read `HANDOFF.md` first when picking up new work** — it orients
   you in the architecture, lists the gotchas, and
