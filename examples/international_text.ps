@@ -1,0 +1,54 @@
+%!PS-Adobe-3.0
+%%Title: international_text.ps — Korean, Japanese, and Thai via Unicode-mode faces
+%%Creator: pscat
+%%Pages: 1
+%%EndComments
+
+% Three catalog faces (Noto Sans KR/JP/Thai) are "Unicode-mode": their
+% scripts (Hangul, kana/kanji, Thai) vastly exceed the 256-slot Encoding
+% array every other pscat face uses, so `show` decodes their strings as
+% UTF-8 and maps codepoints straight to glyphs via the face's cmap
+% instead of byte -> Encoding name -> glyph id. The upshot: literal
+% non-Latin text in a UTF-8-saved .ps file (like this one) just works.
+% See FONTS.md's "Unicode-mode catalog faces" addendum for the
+% mechanism and its limits (no GPOS/mark positioning — Thai combining
+% marks stack using bare advances, not shaped attachment).
+%
+%   pscat --png international_text.png examples/international_text.ps
+
+0.98 0.97 0.94 setrgbcolor clippath fill
+0 setgray
+/Times-Bold findfont 30 scalefont setfont
+36 460 moveto (Hello, World) show
+/Times-Italic findfont 13 scalefont setfont
+36 438 moveto (one greeting, four scripts, one `show` call each) show
+
+/y 380 def
+/greeting { /fn exch def /txt exch def /lbl exch def
+  /Helvetica findfont 10 scalefont setfont
+  0.45 setgray
+  36 y moveto lbl show
+  0 setgray
+  fn findfont 30 scalefont setfont
+  36 y 26 sub moveto txt show
+  /y y 70 sub def
+} def
+
+(Korean -- NotoSansKR-Regular)   (안녕하세요, 세계!)   /NotoSansKR-Regular   greeting
+(Japanese -- NotoSansJP-Regular) (こんにちは、世界！) /NotoSansJP-Regular   greeting
+(Thai -- NotoSansThai-Regular)   (สวัสดีชาวโลก)         /NotoSansThai-Regular greeting
+
+% --- mixing scripts inside one string, one font, one show call --------
+/NotoSansThai-Regular findfont 18 scalefont setfont
+0 setgray
+36 y 10 add moveto
+(Noto covers Latin too: Hello 123 !) show
+
+% --- stringwidth on a Unicode-mode face, used to center text ----------
+/NotoSansKR-Regular findfont 22 scalefont setfont
+/centered (안녕) def
+250 centered stringwidth pop 2 div sub 40 moveto
+centered show
+
+showpage
+%%EOF

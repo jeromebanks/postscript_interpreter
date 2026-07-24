@@ -3,6 +3,63 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 22 — Korean, Japanese, Thai fonts (2026-07-24)
+
+Not on the original roadmap; came from a direct ask ("can we print out
+in Korean?"). The blocker wasn't fonts, it was architecture: `show`'s
+whole pipeline is byte-indexed (a `u8` per character code, a 256-entry
+`Encoding` array per font), and Hangul (11,172 precomposed syllables)
+and Japanese kanji (thousands) blow past that ceiling by two orders of
+magnitude — Thai's ~90 codepoints would have fit, but building a
+one-off byte-packed encoding for Thai alone while leaving Korean/
+Japanese impossible seemed like the wrong shape.
+
+Landed a scoped, documented deviation instead of the full Type 0/CID
+machinery real conformance would need (still out of scope — see
+FONTS.md's Deferred list): a new `CatalogEncoding::Unicode` variant
+marks three catalog faces (Noto Sans KR/JP/Thai, SIL OFL,
+`google/fonts`) as Unicode-mode. `ShowCtx` decodes the shown string as
+UTF-8 into Unicode scalars instead of raw bytes when the active font
+is Unicode-mode (decided once per show, keyed on `FID` so it survives
+`scalefont`/`makefont`), and each scalar maps straight to a glyph via
+the face's `cmap` — no Encoding array, no glyph-name resolution.
+Everything downstream of glyph-id resolution (the paint/measure math)
+is shared with the byte-mode path via a new `paint_resolved_glyph`
+helper; byte-mode fonts are untouched bit-for-bit (340 tests all still
+pass, no line of the existing 331 needed to change). `kshow`'s proc
+now sees real Unicode scalars for these fonts — strictly additive for
+existing text; `widthshow`'s `char` operand deliberately stayed capped
+at a byte (its one real use, widening space to justify a line, never
+needs more).
+
+Found mid-implementation: Noto Sans KR/JP ship only as variable fonts
+whose *default* named instance is Thin (wght 100), not Regular —
+confirmed via the `fvar` table. Without pinning, the catalog would
+have silently rendered (and reported, via the name table's PS name)
+the wrong weight. `load_catalog_face` now pins `wght` to 400 for any
+variable-font catalog entry — a general policy, not special-cased to
+today's three files — and Unicode-mode faces get their `FontName` from
+the file stem rather than the name table (which stays "…-Thin"
+regardless of the pinned instance; it's a static string).
+
+Tradeoffs, documented in FONTS.md: no GPOS/mark positioning (Thai
+combining marks stack on bare advance, not shaped attachment); the
+`/Encoding` array on these three dicts is now vestigial (the classic
+re-encoding idiom has no effect on them); `.ttc` still isn't a
+recognized catalog extension. Adds ~20MB to `fonts/catalog/` and the
+packaged release tarball (Korean/Japanese need full Hangul/kanji
+coverage; there's no well-licensed smaller option) — a deliberate
+tradeoff, confirmed with the requester before fetching the fonts.
+
+New: `tests/catalog.rs`'s Unicode-mode section (resolution, ink
+coverage, stringwidth scaling, ASCII+Hangul mixing, a kshow test
+pinning scalar-not-byte codes), `examples/international_text.ps`.
+Deferred: updating the public gallery/site (`scripts/build_font_gallery.sh`,
+`site/fonts.html`) and `examples/font_catalog.ps`'s page-2 grid for
+these three faces — the grid's two-column layout is already sized to
+exactly fill the page, so appending rows needs a layout change, not
+just three more lines; left for whoever picks up the gallery next.
+
 ## Stage 21 — standalone installability (2026-07-24)
 
 Not on the original roadmap (all 20 stages were done); came up when

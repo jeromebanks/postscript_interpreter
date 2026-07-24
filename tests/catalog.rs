@@ -145,3 +145,117 @@ fn dingbats_glyphs_paint() {
     let it = run("/ZapfDingbats findfont 60 scalefont setfont 10 30 moveto (aH) show");
     assert!(ink_count(&it) > 100, "expected dingbat ink");
 }
+
+// --- Unicode-mode faces (Korean/Japanese/Thai) ------------------------------
+//
+// Noto Sans KR/JP/Thai are CatalogEncoding::Unicode faces (FONTS.md's
+// "Unicode-mode catalog faces" addendum): `show` decodes the string as
+// UTF-8 and maps codepoints straight to glyphs via `cmap`, since Hangul
+// and kanji vastly exceed the 256-slot Encoding model everything else
+// here uses. These tests are the regression gate for that: byte-mode
+// fonts above must keep behaving exactly as before, and these three
+// faces must actually paint the scripts they were added for.
+
+#[test]
+fn korean_family_loads_by_file_stem() {
+    let mut it = run("/NotoSansKR-Regular findfont /FontName get");
+    assert_eq!(top_name(&mut it), "NotoSansKR-Regular");
+}
+
+#[test]
+fn japanese_family_loads_by_file_stem() {
+    let mut it = run("/NotoSansJP-Regular findfont /FontName get");
+    assert_eq!(top_name(&mut it), "NotoSansJP-Regular");
+}
+
+#[test]
+fn thai_family_loads_by_file_stem() {
+    let mut it = run("/NotoSansThai-Regular findfont /FontName get");
+    assert_eq!(top_name(&mut it), "NotoSansThai-Regular");
+}
+
+#[test]
+fn hangul_glyphs_paint() {
+    let it = run(
+        "/NotoSansKR-Regular findfont 40 scalefont setfont 5 40 moveto (\u{c548}\u{b155}) show",
+    );
+    assert!(ink_count(&it) > 100, "expected Hangul ink");
+}
+
+#[test]
+fn kana_and_kanji_glyphs_paint() {
+    let it = run(
+        "/NotoSansJP-Regular findfont 40 scalefont setfont 5 40 moveto (\u{3053}\u{4e16}) show",
+    );
+    assert!(ink_count(&it) > 100, "expected kana/kanji ink");
+}
+
+#[test]
+fn thai_glyphs_paint() {
+    let it = run(
+        "/NotoSansThai-Regular findfont 40 scalefont setfont 5 40 moveto (\u{e2a}\u{e27}\u{e31}\u{e2a}\u{e14}\u{e35}) show",
+    );
+    assert!(ink_count(&it) > 100, "expected Thai ink");
+}
+
+#[test]
+fn hangul_charpath_produces_a_nondegenerate_outline() {
+    // charpath is the third ShowMode (paint/width already covered
+    // above) — confirm it appends real outlines for a Unicode-mode
+    // face too, not just an empty/degenerate path.
+    let mut it = run(
+        "/NotoSansKR-Regular findfont 40 scalefont setfont 5 40 moveto \
+         (\u{c548}\u{b155}) false charpath pathbbox",
+    );
+    let ury = top_f64(&mut it);
+    let urx = top_f64(&mut it);
+    let lly = top_f64(&mut it);
+    let llx = top_f64(&mut it);
+    assert!(
+        urx > llx + 10.0 && ury > lly + 10.0,
+        "expected a non-degenerate bbox, got ({llx}, {lly}, {urx}, {ury})"
+    );
+}
+
+#[test]
+fn unicode_mode_stringwidth_is_positive_and_scales_with_length() {
+    let mut one =
+        run("/NotoSansKR-Regular findfont 40 scalefont setfont (\u{c548}) stringwidth pop");
+    let mut two =
+        run("/NotoSansKR-Regular findfont 40 scalefont setfont (\u{c548}\u{b155}) stringwidth pop");
+    let w1 = top_f64(&mut one);
+    let w2 = top_f64(&mut two);
+    assert!(w1 > 0.0, "expected positive width for one Hangul syllable");
+    assert!(
+        w2 > w1 * 1.5,
+        "expected two-syllable width ({w2}) to roughly double one-syllable width ({w1})"
+    );
+}
+
+#[test]
+fn unicode_mode_mixes_with_ascii_in_one_string() {
+    // Noto Sans KR also covers Latin, so a single Unicode-mode string
+    // can mix scripts without switching fonts mid-show.
+    let it = run(
+        "/NotoSansKR-Regular findfont 40 scalefont setfont 5 40 moveto (Hi \u{c548}\u{b155}) show",
+    );
+    assert!(ink_count(&it) > 100, "expected mixed ASCII+Hangul ink");
+}
+
+#[test]
+fn kshow_pushes_unicode_scalars_not_bytes_in_unicode_mode() {
+    // Between the two Hangul syllables, kshow's proc should see their
+    // actual (large) Unicode scalar values, not truncated byte codes.
+    // The proc combines prev/next into one number (prev*1e6 + next) and
+    // leaves it on the stack for the assertion below.
+    let mut it = run(
+        "/NotoSansKR-Regular findfont 20 scalefont setfont 5 20 moveto \
+         { exch 1000000 mul add } (\u{c548}\u{b155}) kshow",
+    );
+    let combined = top_f64(&mut it) as i64;
+    let expected = 0xC548i64 * 1_000_000 + 0xB155i64;
+    assert_eq!(
+        combined, expected,
+        "kshow should see Unicode scalar codes, not byte-truncated ones"
+    );
+}

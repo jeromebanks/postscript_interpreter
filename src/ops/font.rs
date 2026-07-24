@@ -257,9 +257,14 @@ fn begin_show(
     mode: ShowMode,
     kshow_proc: Option<Object>,
 ) -> Result<(), PsError> {
-    if it.gfx.state().font.is_none() {
-        return Err(PsError::InvalidFont);
-    }
+    let fid = it
+        .gfx
+        .state()
+        .font
+        .as_ref()
+        .ok_or(PsError::InvalidFont)?
+        .fid;
+    let unicode_mode = font::is_unicode_font(fid);
     let pen = match mode {
         // stringwidth is pure metrics; no current point required.
         ShowMode::Width => crate::gfx::DevPoint { x: 0.0, y: 0.0 },
@@ -270,6 +275,7 @@ fn begin_show(
     };
     it.begin_show(font::ShowCtx::new(
         text.to_vec(),
+        unicode_mode,
         params,
         mode,
         kshow_proc,
@@ -294,9 +300,17 @@ fn ashow(it: &mut Interp) -> Result<(), PsError> {
     begin_show(it, s, params, ShowMode::Paint, None)
 }
 
-fn pop_char_code(it: &mut Interp) -> Result<u8, PsError> {
+/// The `char` operand of `widthshow`/`awidthshow`: still a byte per the
+/// PLRM. Unicode-mode fonts (see `font::is_unicode_font`) can show
+/// codepoints past 255, but the one real use of `widthshow` — widening
+/// space (code 32) to justify a line — is well under 256 regardless of
+/// font, so there's no call to widen this past `u8` for a capability
+/// nothing exercises.
+fn pop_char_code(it: &mut Interp) -> Result<u32, PsError> {
     let c = it.pop_int()?;
-    u8::try_from(c).map_err(|_| PsError::Rangecheck)
+    u8::try_from(c)
+        .map(u32::from)
+        .map_err(|_| PsError::Rangecheck)
 }
 
 /// cx cy char string widthshow — extra advance on one byte (classically,

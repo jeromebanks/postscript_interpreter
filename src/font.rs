@@ -95,12 +95,20 @@ pub(crate) fn builtin_index(name: &str) -> Option<i64> {
 
 /// Which Encoding array a catalog face's font dict gets. The two URW
 /// symbol faces carry their own PLRM encodings; everything else is
-/// StandardEncoding like the builtins.
+/// StandardEncoding like the builtins. `Unicode` is a deliberate
+/// deviation from the byte-indexed model (see the "Unicode-mode
+/// catalog faces" addendum in FONTS.md): fonts whose native script
+/// can't fit in a 256-entry Encoding (Hangul, kana/kanji, Thai) get a
+/// `show` pipeline that decodes the string as UTF-8 and maps each
+/// codepoint straight to a glyph via the face's `cmap`, bypassing
+/// Encoding/glyph-name resolution entirely. The dict still carries a
+/// StandardEncoding array for shape consistency, but it's unread.
 #[derive(Clone, Copy)]
 enum CatalogEncoding {
     Standard,
     Symbol,
     Dingbats,
+    Unicode,
 }
 
 /// A face loaded from `fonts/catalog/` at findfont time. The file bytes
@@ -235,17 +243,44 @@ fn catalog_fid(requested: &str) -> Option<i64> {
 fn load_catalog_face(path: &std::path::Path) -> Option<i64> {
     let key = path.file_stem()?.to_str()?.to_string();
     let data: &'static [u8] = Box::leak(std::fs::read(path).ok()?.into_boxed_slice());
-    let face: &'static Face<'static> = Box::leak(Box::new(Face::parse(data, 0).ok()?));
-    let ps_name = face
-        .names()
-        .into_iter()
-        .find(|n| n.name_id == ttf_parser::name_id::POST_SCRIPT_NAME)
-        .and_then(|n| n.to_string())
-        .unwrap_or_else(|| key.clone());
+    let mut boxed = Box::new(Face::parse(data, 0).ok()?);
+    // Some catalog files are variable fonts whose *default* named
+    // instance isn't Regular — Noto Sans KR/JP ship with wght's default
+    // at Thin (100), not 400. Without pinning it, the catalog would
+    // silently render (and report) the file's default weight rather
+    // than the Regular cut the `-Regular` filename promises. This is a
+    // general policy for any variable-font catalog addition, not
+    // special-cased to today's three files.
+    if boxed.is_variable() {
+        let wght = ttf_parser::Tag::from_bytes(b"wght");
+        if let Some(axis) = boxed.variation_axes().into_iter().find(|a| a.tag == wght) {
+            let target = 400.0f32.clamp(axis.min_value, axis.max_value);
+            boxed.set_variation(wght, target);
+        }
+    }
+    let face: &'static Face<'static> = Box::leak(boxed);
     let encoding = match key.as_str() {
         "StandardSymbolsPS" => CatalogEncoding::Symbol,
         "D050000L" => CatalogEncoding::Dingbats,
+        "NotoSansKR-Regular" | "NotoSansJP-Regular" | "NotoSansThai-Regular" => {
+            CatalogEncoding::Unicode
+        }
         _ => CatalogEncoding::Standard,
+    };
+    // The name table's PostScript name (id 6) is a fixed string baked
+    // into the file at whatever instance the font author called
+    // "default" — for the variable fonts above that's "…-Thin", which
+    // would contradict the pinned-Regular rendering above. The file
+    // stem (our own naming convention) is the honest `FontName` for
+    // those; everything else keeps trusting the face's own name table.
+    let ps_name = if matches!(encoding, CatalogEncoding::Unicode) {
+        key.clone()
+    } else {
+        face.names()
+            .into_iter()
+            .find(|n| n.name_id == ttf_parser::name_id::POST_SCRIPT_NAME)
+            .and_then(|n| n.to_string())
+            .unwrap_or_else(|| key.clone())
     };
     let mut cat = CATALOG.write().unwrap();
     cat.push(CatalogFace {
@@ -255,6 +290,23 @@ fn load_catalog_face(path: &std::path::Path) -> Option<i64> {
         encoding,
     });
     Some((BUILTINS.len() + cat.len() - 1) as i64)
+}
+
+/// Whether `fid` names a Unicode-mode catalog face (see the
+/// `CatalogEncoding` doc comment) — builtins and Type 1/Type 3 dicts
+/// (which have no registry entry, `fid < 0`) are never Unicode-mode.
+pub(crate) fn is_unicode_font(fid: i64) -> bool {
+    let Ok(idx) = usize::try_from(fid) else {
+        return false;
+    };
+    if idx < BUILTINS.len() {
+        return false;
+    }
+    CATALOG
+        .read()
+        .unwrap()
+        .get(idx - BUILTINS.len())
+        .is_some_and(|c| matches!(c.encoding, CatalogEncoding::Unicode))
 }
 
 /// Names of every face findfont can currently reach without
@@ -342,7 +394,11 @@ pub(crate) fn build_builtin_dict(fid: i64) -> Result<Rc<RefCell<Dict>>, PsError>
         let cat = CATALOG.read().unwrap();
         let c = &cat[idx - BUILTINS.len()];
         let enc = match c.encoding {
-            CatalogEncoding::Standard => encodings::standard_encoding(),
+            // Unicode-mode faces never read this array at show time
+            // (see the CatalogEncoding doc comment); StandardEncoding
+            // is just a well-formed placeholder for dict-shape
+            // consistency (`dup length dict copy`-style idioms).
+            CatalogEncoding::Standard | CatalogEncoding::Unicode => encodings::standard_encoding(),
             CatalogEncoding::Symbol => encodings::symbol_encoding(),
             CatalogEncoding::Dingbats => encodings::dingbats_encoding(),
         };
@@ -401,11 +457,13 @@ pub(crate) fn compose(first: [f64; 6], second: [f64; 6]) -> [f64; 6] {
 }
 
 /// Per-glyph text-placement extras: `ashow` adds a vector to every
-/// glyph's advance; `widthshow` adds one to a designated byte's.
+/// glyph's advance; `widthshow` adds one to a designated character
+/// code's (a byte for ordinary fonts, a Unicode scalar for
+/// Unicode-mode ones — see `CatalogEncoding`).
 #[derive(Default)]
 pub(crate) struct ShowParams {
     pub extra: (f64, f64),
-    pub char_extra: Option<(u8, (f64, f64))>,
+    pub char_extra: Option<(u32, (f64, f64))>,
 }
 
 pub(crate) enum ShowMode {
@@ -531,24 +589,22 @@ fn encoding_name(fs: &FontState, byte: u8) -> crate::name::PsName {
     }
 }
 
-/// One outline-font glyph: paint/append/measure at `pen`, returning the
-/// raw user-space advance (before per-show extras).
-fn outline_glyph(
+/// Paint/append/measure a resolved glyph id at `pen`, returning the raw
+/// user-space advance (before per-show extras). Shared by `outline_glyph`
+/// (byte → Encoding name → glyph id) and `unicode_glyph` (codepoint →
+/// `cmap` directly) — everything past glyph-id resolution is identical.
+fn paint_resolved_glyph(
     gfx: &mut Gfx,
-    fs: &FontState,
-    byte: u8,
+    face: &Face,
+    fm: [f64; 6],
+    gid: Option<GlyphId>,
     mode: &ShowMode,
     pen: DevPoint,
-) -> Result<(f64, f64), PsError> {
-    let face = face_for(fs.fid)?;
+) -> (f64, f64) {
     let k = 1000.0 / f64::from(face.units_per_em());
-    let fm = fs.matrix;
     // Glyph-space → user-space linear part (FontMatrix over 1000-unit
     // glyph space, with the em normalization folded in).
     let g = [fm[0] * k, fm[1] * k, fm[2] * k, fm[3] * k];
-
-    let name = encoding_name(fs, byte);
-    let gid = resolve_glyph(face, &name);
 
     if let Some(gid) = gid
         && !matches!(mode, ShowMode::Width)
@@ -589,7 +645,39 @@ fn outline_glyph(
             .or_else(|| face.glyph_hor_advance(GlyphId(0)))
             .unwrap_or(0),
     );
-    Ok((g[0] * w, g[1] * w))
+    (g[0] * w, g[1] * w)
+}
+
+/// One outline-font glyph reached the byte-oriented way: byte →
+/// Encoding name (live dict read) → glyph id.
+fn outline_glyph(
+    gfx: &mut Gfx,
+    fs: &FontState,
+    byte: u8,
+    mode: &ShowMode,
+    pen: DevPoint,
+) -> Result<(f64, f64), PsError> {
+    let face = face_for(fs.fid)?;
+    let name = encoding_name(fs, byte);
+    let gid = resolve_glyph(face, &name);
+    Ok(paint_resolved_glyph(gfx, face, fs.matrix, gid, mode, pen))
+}
+
+/// One glyph on a Unicode-mode catalog face (see `CatalogEncoding`):
+/// the decoded codepoint maps straight to a glyph id via the face's
+/// `cmap`, with no Encoding array or glyph-name lookup involved — the
+/// 256-slot Encoding model can't address Hangul/kana/kanji, so these
+/// faces skip it entirely.
+fn unicode_glyph(
+    gfx: &mut Gfx,
+    fs: &FontState,
+    code: u32,
+    mode: &ShowMode,
+    pen: DevPoint,
+) -> Result<(f64, f64), PsError> {
+    let face = face_for(fs.fid)?;
+    let gid = char::from_u32(code).and_then(|c| face.glyph_index(c));
+    Ok(paint_resolved_glyph(gfx, face, fs.matrix, gid, mode, pen))
 }
 
 /// One Type 1 glyph: decrypt the charstring, interpret it (hints
@@ -727,7 +815,18 @@ pub(crate) enum ShowStep {
 /// on the operand stack before the next token runs — frame order *is*
 /// program order.
 pub(crate) struct ShowCtx {
-    text: Vec<u8>,
+    /// Character codes to show, one `u32` per glyph. For ordinary
+    /// (byte-oriented) fonts these are the string's raw bytes widened
+    /// to `u32`; for Unicode-mode catalog faces (see `CatalogEncoding`)
+    /// they're the string decoded as UTF-8, one Unicode scalar per
+    /// glyph — the deliberate, documented deviation from PostScript's
+    /// byte-oriented string model that makes Hangul/kana/kanji/Thai
+    /// text reachable at all.
+    codes: Vec<u32>,
+    /// Whether `codes` holds decoded Unicode scalars (true) or raw
+    /// bytes (false) — decided once, from the font in effect when the
+    /// show began; see `unicode_glyph` vs `outline_glyph`.
+    unicode_mode: bool,
     idx: usize,
     /// Device-space pen. The current point is re-fetched after each
     /// kshow proc so the proc can move it — that's what kshow is *for*.
@@ -745,13 +844,23 @@ pub(crate) struct ShowCtx {
 impl ShowCtx {
     pub(crate) fn new(
         text: Vec<u8>,
+        unicode_mode: bool,
         params: ShowParams,
         mode: ShowMode,
         kshow_proc: Option<Object>,
         pen: DevPoint,
     ) -> Self {
+        let codes = if unicode_mode {
+            String::from_utf8_lossy(&text)
+                .chars()
+                .map(u32::from)
+                .collect()
+        } else {
+            text.iter().map(|&b| u32::from(b)).collect()
+        };
         ShowCtx {
-            text,
+            codes,
+            unicode_mode,
             idx: 0,
             pen,
             total: (0.0, 0.0),
@@ -794,7 +903,11 @@ impl ShowCtx {
             gfx.restore_glyph_snapshot(p.depth, p.saved);
             let (wx, wy) = p.width.unwrap_or((0.0, 0.0));
             let m = p.matrix;
-            self.advance(gfx, p.byte, (m[0] * wx + m[2] * wy, m[1] * wx + m[3] * wy));
+            self.advance(
+                gfx,
+                u32::from(p.byte),
+                (m[0] * wx + m[2] * wy, m[1] * wx + m[3] * wy),
+            );
             if let Some(step) = self.maybe_kshow() {
                 return Ok(step);
             }
@@ -808,7 +921,7 @@ impl ShowCtx {
                 self.pen = gfx.device_current_point().ok_or(PsError::NoCurrentPoint)?;
             }
         }
-        let Some(&byte) = self.text.get(self.idx) else {
+        let Some(&code) = self.codes.get(self.idx) else {
             return Ok(match self.mode {
                 ShowMode::Width => ShowStep::PopPushWidth(self.total.0, self.total.1),
                 _ => ShowStep::Pop,
@@ -818,17 +931,25 @@ impl ShowCtx {
         // inside BuildChar) may have changed it.
         let fs = gfx.state().font.clone().ok_or(PsError::InvalidFont)?;
         if fs.fid >= 0 {
-            let adv = outline_glyph(gfx, &fs, byte, &self.mode, self.pen)?;
+            let adv = if self.unicode_mode {
+                unicode_glyph(gfx, &fs, code, &self.mode, self.pen)?
+            } else {
+                outline_glyph(gfx, &fs, code as u8, &self.mode, self.pen)?
+            };
             self.idx += 1;
-            self.advance(gfx, byte, adv);
+            self.advance(gfx, code, adv);
             if let Some(step) = self.maybe_kshow() {
                 return Ok(step);
             }
             Ok(ShowStep::Again)
         } else {
-            // No registry entry: a procedural font. Type 3 glyph
-            // procedures win; otherwise Type 1 CharStrings render
-            // synchronously like outlines.
+            // No registry entry: a procedural font (Type 1/Type 3 dicts
+            // never carry Unicode-mode codes — `unicode_mode` is decided
+            // from `is_unicode_font`, which is false whenever `fid < 0`
+            // — so `code` here is always an original byte, safe to narrow).
+            let byte = code as u8;
+            // Type 3 glyph procedures win; otherwise Type 1 CharStrings
+            // render synchronously like outlines.
             let is_type3 = {
                 let d = fs.dict.borrow();
                 d.get("BuildGlyph").is_some() || d.get("BuildChar").is_some()
@@ -838,7 +959,7 @@ impl ShowCtx {
             } else {
                 let adv = type1_glyph(gfx, &fs, byte, &self.mode, self.pen)?;
                 self.idx += 1;
-                self.advance(gfx, byte, adv);
+                self.advance(gfx, code, adv);
                 if let Some(step) = self.maybe_kshow() {
                     return Ok(step);
                 }
@@ -849,11 +970,11 @@ impl ShowCtx {
 
     /// Apply one glyph's advance (plus ashow/widthshow extras) to the
     /// running total and, when painting, to the pen and current point.
-    fn advance(&mut self, gfx: &mut Gfx, byte: u8, mut adv: (f64, f64)) {
+    fn advance(&mut self, gfx: &mut Gfx, code: u32, mut adv: (f64, f64)) {
         adv.0 += self.params.extra.0;
         adv.1 += self.params.extra.1;
         if let Some((ch, (cx, cy))) = self.params.char_extra
-            && ch == byte
+            && ch == code
         {
             adv.0 += cx;
             adv.1 += cy;
@@ -874,8 +995,8 @@ impl ShowCtx {
     /// last), kshow pushes their codes and runs its proc.
     fn maybe_kshow(&mut self) -> Option<ShowStep> {
         let proc = self.kshow_proc.as_ref()?;
-        let &next = self.text.get(self.idx)?;
-        let prev = self.text[self.idx - 1];
+        let &next = self.codes.get(self.idx)?;
+        let prev = self.codes[self.idx - 1];
         self.kshow_wait = true;
         Some(ShowStep::Exec {
             operands: vec![Object::int(i64::from(prev)), Object::int(i64::from(next))],
