@@ -256,3 +256,79 @@ the twelve builtins into a **runtime catalog** loaded from
 `examples/font_catalog.ps` renders the specimen sheets. The library
 of *programmatic* faces lives on in `lib/fonts/` (seven now: Neon,
 Marquee, Constellation, Lapidary, Circuitry, Stitchwork, Confetti).
+
+## Post-roadmap addendum — Unicode-mode catalog faces (Korean, Japanese, Thai)
+
+Every face above — builtins and catalog alike — is byte-oriented:
+`show` reads one byte, looks it up in a 256-entry `Encoding` array to
+get a glyph name, and resolves that name to a glyph id. That ceiling
+is structural, not incidental (`ShowCtx`'s codes were, until now,
+literally the string's raw bytes). Thai's ~90 codepoints fit under it;
+Hangul (11,172 precomposed syllables) and Japanese kanji (thousands)
+do not, by two orders of magnitude. Real, general support for those
+scripts is Type 0/composite/CID fonts — still explicitly out of scope
+(Decision 5, Deferred list above).
+
+Instead, three catalog faces — **Noto Sans KR, Noto Sans JP, Noto Sans
+Thai** (SIL OFL 1.1, `google/fonts`) — get a **documented, narrow
+deviation**: a new `CatalogEncoding::Unicode` variant (`src/font.rs`),
+assigned by file stem in `load_catalog_face` alongside the existing
+Symbol/Dingbats special cases. When the font in effect at `begin_show`
+is Unicode-mode (`font::is_unicode_font`, keyed on `FID` — so derived
+dicts from `scalefont`/`makefont`/the re-encoding idiom stay
+Unicode-mode too, since FID is the seam per Decision 2), `ShowCtx`
+decodes the string as UTF-8 into Unicode scalars instead of raw bytes,
+and each scalar maps straight to a glyph via the face's `cmap`
+(`unicode_glyph`), skipping Encoding/glyph-name resolution entirely.
+Byte-mode fonts are untouched — same bytes, same `Encoding` reads,
+same `outline_glyph` path (the two now share the actual paint/measure
+math via `paint_resolved_glyph`; only glyph-id resolution differs).
+
+Consequences, by design:
+
+- **`(가나다) show` just works** in a UTF-8-saved `.ps` file on a
+  Unicode-mode font — no per-document byte-remapping, no `uniXXXX`
+  Encoding surgery. Latin text in the same string works too (Noto Sans
+  covers it), so scripts can mix within one `show` call as long as the
+  one active font covers all of them.
+- **`/Encoding` is vestigial on these three dicts.** It's still a
+  well-formed `StandardEncoding` array (dict-shape consistency,
+  `dup length dict copy` idioms keep working structurally), but `show`
+  never reads it for a Unicode-mode font — the classic re-encoding
+  idiom (copy dict, swap `/Encoding`, `definefont`) has no effect here.
+- **`kshow`'s proc** now receives the actual Unicode scalars of the
+  surrounding pair, not byte-truncated values — strictly additive for
+  existing byte-mode text (values under 256 are unaffected).
+  `widthshow`/`awidthshow`'s `char` operand stays capped at `u8`
+  (`pop_char_code`, `src/ops/font.rs`): its one real use — widening
+  space (code 32) to justify a line — is well under 256 regardless of
+  font, so there was no case for admitting codepoints past 255 there.
+- **No shaping.** Glyph advance is still the bare `hor_advance` used
+  everywhere else — no GPOS/mark-attachment. Thai's above/below
+  combining vowel and tone marks stack using their own advance widths,
+  not shaped attachment; visually adequate for short strings, not a
+  substitute for a real shaper.
+- **Variable-font pinning.** Noto Sans KR/JP ship only as variable
+  TTFs whose *default* named instance is Thin (wght 100), not Regular
+  — confirmed via the `fvar` table, not assumed. `load_catalog_face`
+  pins `wght` to 400 (clamped to the face's axis range) for any
+  variable-font catalog entry, and uses the file stem as `FontName`
+  for Unicode-mode faces rather than the name table's PostScript name
+  (which stays "…-Thin" regardless of the pinned instance — it's a
+  static string, not recomputed from variation coordinates). This is a
+  general policy, not special-cased to today's three files: any future
+  variable-font catalog addition gets the same Regular default.
+- **`.ttc` still isn't a recognized catalog extension** (`.ttf`/`.otf`
+  only) — irrelevant to what's bundled today, but matters if a future
+  addition ships as a TrueType Collection.
+
+Tests: `tests/catalog.rs`'s Unicode-mode section — resolution by file
+stem, ink-coverage rendering for Hangul/kana-kanji/Thai, `stringwidth`
+scaling, ASCII+Hangul mixed in one string, and a `kshow` test asserting
+the proc sees Unicode scalars rather than byte-truncated codes. The
+existing byte-mode suite (this file's tasks 2–4, Stage 18's addendum)
+is the regression gate — it must keep passing unchanged, since it's
+what would catch a mistake that let UTF-8 decoding leak into
+StandardEncoding/ISOLatin1Encoding text.
+
+`examples/international_text.ps` is the specimen for this addendum.

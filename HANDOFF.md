@@ -18,7 +18,13 @@ done, unplanned/post-roadmap: Stage 21, standalone installability —
 `src/paths.rs` (a consolidated, tested resource-root resolver used
 by the font catalog, `run`/`file`, and `pscat-mcp`'s handwrite path),
 `scripts/package_release.sh`, and `.github/workflows/release.yml`,
-so pscat can be installed and run without a git checkout. Written for whichever model
+so pscat can be installed and run without a git checkout; and Stage
+22, Korean/Japanese/Thai fonts — a `CatalogEncoding::Unicode` face
+variant (Noto Sans KR/JP/Thai) whose `show` decodes UTF-8 and maps
+codepoints straight to glyphs via `cmap`, since Hangul/kanji exceed
+the 256-slot Encoding model everything else uses (see FONTS.md's
+"Unicode-mode catalog faces" addendum and NOTES.md's Stage 22 entry).
+Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
 `NOTES.md` has per-stage histories; this file is the *orientation*.
