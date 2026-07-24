@@ -1,0 +1,30 @@
+# Build a standalone pscat bundle (scripts/package_release.sh) and
+# publish it as a GitHub Release whenever a version tag is pushed —
+# so teammates can install pscat without a git checkout or cargo.
+# Tag like: git tag v0.5.0 && git push origin v0.5.0
+#
+# macOS-only for now, matching the only platform this has actually
+# been built/tested on; add runners to the matrix below if/when
+# Linux or Windows teammates need a native bundle too.
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: ./scripts/package_release.sh
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz
+          generate_release_notes: true

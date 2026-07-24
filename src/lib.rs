@@ -16,6 +16,7 @@ pub mod lexer;
 pub mod name;
 pub mod object;
 pub mod ops;
+pub mod paths;
 pub mod pdf;
 pub mod repl;
 #[cfg(not(target_arch = "wasm32"))]

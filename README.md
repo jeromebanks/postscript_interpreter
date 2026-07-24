@@ -135,6 +135,31 @@ triangle, Koch snowflake, golden spiral), a found-file-style test card,
 and a type specimen (`specimen.ps`); all render identically in pscat
 and Ghostscript.
 
+## Installing pscat without the repo
+
+You don't need a git checkout or a Rust toolchain just to *use*
+pscat. `scripts/package_release.sh` builds `pscat`/`pscat-mcp` and
+bundles them with their runtime assets (`lib/`, `fonts/catalog/`,
+`scripts/handwrite.sh`) into a standalone directory — CI does this
+automatically and attaches the result to a
+[GitHub Release](https://github.com/jeromebanks/postscript_interpreter/releases)
+whenever a version tag is pushed (`.github/workflows/release.yml`).
+
+To use one:
+
+```sh
+tar xzf pscat-<version>-<os>-<arch>.tar.gz
+export PATH="$PWD/pscat-<version>-<os>-<arch>:$PATH"
+pscat --png out.png some_file.ps
+```
+
+`lib/artkit.ps` and friends, and `fonts/catalog/`, resolve
+automatically as long as they stay next to the `pscat` binary — the
+whole point of the bundle layout. If you move the binary elsewhere,
+set `PSCAT_ROOT` to wherever the bundle ended up (see `src/paths.rs`
+for the full resolution order, which also covers running from a
+`cargo build --release` checkout with no configuration, as before).
+
 ## Handwrite: string in, handwritten PNG out
 
 ```sh
@@ -352,8 +377,12 @@ config is:
 ```
 
 The server shells out to the `pscat` CLI (found next to it), so the
-tools always match the CLI's behavior; set `PSCAT_ROOT` if you move
-the binaries out of the checkout and still want `handwrite`.
+tools always match the CLI's behavior. `handwrite` also needs
+`scripts/handwrite.sh` — resolved the same way as `pscat`/`lib`/
+`fonts/catalog` (see "Installing pscat without the repo" above), so
+a release bundle needs no extra setup; set `PSCAT_ROOT` only if
+you've moved the binaries away from their `lib`/`fonts`/`scripts`
+siblings.
 
 ## Gallery
 

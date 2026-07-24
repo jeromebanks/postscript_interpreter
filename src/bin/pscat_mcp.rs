@@ -341,20 +341,32 @@ fn pscat_bin() -> Result<PathBuf, String> {
     }
 }
 
-/// The repo root: $PSCAT_ROOT, or two levels up from the binary
-/// (target/<profile>/pscat-mcp in a cargo layout).
+/// The repo/bundle root: $PSCAT_ROOT (trusted unconditionally — an
+/// explicit override that's wrong should fail loudly rather than
+/// silently fall through to some other root), or the shared
+/// heuristics from `pscat::paths` (exe-sibling directory — the
+/// bundle layout, `scripts/handwrite.sh` next to the binaries —
+/// three levels up from the exe for a cargo dev build, or the crate
+/// root at compile time), filtered by `scripts/handwrite.sh`
+/// actually existing there.
 fn repo_root() -> Result<PathBuf, String> {
     if let Ok(root) = std::env::var("PSCAT_ROOT") {
         return Ok(PathBuf::from(root));
     }
-    let me = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-    me.ancestors()
-        .nth(3)
-        .map(Path::to_path_buf)
-        .filter(|r| r.join("scripts/handwrite.sh").exists())
-        .ok_or_else(|| {
-            "repo root not found (set PSCAT_ROOT to the pscat checkout for handwrite)".into()
-        })
+    const SCRIPT_REL: &str = "scripts/handwrite.sh";
+    // first_existing resolves to the full winning path (root joined
+    // with SCRIPT_REL), not the root itself — walk back up exactly as
+    // many components as SCRIPT_REL has to recover it, rather than a
+    // hardcoded double `.parent()` that'd silently drift if the
+    // constant above ever changes.
+    let up = Path::new(SCRIPT_REL).components().count();
+    pscat::paths::first_existing(&pscat::paths::heuristic_roots(), SCRIPT_REL, &|p| {
+        p.exists()
+    })
+    .and_then(|p| p.ancestors().nth(up).map(Path::to_path_buf))
+    .ok_or_else(|| {
+        "repo root not found (set PSCAT_ROOT to the pscat checkout for handwrite)".into()
+    })
 }
 
 fn scratch_dir() -> Result<PathBuf, String> {

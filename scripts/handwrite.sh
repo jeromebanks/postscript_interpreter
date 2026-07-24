@@ -40,7 +40,22 @@ EOF
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 LIB="$ROOT/lib/handscript.ps"
-BIN="$ROOT/target/release/pscat"
+
+# BIN resolution covers two layouts this same script file runs from
+# unmodified: an installed bundle (pscat sits at the bundle root,
+# this script one level down in scripts/ — see
+# scripts/package_release.sh) and a dev checkout (built via cargo,
+# below). Falls through to "trigger the cargo-build fallback below"
+# if neither exists and nothing's on PATH either.
+if [[ -x "$ROOT/pscat" ]]; then
+  BIN="$ROOT/pscat"
+elif [[ -x "$ROOT/target/release/pscat" ]]; then
+  BIN="$ROOT/target/release/pscat"
+elif command -v pscat >/dev/null 2>&1; then
+  BIN="$(command -v pscat)"
+else
+  BIN="$ROOT/target/release/pscat"
+fi
 
 TEXT="" OUT="handwritten.png"
 SIZE=36 WIDTH=612 HEIGHT="" MARGIN=54 LEADING=1.5

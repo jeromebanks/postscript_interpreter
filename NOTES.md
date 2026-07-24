@@ -3,6 +3,56 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Stage 21 — standalone installability (2026-07-24)
+
+Not on the original roadmap (all 20 stages were done); came up when
+a teammate wanted pscat runnable without a git checkout. Two prior,
+independently-written path-resolution chains existed —
+`font.rs::catalog_root()` (four candidates, `CARGO_MANIFEST_DIR` and
+CWD included) and `pscat_mcp.rs::repo_root()` (two candidates, no
+CWD) — divergent by accident, not design (confirmed against NOTES.md
+history: nothing documents why Stage 14's MCP server didn't reuse
+Stage 15/18's font-catalog logic). Consolidated into `src/paths.rs`,
+used by both plus a new call site: the `run`/`file` operators
+(`src/ops/file.rs`), which previously had *no* fallback at all —
+`(lib/artkit.ps) run` only worked with CWD already at the repo root.
+
+The one real design wrinkle: `run`/`file` can't use the font
+catalog's candidate order (heuristics before CWD) without risking a
+bundle/dev-checkout heuristic silently shadowing a file the caller
+meant relative to CWD (e.g. `(helper.ps) run` from a subdirectory).
+Nothing in the existing suite exercised the PS-level `run` operator
+with a relative path, so this was a real coverage gap, not just an
+absence of failures — `tests/files.rs` now has both a CWD-resolution
+regression test and unit tests in `src/paths.rs` pinning the two
+different orders (`program_file`: CWD before heuristics;
+`catalog_dir`: heuristics before CWD, unchanged from before this
+module existed).
+
+Found and fixed a genuine bug of my own mid-implementation:
+`pscat_mcp.rs::repo_root()`'s rewire initially took `.parent()` of
+the *resolved file path* (`root/scripts/handwrite.sh`) once, landing
+one directory too shallow (`root/scripts` instead of `root`) —
+`tests/mcp.rs`'s `handwrite_returns_a_note` caught it immediately.
+Fixed by walking back up exactly as many path components as the
+target has, rather than a hardcoded double `.parent()`.
+
+`scripts/package_release.sh` (new) builds `pscat`/`pscat-mcp` and
+bundles them with `lib/`, `fonts/catalog/` (wholesale — license
+`.txt` files travel with the fonts, not filtered out), and a
+bundle-aware `scripts/handwrite.sh` (same file works unmodified in
+either layout — it already anchored to its own location via
+`dirname "$0"`, only `BIN` needed a bundle-first fallback chain).
+Binaries sit at the bundle root so exe-sibling resolution needs zero
+configuration: unzip, add to `PATH`, done. `examples/`/`gallery/`
+excluded — confirmed nothing at runtime depends on them.
+`.github/workflows/release.yml` runs the packaging script and
+publishes the tarball to GitHub Releases on a version tag push.
+
+Deferred: multi-platform builds (macOS-only for now, matching what's
+actually been tested); a `brew` tap (a plain tarball was enough for
+the immediate need).
+
 ## Stage 20 — the style packs (2026-07-19)
 
 Four motif libraries in `lib/styles/`, layered on artkit (loaded

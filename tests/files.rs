@@ -253,6 +253,66 @@ fn file_errors() {
     ));
 }
 
+/// A relative-path fixture under `target/`, cleaned up on drop even
+/// if the test panics — `target/` is already gitignored, and the
+/// crate root is `cargo test`'s CWD, so a relative path to it is the
+/// realistic case `run`/`file` resolve for programs that `(lib/foo)
+/// run` un-anchored from that CWD (see `src/ops/file.rs::resolve`
+/// and `src/paths.rs`). Named with the process id *and* a per-process
+/// counter — the pid alone isn't enough, since every test in this
+/// binary shares one process and `cargo test` runs them concurrently
+/// by default (an earlier version of this fixture collided exactly
+/// that way: two tests raced on one filename and each other's
+/// content leaked across the read).
+struct RelFixture {
+    rel_path: String,
+}
+
+impl RelFixture {
+    fn new(contents: &str) -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let rel_path = format!("target/pscat-test-fixture-{}-{n}.ps", std::process::id());
+        std::fs::write(&rel_path, contents).expect("write fixture");
+        Self { rel_path }
+    }
+}
+
+impl Drop for RelFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.rel_path);
+    }
+}
+
+#[test]
+fn run_resolves_a_relative_path_against_cwd() {
+    // The common case, unchanged by adding fallback resolution: a
+    // relative `run` that already resolves against CWD must keep
+    // working exactly as it did before `src/paths.rs` existed. This
+    // is the PS-level `run` operator specifically — the gap flagged
+    // during review, since the existing artkit/styles/fontlib tests
+    // all load `lib/*.ps` at the Rust level instead.
+    let fixture = RelFixture::new("41 42 add");
+    let mut it = Interp::with_page(100, 100).expect("page");
+    it.run_str(&format!("({}) run", fixture.rel_path))
+        .unwrap_or_else(|e| panic!("run failed: {e}"));
+    assert_eq!(top_repr(&mut it), "83");
+}
+
+#[test]
+fn file_resolves_a_relative_path_against_cwd() {
+    let fixture = RelFixture::new("hello");
+    let mut it = Interp::with_page(100, 100).expect("page");
+    it.run_str(&format!(
+        "({}) (r) file 5 string readstring",
+        fixture.rel_path
+    ))
+    .unwrap_or_else(|e| panic!("run failed: {e}"));
+    assert_eq!(top_repr(&mut it), "true");
+    assert_eq!(top_repr(&mut it), "(hello)");
+}
+
 #[test]
 fn currentfile_skips_executable_strings() {
     // Inside an executable string, currentfile falls through to the

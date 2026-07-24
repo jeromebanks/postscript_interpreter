@@ -1,7 +1,7 @@
 # HANDOFF.md — state of the interpreter and how to continue
 
 Written 2026-07-13 at the completion of Stages 6–7; last updated
-2026-07-19. Stages 8–20 are all complete: spool/halftone/Gallery II
+2026-07-24. Stages 8–20 are all complete: spool/halftone/Gallery II
 (10), perf parity (11), handwriting (12), the handwrite tool (13),
 agent integration — skill, `pscat-mcp`, `pscat -` (14), the
 font library `lib/fonts/` — /Neon, /Marquee, /Constellation,
@@ -13,7 +13,12 @@ Machinalis (19), and the style packs — `lib/styles/`
 steampunk/psychedelic/scifi/toon motif libraries over artkit, with
 specimen posters in `examples/style_*.ps` (20) — plus
 `--interactive` (the windowed
-REPL, Stage 8's last sliver) and the Level 2 rect operators. Written for whichever model
+REPL, Stage 8's last sliver) and the Level 2 rect operators. Also
+done, unplanned/post-roadmap: Stage 21, standalone installability —
+`src/paths.rs` (a consolidated, tested resource-root resolver used
+by the font catalog, `run`/`file`, and `pscat-mcp`'s handwrite path),
+`scripts/package_release.sh`, and `.github/workflows/release.yml`,
+so pscat can be installed and run without a git checkout. Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
 `NOTES.md` has per-stage histories; this file is the *orientation*.

@@ -2,3 +2,4 @@
 tests/corpus/
 web/pscat.wasm
 _site/
+/dist/

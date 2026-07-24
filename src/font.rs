@@ -180,21 +180,7 @@ pub(crate) fn resolve(requested: &str) -> i64 {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn catalog_root() -> Option<std::path::PathBuf> {
-    let candidates = [
-        std::env::var("PSCAT_ROOT")
-            .ok()
-            .map(std::path::PathBuf::from),
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.ancestors().nth(3).map(std::path::Path::to_path_buf)),
-        Some(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))),
-        Some(std::path::PathBuf::from(".")),
-    ];
-    candidates
-        .into_iter()
-        .flatten()
-        .map(|p| p.join("fonts/catalog"))
-        .find(|p| p.is_dir())
+    crate::paths::catalog_dir()
 }
 
 /// Find (loading if necessary) the catalog face for a requested name.
