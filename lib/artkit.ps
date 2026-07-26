@@ -279,11 +279,16 @@ end
 % advance, one tangent per flattened path segment — visible as faceting
 % at large radii). The arc is swept a little wider than the string's
 % measured width so float/flattening error can't clip the last glyph.
+% The caller's current path survives, same contract as alongpath: the
+% arc built to walk is scoped inside gsave/grestore (path is part of
+% this interpreter's graphics state), not left behind in its place.
 /ctext {
     /ctstr exch def /ctang exch def /ctr exch def /cty exch def /ctx exch def
-    /ctspan ctstr stringwidth pop ctr div 57.29578 mul def
-    newpath ctx cty ctr ctang ctang ctspan 1.05 mul sub arcn
-    ctstr pathtext
+    /ctspan ctstr stringwidth pop ctr div 57.29578 mul def  % 57.29578 = degrees/radian
+    gsave
+        newpath ctx cty ctr ctang ctang ctspan 1.05 mul sub arcn
+        ctstr pathtext
+    grestore
 } def
 
 % cx cy r (str) ctextctr -
@@ -293,7 +298,7 @@ end
 % angle from the string's width.
 /ctextctr {
     /ctcstr exch def /ctcr exch def /ctcy exch def /ctcx exch def
-    /ctcspan ctcstr stringwidth pop ctcr div 57.29578 mul def
+    /ctcspan ctcstr stringwidth pop ctcr div 57.29578 mul def  % degrees/radian
     ctcx ctcy ctcr 90 ctcspan 2 div add ctcstr ctext
 } def
 

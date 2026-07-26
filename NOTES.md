@@ -3,7 +3,7 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
-## Stage 24 — circular/curved text in artkit (2026-07-26)
+## Circular/curved text in artkit (issue #12, 2026-07-26)
 
 Closes issue #12. First run of `.claude/skills/work-issue/SKILL.md`,
 the new issue → branch → worktree → (advisor-reviewed plan) →

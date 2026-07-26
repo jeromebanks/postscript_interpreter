@@ -182,6 +182,30 @@ fn ctext_and_ctextctr_leave_ink_at_small_and_large_radius() {
 }
 
 #[test]
+fn ctext_preserves_the_callers_current_path() {
+    // artkit's other path-touching brushes leave the caller's path
+    // alone (alongpath's header: "The current path survives"); ctext
+    // should honor the same contract rather than silently replacing
+    // whatever path the caller had built with its own arc. Build a
+    // large rectangle, call ctext, then stroke: if the rectangle
+    // survived, the stroke's ink reflects its ~1500pt perimeter, not
+    // just ctext's own small arc.
+    let mut it = Interp::with_page(400, 400).expect("page");
+    load(&mut it);
+    it.run_str(
+        "/Helvetica-Bold findfont 20 scalefont setfont \
+         newpath 10 10 moveto 390 10 lineto 390 390 lineto 10 390 lineto closepath \
+         200 200 60 0 (mark) ctext \
+         2 setlinewidth stroke",
+    )
+    .unwrap_or_else(|e| panic!("ctext failed: {}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 1000,
+        "expected the surviving rectangle's stroke, not just ctext's own arc"
+    );
+}
+
+#[test]
 fn shapes_fill() {
     for shape in [
         "100 100 60 6 ngon",
