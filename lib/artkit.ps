@@ -17,13 +17,14 @@
 %   turtle    x y h thome | d fd | d hop | a tl | a tr | tpush | tpop
 %   L-systems (axiom) <<rules>> depth lsys | (str) step angle ldraw
 %   brushes   pitch {x y ang ...} alongpath | (str) pathtext
+%             cx cy r ang (str) ctext | cx cy r (str) ctextctr
 %   shapes    cx cy r n ngon | cx cy r1 r2 n star | x y w h r rrect
 %   text      (s) cx y showctr | (s) w fitfont
 %   layout    x y w h cols rows {x y w h ...} grid
 %
 % Convention: helper names are lowercase and short; internal scratch
-% names carry two-letter prefixes (ap-, ld-, ls-, tk-) — avoid
-% redefining those inside brush/draw procs.
+% names carry two-letter prefixes (ap-, ct-, ld-, ls-, pt-, tk-) —
+% avoid redefining those inside brush/draw procs.
 
 % --- random ----------------------------------------------------------
 % Deterministic (rand), reproducible under srand. Drawn from rand's
@@ -264,6 +265,36 @@ end
           /pti pti 1 add def
       } { pop pop pop } ifelse }
     alintern
+} def
+
+% cx cy r ang (str) ctext -
+% Circular text: sets (str) along a circle of radius r centered at
+% cx,cy, starting at ang degrees (arc's convention — 0 = east, angle
+% grows counterclockwise) and sweeping *clockwise* from there. That
+% direction is what keeps glyphs upright and reading left-to-right
+% along the top of the circle (the usual seal/coin composition);
+% placed along the bottom half, the same text reads upside down —
+% a real property of circular type, not a bug here. Built on pathtext,
+% so it inherits pathtext's own documented limits (plain-stringwidth
+% advance, one tangent per flattened path segment — visible as faceting
+% at large radii). The arc is swept a little wider than the string's
+% measured width so float/flattening error can't clip the last glyph.
+/ctext {
+    /ctstr exch def /ctang exch def /ctr exch def /cty exch def /ctx exch def
+    /ctspan ctstr stringwidth pop ctr div 57.29578 mul def
+    newpath ctx cty ctr ctang ctang ctspan 1.05 mul sub arcn
+    ctstr pathtext
+} def
+
+% cx cy r (str) ctextctr -
+% ctext's common case: center (str) at the top of the circle (90
+% degrees) instead of taking an explicit start angle — the one-liner
+% for a "ring of type" composition without hand-deriving the start
+% angle from the string's width.
+/ctextctr {
+    /ctcstr exch def /ctcr exch def /ctcy exch def /ctcx exch def
+    /ctcspan ctcstr stringwidth pop ctcr div 57.29578 mul def
+    ctcx ctcy ctcr 90 ctcspan 2 div add ctcstr ctext
 } def
 
 % --- shapes (appended to the current path) ---------------------------

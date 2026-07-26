@@ -1,0 +1,47 @@
+%!PS-Adobe-3.0
+%%Title: Round Trip — a circular-text specimen
+%%BoundingBox: 0 0 500 500
+%%EndComments
+
+% Specimen sheet for artkit's ctext/ctextctr (lib/artkit.ps): a
+% seal/stamp motif built from two centered rings (ctextctr) around a
+% badge, plus one explicit-angle ctext call along the bottom to show
+% —honestly, not hide— the one real gotcha: text on the lower half of
+% a circle reads upside down, the same way it would on a real seal.
+% Run from the repo root:
+%
+%   pscat --page 500x500 examples/circular_text.ps
+
+(lib/artkit.ps) run
+7 srand
+
+1 1 1 setrgbcolor clippath fill
+0.08 0.08 0.1 setrgbcolor
+
+% the two rings a seal is built from
+1.5 setlinewidth
+newpath 250 250 190 0 360 arc stroke
+newpath 250 250 120 0 360 arc stroke
+
+/Palatino-Bold findfont 24 scalefont setfont
+250 250 190 (POSTSCRIPT INTERPRETER) ctextctr
+
+/Palatino-Italic findfont 16 scalefont setfont
+250 250 155 (circular text, centered) ctextctr
+
+% the badge at the center
+/dusk pal 2 get aload pop setrgbcolor
+newpath 250 250 60 30 8 star fill
+0.08 0.08 0.1 setrgbcolor
+newpath 250 250 60 30 8 star stroke
+/Palatino-Bold findfont 20 scalefont setfont
+(ctext) 250 246 showctr
+/Palatino findfont 11 scalefont setfont
+(lib/artkit.ps) 250 228 showctr
+
+% explicit-angle ctext along the bottom — deliberately upside down,
+% the honest behavior of text on the lower half of a circle
+/Palatino-Italic findfont 13 scalefont setfont
+250 250 100 290 (upside down here) ctext
+
+showpage
