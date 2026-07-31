@@ -26,3 +26,14 @@ No Claude-Code-specific conventions beyond the above at this time — if any
 emerge (preferred tool usage patterns, things that trip up this particular
 setup, etc.), add them here rather than in `AGENTS.md`, which should stay
 tool-agnostic.
+
+<!-- sdlcify:managed:start -->
+## SDLC
+
+`SDLC.md` is the authoritative record of this repo's development
+lifecycle and the branch-protection/merge policy currently enforced on
+GitHub — generated and kept in sync by the `sdlcify` skill
+(`.claude/skills/sdlcify/`). Day-to-day issue execution (pick an issue,
+branch, implement, open a PR) is handled by
+`.claude/skills/work-issue/`.
+<!-- sdlcify:managed:end -->

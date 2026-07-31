@@ -3,3 +3,9 @@ tests/corpus/
 web/pscat.wasm
 _site/
 /dist/
+
+# sdlcify: common ignores
+.DS_Store
+*.swp
+*.swo
+*~
