@@ -129,6 +129,82 @@ fn pathtext_sets_text_along_a_path() {
     assert!(ink_count(&it) > 300, "expected glyph ink along the path");
 }
 
+fn ink_of(body: &str) -> usize {
+    let mut it = Interp::with_page(400, 400).expect("page");
+    load(&mut it);
+    it.run_str(body)
+        .unwrap_or_else(|e| panic!("{body} failed: {}", it.error_report(&e)));
+    ink_count(&it)
+}
+
+#[test]
+fn ctext_stamps_every_glyph_including_the_last() {
+    // Regression guard for the classic path-following-text bug: if the
+    // swept arc is even slightly shorter than the string's measured
+    // width, the trailing glyph is silently never stamped -- no error,
+    // and a whole-canvas ink_count threshold wouldn't notice. Compare
+    // ink with and without the final character: dropping it should
+    // visibly reduce ink; if ctext already silently drops it, the two
+    // counts come out nearly equal instead.
+    let setup = "/Helvetica-Bold findfont 24 scalefont setfont ";
+    let full = ink_of(&format!("{setup} 200 200 90 0 (CIRCULARTEXT) ctext"));
+    let truncated = ink_of(&format!("{setup} 200 200 90 0 (CIRCULARTEX) ctext"));
+    assert!(
+        full > truncated + 50,
+        "last glyph doesn't appear to contribute ink: full={full} truncated={truncated}"
+    );
+}
+
+#[test]
+fn ctext_and_ctextctr_leave_ink_at_small_and_large_radius() {
+    // Small radius (with a font sized to actually fit the circle)
+    // exercises tight curvature -- more flattened-segment faceting per
+    // glyph; large radius exercises a long sweep. Both should place
+    // visible glyph ink.
+    // The small-radius glyphs are individually tiny (12pt), so
+    // antialiasing leaves far fewer fully-dark pixels than the large
+    // case's 24pt glyphs -- the two cases get separate, individually
+    // calibrated thresholds rather than one shared number.
+    let small = "/Helvetica-Bold findfont 12 scalefont setfont ";
+    let large = "/Helvetica-Bold findfont 24 scalefont setfont ";
+    for body in [
+        format!("{small} 150 150 40 0 (hi) ctext"),
+        format!("{small} 150 150 40 (hi) ctextctr"),
+    ] {
+        assert!(ink_of(&body) > 20, "{body} left too little ink");
+    }
+    for body in [
+        format!("{large} 200 200 180 0 (going the distance) ctext"),
+        format!("{large} 200 200 180 (going the distance) ctextctr"),
+    ] {
+        assert!(ink_of(&body) > 200, "{body} left too little ink");
+    }
+}
+
+#[test]
+fn ctext_preserves_the_callers_current_path() {
+    // artkit's other path-touching brushes leave the caller's path
+    // alone (alongpath's header: "The current path survives"); ctext
+    // should honor the same contract rather than silently replacing
+    // whatever path the caller had built with its own arc. Build a
+    // large rectangle, call ctext, then stroke: if the rectangle
+    // survived, the stroke's ink reflects its ~1500pt perimeter, not
+    // just ctext's own small arc.
+    let mut it = Interp::with_page(400, 400).expect("page");
+    load(&mut it);
+    it.run_str(
+        "/Helvetica-Bold findfont 20 scalefont setfont \
+         newpath 10 10 moveto 390 10 lineto 390 390 lineto 10 390 lineto closepath \
+         200 200 60 0 (mark) ctext \
+         2 setlinewidth stroke",
+    )
+    .unwrap_or_else(|e| panic!("ctext failed: {}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 1000,
+        "expected the surviving rectangle's stroke, not just ctext's own arc"
+    );
+}
+
 #[test]
 fn shapes_fill() {
     for shape in [
@@ -162,6 +238,7 @@ fn ghostscript_accepts_artkit() {
         newpath 20 200 moveto 380 200 lineto 25 { pop pop pop } alongpath \
         /Helvetica findfont 20 scalefont setfont \
         newpath 20 350 moveto 380 380 lineto (gs runs artkit) pathtext \
+        150 250 40 (ring of type) ctextctr \
         showpage\n";
     let dir = std::env::temp_dir().join(format!("pscat-artkit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");

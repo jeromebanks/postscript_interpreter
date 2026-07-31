@@ -256,9 +256,11 @@ eight mood palettes with color mixing, turtle graphics with a pose
 stack, an L-system engine, shapes, layout and text helpers — and the
 `pathforall`-powered brushes: `alongpath` stamps anything at even
 arc-length along any path (`charpath` text included), and `pathtext`
-sets type along a curve, each glyph rotated to the tangent. All of it
-deterministic under `srand`, all of it running unchanged in
-Ghostscript.
+sets type along a curve, each glyph rotated to the tangent — `ctext`
+and `ctextctr` build on `pathtext` for the circular case specifically
+(seals, coins, "ring of type" compositions), the latter centering the
+string on the circle automatically. All of it deterministic under
+`srand`, all of it running unchanged in Ghostscript.
 
 ```postscript
 (lib/artkit.ps) run

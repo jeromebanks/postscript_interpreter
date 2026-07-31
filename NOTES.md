@@ -3,6 +3,63 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Circular/curved text in artkit (issue #12, 2026-07-26)
+
+Closes issue #12. First run of `.claude/skills/work-issue/SKILL.md`,
+the new issue → branch → worktree → (advisor-reviewed plan) →
+implement → (advisor-reviewed diff) → PR automation.
+
+`lib/artkit.ps` already had `pathtext` (Stage 19) — glyph-by-glyph
+text along *any* current path — which turned out to already cover the
+"curved baselines more broadly" half of the issue. The actual gap was
+narrower than the issue's title suggested: a circle-specific
+convenience on top of `pathtext`, so a caller doesn't have to
+hand-build the arc path or derive the centering-angle math themselves
+(exactly what `gallery/ring_of_type.ps`, Stage 6 and thus predating
+`pathtext`, still does inline).
+
+Added two procedures, both thin wrappers around `pathtext` (no
+glyph-placement logic duplicated): `ctext` (`cx cy r ang (str)`) sweeps
+a circular arc clockwise from an explicit start angle — clockwise
+because that's the direction that keeps glyphs upright and
+left-to-right along the *top* of the circle, the usual seal/coin
+composition; the bottom half reads upside down, documented as a real
+property of circular type rather than hidden. `ctextctr` (`cx cy r
+(str)`) is the common-case convenience: centers the string at the
+circle's top (90°) by measuring `stringwidth` instead of taking an
+angle. Both pad the swept arc ~5% past the string's measured width —
+`pathtext` silently drops trailing glyphs if the path runs out before
+the string does (no error, just missing ink), so the padding is a
+deliberate margin against float/flattening error, not a fudge factor
+found by trial and error.
+
+Caught by testing, not by inspection: an early test paired a 12pt-scale
+circle wrongly with a 24pt font and, separately, used one ink-count
+threshold for both a 2-glyph small-radius case and a much longer
+large-radius case — both looked like implementation bugs at first
+glance (render-and-look confirmed the geometry itself was correct) and
+turned out to be miscalibrated test expectations instead. Also added a
+differential test (`tests/artkit.rs`) that compares ink with and
+without a string's final character specifically, since the
+"trailing-glyph-silently-dropped" failure mode is invisible to a
+whole-canvas ink-count threshold — the bug this issue's arc-padding
+exists to prevent wouldn't have failed the naive version of that test.
+
+New demo: `examples/circular_text.ps` (not `gallery/` — gallery pieces
+inline their own toolkit copy per the self-containment doctrine, which
+would defeat the point of demonstrating a *reusable* procedure;
+`examples/style_*.ps` already establishes the `(lib/artkit.ps) run`
+pattern this follows). Renders identically under `pscat` and `gs`
+(with `-dNOSAFER` — `gs`'s default sandbox blocks the `run`-a-file
+pattern every `examples/style_*.ps` file already uses; a pre-existing
+gap in gs test coverage for `examples/`, not something new here, and
+out of scope for this issue to fix repo-wide).
+
+Also: the header's reserved-scratch-prefix list (`ap-, ld-, ls-, tk-`)
+was missing `pt-`, already in use by `pathtext`'s internals since
+Stage 19. Added it alongside the new `ct-` prefix while touching that
+line anyway.
+
 ## Stage 23 — gallery/site catch-up, `.ttc`, a second Korean face (2026-07-24)
 
 Closes issues #3 and #5, both filed as Stage 22 follow-ups. First work
