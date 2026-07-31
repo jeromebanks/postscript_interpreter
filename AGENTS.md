@@ -118,3 +118,16 @@ file, debug one, generate a handwritten note — read
 `.claude/skills/pscat/SKILL.md`: it has the command recipes and
 pitfalls in one page, regardless of which agent runtime you are.
 MCP-wired agents can use `pscat-mcp` instead (README, "For agents").
+
+<!-- sdlcify:managed:start -->
+## SDLC
+
+`SDLC.md` is the authoritative record of this repo's development
+lifecycle and the branch-protection/merge policy currently enforced on
+GitHub — generated and kept in sync by the `sdlcify` skill
+(`.claude/skills/sdlcify/`). It supersedes this file's own "Software
+development lifecycle" section above where the two disagree (notably:
+merge authority — see `SDLC.md` for the current policy rather than
+relying on the "leave merging to a human" line above). Day-to-day issue
+execution is handled by `.claude/skills/work-issue/`.
+<!-- sdlcify:managed:end -->

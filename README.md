@@ -453,3 +453,12 @@ I used to write raw PostScript by hand in college and send it straight to
 a LaserWriter. This is a from-scratch Rust interpreter built to relive
 that — watching a hand-written recursive PostScript program draw itself,
 live, without depending on a decades-old C codebase to do it.
+
+<!-- sdlcify:managed:start -->
+## SDLC
+
+See [`SDLC.md`](SDLC.md) for how this repo's development lifecycle
+works (issue → branch → PR → review → merge → cleanup) and the
+branch-protection/merge policy currently enforced on GitHub — generated
+and kept in sync by the `sdlcify` skill.
+<!-- sdlcify:managed:end -->
