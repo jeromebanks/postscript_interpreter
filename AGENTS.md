@@ -46,29 +46,14 @@ first. This file covers *how* to work, not *what* to build.
 ## Software development lifecycle
 
 Nontrivial work (a new stage, a feature, a fix worth more than a
-one-line diff) goes through issue → feature branch → PR, not straight
-onto `main`:
-
-1. **Issue first.** `gh issue create` describing what and why before
-   writing code — even a few sentences. This is what "what was
-   explicitly deferred" (above) should turn into next: a follow-up
-   issue, not just a `NOTES.md` line that's easy to lose track of.
-2. **Feature branch, not `main`.** `git checkout -b feature/<slug>` (or
-   `fix/<slug>` for a bugfix). Commit at the same checkpoints described
-   above; the branch is the unit of review, not the individual commit.
-3. **Quality bar before opening the PR**: `cargo build && cargo test &&
-   cargo clippy --all-targets && cargo fmt --all -- --check` all clean
-   (`.github/workflows/ci.yml` enforces this on every PR too — it's a
-   backstop, not a substitute for checking locally first). Update
-   `NOTES.md`/`HANDOFF.md`/`README.md` on the branch, not after merge.
-4. **Open the PR** with `gh pr create`, referencing the issue (`Closes
-   #N`), a summary of what changed and why, and a test plan (what you
-   ran, what a reviewer should check). CI must pass before merge.
-5. **Leave merging to a human** unless explicitly told to merge —
-   opening the PR is the deliverable, not landing it.
-
-This applies going forward; it doesn't retroactively obligate
-rewriting the stage-by-stage direct-to-`main` history that predates it.
+one-line diff) goes through issue → feature branch → PR → review →
+merge → cleanup, not straight onto `main`. The full lifecycle, and the
+current merge-authority policy (who/what may merge once CI is green
+and review is clean), is `SDLC.md` — read that, not this section, for
+the authoritative process; `.claude/skills/work-issue/` automates it
+end to end. This applies going forward; it doesn't retroactively
+obligate rewriting the stage-by-stage direct-to-`main` history that
+predates it.
 
 ## Code quality bar
 
@@ -125,9 +110,6 @@ MCP-wired agents can use `pscat-mcp` instead (README, "For agents").
 `SDLC.md` is the authoritative record of this repo's development
 lifecycle and the branch-protection/merge policy currently enforced on
 GitHub — generated and kept in sync by the `sdlcify` skill
-(`.claude/skills/sdlcify/`). It supersedes this file's own "Software
-development lifecycle" section above where the two disagree (notably:
-merge authority — see `SDLC.md` for the current policy rather than
-relying on the "leave merging to a human" line above). Day-to-day issue
-execution is handled by `.claude/skills/work-issue/`.
+(`.claude/skills/sdlcify/`). Day-to-day issue execution is handled by
+`.claude/skills/work-issue/`.
 <!-- sdlcify:managed:end -->

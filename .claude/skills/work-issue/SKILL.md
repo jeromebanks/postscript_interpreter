@@ -1,15 +1,17 @@
 ---
 name: work-issue
-description: Run this repo's simple issue -> feature branch -> PR SDLC (AGENTS.md's "Software development lifecycle" section) end to end for one GitHub issue -- pick or accept an issue, label it in-progress, create a feature branch and worktree, implement it, then open a PR and hand it back for human review. Use whenever the user says "work on issue N", "implement the next ticket/issue", "pick up the next backlog item", "/work-issue", or similar -- this is the standard way backlog issues in this repo get turned into PRs, not an ad hoc one-off.
+description: Run this repo's issue -> feature branch -> PR -> review -> merge -> cleanup SDLC (SDLC.md) end to end for one GitHub issue -- pick or accept an issue, label it in-progress, create a feature branch and worktree, implement it, open a PR, independently review it, and merge per SDLC.md's policy. Use whenever the user says "work on issue N", "implement the next ticket/issue", "pick up the next backlog item", "/work-issue", or similar -- this is the standard way backlog issues in this repo get turned into shipped code, not an ad hoc one-off.
 ---
 
 # work-issue — one issue, start to finish
 
-This is the repo's first-pass SDLC automation: take one open GitHub
-issue from the backlog to an open PR, following AGENTS.md's
-"Software development lifecycle" section exactly (issue -> feature
-branch -> PR, quality bar before opening the PR, never merge). It's
-deliberately simple — no batching, no config, no auto-merge. Expect to
+This is the repo's SDLC automation: take one open GitHub issue from the
+backlog all the way to merged, following `SDLC.md`'s lifecycle exactly
+(issue -> feature branch -> plan review -> implement -> quality gate ->
+diff review -> PR -> independent review -> merge -> cleanup). Merge
+authority is whatever `SDLC.md`'s `merge_policy` frontmatter currently
+says — read it fresh at step 8, don't assume from memory, since it's
+the kind of thing that gets changed by re-running `sdlcify`. Expect to
 revise this skill as real usage surfaces rough edges.
 
 Argument: an optional issue number. `/work-issue 16` works that issue;
@@ -169,22 +171,84 @@ EOF
 ```
 
 `Closes #<N>` is what lets merging the PR close the issue automatically
-— that's the only thing that should close it. This skill never merges
-and never asks to; per AGENTS.md, "opening the PR is the deliverable,"
-full stop. Leave it for a human.
+— that's the only thing that should close it.
 
-Then flip the issue's status and leave a trail back to the PR:
+Flip the issue's status and leave a trail back to the PR:
 
 ```sh
 gh issue edit <N> --remove-label in-progress --add-label in-review
 gh issue comment <N> --body "Opened <PR URL>."
 ```
 
-Report back: issue number and title, branch name, worktree path, and
-the PR URL. Mention that the worktree is left in place on purpose (for
-review, follow-up commits, or CI-triggered fixes) — cleaning it up
-with `git worktree remove <path>` is a manual step for once the PR is
-actually merged, not something this skill does for you.
+## 8. Independent review, then merge per `SDLC.md`'s policy
+
+Read `SDLC.md`'s frontmatter fresh (`merge_policy.mode` and, if
+`size-and-risk-bar`, `max_changed_lines`/`sensitive_paths`) — this is
+config, not something to remember from a prior run or from having
+written the skill.
+
+Run an independent review of the PR — a reviewer with no context from
+implementing it, cold on the diff. Use the `review` skill (`gh pr view
+<PR#>` for context + `gh pr diff <PR#>` for the diff, per its own
+instructions) rather than reusing the step-6 `advisor` pass, which saw
+the whole implementation session and isn't independent. Must come back
+with nothing blocking to proceed.
+
+If review is clean, decide merge eligibility from the policy:
+- `human-only`: stop here. Report the PR as open and awaiting merge;
+  don't attempt to merge it.
+- `agent-full`: eligible regardless of diff size or files touched.
+- `size-and-risk-bar`: eligible only if the diff (excluding doc-only
+  files) is under `max_changed_lines` and touches none of
+  `sensitive_paths`; otherwise stop here and say which condition it
+  missed, same as the `human-only` case.
+
+If eligible, merge:
+
+```sh
+gh pr view <PR#> --json mergeable,mergeStateStatus,statusCheckRollup
+```
+
+If `mergeStateStatus` is `BEHIND` (branch protection's `strict` status
+check requires the tested commit to reflect current `main` — a PR
+opened a while ago, or after another PR merged first, will hit this),
+update and wait for CI before merging:
+
+```sh
+gh pr update-branch <PR#>
+gh pr checks <PR#> --watch   # or poll; wait for the re-triggered run
+```
+
+Then merge using the shape recorded in `SDLC.md`'s `merge_button`
+block (this repo: squash, delete-branch-on-merge):
+
+```sh
+gh pr merge <PR#> --squash --delete-branch
+```
+
+If CI fails on the updated branch, don't force past it — treat that
+as a blocker the same as a failed review, and report it rather than
+merging anyway.
+
+## 9. Post-merge cleanup
+
+```sh
+gh issue view <N> --json state   # confirm Closes #<N> auto-closed it
+git worktree remove "$WORKTREE_DIR" 2>&1 || true
+git -C "$(git rev-parse --show-toplevel)" branch -d "$BRANCH" 2>&1 || true
+git -C "$(git rev-parse --show-toplevel)" fetch origin --prune
+```
+
+`git worktree remove` can fail with "branch used by worktree" if run
+in the wrong order — remove the worktree *before* trying to delete the
+local branch, not after, or the branch delete will block on it.
+
+Report back: issue number and title, branch name, PR URL and its merge
+commit, and confirmation the issue closed and the worktree/branch were
+cleaned up. If step 8 stopped short of merging (`human-only`, or over
+the size/risk bar), report that explicitly instead — branch name,
+worktree path, and the PR URL, with the worktree left in place since
+there may be follow-up commits before a human merges it.
 
 ## Pitfalls
 
@@ -213,3 +277,15 @@ actually merged, not something this skill does for you.
   let "label already exists" abort the run.
 - **If `cargo fmt --all -- --check` or clippy fails**, fix it before
   opening the PR — don't open a PR you know CI will reject.
+- **A PR opened a while ago (or after another PR merged first) will
+  likely show `mergeStateStatus: BEHIND`** at step 8, because branch
+  protection's `strict` status check requires the tested commit to
+  reflect current `main` — the CI run from when the PR was opened no
+  longer counts. This is normal, not a failure: `gh pr update-branch`,
+  wait for CI to re-run on the updated branch, then merge. Confirmed
+  hitting this on the very first agent-merged PR in this repo (#22).
+- **Remove the worktree before deleting the local branch, not after**
+  (step 9's order matters) — `git branch -d` fails with "branch used
+  by worktree" if the worktree still references it. `git worktree
+  remove` first, then the branch delete, then `fetch --prune` to clear
+  the now-dead remote-tracking ref.

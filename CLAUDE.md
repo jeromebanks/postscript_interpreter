@@ -6,10 +6,11 @@ this repo.
 - **Project vision, priorities, and staged milestones:** see `INIT.md`.
 - **Operational conventions** (build/test commands, commit hygiene,
   workflow, code quality bar): see `AGENTS.md`.
-- **SDLC: issue → feature branch → PR**, not straight onto `main` — see
-  `AGENTS.md`'s "Software development lifecycle" section before
-  starting any nontrivial work. CI (`.github/workflows/ci.yml`) gates
-  every PR on build/test/clippy/fmt; leave merging to a human.
+- **SDLC: issue → feature branch → PR → review → merge → cleanup**, not
+  straight onto `main` — see `SDLC.md` for the full lifecycle and the
+  current merge-authority policy before starting any nontrivial work.
+  CI (`.github/workflows/ci.yml`) gates every PR on build/test/clippy/
+  fmt.
 - **All roadmap stages (1–20) are complete**, plus Stage 21 (standalone
   installability), Stage 22 (Korean/Japanese/Thai fonts), and Stage 23
   (gallery/site catch-up, `.ttc`, a second Korean face), all
