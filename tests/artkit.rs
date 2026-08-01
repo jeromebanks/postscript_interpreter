@@ -434,3 +434,61 @@ fn ghostscript_accepts_artkit() {
         .expect("run gs");
     assert!(status.success(), "gs rejected artkit");
 }
+
+#[test]
+fn trigrid_stamp_calling_tri_with_a_whole_stamp_dict_wrap() {
+    // Companion to the hexgrid+hex regression above, but for the
+    // pattern the shipped code actually uses: examples/tiling.ps,
+    // gallery/woven_labyrinth.ps, and the gs-compat driver all wrap
+    // the *whole* stamp proc in one dict rather than just the inner
+    // hex/tri call. `tri` is the worse case to get wrong: it clobbers
+    // tgs/tga/tgR too, not just tgx/tgy -- an unwrapped composition
+    // corrupts tile *size*, which the ink-coverage test above wouldn't
+    // necessarily catch (a few undersized triangles barely move the
+    // total). Pins both the exact centers and that `s` stays exactly
+    // 30.0 across every triangle. The counter here can't be a plain
+    // `/i i 1 add def` (that trick would itself be swallowed by the
+    // wrap, per the header's second gotcha) -- it's a 1-element array
+    // mutated with `put` instead, immune to dict nesting.
+    let got = eval(
+        "/hits 24 array def /idxbox 1 array def idxbox 0 0 put \
+         0 0 90 60 3 1 { 5 dict begin \
+             /up exch def /s exch def /cy exch def /cx exch def \
+             /i idxbox 0 get def \
+             hits i cx put \
+             hits i 1 add cy put \
+             hits i 2 add s put \
+             hits i 3 add up { 1 } { 0 } ifelse put \
+             idxbox 0 i 4 add put \
+             newpath cx cy s up tri fill \
+         end } trigrid hits aload pop",
+    );
+    let nums: Vec<f64> = got.iter().map(|s| s.parse().unwrap()).collect();
+    // s = 90/3 = 30 exactly; a = s*0.288675, R = s*0.577350 (up/down
+    // centroid offsets) -- values below taken from the interpreter's
+    // own arithmetic, not hand-rounded.
+    let expected = [
+        (7.5, 8.660250000000001, true),
+        (22.5, 17.320500000000003, false),
+        (37.5, 8.660250000000001, true),
+        (52.5, 17.320500000000003, false),
+        (67.5, 8.660250000000001, true),
+        (82.5, 17.320500000000003, false),
+    ];
+    for (k, (ex, ey, eup)) in expected.iter().enumerate() {
+        let (cx, cy, s, up) = (
+            nums[k * 4],
+            nums[k * 4 + 1],
+            nums[k * 4 + 2],
+            nums[k * 4 + 3],
+        );
+        assert!((cx - ex).abs() < 1e-9, "triangle {k}: cx {cx} != {ex}");
+        assert!((cy - ey).abs() < 1e-9, "triangle {k}: cy {cy} != {ey}");
+        assert_eq!(s, 30.0, "triangle {k}: edge length drifted to {s}");
+        assert_eq!(
+            up,
+            if *eup { 1.0 } else { 0.0 },
+            "triangle {k}: wrong orientation"
+        );
+    }
+}
