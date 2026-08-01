@@ -19,7 +19,12 @@ Verified against gs (this project's semantics oracle) before building
 anything: `gs -sDEVICE=pdfwrite` on a file with `%%Title:`/`%%For:`
 DSC header comments embeds them as document metadata (`dc:title`/
 `dc:creator` XMP entries) — so pscat doing the same is matching an
-established convention, not inventing one.
+established convention, not inventing one. Deliberately partial
+parity, not full: gs also reads `%%Creator:` into a separate PDF
+`/Creator` field (the authoring *application*, distinct from
+`/Author`); pscat doesn't emit `/Creator` at all here — `/Producer`
+stays fixed at `pscat` regardless of DSC comments, which already
+identifies the generating tool.
 
 Added `pdf::scan_document_info` (scans DSC header comments, stops at
 the first non-comment line since DSC requires headers to precede
