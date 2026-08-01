@@ -35,9 +35,12 @@ PDF's `/Info` dict, verified against gs's own pdfwrite behavior on the
 same comments; also fixed a real pre-existing bug found while building
 its demo example, where `stroke`'s PDF recording was silently
 no-op'd whenever `--pdf` was used without `--svg` (NOTES.md's entry
-has the full story). Still open: issue #6, a procedural
-jittered-stroke Hangul face (jamo composition) — a real design
-project, not a quick follow-up.
+has the full story). Also done: issue #9, a tiling/tessellation
+library for artkit — `lattice`/`hex`/`tri`/`hexgrid`/`trigrid`/
+`truchet`, `examples/tiling.ps`, and the gallery piece `Woven
+Labyrinth` (NOTES.md's entry has the full story). Still open: issue
+#6, a procedural jittered-stroke Hangul face (jamo composition) — a
+real design project, not a quick follow-up.
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;

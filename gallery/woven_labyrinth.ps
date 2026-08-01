@@ -1,0 +1,89 @@
+%!PS-Adobe-3.0
+%%Title: Woven Labyrinth
+%%BoundingBox: 0 0 640 640
+%%EndComments
+
+% A quilt built from the oldest Truchet tile there is: Sébastien
+% Truchet's 1704 original was nothing but a square split corner to
+% corner into two contrasting triangles. Scatter that one motif across
+% a grid at four random quarter-turns and the diagonals chain into a
+% continuous, flowing labyrinth — no two runs the same, though every
+% run of *this* file is (seeded rand: same seed, same weave). The
+% frame and the grid's own stitch-lines are the only other ink.
+%
+% Gallery II (Stage 24, tiling library) — inlines `chance` and
+% `truchet` from lib/artkit.ps per the gallery's self-containment
+% doctrine (see hortus.ps).
+%
+%   pscat --page 640x640 gallery/woven_labyrinth.ps
+
+11 srand
+
+% --- the toolkit subset (from lib/artkit.ps) -------------------------
+/chance { rand 8192 idiv exch mod } def
+/truchet {
+    /tgproc exch def /tgrows exch def /tgcols exch def
+    /tgh exch def /tgw exch def /tgy exch def /tgx exch def
+    /tgcw tgw tgcols div def
+    /tgch tgh tgrows div def
+    0 1 tgrows 1 sub {
+        /tgj exch def
+        0 1 tgcols 1 sub {
+            /tgi exch def
+            gsave
+                tgx tgi tgcw mul add tgcw 2 div add
+                tgy tgj tgch mul add tgch 2 div add
+                translate
+                4 chance 90 mul rotate
+                tgcw tgch tgproc
+            grestore
+        } for
+    } for
+} def
+
+/cream [0.97 0.945 0.87] def
+/indigo [0.17 0.22 0.42] def
+/rust [0.74 0.37 0.22] def
+/ink [0.24 0.16 0.11] def
+
+cream aload pop setrgbcolor
+newpath 0 0 moveto 640 0 lineto 640 640 lineto 0 640 lineto closepath fill
+
+% --- the weave ---------------------------------------------------------
+60 40 520 520 16 16 {
+    2 dict begin
+        /h exch def /w exch def
+        newpath
+            w 2 div neg h 2 div neg moveto
+            w 2 div h 2 div neg lineto
+            w 2 div h 2 div lineto
+        closepath
+        rust aload pop setrgbcolor fill
+        newpath
+            w 2 div neg h 2 div neg moveto
+            w 2 div neg h 2 div lineto
+            w 2 div h 2 div lineto
+        closepath
+        indigo aload pop setrgbcolor fill
+        ink aload pop setrgbcolor 0.6 setlinewidth
+        newpath w 2 div neg h 2 div neg moveto w 2 div h 2 div lineto stroke
+        newpath w 2 div neg h 2 div neg moveto w 2 div h 2 div neg lineto
+                w 2 div h 2 div lineto w 2 div neg h 2 div lineto closepath stroke
+    end
+} truchet
+
+% --- frame ---------------------------------------------------------------
+ink aload pop setrgbcolor
+2.5 setlinewidth
+newpath 55 35 530 530 rectstroke
+1 setlinewidth
+newpath 61 41 518 518 rectstroke
+
+% --- title -----------------------------------------------------------
+ink aload pop setrgbcolor
+/Palatino-Bold findfont 30 scalefont setfont
+(WOVEN LABYRINTH) dup stringwidth pop 2 div 320 exch sub 596 moveto show
+/Palatino-Italic findfont 12 scalefont setfont
+(one tile, four turns, after Truchet \0501704\051) dup stringwidth pop 2 div 320 exch sub 578 moveto show
+
+showpage

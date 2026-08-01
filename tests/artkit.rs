@@ -221,6 +221,175 @@ fn shapes_fill() {
 }
 
 #[test]
+fn hex_and_tri_fill() {
+    for shape in [
+        "100 100 60 hex",
+        "100 100 60 true tri",
+        "100 100 60 false tri",
+    ] {
+        let mut it = Interp::with_page(200, 200).expect("page");
+        load(&mut it);
+        it.run_str(&format!("newpath {shape} fill"))
+            .unwrap_or_else(|e| panic!("{shape} failed: {}", it.error_report(&e)));
+        assert!(ink_count(&it) > 500, "{shape} left no ink");
+    }
+}
+
+#[test]
+fn lattice_walks_the_expected_points() {
+    // 2x2 lattice with an oblique second basis vector -- pin the exact
+    // points visited (in order) so a future refactor can't silently
+    // transpose i/j or swap v1/v2 without a test noticing. The proc
+    // records each x,y it's called with into `hits` via two puts
+    // (results array left on the stack via aload for the assertions).
+    let got = eval(
+        "/hits 8 array def /hi 0 def \
+         0 0 10 0 3 5 2 2 { \
+             /py exch def /px exch def \
+             hits hi px put /hi hi 1 add def \
+             hits hi py put /hi hi 1 add def \
+         } lattice hits aload pop",
+    );
+    let nums: Vec<f64> = got.iter().map(|s| s.parse().unwrap()).collect();
+    // points = (0,0) + i*(10,0) + j*(3,5), for i in 0..2, j in 0..2
+    let expected = [(0.0, 0.0), (10.0, 0.0), (3.0, 5.0), (13.0, 5.0)];
+    for (k, (ex, ey)) in expected.iter().enumerate() {
+        assert_eq!(nums[k * 2], *ex, "point {k} x");
+        assert_eq!(nums[k * 2 + 1], *ey, "point {k} y");
+    }
+}
+
+#[test]
+fn hexgrid_stamp_calling_hex_needs_its_own_dict_and_that_actually_works() {
+    // hexgrid and hex share the tg- prefix (tgx/tgy/tgr): a stamp that
+    // calls hex *without* opening a fresh dict first clobbers hexgrid's
+    // own loop state the instant the first cell runs (proven while
+    // building this feature -- and true of the pre-existing grid+ngon
+    // pair too, same tk- prefix, same mechanism; not new here). The
+    // section header documents the fix: wrap the call to hex/tri/
+    // another tiling driver in its own small dict so its defs land
+    // there instead of shadowing the outer driver's. This test pins
+    // that the documented fix actually produces the right 9 centers,
+    // not just that it doesn't error.
+    let got = eval(
+        "/hits 18 array def /hi 0 def \
+         0 0 90 90 3 3 { \
+             /r exch def /cy exch def /cx exch def \
+             hits hi cx put /hi hi 1 add def \
+             hits hi cy put /hi hi 1 add def \
+             3 dict begin newpath cx cy r hex end \
+         } hexgrid hits aload pop",
+    );
+    let nums: Vec<f64> = got.iter().map(|s| s.parse().unwrap()).collect();
+    // r = (90/3)/sqrt(3) = 17.32..; dx = r*sqrt(3) = 30; dy = r*1.5 = 25.98..
+    let expected = [
+        (0.0, 0.0),
+        (30.0, 0.0),
+        (60.0, 0.0),
+        (15.0, 25.980759227066642),
+        (45.0, 25.980759227066642),
+        (75.0, 25.980759227066642),
+        (0.0, 51.961518454133284),
+        (30.0, 51.961518454133284),
+        (60.0, 51.961518454133284),
+    ];
+    for (k, (ex, ey)) in expected.iter().enumerate() {
+        assert!(
+            (nums[k * 2] - ex).abs() < 1e-6 && (nums[k * 2 + 1] - ey).abs() < 1e-6,
+            "cell {k}: expected ({ex}, {ey}), got ({}, {})",
+            nums[k * 2],
+            nums[k * 2 + 1]
+        );
+    }
+}
+
+#[test]
+fn hexgrid_and_trigrid_tile_their_region_without_gaps() {
+    // A correctly interlocking tiling should leave nearly as much ink
+    // as a solid fill of the same bounding box -- a gap or overlap bug
+    // (wrong row offset, wrong triangle orientation) would show up as
+    // noticeably less coverage. The canvas is sized to exactly match
+    // the box (200x200, no margin) so page clipping does the same job
+    // clipping-to-the-box would -- ink outside the nominal region
+    // can't hide on an off-screen margin and inflate the count.
+    fn box_ink(body: &str) -> usize {
+        let mut it = Interp::with_page(200, 200).expect("page");
+        load(&mut it);
+        it.run_str(body)
+            .unwrap_or_else(|e| panic!("{body} failed: {}", it.error_report(&e)));
+        ink_count(&it)
+    }
+
+    let baseline = box_ink("newpath 0 0 200 200 rectfill");
+
+    let hex_ink = box_ink(
+        "0 0 200 200 5 6 { 3 dict begin /r exch def /cy exch def /cx exch def \
+            newpath cx cy r hex fill end } hexgrid",
+    );
+    assert!(
+        hex_ink as f64 > baseline as f64 * 0.85,
+        "hexgrid left gaps: hex_ink={hex_ink} baseline={baseline}"
+    );
+
+    let tri_ink = box_ink(
+        "0 0 200 200 6 7 { 4 dict begin /up exch def /s exch def /cy exch def /cx exch def \
+            newpath cx cy s up tri fill end } trigrid",
+    );
+    assert!(
+        tri_ink as f64 > baseline as f64 * 0.85,
+        "trigrid left gaps: tri_ink={tri_ink} baseline={baseline}"
+    );
+}
+
+#[test]
+fn truchet_calls_proc_once_per_cell_with_the_cell_size() {
+    let got = eval(
+        "/n 0 def \
+         0 0 90 60 3 2 { /ch exch def /cw exch def \
+             cw 30 eq { } { /n -1 def } ifelse \
+             ch 30 eq { } { /n -1 def } ifelse \
+             n 0 ge { /n n 1 add def } if \
+         } truchet n",
+    );
+    assert_eq!(
+        got.last().unwrap(),
+        "6",
+        "expected 6 cells, each sized 30x30"
+    );
+}
+
+#[test]
+fn truchet_randomizes_the_rotation_across_cells() {
+    // Read back cos(rotation) from inside the stamp proc via
+    // currentmatrix -- 0/90/180/270 degrees give distinct values
+    // (1, 0, -1, 0). A real spread of buckets (not just one repeated
+    // value) is the actual claim `truchet`'s doc comment makes.
+    let got = eval(
+        "3 srand /idx 0 def /hits 25 array def \
+         0 0 100 100 5 5 { pop pop \
+             hits idx matrix currentmatrix 0 get put \
+             /idx idx 1 add def \
+         } truchet hits aload pop",
+    );
+    let mut buckets = std::collections::HashSet::new();
+    for v in &got {
+        let f: f64 = v.parse().unwrap();
+        let bucket = if f > 0.5 {
+            1
+        } else if f < -0.5 {
+            -1
+        } else {
+            0
+        };
+        buckets.insert(bucket);
+    }
+    assert!(
+        buckets.len() >= 2,
+        "expected a mix of rotations across 25 cells, saw only {buckets:?}"
+    );
+}
+
+#[test]
 fn ghostscript_accepts_artkit() {
     let gs_ok = std::process::Command::new("gs")
         .arg("--version")
@@ -239,6 +408,12 @@ fn ghostscript_accepts_artkit() {
         /Helvetica findfont 20 scalefont setfont \
         newpath 20 350 moveto 380 380 lineto (gs runs artkit) pathtext \
         150 250 40 (ring of type) ctextctr \
+        260 20 100 60 3 3 { 3 dict begin /r exch def /cy exch def /cx exch def \
+            newpath cx cy r hex fill end } hexgrid \
+        260 100 100 60 3 3 { 4 dict begin /up exch def /s exch def /cy exch def /cx exch def \
+            newpath cx cy s up tri fill end } trigrid \
+        0 0 60 60 3 3 { pop pop newpath 0 0 20 0 360 arc fill } truchet \
+        300 300 15 0 0 15 3 3 { /y exch def /x exch def newpath x y 5 0 360 arc fill } lattice \
         showpage\n";
     let dir = std::env::temp_dir().join(format!("pscat-artkit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
@@ -258,4 +433,62 @@ fn ghostscript_accepts_artkit() {
         .status()
         .expect("run gs");
     assert!(status.success(), "gs rejected artkit");
+}
+
+#[test]
+fn trigrid_stamp_calling_tri_with_a_whole_stamp_dict_wrap() {
+    // Companion to the hexgrid+hex regression above, but for the
+    // pattern the shipped code actually uses: examples/tiling.ps,
+    // gallery/woven_labyrinth.ps, and the gs-compat driver all wrap
+    // the *whole* stamp proc in one dict rather than just the inner
+    // hex/tri call. `tri` is the worse case to get wrong: it clobbers
+    // tgs/tga/tgR too, not just tgx/tgy -- an unwrapped composition
+    // corrupts tile *size*, which the ink-coverage test above wouldn't
+    // necessarily catch (a few undersized triangles barely move the
+    // total). Pins both the exact centers and that `s` stays exactly
+    // 30.0 across every triangle. The counter here can't be a plain
+    // `/i i 1 add def` (that trick would itself be swallowed by the
+    // wrap, per the header's second gotcha) -- it's a 1-element array
+    // mutated with `put` instead, immune to dict nesting.
+    let got = eval(
+        "/hits 24 array def /idxbox 1 array def idxbox 0 0 put \
+         0 0 90 60 3 1 { 5 dict begin \
+             /up exch def /s exch def /cy exch def /cx exch def \
+             /i idxbox 0 get def \
+             hits i cx put \
+             hits i 1 add cy put \
+             hits i 2 add s put \
+             hits i 3 add up { 1 } { 0 } ifelse put \
+             idxbox 0 i 4 add put \
+             newpath cx cy s up tri fill \
+         end } trigrid hits aload pop",
+    );
+    let nums: Vec<f64> = got.iter().map(|s| s.parse().unwrap()).collect();
+    // s = 90/3 = 30 exactly; a = s*0.288675, R = s*0.577350 (up/down
+    // centroid offsets) -- values below taken from the interpreter's
+    // own arithmetic, not hand-rounded.
+    let expected = [
+        (7.5, 8.660250000000001, true),
+        (22.5, 17.320500000000003, false),
+        (37.5, 8.660250000000001, true),
+        (52.5, 17.320500000000003, false),
+        (67.5, 8.660250000000001, true),
+        (82.5, 17.320500000000003, false),
+    ];
+    for (k, (ex, ey, eup)) in expected.iter().enumerate() {
+        let (cx, cy, s, up) = (
+            nums[k * 4],
+            nums[k * 4 + 1],
+            nums[k * 4 + 2],
+            nums[k * 4 + 3],
+        );
+        assert!((cx - ex).abs() < 1e-9, "triangle {k}: cx {cx} != {ex}");
+        assert!((cy - ey).abs() < 1e-9, "triangle {k}: cy {cy} != {ey}");
+        assert_eq!(s, 30.0, "triangle {k}: edge length drifted to {s}");
+        assert_eq!(
+            up,
+            if *eup { 1.0 } else { 0.0 },
+            "triangle {k}: wrong orientation"
+        );
+    }
 }
