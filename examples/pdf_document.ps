@@ -1,0 +1,56 @@
+%!PS-Adobe-3.0
+%%Title: A Two-Page Document
+%%For: pscat
+%%Pages: 2
+%%EndComments
+%% pdf_document.ps — issue #8: a small multi-page "document" (not
+%% just a rendered picture) demonstrating `pscat --pdf out.pdf
+%% pdf_document.ps`. The %%Title:/%%For: header comments above become
+%% the output PDF's /Info metadata (Title/Author), same as gs's own
+%% pdfwrite device does with the same two comments — so the resulting
+%% file shows a real title in a reader's library (Kindle, Books, any
+%% PDF viewer) instead of the bare filename. PDF is already natively
+%% accepted by Kindle's Send-to-Kindle (email attachment or USB copy)
+%% and virtually every e-reader/PDF viewer, so no separate export
+%% format is needed for that half of the issue.
+
+/Helvetica-Bold findfont 28 scalefont setfont
+0.15 0.15 0.2 setrgbcolor
+90 620 moveto (A Two-Page Document) show
+
+/Helvetica findfont 14 scalefont setfont
+0.35 0.35 0.4 setrgbcolor
+90 580 moveto (for pscat) show
+
+0.7 0.7 0.75 setrgbcolor
+2 setlinewidth
+90 550 moveto 522 550 lineto stroke
+
+/Times-Italic findfont 16 scalefont setfont
+0.1 0.1 0.1 setrgbcolor
+90 480 moveto
+(A document, not just a picture: this page and the next are two) show
+90 460 moveto
+(separate showpage calls, so pscat --pdf emits a real multi-page) show
+90 440 moveto
+(PDF with a proper table of contents entry per page in most readers.) show
+
+showpage
+
+/Helvetica-Bold findfont 20 scalefont setfont
+0.15 0.15 0.2 setrgbcolor
+90 650 moveto (Page Two) show
+
+/Helvetica findfont 13 scalefont setfont
+0.3 0.3 0.35 setrgbcolor
+90 610 moveto
+(This page carries the same document identity \(Title/Author\) as) show
+90 592 moveto
+(page one -- PDF metadata lives once, at the document level, not) show
+90 574 moveto
+(per page.) show
+
+0.8 0.3 0.2 setrgbcolor
+newpath 300 300 60 0 360 arc fill
+
+showpage

@@ -28,9 +28,16 @@ and Stage 23, the Stage-22 follow-up issues (#3, #5) — gallery/site
 entries for the four international faces, `.ttc` as a recognized
 catalog extension, and a second Korean face (Nanum Brush Script,
 brush-calligraphy style) on the same Unicode-mode mechanism (NOTES.md's
-Stage 23 entry). Still open: issue #6, a procedural jittered-stroke
-Hangul face (jamo composition) — a real design project, not a quick
-follow-up.
+Stage 23 entry). Also done: issue #12, circular/curved-text procedures
+in artkit (`ctext`/`ctextctr`), and issue #8, PDF document metadata —
+`%%Title:`/`%%For:` DSC header comments now populate the exported
+PDF's `/Info` dict, verified against gs's own pdfwrite behavior on the
+same comments; also fixed a real pre-existing bug found while building
+its demo example, where `stroke`'s PDF recording was silently
+no-op'd whenever `--pdf` was used without `--svg` (NOTES.md's entry
+has the full story). Still open: issue #6, a procedural
+jittered-stroke Hangul face (jamo composition) — a real design
+project, not a quick follow-up.
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
@@ -38,7 +45,7 @@ touching code. `ROADMAP.md` has the task list with model routing;
 
 ## Where things stand
 
-**317 tests across 34 suites, clippy clean.** Stages 1–19 are done,
+**356 tests across 35 suites, clippy clean.** Stages 1–19 are done,
 including Stage 8's last sliver, the `--interactive` windowed REPL
 (`-i`; stdin reader thread → `EventLoopProxy` user events → chunks
 run on the frame budget; line accumulation shared with the terminal
