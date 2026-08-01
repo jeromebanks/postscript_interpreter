@@ -11,8 +11,8 @@ playground running the interpreter in your browser tab, no install.
 
 ## Status
 
-**All twenty roadmap stages are complete** (2026-07-19): 317 tests
-across 34 suites, clippy clean, golden-checked against Ghostscript.
+**All twenty roadmap stages are complete** (2026-07-19): 356 tests
+across 35 suites, clippy clean, golden-checked against Ghostscript.
 What follows is the tour, roughly in the order it was built.
 
 **Stages 1–4 (the core)**: the language (tokenizer, object model,
@@ -75,7 +75,12 @@ classics render block-identical to Ghostscript.
 (the window keeps showing the finished page; `--png` numbers pages),
 `--dpi` for print-resolution rendering, and `--svg`/`--pdf` export —
 both mirror the paint pipeline directly, and the PDF is verified by
-letting Ghostscript rasterize it back.
+letting Ghostscript rasterize it back. `--pdf` output is a real
+document, not just a picture: `%%Title:`/`%%For:` DSC header comments
+(issue #8) become the PDF's `/Info` metadata, so a multi-page piece
+opens in a reader — Kindle's Send-to-Kindle and virtually any e-reader
+or PDF viewer already take PDF directly, no separate export needed —
+with an actual title instead of a filename.
 
 **Stage 10 (the LaserWriter experience)**: `--spool DIR`
 turns the window into the printer in the corner of the lab — it

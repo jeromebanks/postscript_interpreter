@@ -158,6 +158,15 @@ fn main() -> ExitCode {
         }
     };
 
+    if options.pdf.is_some() {
+        // %%Title:/%%For: DSC header comments -> the PDF's /Info dict
+        // (issue #8), so a real reader (Kindle, Books, ...) shows an
+        // authored title instead of a bare filename. Only meaningful
+        // for an actual source file/stdin, not -e's inline snippets.
+        let (title, author) = pscat::pdf::scan_document_info(&source);
+        interp.gfx_mut().set_pdf_info(title, author);
+    }
+
     if options.headless || options.png.is_some() || options.svg.is_some() || options.pdf.is_some() {
         return finish_headless(
             run_headless(&mut interp, &source, &options),

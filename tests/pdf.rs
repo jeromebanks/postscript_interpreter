@@ -138,6 +138,26 @@ fn images_become_xobjects() {
     assert!(text.contains("/Im0 Do"));
 }
 
+/// Regression guard: `stroke`'s PDF recording used to live inside
+/// `if self.svg.is_some()`, so a `--pdf`-only export (the common case
+/// -- no `--svg`) silently dropped every stroked line. `fill` and
+/// `fill_path_direct` never had this bug; `pdf_and_canvas` here
+/// deliberately enables *only* PDF recording, matching `--pdf` alone,
+/// to catch a regression back to the svg-gated version.
+#[test]
+fn strokes_appear_in_pdf_only_export() {
+    let (pdf, _) = pdf_and_canvas(
+        b"0.7 0.7 0.75 setrgbcolor 2 setlinewidth
+          newpath 10 50 moveto 90 50 lineto stroke",
+    );
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains(" S\n") || text.contains(" S\r"), "{text}");
+    assert!(
+        text.contains("0.7 0.7 0.75 RG"),
+        "stroke color recorded: {text}"
+    );
+}
+
 #[test]
 fn imagemasks_are_stencils() {
     let (pdf, _) = pdf_and_canvas(
@@ -147,4 +167,45 @@ fn imagemasks_are_stencils() {
     let text = String::from_utf8_lossy(&pdf);
     assert!(text.contains("/ImageMask true"), "{text}");
     assert!(text.contains("1 0 0 rg"), "painted in current color");
+}
+
+/// Issue #8: `%%Title:`/`%%For:` DSC header comments become the PDF's
+/// `/Info` metadata, same convention `main.rs` wires via
+/// `scan_document_info`. Exercised end to end here (not just the
+/// pdf.rs unit tests) so a regression in the Gfx/PdfRecorder wiring
+/// itself, not just the scanner, would fail a test.
+#[test]
+fn dsc_header_comments_become_pdf_info() {
+    let src = b"%%Title: Moonlit Poem\n%%For: Jerome\n%%EndComments\n\
+                newpath 10 10 moveto 90 10 lineto stroke showpage";
+    let mut it = Interp::with_page(SIZE, SIZE).expect("page");
+    it.gfx_mut().enable_pdf();
+    let (title, author) = pscat::pdf::scan_document_info(src);
+    it.gfx_mut().set_pdf_info(title, author);
+    it.run_source(src)
+        .unwrap_or_else(|e| panic!("run failed: {}", it.error_report(&e)));
+    let pdf = it.gfx().pdf_document().expect("recording on");
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains("/Producer (pscat)"));
+    assert!(text.contains("/Title (Moonlit Poem)"));
+    assert!(text.contains("/Author (Jerome)"));
+    assert!(text.contains("/Info "), "trailer references /Info");
+
+    if gs_available() {
+        // A broken object/xref layout (e.g. /Info shifting the page or
+        // image object numbers) would make gs reject the file outright
+        // -- this is a validity smoke test, not a pixel comparison.
+        let _ = gs_rasterize(&pdf, "dsc_info");
+    } else {
+        eprintln!("skipping gs validity check: gs not installed");
+    }
+}
+
+#[test]
+fn no_dsc_comments_still_gets_producer_but_no_title() {
+    let (pdf, _) = pdf_and_canvas(b"newpath 10 10 moveto 90 10 lineto stroke showpage");
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains("/Producer (pscat)"));
+    assert!(!text.contains("/Title"));
+    assert!(!text.contains("/Author"));
 }

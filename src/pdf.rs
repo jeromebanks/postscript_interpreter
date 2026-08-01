@@ -49,6 +49,10 @@ pub struct PdfRecorder {
     /// Which images each finished page references.
     page_images: Vec<Vec<usize>>,
     current_images: Vec<usize>,
+    /// Document `/Info` fields (issue #8) — from `%%Title:`/`%%For:`
+    /// DSC header comments via `scan_document_info`, when present.
+    title: Option<String>,
+    author: Option<String>,
 }
 
 impl PdfRecorder {
@@ -61,7 +65,16 @@ impl PdfRecorder {
             images: Vec::new(),
             page_images: Vec::new(),
             current_images: Vec::new(),
+            title: None,
+            author: None,
         }
+    }
+
+    /// Set document metadata for the `/Info` dictionary. `None` leaves
+    /// that field out entirely (no empty `/Title ()` clutter).
+    pub fn set_info(&mut self, title: Option<String>, author: Option<String>) {
+        self.title = title;
+        self.author = author;
     }
 
     fn clip_prelude(&mut self, chain: &Chain) -> String {
@@ -277,6 +290,22 @@ Q",
             objects.push(img.clone());
         }
 
+        // /Info is appended last, after every page/image object, so it
+        // never shifts the kids/image_base positional math above —
+        // those were computed against the object count *before* this
+        // point. Only emitted when there's something to say; every
+        // pscat PDF still gets /Producer.
+        let mut info = String::from("<< /Producer (pscat)");
+        if let Some(t) = &self.title {
+            let _ = write!(info, " /Title {}", pdf_string(t));
+        }
+        if let Some(a) = &self.author {
+            let _ = write!(info, " /Author {}", pdf_string(a));
+        }
+        info.push_str(" >>");
+        let info_obj_num = objects.len() + 1;
+        objects.push(info.into_bytes());
+
         let mut out = b"%PDF-1.4\n".to_vec();
         let mut offsets = Vec::with_capacity(objects.len());
         for (i, obj) in objects.iter().enumerate() {
@@ -293,7 +322,7 @@ Q",
         }
         out.extend_from_slice(
             format!(
-                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_at}\n%%EOF\n",
+                "trailer\n<< /Size {} /Root 1 0 R /Info {info_obj_num} 0 R >>\nstartxref\n{xref_at}\n%%EOF\n",
                 objects.len() + 1
             )
             .as_bytes(),
@@ -317,4 +346,127 @@ fn path_ops(path: &crate::gfx::PsPath) -> String {
 fn f(v: f32) -> String {
     let s = format!("{v:.3}");
     s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// Encode a PDF text-string object. Printable-ASCII input becomes an
+/// escaped literal string `(...)`; anything else (non-ASCII text —
+/// plausible for a title given this project's Korean/Japanese font
+/// work, or stray control bytes) becomes a UTF-16BE hex string with
+/// the standard `FEFF` BOM prefix, the PDF spec's documented mechanism
+/// for non-PDFDocEncoding text strings. Either form round-trips
+/// through gs (tests/pdf.rs), so there's no silent mojibake either way.
+fn pdf_string(s: &str) -> String {
+    if s.chars().all(|c| c.is_ascii() && !c.is_ascii_control()) {
+        let mut out = String::from("(");
+        for c in s.chars() {
+            if c == '(' || c == ')' || c == '\\' {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+        out.push(')');
+        out
+    } else {
+        let mut out = String::from("<FEFF");
+        for unit in s.encode_utf16() {
+            let _ = write!(out, "{unit:04X}");
+        }
+        out.push('>');
+        out
+    }
+}
+
+/// Scan a PostScript source's DSC header comments for document
+/// metadata: `%%Title:` and, for the author, `%%For:` (the DSC-correct
+/// keyword — takes precedence if both appear) or `%%Author:` (a common
+/// non-standard alias, used only when `%%For:` is absent). Stops at
+/// the first non-comment, non-blank line, since DSC requires header
+/// comments to precede any program content — this also keeps the scan
+/// from matching a `%%Title:`-looking string buried later in a
+/// comment, string literal, or data block.
+///
+/// Verified against gs, this project's semantics oracle: `gs
+/// -sDEVICE=pdfwrite` on a file with `%%Title:`/`%%For:` header
+/// comments embeds them as the output PDF's document metadata
+/// (`dc:title`/`dc:creator` XMP entries) — so honoring the same two
+/// comments here matches an established convention, not a new one.
+pub fn scan_document_info(source: &[u8]) -> (Option<String>, Option<String>) {
+    let mut title = None;
+    let mut author = None;
+    for raw_line in source.split(|&b| b == b'\n') {
+        let line = String::from_utf8_lossy(raw_line);
+        let line = line.trim_end_matches('\r').trim_start();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("%%Title:") {
+            title = Some(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("%%For:") {
+            author = Some(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("%%Author:") {
+            author.get_or_insert_with(|| rest.trim().to_string());
+        } else if !line.starts_with('%') {
+            break;
+        }
+    }
+    (title, author)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scans_title_and_for() {
+        let src = b"%!PS-Adobe-3.0\n%%Title: Moonlit Poem\n%%For: Jerome\n%%EndComments\n/x 1 def\n%%Title: not this one\n";
+        let (title, author) = scan_document_info(src);
+        assert_eq!(title.as_deref(), Some("Moonlit Poem"));
+        assert_eq!(author.as_deref(), Some("Jerome"));
+    }
+
+    #[test]
+    fn falls_back_to_author_when_for_absent() {
+        let src = b"%!PS-Adobe-3.0\n%%Author: Jerome\n%%EndComments\n";
+        let (_, author) = scan_document_info(src);
+        assert_eq!(author.as_deref(), Some("Jerome"));
+    }
+
+    #[test]
+    fn for_wins_over_author_regardless_of_order() {
+        let src = b"%%Author: Wrong\n%%For: Right\n";
+        let (_, author) = scan_document_info(src);
+        assert_eq!(author.as_deref(), Some("Right"));
+
+        let src2 = b"%%For: Right\n%%Author: Wrong\n";
+        let (_, author2) = scan_document_info(src2);
+        assert_eq!(author2.as_deref(), Some("Right"));
+    }
+
+    #[test]
+    fn stops_at_first_non_comment_line() {
+        let src = b"%%Title: Real Title\n/x 1 def\n%%Title: Ignored\n";
+        let (title, _) = scan_document_info(src);
+        assert_eq!(title.as_deref(), Some("Real Title"));
+    }
+
+    #[test]
+    fn no_header_comments_yields_none() {
+        let (title, author) = scan_document_info(b"/x 1 def\n");
+        assert_eq!(title, None);
+        assert_eq!(author, None);
+    }
+
+    #[test]
+    fn pdf_string_escapes_ascii_specials() {
+        assert_eq!(pdf_string("plain"), "(plain)");
+        assert_eq!(pdf_string("A (Test) Title"), "(A \\(Test\\) Title)");
+        assert_eq!(pdf_string("back\\slash"), "(back\\\\slash)");
+    }
+
+    #[test]
+    fn pdf_string_uses_utf16be_hex_for_non_ascii() {
+        // U+B2EC (달, "moon") -> UTF-16BE 0xB2EC, BOM-prefixed hex string.
+        let s = pdf_string("달");
+        assert_eq!(s, "<FEFFB2EC>");
+    }
 }

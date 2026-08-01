@@ -746,16 +746,23 @@ impl Gfx {
                 Transform::identity(),
                 mask.as_deref(),
             );
+            let (w, cap, join, ml) = (
+                stroke.width,
+                self.state.line_cap,
+                self.state.line_join,
+                self.state.miter_limit,
+            );
+            // SVG and PDF recording are independent output targets —
+            // gating one behind the other (as this block used to do,
+            // nesting the PDF write inside `if self.svg.is_some()`)
+            // silently dropped every stroked line from `--pdf`-only
+            // exports. `fill`/`fill_path_direct` already get this
+            // right by checking each recorder's own `Option`; match
+            // that here.
             if self.svg.is_some() {
                 let d = self.state.path.to_svg_data();
                 let rgb = self.state.rgb;
                 let chain = self.state.clip.as_ref().map(|c| c.node.clone());
-                let (w, cap, join, ml) = (
-                    stroke.width,
-                    self.state.line_cap,
-                    self.state.line_join,
-                    self.state.miter_limit,
-                );
                 if let Some(svg) = &mut self.svg {
                     svg.stroke(
                         &d,
@@ -768,6 +775,10 @@ impl Gfx {
                         &chain,
                     );
                 }
+            }
+            if self.pdf.is_some() {
+                let rgb = self.state.rgb;
+                let chain = self.state.clip.as_ref().map(|c| c.node.clone());
                 let Gfx { pdf, state, .. } = self;
                 if let Some(pdf) = pdf {
                     pdf.stroke(
@@ -894,6 +905,15 @@ impl Gfx {
         self.pdf
             .as_ref()
             .map(|pdf| pdf.finish(self.painted_since_page))
+    }
+
+    /// Set the PDF document's `/Info` metadata (issue #8) — a no-op if
+    /// PDF recording isn't enabled. Typically fed from
+    /// `pdf::scan_document_info` on the source's DSC header comments.
+    pub fn set_pdf_info(&mut self, title: Option<String>, author: Option<String>) {
+        if let Some(pdf) = self.pdf.as_mut() {
+            pdf.set_info(title, author);
+        }
     }
 
     pub(crate) fn pdf_wanted(&self) -> bool {

@@ -3,6 +3,73 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## PDF document metadata + a stroke-recording bug fix (issue #8, 2026-08-01)
+
+Closes issue #8. First run of `work-issue`'s new independent-review/
+merge steps, via the `/loop /work-issue` unattended loop.
+
+The issue's title suggested a broad new capability ("generate PDF
+output and support distribution to Kindle"), but multi-page PDF export
+already existed in full since Stage 9 (`src/pdf.rs`, a real `/Pages`
+tree, gs-round-trip tested). The actual gap, same pattern as issue
+#12: pscat's PDFs carried no `/Info` document metadata (Title/Author/
+Producer) — the thing that makes a reader's library (Kindle, Books,
+any PDF viewer) show an authored title instead of a bare filename.
+Verified against gs (this project's semantics oracle) before building
+anything: `gs -sDEVICE=pdfwrite` on a file with `%%Title:`/`%%For:`
+DSC header comments embeds them as document metadata (`dc:title`/
+`dc:creator` XMP entries) — so pscat doing the same is matching an
+established convention, not inventing one. Deliberately partial
+parity, not full: gs also reads `%%Creator:` into a separate PDF
+`/Creator` field (the authoring *application*, distinct from
+`/Author`); pscat doesn't emit `/Creator` at all here — `/Producer`
+stays fixed at `pscat` regardless of DSC comments, which already
+identifies the generating tool.
+
+Added `pdf::scan_document_info` (scans DSC header comments, stops at
+the first non-comment line since DSC requires headers to precede
+program content), `PdfRecorder::set_info`/an `/Info` object in
+`finish()` (appended *after* every page/image object specifically so
+it can't shift the existing positional object-numbering math — kids
+indices and `image_base` are computed against the pre-`/Info` object
+count), a `pdf_string` encoder (ASCII → escaped literal, non-ASCII →
+UTF-16BE hex string with BOM, since a Hangul/Japanese title is
+plausible given this project's font work and PDF text strings need
+one or the other), and `Gfx::set_pdf_info` wired into `main.rs`'s
+`--pdf` path.
+
+For "distribution to Kindle": Kindle's Send-to-Kindle already accepts
+PDF directly (email attachment or USB) — deliberately did not add
+email-sending automation (would need external credentials, not asked
+for) or a new export format (EPUB/MOBI — the issue left format open,
+and PDF is what already exists and is broadly e-reader-compatible).
+Also deliberately not doing: PDF outline/bookmarks/table-of-contents
+for long documents (real value, distinct scope — worth its own
+issue) and font embedding (pre-existing, documented deviation across
+the whole PDF/SVG pipeline).
+
+**Found and fixed a real, unrelated pre-existing bug while building
+the demo example**: `Gfx::stroke`'s PDF recording lived inside `if
+self.svg.is_some()`, so any `--pdf`-only export (no `--svg` — the
+common case) silently dropped every stroked line. `fill` and
+`fill_path_direct` never had this bug; both correctly check
+`self.pdf.is_some()` independent of SVG. Caught by literally rendering
+`examples/pdf_document.ps` and looking — a divider line appeared in
+pscat's own PNG output but vanished from the PDF. No existing test
+exercised `stroke` in a PDF-only export, so this had presumably been
+silently wrong for a while. New regression test:
+`tests/pdf.rs::strokes_appear_in_pdf_only_export`.
+
+Also caught by rendering, a bug in the new example itself, not the
+library: `arc` without a preceding `newpath` draws an implicit
+connecting line from the current point (left over from the prior
+`moveto`) to the arc's start — a stray diagonal line to a filled
+circle on the demo's second page. Fixed with an explicit `newpath`.
+
+New example: `examples/pdf_document.ps` — a two-page piece with
+`%%Title:`/`%%For:` header comments, demonstrating the metadata
+feature and that multi-page structure survives `--pdf`.
+
 ## Circular/curved text in artkit (issue #12, 2026-07-26)
 
 Closes issue #12. First run of `.claude/skills/work-issue/SKILL.md`,
