@@ -19,20 +19,46 @@ Argument: an optional issue number. `/work-issue 16` works that issue;
 
 ## 1. Pick the issue
 
-If an issue number was given, confirm it's open and not already being
-worked:
+If an issue number was given, confirm it's open:
 
 ```sh
 gh issue view <N> --json state,title,labels
 ```
 
-If it's closed, or already carries the `in-progress` label, stop and
-tell the user rather than plowing ahead — that's a sign someone (or a
-previous run of this skill) is already on it.
+If it's closed, stop and tell the user. If it carries `in-progress`,
+check whether there's already an open PR claiming it (`gh pr list
+--state open --json body --jq` scanning for `Closes #<N>`/`Fixes
+#<N>`/`Resolves #<N>`):
+- **Open PR exists**: stop and tell the user — someone (or another run
+  of this skill) is genuinely already on it.
+- **No open PR**: this is a crashed or interrupted prior run, not a
+  live claim — resume it rather than halting. Check for
+  `../<repo>-issue-<N>` (step 3 already contemplates reusing an
+  existing worktree); if it exists, pick up from wherever it left off
+  (uncommitted changes, a branch with commits but no PR, etc. are all
+  normal mid-run states, not corruption). This matters for the
+  unattended-loop case specifically: a session crash shouldn't
+  permanently deadlock the backlog on one issue.
 
-If no number was given, find the lowest-numbered open issue that
-isn't already labeled `in-progress` and isn't already the target of an
-open PR:
+If no number was given, **first check for an abandoned in-progress
+issue to resume** — this takes priority over picking something fresh,
+otherwise a crashed run's issue gets silently skipped forever instead
+of finished:
+
+```sh
+# in-progress issues with no open PR claiming them = crashed prior runs
+gh issue list --state open --label in-progress --json number,title
+gh pr list --state open --json body --jq \
+  '[.[].body | scan("(?:Closes|Fixes|Resolves) #([0-9]+)")[][0] | tonumber]'
+```
+
+If any `in-progress` issue's number isn't in the open-PR list, resume
+the lowest-numbered one of those (same as the explicit-number path
+above — reuse its worktree if one exists) instead of continuing to the
+picker below.
+
+Otherwise, find the lowest-numbered open issue that isn't already
+labeled `in-progress` and isn't already the target of an open PR:
 
 ```sh
 # candidates: open, not in-progress, lowest number first
@@ -188,11 +214,18 @@ config, not something to remember from a prior run or from having
 written the skill.
 
 Run an independent review of the PR — a reviewer with no context from
-implementing it, cold on the diff. Use the `review` skill (`gh pr view
-<PR#>` for context + `gh pr diff <PR#>` for the diff, per its own
-instructions) rather than reusing the step-6 `advisor` pass, which saw
-the whole implementation session and isn't independent. Must come back
-with nothing blocking to proceed.
+implementing it, cold on the diff. **Invoking the `review` skill
+directly in this session doesn't satisfy that**: this session wrote
+the code and carries the whole implementation history, so it isn't
+independent no matter which skill it runs. Use the `Agent` tool
+instead, with a self-contained prompt that gives it nothing but the PR
+number and what to check (title/body via `gh pr view`, diff via `gh pr
+diff` — the agent fetches these itself, it doesn't inherit this
+session's view of them) — same spirit as the `review` skill's own
+instructions, just run by a subagent with a blank slate rather than
+this one. Must come back with nothing blocking to proceed; if it
+flags something, fix it, re-run the quality gate, and get a fresh
+independent pass on the updated diff before continuing.
 
 If review is clean, decide merge eligibility from the policy:
 - `human-only`: stop here. Report the PR as open and awaiting merge;
