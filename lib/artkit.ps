@@ -450,8 +450,14 @@ end
 
 % x y w h cols rows {cx cy r -} hexgrid -
 % Pointy-top hex lattice, cols hexes spanning w, odd rows staggered by
-% half a hex — like grid, cols/rows fit the region rather than
-% clipping to it, so it may run a little past x y w h at the edges.
+% half a hex. h is accepted (for signature symmetry with grid) but NOT
+% used to size the hexes — a regular hexagon's width and height aren't
+% independent, so only w/cols sets the scale; rows is just "how many
+% rows of that size to draw," not a second fit constraint. Mismatched
+% rows can leave most of the box empty or run well past its bottom
+% edge — e.g. 10 cols/1 row on a square box covers only a thin top
+% strip. To actually span h, pick rows yourself: r = (w/cols)/sqrt(3),
+% then rows ~= h / (r*1.5).
 /hexgrid {
     /tgproc exch def /tgrows exch def /tgcols exch def
     /tgh exch def /tgw exch def /tgy exch def /tgx exch def
@@ -473,6 +479,10 @@ end
 % x y w h cols rows {cx cy s up -} trigrid -
 % Triangular lattice: cols upward triangles span w; each row packs
 % cols*2 triangles (alternating up/down) at the derived edge length s.
+% Same h caveat as hexgrid just above: an equilateral triangle's row
+% height is fixed by s (= w/cols), so h isn't an independent fit
+% constraint — pick rows yourself if you need the tiling to actually
+% reach the box's bottom edge: rows ~= h / (s*0.866025).
 /trigrid {
     /tgproc exch def /tgrows exch def /tgcols exch def
     /tgh exch def /tgw exch def /tgy exch def /tgx exch def
