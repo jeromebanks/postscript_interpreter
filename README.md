@@ -264,8 +264,13 @@ arc-length along any path (`charpath` text included), and `pathtext`
 sets type along a curve, each glyph rotated to the tangent — `ctext`
 and `ctextctr` build on `pathtext` for the circular case specifically
 (seals, coins, "ring of type" compositions), the latter centering the
-string on the circle automatically. All of it deterministic under
-`srand`, all of it running unchanged in Ghostscript.
+string on the circle automatically. A tiling section adds a general
+`lattice` walk, `hex`/`tri` shape primitives, `hexgrid`/`trigrid`
+drivers for the two other regular tessellations, and `truchet` — a
+single motif at a random quarter-turn per cell, the classic trick that
+turns a regular grid into a flowing, maze-like pattern (see gallery's
+Woven Labyrinth). All of it deterministic under `srand`, all of it
+running unchanged in Ghostscript.
 
 ```postscript
 (lib/artkit.ps) run

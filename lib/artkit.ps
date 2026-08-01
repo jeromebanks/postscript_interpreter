@@ -21,9 +21,12 @@
 %   shapes    cx cy r n ngon | cx cy r1 r2 n star | x y w h r rrect
 %   text      (s) cx y showctr | (s) w fitfont
 %   layout    x y w h cols rows {x y w h ...} grid
+%   tiling    x0 y0 v1 v2 n1 n2 {x y ...} lattice | cx cy r hex
+%             cx cy s up tri | x y w h cols rows {...} hexgrid | trigrid
+%             | truchet
 %
 % Convention: helper names are lowercase and short; internal scratch
-% names carry two-letter prefixes (ap-, ct-, ld-, ls-, pt-, tk-) —
+% names carry two-letter prefixes (ap-, ct-, ld-, ls-, pt-, tg-, tk-) —
 % avoid redefining those inside brush/draw procs.
 
 % --- random ----------------------------------------------------------
@@ -365,6 +368,139 @@ end
             tkx tki tkcw mul add
             tky tkj tkch mul add
             tkcw tkch tkproc
+        } for
+    } for
+} def
+
+% --- tiling (regular and randomized tessellations) --------------------
+% `grid` above already covers the square case. This section adds one
+% general lattice-walk primitive, two shape primitives to go with
+% ngon/star/rrect, and drivers for the other two regular tilings (hex,
+% triangular) plus a randomized-orientation driver for Truchet tiles —
+% a single motif, randomly quarter-turned per cell, that reads as a
+% flowing maze even though the underlying grid is perfectly regular.
+% True aperiodic (Penrose-style) tiling is a deliberate omission: it
+% needs matching-rule/substitution machinery well beyond a lattice
+% walk, where Truchet already delivers the "looks aperiodic" effect
+% generative art actually wants.
+
+% x0 y0 v1x v1y v2x v2y n1 n2 {x y -} lattice -
+% Walks an n1 x n2 grid of points x0,y0 + i*v1 + j*v2 (i in 0..n1-1, j
+% in 0..n2-1), calling proc at each — the primitive hexgrid/trigrid
+% are built on. Any v1/v2 pair (square, oblique, brick-bond offsets)
+% lets a caller tile a custom motif — Escher-style interlocking shapes
+% included — the same way alongpath lets a brush walk any path.
+/lattice {
+    /tgproc exch def /tgn2 exch def /tgn1 exch def
+    /tgv2y exch def /tgv2x exch def /tgv1y exch def /tgv1x exch def
+    /tgy0 exch def /tgx0 exch def
+    0 1 tgn2 1 sub {
+        /tgj exch def
+        0 1 tgn1 1 sub {
+            /tgi exch def
+            tgx0 tgi tgv1x mul add tgj tgv2x mul add
+            tgy0 tgi tgv1y mul add tgj tgv2y mul add
+            tgproc
+        } for
+    } for
+} def
+
+% cx cy r hex -  (appended to current path; pointy-top, like ngon/star)
+/hex {
+    /tgr exch def /tgy exch def /tgx exch def
+    tgx tgr 90 cos mul add tgy tgr 90 sin mul add moveto
+    1 1 5 {
+        /tgk exch def
+        /tga 90 tgk 60 mul add def
+        tgx tga cos tgr mul add tgy tga sin tgr mul add lineto
+    } for
+    closepath
+} def
+
+% cx cy s up tri -  (appended to current path; up true points up)
+/tri {
+    /tgup exch def /tgs exch def /tgy exch def /tgx exch def
+    /tgR tgs 0.577350 mul def                    % centroid-to-vertex
+    /tga tgs 0.288675 mul def                    % centroid-to-edge
+    tgup {
+        tgx tgy tgR add moveto
+        tgx tgs 2 div sub tgy tga sub lineto
+        tgx tgs 2 div add tgy tga sub lineto
+    } {
+        tgx tgy tgR sub moveto
+        tgx tgs 2 div sub tgy tga add lineto
+        tgx tgs 2 div add tgy tga add lineto
+    } ifelse
+    closepath
+} def
+
+% x y w h cols rows {cx cy r -} hexgrid -
+% Pointy-top hex lattice, cols hexes spanning w, odd rows staggered by
+% half a hex — like grid, cols/rows fit the region rather than
+% clipping to it, so it may run a little past x y w h at the edges.
+/hexgrid {
+    /tgproc exch def /tgrows exch def /tgcols exch def
+    /tgh exch def /tgw exch def /tgy exch def /tgx exch def
+    /tgr tgw tgcols div 1.732051 div def         % 1.732051 ~= sqrt(3)
+    /tgdx tgr 1.732051 mul def
+    /tgdy tgr 1.5 mul def
+    0 1 tgrows 1 sub {
+        /tgj exch def
+        /tgoff tgj 2 mod 0 eq { 0 } { tgdx 2 div } ifelse def
+        0 1 tgcols 1 sub {
+            /tgi exch def
+            tgx tgi tgdx mul add tgoff add
+            tgy tgj tgdy mul add
+            tgr tgproc
+        } for
+    } for
+} def
+
+% x y w h cols rows {cx cy s up -} trigrid -
+% Triangular lattice: cols upward triangles span w; each row packs
+% cols*2 triangles (alternating up/down) at the derived edge length s.
+/trigrid {
+    /tgproc exch def /tgrows exch def /tgcols exch def
+    /tgh exch def /tgw exch def /tgy exch def /tgx exch def
+    /tgs tgw tgcols div def
+    /tgrh tgs 0.866025 mul def                   % row height = s*sqrt(3)/2
+    /tga tgs 0.288675 mul def
+    /tgR tgs 0.577350 mul def
+    0 1 tgrows 1 sub {
+        /tgj exch def
+        /tgyb tgy tgj tgrh mul add def
+        0 1 tgcols 2 mul 1 sub {
+            /tgi exch def
+            /tgup tgi 2 mod 0 eq def
+            tgx tgi tgs mul 2 div add tgs 4 div add
+            tgup { tgyb tga add } { tgyb tgR add } ifelse
+            tgs tgup tgproc
+        } for
+    } for
+} def
+
+% x y w h cols rows {w h -} truchet -
+% Truchet tiles: walks a square grid like grid, but wraps each call in
+% gsave / translate-to-cell-center / rotate-by-a-random-quarter-turn /
+% grestore first, so proc only ever draws one motif centered on the
+% origin — the random rotation is what turns a single repeated tile
+% into the classic flowing Truchet look.
+/truchet {
+    /tgproc exch def /tgrows exch def /tgcols exch def
+    /tgh exch def /tgw exch def /tgy exch def /tgx exch def
+    /tgcw tgw tgcols div def
+    /tgch tgh tgrows div def
+    0 1 tgrows 1 sub {
+        /tgj exch def
+        0 1 tgcols 1 sub {
+            /tgi exch def
+            gsave
+                tgx tgi tgcw mul add tgcw 2 div add
+                tgy tgj tgch mul add tgch 2 div add
+                translate
+                4 chance 90 mul rotate
+                tgcw tgch tgproc
+            grestore
         } for
     } for
 } def

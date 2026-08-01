@@ -45,6 +45,12 @@ here is *written*, rendered, looked at, and refined.
   `gsave newpath ... grestore` so the walked path survives.
 - **Shapes/text/layout**: `ngon`, `star`, `rrect`; `(s) cx y
   showctr`, `(s) w fitfont`; `x y w h cols rows {x y w h ...} grid`.
+- **Tiling**: `x0 y0 v1 v2 n1 n2 {x y ...} lattice` (the general point
+  walk — any basis, oblique included); `hex`/`tri` shapes; `hexgrid`/
+  `trigrid` (the other two regular tessellations, built on `lattice`);
+  `truchet` — walks a square grid like `grid` but rotates each cell a
+  random quarter-turn first, so one motif reads as a flowing maze
+  (`gallery/woven_labyrinth.ps` is the worked example).
 
 ## Style packs (`lib/styles/`, load after artkit)
 

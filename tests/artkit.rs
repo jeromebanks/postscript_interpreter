@@ -221,6 +221,131 @@ fn shapes_fill() {
 }
 
 #[test]
+fn hex_and_tri_fill() {
+    for shape in [
+        "100 100 60 hex",
+        "100 100 60 true tri",
+        "100 100 60 false tri",
+    ] {
+        let mut it = Interp::with_page(200, 200).expect("page");
+        load(&mut it);
+        it.run_str(&format!("newpath {shape} fill"))
+            .unwrap_or_else(|e| panic!("{shape} failed: {}", it.error_report(&e)));
+        assert!(ink_count(&it) > 500, "{shape} left no ink");
+    }
+}
+
+#[test]
+fn lattice_walks_the_expected_points() {
+    // 2x2 lattice with an oblique second basis vector -- pin the exact
+    // points visited (in order) so a future refactor can't silently
+    // transpose i/j or swap v1/v2 without a test noticing. The proc
+    // records each x,y it's called with into `hits` via two puts
+    // (results array left on the stack via aload for the assertions).
+    let got = eval(
+        "/hits 8 array def /hi 0 def \
+         0 0 10 0 3 5 2 2 { \
+             /py exch def /px exch def \
+             hits hi px put /hi hi 1 add def \
+             hits hi py put /hi hi 1 add def \
+         } lattice hits aload pop",
+    );
+    let nums: Vec<f64> = got.iter().map(|s| s.parse().unwrap()).collect();
+    // points = (0,0) + i*(10,0) + j*(3,5), for i in 0..2, j in 0..2
+    let expected = [(0.0, 0.0), (10.0, 0.0), (3.0, 5.0), (13.0, 5.0)];
+    for (k, (ex, ey)) in expected.iter().enumerate() {
+        assert_eq!(nums[k * 2], *ex, "point {k} x");
+        assert_eq!(nums[k * 2 + 1], *ey, "point {k} y");
+    }
+}
+
+#[test]
+fn hexgrid_and_trigrid_tile_their_region_without_gaps() {
+    // A correctly interlocking tiling should leave nearly as much ink
+    // as a solid fill of the same bounding box -- a gap or overlap bug
+    // (wrong row offset, wrong triangle orientation) would show up as
+    // noticeably less coverage. The canvas is sized to exactly match
+    // the box (200x200, no margin) so page clipping does the same job
+    // clipping-to-the-box would -- ink outside the nominal region
+    // can't hide on an off-screen margin and inflate the count.
+    fn box_ink(body: &str) -> usize {
+        let mut it = Interp::with_page(200, 200).expect("page");
+        load(&mut it);
+        it.run_str(body)
+            .unwrap_or_else(|e| panic!("{body} failed: {}", it.error_report(&e)));
+        ink_count(&it)
+    }
+
+    let baseline = box_ink("newpath 0 0 200 200 rectfill");
+
+    let hex_ink = box_ink(
+        "0 0 200 200 5 6 { 3 dict begin /r exch def /cy exch def /cx exch def \
+            newpath cx cy r hex fill end } hexgrid",
+    );
+    assert!(
+        hex_ink as f64 > baseline as f64 * 0.85,
+        "hexgrid left gaps: hex_ink={hex_ink} baseline={baseline}"
+    );
+
+    let tri_ink = box_ink(
+        "0 0 200 200 6 7 { 4 dict begin /up exch def /s exch def /cy exch def /cx exch def \
+            newpath cx cy s up tri fill end } trigrid",
+    );
+    assert!(
+        tri_ink as f64 > baseline as f64 * 0.85,
+        "trigrid left gaps: tri_ink={tri_ink} baseline={baseline}"
+    );
+}
+
+#[test]
+fn truchet_calls_proc_once_per_cell_with_the_cell_size() {
+    let got = eval(
+        "/n 0 def \
+         0 0 90 60 3 2 { /ch exch def /cw exch def \
+             cw 30 eq { } { /n -1 def } ifelse \
+             ch 30 eq { } { /n -1 def } ifelse \
+             n 0 ge { /n n 1 add def } if \
+         } truchet n",
+    );
+    assert_eq!(
+        got.last().unwrap(),
+        "6",
+        "expected 6 cells, each sized 30x30"
+    );
+}
+
+#[test]
+fn truchet_randomizes_the_rotation_across_cells() {
+    // Read back cos(rotation) from inside the stamp proc via
+    // currentmatrix -- 0/90/180/270 degrees give distinct values
+    // (1, 0, -1, 0). A real spread of buckets (not just one repeated
+    // value) is the actual claim `truchet`'s doc comment makes.
+    let got = eval(
+        "3 srand /idx 0 def /hits 25 array def \
+         0 0 100 100 5 5 { pop pop \
+             hits idx matrix currentmatrix 0 get put \
+             /idx idx 1 add def \
+         } truchet hits aload pop",
+    );
+    let mut buckets = std::collections::HashSet::new();
+    for v in &got {
+        let f: f64 = v.parse().unwrap();
+        let bucket = if f > 0.5 {
+            1
+        } else if f < -0.5 {
+            -1
+        } else {
+            0
+        };
+        buckets.insert(bucket);
+    }
+    assert!(
+        buckets.len() >= 2,
+        "expected a mix of rotations across 25 cells, saw only {buckets:?}"
+    );
+}
+
+#[test]
 fn ghostscript_accepts_artkit() {
     let gs_ok = std::process::Command::new("gs")
         .arg("--version")
@@ -239,6 +364,12 @@ fn ghostscript_accepts_artkit() {
         /Helvetica findfont 20 scalefont setfont \
         newpath 20 350 moveto 380 380 lineto (gs runs artkit) pathtext \
         150 250 40 (ring of type) ctextctr \
+        260 20 100 60 3 3 { 3 dict begin /r exch def /cy exch def /cx exch def \
+            newpath cx cy r hex fill end } hexgrid \
+        260 100 100 60 3 3 { 4 dict begin /up exch def /s exch def /cy exch def /cx exch def \
+            newpath cx cy s up tri fill end } trigrid \
+        0 0 60 60 3 3 { pop pop newpath 0 0 20 0 360 arc fill } truchet \
+        300 300 15 0 0 15 3 3 { /y exch def /x exch def newpath x y 5 0 360 arc fill } lattice \
         showpage\n";
     let dir = std::env::temp_dir().join(format!("pscat-artkit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");

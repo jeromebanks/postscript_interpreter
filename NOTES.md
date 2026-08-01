@@ -3,6 +3,61 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## A tiling/tessellation library for artkit (issue #9, 2026-08-01)
+
+Closes issue #9. Run via `work-issue` after issue #6 (a procedural
+Hangul font) was set aside at the user's call — a real design project
+in its own right, not a quick pass — in favor of this more tractable
+backlog item.
+
+`lib/artkit.ps`'s `grid` (Stage 19) already covered square tiling, so
+the actual gap was the other regular tessellations plus something with
+real generative-art teeth. Added six procedures: `lattice` (the
+general primitive — walks an n1×n2 grid of points at `x0,y0 + i·v1 +
+j·v2` for any basis pair, oblique included, calling a proc at each —
+`hexgrid`/`trigrid` are both built on it); `hex` and `tri`, shape
+primitives in the same spirit as `ngon`/`star`/`rrect`; `hexgrid`
+(pointy-top hexagons, odd rows staggered) and `trigrid` (alternating
+up/down triangles — cols upward triangles span the width, each row
+packs `cols*2`) for the other two regular tilings; and `truchet`,
+which walks a plain square grid like `grid` but wraps each cell in
+`gsave`/translate-to-center/`4 chance 90 mul rotate`/`grestore` before
+calling the stamp proc — so a single motif, randomly quarter-turned,
+reads as a continuous flowing pattern even though the grid underneath
+is perfectly regular. True Penrose-style aperiodic tiling is a
+deliberate omission (documented in the section's header comment): it
+needs substitution/matching-rule machinery well beyond a lattice walk,
+and `truchet` already delivers the "looks aperiodic" effect generative
+art actually wants.
+
+Geometry was verified two ways before trusting it: render-and-look
+(caught a `trigrid` row-count miscalculation and a `lattice` basis
+that ran a demo panel off the page — both fixed by recomputing the fit
+rather than fudging the numbers) and a `tests/artkit.rs` coverage
+test that fills a hexgrid/trigrid tiling on a canvas sized to exactly
+match the tiled region (so page-edge clipping does the job a crop
+would, and spillover ink can't hide off-canvas and inflate the count)
+and checks it against a solid-fill baseline — a real gap or overlap
+bug would show up as materially less ink, not just a few percent from
+legitimate edge rounding. Also pinned `lattice`'s exact point sequence
+arithmetically (an oblique basis, checked point by point) and
+`truchet`'s rotation spread by reading `cos(rotation)` back via
+`currentmatrix` from inside the stamp proc across many cells —
+proving the four quarter-turns actually vary, not just that `truchet`
+runs the right number of times.
+
+New demo: `examples/tiling.ps`, a four-quadrant specimen (hexgrid+hex,
+trigrid+tri, truchet, and an oblique `lattice`). New gallery piece:
+`gallery/woven_labyrinth.ps`, "Woven Labyrinth" — Sébastien Truchet's
+actual 1704 tile (a square split corner-to-corner into two contrasting
+triangles, not the later quarter-circle-arc variant) at 256 random
+quarter-turns, framed and titled; inlines `chance`/`truchet` per the
+gallery's self-containment doctrine (see `hortus.ps`). Renders
+identically in structure under `pscat` and `gs` (colors differ between
+runs of the two — expected, since nothing pins `rand`'s stream
+bit-for-bit across implementations, only that both accept the file and
+tile without gaps).
+
 ## PDF document metadata + a stroke-recording bug fix (issue #8, 2026-08-01)
 
 Closes issue #8. First run of `work-issue`'s new independent-review/

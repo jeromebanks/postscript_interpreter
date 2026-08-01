@@ -1,0 +1,87 @@
+%!PS-Adobe-3.0
+%%Title: Four Tilings — a specimen sheet for artkit's tiling library
+%%BoundingBox: 0 0 600 600
+%%EndComments
+
+% Specimen sheet for artkit's tiling section (lib/artkit.ps): four
+% quadrants, one technique each. Top-left is hexgrid+hex (a pointy-top
+% hex mosaic); top-right is trigrid+tri (alternating up/down triangles,
+% tessellating with no gaps — see tests/artkit.rs for the arithmetic
+% proof); bottom-left is truchet, walking a plain square grid but
+% wrapping each cell in a random quarter-turn so one quarter-circle
+% motif reads as a flowing, maze-like river; bottom-right is the
+% general lattice primitive underneath hexgrid/trigrid, walked here
+% with an oblique (non-rectangular) basis to show it isn't limited to
+% the two regular tilings built on it. Run from the repo root:
+%
+%   pscat --page 600x600 examples/tiling.ps
+
+(lib/artkit.ps) run
+9 srand
+
+1 1 1 setrgbcolor clippath fill
+
+/Palatino-Bold findfont 22 scalefont setfont
+0.1 0.1 0.12 setrgbcolor
+(Four Tilings) 300 566 showctr
+/Palatino-Italic findfont 12 scalefont setfont
+(lattice, hex + hexgrid, tri + trigrid, truchet) 300 548 showctr
+
+% --- top-left: hexgrid + hex ------------------------------------------
+30 300 250 220 5 6 {
+    3 dict begin
+        /r exch def /cy exch def /cx exch def
+        gsave
+            newpath cx cy r hex
+            /tide pal oneof aload pop setrgbcolor fill
+            0.15 0.2 0.22 setrgbcolor 0.75 setlinewidth
+            newpath cx cy r hex stroke
+        grestore
+    end
+} hexgrid
+
+% --- top-right: trigrid + tri ------------------------------------------
+320 300 250 216 6 6 {
+    4 dict begin
+        /up exch def /s exch def /cy exch def /cx exch def
+        gsave
+            newpath cx cy s up tri
+            up { /ember pal 1 get } { /ember pal 3 get } ifelse
+            aload pop setrgbcolor fill
+            0.15 0.08 0.05 setrgbcolor 0.5 setlinewidth
+            newpath cx cy s up tri stroke
+        grestore
+    end
+} trigrid
+
+% --- bottom-left: truchet -----------------------------------------------
+0.12 0.14 0.3 setrgbcolor
+1.8 setlinewidth
+1 setlinecap
+30 30 250 220 10 9 {
+    2 dict begin
+        /h exch def /w exch def
+        gsave
+            newpath w 2 div neg 0 moveto 0 0 h 2 div 180 270 arc stroke
+            newpath w 2 div 0 moveto 0 0 h 2 div 0 90 arc stroke
+        grestore
+    end
+} truchet
+
+% --- bottom-right: lattice, oblique basis -------------------------------
+330 40 25 0 5 20 8 9 {
+    /y exch def /x exch def
+    gsave
+        x y translate
+        /carnival pal oneof aload pop setrgbcolor
+        newpath 0 0 7 5 6 star fill
+    grestore
+} lattice
+
+0.1 0.1 0.12 setrgbcolor
+/Palatino findfont 10 scalefont setfont
+1 setlinewidth
+newpath 300 30 moveto 300 540 lineto stroke
+newpath 20 300 moveto 580 300 lineto stroke
+
+showpage
