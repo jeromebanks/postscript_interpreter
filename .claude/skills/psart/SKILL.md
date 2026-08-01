@@ -50,7 +50,11 @@ here is *written*, rendered, looked at, and refined.
   `trigrid` (the other two regular tessellations, built on `lattice`);
   `truchet` — walks a square grid like `grid` but rotates each cell a
   random quarter-turn first, so one motif reads as a flowing maze
-  (`gallery/woven_labyrinth.ps` is the worked example).
+  (`gallery/woven_labyrinth.ps` is the worked example). Calling
+  `hex`/`tri` from inside a `hexgrid`/`trigrid` stamp (the obvious
+  thing to do) needs the inner call wrapped in its own `N dict begin
+  ... end` — they share scratch names, same as `grid`/`ngon` already
+  do; artkit.ps's tiling-section header has the details.
 
 ## Style packs (`lib/styles/`, load after artkit)
 

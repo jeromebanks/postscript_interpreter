@@ -383,6 +383,20 @@ end
 % needs matching-rule/substitution machinery well beyond a lattice
 % walk, where Truchet already delivers the "looks aperiodic" effect
 % generative art actually wants.
+%
+% Composition gotcha, same one grid/ngon already have (shared tk-
+% prefix): a driver here (lattice/hexgrid/trigrid/truchet) re-reads its
+% own tg-named position state from the *current dict* on every
+% iteration, so a stamp proc that calls hex/tri/another driver
+% un-wrapped clobbers that state the instant the first cell runs (their
+% `/tgx exch def` etc. land in the same dict). Fix: wrap just the
+% inner call in its own small dict — `3 dict begin cx cy r hex end` —
+% so its defs shadow there instead. Do NOT wrap a proc's own persistent
+% per-cell state (a running counter, an array index) inside that same
+% nested dict — `def` always targets the innermost open dict, so an
+% incrementing counter defined inside the wrapper is discarded at
+% `end` instead of surviving to the next cell; keep counters outside
+% the wrapper (or store them in an array via `put`, immune to this).
 
 % x0 y0 v1x v1y v2x v2y n1 n2 {x y -} lattice -
 % Walks an n1 x n2 grid of points x0,y0 + i*v1 + j*v2 (i in 0..n1-1, j

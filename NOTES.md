@@ -46,6 +46,27 @@ arithmetically (an oblique basis, checked point by point) and
 proving the four quarter-turns actually vary, not just that `truchet`
 runs the right number of times.
 
+Caught by an advisor review of the diff, not by any of the above: a
+stamp proc calling `hex`/`tri` from inside `hexgrid`/`trigrid` — the
+obvious, advertised way to use them, and exactly what the new demo and
+gallery piece both do — clobbers the outer driver's own position state
+if the inner call isn't wrapped in its own dict, since both share the
+`tg-` scratch prefix and PostScript `def` always targets whichever
+dict is innermost. Confirmed with a test showing 9 hex centers
+corrupting into a diverging drift starting at the 3rd cell, then
+confirmed the fix (wrap just the inner call: `3 dict begin cx cy r
+hex end`) restores the exact expected centers — kept as a permanent
+regression test. Checked whether this was new: it isn't — `grid`
+calling `ngon` un-wrapped (`tk-` prefix) has the identical bug,
+already latent in the Stage 19 original. Documented the gotcha and its
+fix in the tiling section's header rather than redesigning either
+family's scratch-naming, which would be a much larger, unrelated
+change; the demo/gallery code already wraps correctly (they don't use
+a persistent per-cell counter, so the naive whole-stamp `dict
+begin/end` they use is safe for them specifically — a counter defined
+inside that same wrapper would itself be silently discarded at `end`,
+a second trap documented alongside the first).
+
 New demo: `examples/tiling.ps`, a four-quadrant specimen (hexgrid+hex,
 trigrid+tri, truchet, and an oblique `lattice`). New gallery piece:
 `gallery/woven_labyrinth.ps`, "Woven Labyrinth" — Sébastien Truchet's

@@ -260,6 +260,50 @@ fn lattice_walks_the_expected_points() {
 }
 
 #[test]
+fn hexgrid_stamp_calling_hex_needs_its_own_dict_and_that_actually_works() {
+    // hexgrid and hex share the tg- prefix (tgx/tgy/tgr): a stamp that
+    // calls hex *without* opening a fresh dict first clobbers hexgrid's
+    // own loop state the instant the first cell runs (proven while
+    // building this feature -- and true of the pre-existing grid+ngon
+    // pair too, same tk- prefix, same mechanism; not new here). The
+    // section header documents the fix: wrap the call to hex/tri/
+    // another tiling driver in its own small dict so its defs land
+    // there instead of shadowing the outer driver's. This test pins
+    // that the documented fix actually produces the right 9 centers,
+    // not just that it doesn't error.
+    let got = eval(
+        "/hits 18 array def /hi 0 def \
+         0 0 90 90 3 3 { \
+             /r exch def /cy exch def /cx exch def \
+             hits hi cx put /hi hi 1 add def \
+             hits hi cy put /hi hi 1 add def \
+             3 dict begin newpath cx cy r hex end \
+         } hexgrid hits aload pop",
+    );
+    let nums: Vec<f64> = got.iter().map(|s| s.parse().unwrap()).collect();
+    // r = (90/3)/sqrt(3) = 17.32..; dx = r*sqrt(3) = 30; dy = r*1.5 = 25.98..
+    let expected = [
+        (0.0, 0.0),
+        (30.0, 0.0),
+        (60.0, 0.0),
+        (15.0, 25.980759227066642),
+        (45.0, 25.980759227066642),
+        (75.0, 25.980759227066642),
+        (0.0, 51.961518454133284),
+        (30.0, 51.961518454133284),
+        (60.0, 51.961518454133284),
+    ];
+    for (k, (ex, ey)) in expected.iter().enumerate() {
+        assert!(
+            (nums[k * 2] - ex).abs() < 1e-6 && (nums[k * 2 + 1] - ey).abs() < 1e-6,
+            "cell {k}: expected ({ex}, {ey}), got ({}, {})",
+            nums[k * 2],
+            nums[k * 2 + 1]
+        );
+    }
+}
+
+#[test]
 fn hexgrid_and_trigrid_tile_their_region_without_gaps() {
     // A correctly interlocking tiling should leave nearly as much ink
     // as a solid fill of the same bounding box -- a gap or overlap bug
