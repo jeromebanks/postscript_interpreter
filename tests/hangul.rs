@@ -60,6 +60,35 @@ fn decompose_matches_unicode_arithmetic_at_the_block_endpoints() {
 }
 
 #[test]
+fn drawshapes_second_shape_keeps_the_parent_bounds() {
+    // Regression: `drawshape` has no scratch dict of its own, so its
+    // `/bx1 exch def` (etc.) lands in the same shared scope
+    // `drawshapes` needs its *own* original bx1 from for the second,
+    // right-hand shape — the same class of bug as the wordadv/layout
+    // `/i` collision, one call deeper. A clobbered bx1 gives the
+    // second shape x1 < x0 (a negative-width, mirrored box), so its
+    // ink collapses to a sliver near the middle instead of reaching
+    // the parent box's actual right edge. Calls `drawshapes` directly
+    // (bypassing BuildChar's font transform) with two different
+    // shapes in a wide box and checks ink reaches near the right
+    // edge, not just the middle third.
+    let mut it = with_lib(1000, 400);
+    it.run_str("HangulDict begin work begin [/g /d] 50 50 950 350 drawshapes end end")
+        .unwrap_or_else(|e| panic!("drawshapes failed: {}", it.error_report(&e)));
+    let pm = &it.gfx().pixmap;
+    let rightmost = (0..1000u32)
+        .rev()
+        .find(|&x| (0..400u32).any(|y| pm.pixel(x, y).is_some_and(|p| p.red() < 128)))
+        .expect("some ink somewhere");
+    assert!(
+        rightmost > 800,
+        "second shape should reach near the box's right edge (950), \
+         rightmost ink was at x={rightmost} — a collapsed/mirrored \
+         sliver would fall well short"
+    );
+}
+
+#[test]
 fn a_syllable_from_each_layout_class_paints_ink() {
     // 가 (V, no final), 각 (V+final), 고 (H, no final), 곡 (H+final),
     // 과 (M, no final), 곽 (M+final) — the six standard Hangul

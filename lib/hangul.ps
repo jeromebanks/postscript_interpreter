@@ -198,16 +198,25 @@ HangulDict begin
   % [names] x0 y0 x1 y1 drawshapes -> one shape filling the cell, or
   % two side by side (doubled consonants, two-consonant jongseong
   % clusters) with a small gap between them.
+  %
+  % The parent box is captured under obx0/oby0/obx1/oby1 — names
+  % distinct from drawshape's own bx0/by0/bx1/by1 — rather than reused
+  % as bx0/by0/bx1/by1 directly: `drawshape` has no scratch dict of
+  % its own, so it `def`s those same names into this proc's shared
+  % `work` scope, and the *second* drawshape call below needs the
+  % parent box's original bx1, not whatever the first call just left
+  % behind. (The same class of bug as wordadv/layout's /i collision —
+  % see wordadv's comment — just one call deeper.)
   /drawshapes {
-    /by1 exch def /bx1 exch def /by0 exch def /bx0 exch def
+    /oby1 exch def /obx1 exch def /oby0 exch def /obx0 exch def
     /names exch def
     names length 1 eq {
-      names 0 get bx0 by0 bx1 by1 drawshape
+      names 0 get obx0 oby0 obx1 oby1 drawshape
     } {
-      /gap bx1 bx0 sub 0.08 mul def
-      /mid bx0 bx1 add 2 div def
-      names 0 get bx0 by0 mid gap 2 div sub by1 drawshape
-      names 1 get mid gap 2 div add by0 bx1 by1 drawshape
+      /gap obx1 obx0 sub 0.08 mul def
+      /mid obx0 obx1 add 2 div def
+      names 0 get obx0 oby0 mid gap 2 div sub oby1 drawshape
+      names 1 get mid gap 2 div add oby0 obx1 oby1 drawshape
     } ifelse
   } def
 
