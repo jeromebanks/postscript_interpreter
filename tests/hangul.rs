@@ -266,6 +266,26 @@ fn wordadv_measures_four_byte_utf8_as_one_codepoint() {
 }
 
 #[test]
+fn wordadv_does_not_crash_on_truncated_utf8() {
+    // A malformed lead byte (0xE0, a 3-byte sequence promising two
+    // continuation bytes that never arrive) must not make `get` read
+    // past the string and rangecheck — that would abort the entire
+    // hg-linecount/hg-write call over one bad trailing byte. Built as
+    // raw bytes via run_source, not a Rust string literal (Rust
+    // strings can't hold invalid UTF-8).
+    let mut it = with_lib(50, 50);
+    let mut src = b"HGLayout begin /Size 20 def (".to_vec();
+    src.push(0xE0); // truncated: no continuation bytes follow before ')'
+    src.extend_from_slice(b") wordadv end");
+    it.run_source(&src).unwrap_or_else(|e| {
+        panic!(
+            "wordadv should measure truncated UTF-8, not error: {}",
+            it.error_report(&e)
+        )
+    });
+}
+
+#[test]
 fn a_long_unspaced_word_is_not_truncated() {
     // Hangul syllables are 3 bytes each with no space required
     // between them the way Latin words are, so a single unspaced

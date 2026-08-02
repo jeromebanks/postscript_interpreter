@@ -473,6 +473,25 @@ HGLayout begin
   % called from layout's own byte-scanning loop, which keeps its own
   % /i). A collision here doesn't error; it silently corrupts the
   % caller's loop counter, which is a much worse failure mode.
+  % idx validcont -> true if s has a byte at idx and it's shaped like
+  % a UTF-8 continuation byte (10xxxxxx). Bounds-checked so a truncated
+  % lead byte at the very end of the string (or any other malformed
+  % sequence) falls through to the single-byte fallback below rather
+  % than `get` raising rangecheck past the string's end — the crash
+  % that matters here. This is not a byte-for-byte mirror of Rust's
+  % `from_utf8_lossy` (the real decoder `show` uses): both treat
+  % malformed input as one or more replacement/fallback units rather
+  % than erroring, but the exact byte-count-per-unit can differ on
+  % some malformed shapes. Well-formed UTF-8 — the only thing this
+  % face targets — measures exactly either way.
+  /validcont {
+    dup wn lt {
+      s exch get 16#C0 and 16#80 eq
+    } {
+      pop false
+    } ifelse
+  } def
+
   /wordadv {
     /s exch def
     /w 0 def
@@ -485,14 +504,22 @@ HGLayout begin
         /wcp wb def /wstep 1 def
       } {
         wb 16#E0 and 16#C0 eq {
-          /wcp wb 16#1F and 6 bitshift s wi 1 add get 16#3F and or def
-          /wstep 2 def
+          wi 1 add validcont {
+            /wcp wb 16#1F and 6 bitshift s wi 1 add get 16#3F and or def
+            /wstep 2 def
+          } {
+            /wcp wb def /wstep 1 def
+          } ifelse
         } {
           wb 16#F0 and 16#E0 eq {
-            /wcp wb 16#0F and 12 bitshift
-                s wi 1 add get 16#3F and 6 bitshift or
-                s wi 2 add get 16#3F and or def
-            /wstep 3 def
+            wi 1 add validcont wi 2 add validcont and {
+              /wcp wb 16#0F and 12 bitshift
+                  s wi 1 add get 16#3F and 6 bitshift or
+                  s wi 2 add get 16#3F and or def
+              /wstep 3 def
+            } {
+              /wcp wb def /wstep 1 def
+            } ifelse
           } {
             wb 16#F8 and 16#F0 eq {
               % Four-byte (supplementary-plane, e.g. emoji): always
@@ -501,11 +528,15 @@ HGLayout begin
               % (Rust-side UTF-8 decode) does, and a fallback that
               % miscounts it as four separate half-width glyphs would
               % measure a line shorter than it actually is.
-              /wcp wb 16#07 and 18 bitshift
-                  s wi 1 add get 16#3F and 12 bitshift or
-                  s wi 2 add get 16#3F and 6 bitshift or
-                  s wi 3 add get 16#3F and or def
-              /wstep 4 def
+              wi 1 add validcont wi 2 add validcont and wi 3 add validcont and {
+                /wcp wb 16#07 and 18 bitshift
+                    s wi 1 add get 16#3F and 12 bitshift or
+                    s wi 2 add get 16#3F and 6 bitshift or
+                    s wi 3 add get 16#3F and or def
+                /wstep 4 def
+              } {
+                /wcp wb def /wstep 1 def
+              } ifelse
             } {
               /wcp wb def /wstep 1 def
             } ifelse
