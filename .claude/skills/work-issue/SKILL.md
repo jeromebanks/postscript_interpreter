@@ -248,11 +248,18 @@ wrong directory reviews the wrong tree and still returns a confident
 verdict, so assert the branch before trusting the output:
 
 ```sh
-cd "$WORKTREE_DIR" && git fetch origin main && \
+rm -f /tmp/codex-review-<N>.json && \
+  cd "$WORKTREE_DIR" && git fetch origin main && \
   test "$(git rev-parse --abbrev-ref HEAD)" = "$BRANCH" && \
   node "$CODEX_SCRIPT" review --wait --json --scope branch --base origin/main \
   > /tmp/codex-review-<N>.json
 ```
+
+`rm -f` first so a short-circuited chain (the branch assert failing, or
+`$WORKTREE_DIR`/`$BRANCH`/`$CODEX_SCRIPT` coming up empty from a
+cwd/variable reset — see Pitfalls) leaves *no* file behind rather than
+leaving a prior round's stale review sitting at that path where the
+posting step below would read and post it as if it were current.
 
 This blocks (expect several minutes — it's a real model pass, it reads
 around the diff for context) and, on success, writes a JSON object
@@ -280,19 +287,26 @@ reviewer aren't reliable enough to auto-waive anything. Use `[P1]` (or
 worse) as a signal for "definitely stop and look," not as the entire
 policy.
 
-**Post the review on both the PR and the issue, unconditionally —
-including a clean pass with nothing to fix.** This is the actual point
-of cross-model review: a durable record a human can read without
-re-running anything, not just a merge/no-merge gate.
-
-```sh
-gh pr comment <PR#> --body "$(jq -r '"## Codex review\n\n" + (.codex.stdout // "(Codex produced no output — see fallback path.)")' /tmp/codex-review-<N>.json)"
-gh issue comment <N> --body "Codex review posted on <PR URL> — <one-line: clean, or what's being fixed/dispositioned>."
-```
-
+**Before posting anything, check whether the run actually succeeded.**
 If `.codex.status` is non-zero, or `.codex.stdout` is empty/null, the
 run failed rather than approved — don't post it as if it were a clean
-review; treat it the same as "Codex runtime unavailable" below.
+review; treat it the same as "Codex runtime unavailable" below (skip
+straight to the Fallback path, don't post from this file at all).
+
+```sh
+jq -e '.codex.status == 0 and (.codex.stdout // "" | length > 0)' /tmp/codex-review-<N>.json
+```
+
+Only once that passes: **post the review on both the PR and the
+issue, unconditionally — including a clean pass with nothing to
+fix.** This is the actual point of cross-model review: a durable
+record a human can read without re-running anything, not just a
+merge/no-merge gate.
+
+```sh
+gh pr comment <PR#> --body "$(jq -r '"## Codex review\n\n" + .codex.stdout' /tmp/codex-review-<N>.json)"
+gh issue comment <N> --body "Codex review posted on <PR URL> — <one-line: clean, or what's being fixed/dispositioned>."
+```
 
 If anything needs fixing: fix it, **commit and `git push` the fix**,
 then re-run the quality gate and re-run the Codex review on the
@@ -313,11 +327,14 @@ reason — proceed to merge-eligibility below.
 with a self-contained prompt that gives it nothing but the PR number
 and what to check (title/body via `gh pr view`, diff via `gh pr diff`
 — the agent fetches these itself, it doesn't inherit this session's
-view of them). Post its review to the PR and issue the same way
-(unconditionally, including a clean result), noting in both that this
-was a same-family fallback. Same rule as above: fix or explicitly
-disposition everything it raises, commit and push before any
-re-review, before continuing.
+view of them). Post its review to the PR and issue under the same
+policy as above — unconditionally, including a clean result — but
+via `gh pr comment`/`gh issue comment` with the agent's own report
+text directly as the body; there's no `/tmp/codex-review-<N>.json` in
+this path, so the `jq` mechanics above don't apply. Note in both
+comments that this was a same-family fallback. Same rule as above: fix
+or explicitly disposition everything it raises, commit and push before
+any re-review, before continuing.
 
 With the review clean (nothing left unfixed without a stated reason,
 via whichever path ran), decide merge eligibility from the policy:
