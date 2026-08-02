@@ -348,3 +348,77 @@ passing unchanged, since it's what would catch a mistake that let
 UTF-8 decoding leak into StandardEncoding/ISOLatin1Encoding text.
 
 `examples/international_text.ps` is the specimen for this addendum.
+
+## Post-roadmap addendum — Unicode-mode Type 3 BuildChar (issue #6)
+
+The Unicode-mode addendum above only ever covered *bundled TrueType*
+faces: `show` decodes UTF-8 and maps each scalar to a glyph id via the
+face's `cmap`, which has nothing to do with Type 3 dicts (procedural
+fonts with no outline source, `FID < 0`). Issue #6 wanted a genuinely
+*procedural* Hangul face in `lib/handscript.ps`'s style — jittered
+stroke skeletons, not bundled outlines — which needs the codepoint
+itself inside `BuildChar`, since Hangul syllable composition is
+arithmetic on the codepoint (Unicode's Hangul Syllables block:
+`si = cp - 0xAC00`, `L = si/588`, `V = si%588/28`, `T = si%28`). Type
+3's `BuildChar` is otherwise hard-wired to a byte per glyph — `code as
+u8` was the only path `ShowCtx::step` had for `FID < 0` fonts.
+
+**The extension**: a Type 3 font dict with `/UnicodeBuildChar true`
+opts into the same UTF-8-decode `show` does for Unicode-mode catalog
+faces, but hands `BuildChar` the *full codepoint* as an `Object::int`
+instead of narrowing it to a byte (`font::is_unicode_type3`, checked in
+`ops/font.rs`'s `begin_show` alongside the existing `is_unicode_font`
+— either one sets `ShowCtx`'s `unicode_mode`, which is what makes
+`ShowCtx::new` decode the string as UTF-8 in the first place).
+`begin_type3_glyph` and `PendingGlyph` widened their byte parameter to
+`code: u32` to carry this through glyph-context teardown. `BuildGlyph`
+(the Level 2, name-driven alternative) still resolves through the
+byte-indexed `Encoding` array, so it needs the codepoint to fit a byte
+regardless of the flag; a Unicode-mode dict whose codepoint doesn't fit
+one gets `rangecheck` from `BuildGlyph` rather than a silently wrong
+name — moot for every face in this repo, since none of them define
+`BuildGlyph` on a `/UnicodeBuildChar true` dict.
+
+Consequences, by design:
+
+- **Ordinary Type 3 fonts are completely unaffected.** No dict gets
+  `unicode_mode` unless it explicitly sets `/UnicodeBuildChar true`;
+  an ordinary font's codes are already ≤255 (raw bytes widened to
+  `u32`), so passing the whole `code` through instead of a pre-narrowed
+  `byte` is a no-op for them. Verified by a regression test asserting
+  an unflagged dict fed a 3-byte UTF-8 sequence still receives three
+  separate byte-sized `BuildChar` calls, not one decoded codepoint.
+- **No Ghostscript equivalent.** This is a pscat-only deviation, same
+  as the bundled-TrueType Unicode-mode addendum above but one level
+  further from standard PostScript: gs's Type 3 `BuildChar` has no
+  concept of a codepoint past 255. `lib/hangul.ps` (below) documents
+  this in its own header rather than claiming gs compatibility the way
+  `lib/handscript.ps` does.
+- **`widthshow`/`awidthshow`'s `char` operand** stays capped at `u8`
+  (`pop_char_code`) for the same reason noted in the TrueType addendum
+  — its one real use (widening space) never needs more.
+
+**`lib/hangul.ps`** is the face this unlocks: `/HangulScript`, a
+jamo-composition Type 3 font in `lib/handscript.ps`'s dynamic-jitter
+style. 19 choseong + 28 jongseong reduce to 14 atomic consonant stroke
+shapes plus a side-by-side compositor (doubled consonants and
+two-consonant clusters are the same shape twice, or two different
+shapes, never independently hand-authored); all 21 jungseong reduce to
+a vertical or horizontal bar with a tick, or — for the 7 diphthongs — a
+real composition of one of each (ㅘ is literally ㅗ + ㅏ). Six standard
+syllable-block layout classes place the choseong/jungseong/jongseong
+cells in the glyph's 1000-unit em square. Its `hg-write`/`hg-linecount`
+wrap engine mirrors `HSLayout`'s buffer/callback shape but measures by
+decoding UTF-8 (Hangul syllables are 3 bytes, not 1) with a uniform
+per-syllable advance (0.9em Hangul, 0.45em anything else) rather than a
+per-glyph width table. Full story, including two real bugs a render-
+and-look pass caught that reasoning about the PostScript wouldn't have,
+in NOTES.md's entry.
+
+Tests: `tests/type3.rs`'s two `/UnicodeBuildChar` tests (flagged dict
+gets the full codepoint; unflagged dict still gets raw bytes);
+`tests/hangul.rs` (decomposition arithmetic at both ends of the Hangul
+block, ink from each of the six layout classes, the jitter and
+same-seed invariants, non-Hangul codepoints not erroring, and the
+linecount/write agreement `lib/handscript.ps`'s own tests establish the
+same pattern for). `examples/hangul_handscript.ps` is the specimen.

@@ -1,0 +1,42 @@
+%!PS-Adobe-3.0
+%%Title: 한글 손글씨 — Hangul, in my own hand
+%%Creator: pscat — issue #6, jamo-composition Hangul face
+%%BoundingBox: 0 0 612 792
+%%EndComments
+
+% lib/handscript.ps's dynamic-Type-3 idea (every glyph regenerated,
+% rand-driven, at show time) applied to Korean: lib/hangul.ps composes
+% each syllable from jittered jamo strokes rather than drawing from a
+% table of ~11,000 precomposed skeletons. Not Ghostscript-compatible —
+% see lib/hangul.ps's header and FONTS.md's "Unicode-mode Type 3
+% BuildChar" addendum for why.
+
+(lib/hangul.ps) run
+
+0.78 0.85 0.94 setrgbcolor
+0.8 setlinewidth
+700 -60 150 {
+  /y exch def
+  newpath 60 y moveto 552 y lineto stroke
+} for
+0.94 0.68 0.68 setrgbcolor
+newpath 100 792 moveto 100 60 lineto stroke
+
+<<
+  /Text (
+안녕하세요
+다람쥐 헌 쳇바퀴에 타고파
+한글 손글씨
+감사합니다
+)
+  /Size 40
+  /Width 612
+  /Height 792
+  /Margin 60
+  /Leading 1.6
+  /Ink [0.13 0.14 0.34]
+  /Seed 1985
+>> hg-write
+
+showpage
+%%EOF

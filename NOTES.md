@@ -3,6 +3,127 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## A procedural jittered-stroke Hangul face (issue #6, 2026-08-02)
+
+Closes issue #6, set aside earlier (see issue #9's entry below) as "a
+real design project in its own right, not a quick pass." It is one:
+11,172 precomposed Hangul syllables can't be hand-authored the way
+`lib/handscript.ps` hand-authored ~40 Latin letters, so the only
+workable approach — per the issue body — is compositional: author the
+jamo (letter) components, then assemble a syllable block from them at
+show time following Unicode's own decomposition arithmetic.
+
+**The blocker this needed first.** A Hangul syllable is up to U+D7A3 —
+three UTF-8 bytes — but PostScript's Type 3 `BuildChar` is hard-wired
+to a byte-per-glyph model (`src/font.rs`'s `ShowCtx`/`begin_type3_glyph`
+always narrowed the character code to `u8` before handing it to
+BuildChar). The existing `CatalogEncoding::Unicode` mechanism (Stage
+22/23's Noto Sans KR etc.) doesn't help here — it decodes UTF-8 for
+*bundled TrueType* faces via `cmap`, with no bearing on Type 3 dicts at
+all. Fixed with a narrow, opt-in extension in the same spirit: a Type 3
+font dict with `/UnicodeBuildChar true` gets `show` decoding its
+argument as UTF-8 and passing the full codepoint to `BuildChar` as an
+`Object::int`, instead of narrowing to a byte
+(`font::is_unicode_type3`, checked in `ops/font.rs`'s `begin_show`
+alongside the existing `is_unicode_font`). `PendingGlyph`'s `byte: u8`
+widened to `code: u32` to carry it through glyph-context teardown;
+`BuildGlyph`'s name-driven path (which still needs a byte to index
+`Encoding`) errors `rangecheck` if a Unicode-mode dict's codepoint
+doesn't fit one — no face in this repo hits that, since `lib/hangul.ps`
+only defines `BuildChar`. Ordinary byte-oriented Type 3 fonts are
+untouched: their codes are already ≤255, so widening the field and
+passing the whole `code` through instead of a pre-narrowed `byte` is a
+no-op for them, confirmed by a regression test asserting an unflagged
+Type 3 dict still gets raw, non-UTF-8-decoded bytes from a multi-byte
+string. Documented in FONTS.md's new "Unicode-mode Type 3 BuildChar"
+addendum, parallel to the Stage 22/23 addendum for the TrueType case.
+This is a pscat-only deviation with no Ghostscript equivalent — unlike
+`lib/handscript.ps`, `lib/hangul.ps` does not run under gs.
+
+**The face itself** (`lib/hangul.ps`, `/HangulScript`). Unicode's
+Hangul Syllables block is arithmetic: `si = codepoint - 0xAC00`,
+`L = si/588`, `V = si%588/28`, `T = si%28` picks out the initial
+consonant (choseong, 19), medial vowel (jungseong, 21), and final
+consonant (jongseong, 0=none plus 27) by index. Hangul's featural
+design means those decompose further:
+
+- 19 choseong + 28 jongseong reduce to 14 atomic consonant shapes
+  (ㄱㄴㄷㄹㅁㅂㅅㅇㅈㅊㅋㅌㅍㅎ) plus a side-by-side compositor
+  (`drawshapes`) for the doubled consonants (ㄲㄸㅃㅆㅉ) and the
+  eleven two-consonant jongseong clusters (ㄳㄵㄶㄺㄻㄼㄽㄾㄿㅀㅄ) —
+  no need to hand-author 33 more shapes independently.
+- All 21 jungseong reduce to a vertical bar with a left/right tick
+  (`drawVvowel`), a horizontal bar with an up/down tick (`drawHvowel`),
+  or — for the 7 diphthongs (ㅘㅙㅚㅝㅞㅟㅢ) — a real composition of
+  one of each (e.g. ㅘ is literally ㅗ + ㅏ, not an approximation).
+- The strokes reuse `lib/handscript.ps`'s jitter/curve-fit renderer
+  verbatim, with one addition: corners. Handscript's curve-fit (built
+  for cursive Latin, where every corner is meant to round off) turned
+  ㄱ's right angle into a single soft curve when its top-horizontal and
+  diagonal were one 3-point stroke; splitting each corner into its own
+  2-point stroke keeps Hangul's sharp corners sharp while still
+  wobbling. The circle (ㅇ) and the hood on ㅎ stay multi-point
+  smoothed strokes — they're supposed to be curved.
+- Six standard syllable-block layout classes (vowel type
+  vertical/horizontal/diphthong, crossed with final present/absent)
+  place the choseong/jungseong/jongseong cells within the glyph's
+  1000-unit em square; `placepoints` scales/translates each atomic
+  shape's stroke data (authored once, in its own 0..1000 design
+  square) into whichever cell it lands in.
+
+Scope, stated up front rather than discovered later: modern Hangul
+only (no archaic jamo); non-Hangul codepoints in the same string get a
+half-width advance and draw nothing (`/HangulScript` is a dedicated
+Hangul face, the same posture handscript.ps takes for Latin, not a
+mixed-script one).
+
+**The wrap engine** (`hg-write`/`hg-linecount`) mirrors
+`lib/handscript.ps`'s `HSLayout` shape (a fixed scratch buffer built up
+with `putinterval`, one `lineproc` call per completed line) but can't
+reuse its byte-indexed width lookup — Hangul syllables are 3 UTF-8
+bytes, not 1. `wordadv` decodes UTF-8 fully rather than just counting
+codepoints, because the two advance classes BuildChar draws by (0.9em
+for a Hangul syllable, 0.45em otherwise) depend on the actual codepoint
+value; this has to match BuildChar's own choice exactly; or
+`hg-linecount` and `hg-write` would disagree about where lines break,
+same invariant handscript.ps's `advof`/`wordadv` keep for Latin
+(verified by a test that runs a pre-pass `hg-linecount` before
+`hg-write` and diffs the rendered pages).
+
+Two real bugs surfaced by rendering and looking, not by reasoning
+about the PostScript in the abstract:
+
+- `drawshapes`'s two-shape (side-by-side) branch pushed `x0 x1 y0 y1`
+  onto the stack instead of the `x0 y0 x1 y1` `drawshape` expects —
+  degenerately anisotropic scaling on every doubled consonant and
+  two-consonant jongseong cluster, rendering as near-invisible
+  slivers rather than erroring (a silent-corruption class of bug, not
+  a stack-underflow one, so nothing short of looking at the output
+  would have caught it).
+- `wordadv`'s inner UTF-8-decode loop used `/i` as its own byte index —
+  the same name `layout`'s outer word-scanning loop uses for its own
+  index, and both land in the same dict (neither proc opens its own
+  scratch dict). Calling `wordadv` mid-scan silently clobbered the
+  outer scan's position, making `layout` re-process the same handful
+  of bytes forever — confirmed by instrumenting both loops with
+  `print` and watching the scan index reset instead of advance. Fixed
+  by prefixing `wordadv`'s locals (`wi`/`wn`/`wb`/`wcp`/`wstep`); see
+  the comment left on `wordadv` for the general gotcha (any name
+  `def`'d in a dict-less proc is visible to, and clobberable by, its
+  caller's own locals in the same dict).
+
+`examples/hangul_handscript.ps` is the specimen (ruled paper, the same
+`hg-write` API, a short note using a few well-known Korean phrases
+including the standard Hangul font-testing pangram, "다람쥐 헌
+쳇바퀴에 타고파"). `tests/hangul.rs` covers the decomposition
+arithmetic at both ends of the Hangul block, ink from a syllable in
+each of the six layout classes, the no-two-glyphs-match and
+same-seed-same-page invariants, non-Hangul codepoints not erroring,
+and the linecount/write agreement above; `tests/type3.rs` gained two
+tests for the underlying `/UnicodeBuildChar` mechanism itself (a
+flagged dict receives the full codepoint; an unflagged one still gets
+raw bytes).
+
 ## Cross-model Codex review + a DSC-scanner metadata bug fix (issue #26, 2026-08-01)
 
 Closes issue #26, a postmortem/findings issue from the first
