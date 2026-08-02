@@ -234,7 +234,11 @@ HangulDict begin
       } if
     } if
     extra {
-      /ex bx1 bx0 sub 0.35 mul bx1 add def
+      % The extra ㅣ stroke for ㅐ/ㅒ/ㅔ/ㅖ (etc.) sits to the right of
+      % the main bar but still inside this cell — bx0 + 0.75*(bx1-bx0),
+      % not bx1 + ... (which put it outside the cell entirely,
+      % overlapping whatever cell/glyph comes next).
+      /ex bx1 bx0 sub 0.75 mul bx0 add def
       [ex by0 ex by1] drawstroke stroke
     } if
   } def

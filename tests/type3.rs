@@ -327,3 +327,37 @@ fn unflagged_type3_still_gets_raw_bytes_not_utf8_decoded() {
         _ => panic!("expected integer"),
     }
 }
+
+#[test]
+fn kshow_font_switch_narrows_for_an_unflagged_type3_font() {
+    // `unicode_mode` is decided once for the whole show, from the
+    // font active when it began, but the font itself is re-read per
+    // glyph — a kshow proc is exactly how it can change mid-string.
+    // An opted-in font earlier in the string must not leave later
+    // glyphs on an ordinary Type 3 font un-narrowed: that font's own
+    // BuildChar has no reason to expect anything past a byte, and a
+    // stray multi-byte codepoint reaching an Encoding-array lookup
+    // would rangecheck in a real font (this one just stashes it).
+    let mut it = run(&format!(
+        "{UNICODE_T3}
+         /P 6 dict def
+         P begin
+           /FontType 3 def
+           /FontMatrix [0.001 0 0 0.001 0 0] def
+           /Encoding 256 array def 0 1 255 {{ Encoding exch /.notdef put }} for
+           /BuildChar {{ exch pop /Got exch def 0 0 setcharwidth }} def
+         end
+         /PlainFont P definefont pop
+         /UniFont findfont 12 scalefont setfont
+         0 0 moveto
+         {{pop pop /PlainFont findfont 12 scalefont setfont}} (\u{AC00}\u{AC01}) kshow
+         Got"
+    ));
+    // U+AC01's low byte is 0x01 — nowhere near the raw codepoint
+    // (0xAC01 = 44033), which is what an un-narrowed pass-through
+    // would have left in Got.
+    match it.pop().expect("Got").value {
+        Value::Integer(n) => assert_eq!(n, 0x01),
+        _ => panic!("expected integer"),
+    }
+}

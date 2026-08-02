@@ -970,18 +970,30 @@ impl ShowCtx {
             }
             Ok(ShowStep::Again)
         } else {
-            // No registry entry: a procedural font. `unicode_mode` here
-            // means an opted-in Type 3 dict (`is_unicode_type3`) — every
-            // other procedural font (ordinary Type 3, all Type 1) keeps
-            // `code` an original byte, safe to narrow.
-            // Type 3 glyph procedures win; otherwise Type 1 CharStrings
-            // render synchronously like outlines.
+            // No registry entry: a procedural font. Type 3 glyph
+            // procedures win; otherwise Type 1 CharStrings render
+            // synchronously like outlines.
             let is_type3 = {
                 let d = fs.dict.borrow();
                 d.get("BuildGlyph").is_some() || d.get("BuildChar").is_some()
             };
             if is_type3 {
-                self.begin_type3_glyph(gfx, fs, code)
+                // `self.unicode_mode` is decided once for the whole
+                // show, from the font active when it began — but `fs`
+                // is re-read per glyph (a kshow proc, or a nested show
+                // inside BuildChar, may switch fonts mid-string). An
+                // opted-in font earlier in the string must not leave
+                // `code` un-narrowed for an ordinary Type 3 font later
+                // in the same show: that font's BuildChar typically
+                // indexes a 256-entry Encoding with it, and a stray
+                // multi-byte codepoint would rangecheck. So re-check
+                // *this* font's own flag rather than trusting the
+                // show-wide `unicode_mode`.
+                if self.unicode_mode && is_unicode_type3(&fs.dict) {
+                    self.begin_type3_glyph(gfx, fs, code)
+                } else {
+                    self.begin_type3_glyph(gfx, fs, u32::from(code as u8))
+                }
             } else {
                 let byte = code as u8;
                 let adv = type1_glyph(gfx, &fs, byte, &self.mode, self.pen)?;
