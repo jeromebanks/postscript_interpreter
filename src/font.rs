@@ -321,6 +321,21 @@ pub(crate) fn is_unicode_font(fid: i64) -> bool {
         .is_some_and(|c| matches!(c.encoding, CatalogEncoding::Unicode))
 }
 
+/// Whether a Type 3 font dict opted into Unicode-mode `BuildChar` — the
+/// procedural-font counterpart of `is_unicode_font`'s bundled-TrueType
+/// mechanism (see `FONTS.md`'s "Unicode-mode Type 3 BuildChar"
+/// addendum). A Type 3 dict with `/UnicodeBuildChar true` gets `show`
+/// decoding its argument as UTF-8 and passing the full codepoint to
+/// `BuildChar` instead of narrowing to a byte — this is what makes
+/// jamo-composition faces like `lib/hangul.ps` possible without a
+/// Type 0/CID font model. Opt-in and narrowly scoped: ordinary Type 3
+/// dicts (no such key) are completely unaffected.
+pub(crate) fn is_unicode_type3(dict: &Rc<RefCell<Dict>>) -> bool {
+    dict.borrow()
+        .get("UnicodeBuildChar")
+        .is_some_and(|o| matches!(o.value, Value::Boolean(true)))
+}
+
 /// Names of every face findfont can currently reach without
 /// substitution: builtins, loadable catalog files, and aliases (for
 /// `--fonts`).
@@ -791,7 +806,11 @@ fn type1_glyph(
 /// executing on the machine. Holds everything needed to seal the glyph
 /// context back up, however the procedure exits.
 pub(crate) struct PendingGlyph {
-    byte: u8,
+    /// The BuildChar operand: a raw byte for ordinary Type 3 dicts, or a
+    /// full Unicode codepoint for `/UnicodeBuildChar true` dicts (see
+    /// `is_unicode_type3`) — always ≤ 255 in the former case, so this
+    /// widened field is a no-op for existing byte-mode fonts.
+    code: u32,
     /// Glyph-space width from setcachedevice/setcharwidth; a BuildChar
     /// that never declares one advances by zero.
     width: Option<(f64, f64)>,
@@ -915,11 +934,7 @@ impl ShowCtx {
             gfx.restore_glyph_snapshot(p.depth, p.saved);
             let (wx, wy) = p.width.unwrap_or((0.0, 0.0));
             let m = p.matrix;
-            self.advance(
-                gfx,
-                u32::from(p.byte),
-                (m[0] * wx + m[2] * wy, m[1] * wx + m[3] * wy),
-            );
+            self.advance(gfx, p.code, (m[0] * wx + m[2] * wy, m[1] * wx + m[3] * wy));
             if let Some(step) = self.maybe_kshow() {
                 return Ok(step);
             }
@@ -955,11 +970,10 @@ impl ShowCtx {
             }
             Ok(ShowStep::Again)
         } else {
-            // No registry entry: a procedural font (Type 1/Type 3 dicts
-            // never carry Unicode-mode codes — `unicode_mode` is decided
-            // from `is_unicode_font`, which is false whenever `fid < 0`
-            // — so `code` here is always an original byte, safe to narrow).
-            let byte = code as u8;
+            // No registry entry: a procedural font. `unicode_mode` here
+            // means an opted-in Type 3 dict (`is_unicode_type3`) — every
+            // other procedural font (ordinary Type 3, all Type 1) keeps
+            // `code` an original byte, safe to narrow.
             // Type 3 glyph procedures win; otherwise Type 1 CharStrings
             // render synchronously like outlines.
             let is_type3 = {
@@ -967,8 +981,9 @@ impl ShowCtx {
                 d.get("BuildGlyph").is_some() || d.get("BuildChar").is_some()
             };
             if is_type3 {
-                self.begin_type3_glyph(gfx, fs, byte)
+                self.begin_type3_glyph(gfx, fs, code)
             } else {
+                let byte = code as u8;
                 let adv = type1_glyph(gfx, &fs, byte, &self.mode, self.pen)?;
                 self.idx += 1;
                 self.advance(gfx, code, adv);
@@ -1026,17 +1041,26 @@ impl ShowCtx {
         &mut self,
         gfx: &mut Gfx,
         fs: FontState,
-        byte: u8,
+        code: u32,
     ) -> Result<ShowStep, PsError> {
-        let name = encoding_name(&fs, byte);
+        // BuildGlyph resolves through the byte-oriented Encoding array,
+        // so it needs `code` to fit a byte — true for every ordinary
+        // Type 3 font, and for `/UnicodeBuildChar true` ones only if
+        // they still define BuildGlyph (none of this repo's do).
+        // Computed before the dict borrow below since `encoding_name`
+        // borrows `fs.dict` too.
+        let name = u8::try_from(code).ok().map(|byte| encoding_name(&fs, byte));
         let (target, char_operand) = {
             let d = fs.dict.borrow();
             // BuildGlyph (Level 2, name-driven) wins over BuildChar
             // (Level 1, code-driven), per the PLRM.
             if let Some(bg) = d.get("BuildGlyph") {
-                (bg, Object::lit(Value::Name(name)))
+                (
+                    bg,
+                    Object::lit(Value::Name(name.ok_or(PsError::Rangecheck)?)),
+                )
             } else if let Some(bc) = d.get("BuildChar") {
-                (bc, Object::int(i64::from(byte)))
+                (bc, Object::int(i64::from(code)))
             } else {
                 return Err(PsError::InvalidFont);
             }
@@ -1065,7 +1089,7 @@ impl ShowCtx {
         gfx.newpath();
         self.idx += 1;
         self.pending = Some(PendingGlyph {
-            byte,
+            code,
             width: None,
             matrix: fs.matrix,
             depth,

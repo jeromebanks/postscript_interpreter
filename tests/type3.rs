@@ -275,3 +275,55 @@ fn charpath_on_type3_advances_without_outlines() {
     assert!((x - 24.4).abs() < 1e-3, "charpath advance {x}");
     assert_eq!(ink_count(&it), 0, "charpath painted nothing");
 }
+
+/// `/UnicodeBuildChar true` (see FONTS.md's "Unicode-mode Type 3
+/// BuildChar" addendum) — the mechanism `lib/hangul.ps` builds on.
+/// BuildChar stashes the raw operand into userdict so the test can
+/// read it back without relying on any drawing.
+const UNICODE_T3: &str = "
+    /U 6 dict def
+    U begin
+      /FontType 3 def
+      /FontMatrix [0.001 0 0 0.001 0 0] def
+      /UnicodeBuildChar true def
+      /BuildChar {
+        exch pop /Got exch def 0 0 setcharwidth
+      } def
+    end
+    /UniFont U definefont pop
+";
+
+#[test]
+fn unicode_buildchar_receives_the_full_codepoint() {
+    // U+AC00 (가), UTF-8 EA B0 80 — three bytes, one glyph.
+    let mut it = run(&format!(
+        "{UNICODE_T3} /UniFont findfont 12 scalefont setfont 0 0 moveto (\u{AC00}) show Got"
+    ));
+    match it.pop().expect("Got").value {
+        Value::Integer(n) => assert_eq!(n, 0xAC00),
+        _ => panic!("expected integer"),
+    }
+}
+
+#[test]
+fn unflagged_type3_still_gets_raw_bytes_not_utf8_decoded() {
+    // Same BuildChar body, no /UnicodeBuildChar — a 3-byte UTF-8
+    // sequence must still arrive as three separate byte-sized glyphs,
+    // proving the opt-in flag is what gates the new behavior and
+    // nothing leaks into ordinary Type 3 fonts.
+    let mut it = run("/U 6 dict def
+         U begin
+           /FontType 3 def
+           /FontMatrix [0.001 0 0 0.001 0 0] def
+           /Encoding 256 array def 0 1 255 { Encoding exch /.notdef put } for
+           /BuildChar { exch pop /Got exch def 0 0 setcharwidth } def
+         end
+         /PlainFont U definefont pop
+         /PlainFont findfont 12 scalefont setfont
+         0 0 moveto (\u{AC00}) show Got");
+    // Last byte of EA B0 80 is 0x80 = 128.
+    match it.pop().expect("Got").value {
+        Value::Integer(n) => assert_eq!(n, 0x80),
+        _ => panic!("expected integer"),
+    }
+}
