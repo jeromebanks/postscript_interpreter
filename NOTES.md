@@ -3,6 +3,35 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Cross-model Codex review + a DSC-scanner metadata bug fix (issue #26, 2026-08-01)
+
+Closes issue #26, a postmortem/findings issue from the first
+`work-issue` run that dispatched independent PR review to Codex
+instead of a same-model blank-context `Agent`. Two things landed here:
+
+- `work-issue` step 8 now runs the review through Codex
+  (`codex-companion.mjs`) when the runtime is available, with a
+  same-family `Agent` fallback; findings post to both the PR and issue
+  unconditionally (including clean passes), and policy is "fix or give
+  an explicit stated reason" per finding rather than a severity-tag
+  auto-gate. Full rationale and the reliability findings from building
+  it (Codex's CLI exiting silently mid-review with no error signal —
+  upstream, not fixable from this repo; the real `review --json` output
+  shape vs. the documented schema) are in issue #26's body.
+- `pdf::scan_document_info` (added for issue #8) stopped only at the
+  first non-comment line, not at `%%EndComments` — DSC's actual header
+  boundary. A comment-only prologue, or an embedded document's own
+  `%%Title:`/`%%For:`, appearing after `%%EndComments` but before any
+  executable line could silently override the outer document's
+  metadata. Fixed to stop at whichever comes first.
+
+Deferred to its own issue (#29): a race in `work-issue`'s crashed-run
+resume logic (step 1 can misclassify a still-live in-progress claim as
+abandoned in the window between labeling and PR-open; step 3 also
+recomputes the branch name from a fresh slug on resume instead of
+reading the worktree's actual checked-out branch) — needs a real
+lease/heartbeat signal, not a quick fix alongside the above.
+
 ## A tiling/tessellation library for artkit (issue #9, 2026-08-01)
 
 Closes issue #9. Run via `work-issue` after issue #6 (a procedural

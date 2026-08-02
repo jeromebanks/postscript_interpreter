@@ -213,21 +213,131 @@ Read `SDLC.md`'s frontmatter fresh (`merge_policy.mode` and, if
 config, not something to remember from a prior run or from having
 written the skill.
 
-Run an independent review of the PR — a reviewer with no context from
-implementing it, cold on the diff. **Invoking the `review` skill
-directly in this session doesn't satisfy that**: this session wrote
-the code and carries the whole implementation history, so it isn't
-independent no matter which skill it runs. Use the `Agent` tool
-instead, with a self-contained prompt that gives it nothing but the PR
-number and what to check (title/body via `gh pr view`, diff via `gh pr
-diff` — the agent fetches these itself, it doesn't inherit this
-session's view of them) — same spirit as the `review` skill's own
-instructions, just run by a subagent with a blank slate rather than
-this one. Must come back with nothing blocking to proceed; if it
-flags something, fix it, re-run the quality gate, and get a fresh
-independent pass on the updated diff before continuing.
+**Review must come from a different model family than whichever one
+implemented the change.** This skill only ever runs as Claude, so its
+review dispatches to Codex — never a same-family blank-context `Agent`
+review, which shares training and blind spots with the implementer no
+matter how little context it's given. (Symmetric rule, stated once:
+if a Codex-driven equivalent of this skill is ever built, its step 8
+dispatches to a blank-context Claude `Agent` instead — no runtime
+detection needed, since each skill only ever runs as the model it's
+written for.)
 
-If review is clean, decide merge eligibility from the policy:
+Locate the Codex plugin's runtime script rather than assuming
+`$CLAUDE_PLUGIN_ROOT` — that env var is populated for plugin-owned
+commands, not project skills like this one, so it may be unset or
+point somewhere unrelated:
+
+```sh
+CODEX_SCRIPT=$(find "$HOME/.claude/plugins" -path "*/codex/scripts/codex-companion.mjs" 2>/dev/null | head -1)
+```
+
+If nothing is found, or `node "$CODEX_SCRIPT" status --json` shows the
+runtime isn't authenticated (run the `codex:setup` skill to check),
+don't silently skip cross-model review — fall back to a blank-context
+Claude `Agent` review (self-contained prompt: nothing but the PR
+number and what to check; it fetches `gh pr view`/`gh pr diff` itself,
+it doesn't inherit this session's view of them) and say explicitly in
+the PR/issue comment (below) that this was a same-family fallback, not
+policy, so a human knows to expect a real Codex pass once the runtime
+is fixed.
+
+Otherwise, run the Codex review from inside `$WORKTREE_DIR` — cwd can
+reset between tool calls (see Pitfalls), and a review run from the
+wrong directory reviews the wrong tree and still returns a confident
+verdict, so assert the branch before trusting the output:
+
+```sh
+rm -f /tmp/codex-review-<N>.json && \
+  cd "$WORKTREE_DIR" && git fetch origin main && \
+  test "$(git rev-parse --abbrev-ref HEAD)" = "$BRANCH" && \
+  node "$CODEX_SCRIPT" review --wait --json --scope branch --base origin/main \
+  > /tmp/codex-review-<N>.json
+```
+
+`rm -f` first so a short-circuited chain (the branch assert failing, or
+`$WORKTREE_DIR`/`$BRANCH`/`$CODEX_SCRIPT` coming up empty from a
+cwd/variable reset — see Pitfalls) leaves *no* file behind rather than
+leaving a prior round's stale review sitting at that path where the
+posting step below would read and post it as if it were current.
+
+This blocks (expect several minutes — it's a real model pass, it reads
+around the diff for context) and, on success, writes a JSON object
+shaped `{review, target, codex: {status, stderr, stdout, reasoning}}`
+— **not** `review-output.schema.json`'s `{verdict, findings[], ...}`;
+that schema belongs to a different internal mode and does not describe
+this command's actual output (confirmed empirically — an earlier draft
+of this skill assumed it did, and `jq`-ing for `.verdict`/`.findings`
+silently returned `null` and would have posted nothing useful). The
+real content is `.codex.stdout`: free-form markdown — a short summary
+paragraph, then a "Full review comments:" section with bullets each
+tagged by priority (`[P1]`, `[P2]`, ...) inline in the prose, not
+structured fields. Treat that tagging as a rough heuristic, not a
+contract — it's model-generated text, not a schema, and its exact
+shape can drift between runs.
+
+**Read the whole thing yourself and decide what needs fixing —
+don't gate merge on a `[P1]`-only regex.** A finding describing a real
+defect must be fixed or given an explicit stated reason it's not being
+fixed ("not a bug", "out of scope, tracked separately"), regardless of
+which priority tag Codex put on it; an unexplained skip isn't
+acceptable — `SDLC.md`'s independent-review step requires coming back
+*clean*, not merely *reviewed*, and priority tags from a free-text
+reviewer aren't reliable enough to auto-waive anything. Use `[P1]` (or
+worse) as a signal for "definitely stop and look," not as the entire
+policy.
+
+**Before posting anything, check whether the run actually succeeded.**
+If `.codex.status` is non-zero, or `.codex.stdout` is empty/null, the
+run failed rather than approved — don't post it as if it were a clean
+review; treat it the same as "Codex runtime unavailable" below (skip
+straight to the Fallback path, don't post from this file at all).
+
+```sh
+jq -e '.codex.status == 0 and (.codex.stdout // "" | length > 0)' /tmp/codex-review-<N>.json
+```
+
+Only once that passes: **post the review on both the PR and the
+issue, unconditionally — including a clean pass with nothing to
+fix.** This is the actual point of cross-model review: a durable
+record a human can read without re-running anything, not just a
+merge/no-merge gate.
+
+```sh
+gh pr comment <PR#> --body "$(jq -r '"## Codex review\n\n" + .codex.stdout' /tmp/codex-review-<N>.json)"
+gh issue comment <N> --body "Codex review posted on <PR URL> — <one-line: clean, or what's being fixed/dispositioned>."
+```
+
+If anything needs fixing: fix it, **commit and `git push` the fix**,
+then re-run the quality gate and re-run the Codex review on the
+updated diff (repeat the whole block above, including posting the new
+review as a fresh comment — don't overwrite the prior one) before
+continuing. Pushing before re-reviewing matters here specifically:
+`--scope branch` diffs local git state, so a fix that's only committed
+locally makes the *next local review* look clean while the actual PR
+on GitHub — what CI tests and what merge would actually ship — still
+points at the old, unfixed commit. Use your judgment on how many
+rounds are worth it on genuinely subjective feedback.
+
+Once the review is clean — nothing left unfixed without a stated
+reason — proceed to merge-eligibility below.
+
+**Fallback path** (Codex runtime unavailable/unauthenticated, or
+`.codex.status` non-zero / empty output above): use the `Agent` tool
+with a self-contained prompt that gives it nothing but the PR number
+and what to check (title/body via `gh pr view`, diff via `gh pr diff`
+— the agent fetches these itself, it doesn't inherit this session's
+view of them). Post its review to the PR and issue under the same
+policy as above — unconditionally, including a clean result — but
+via `gh pr comment`/`gh issue comment` with the agent's own report
+text directly as the body; there's no `/tmp/codex-review-<N>.json` in
+this path, so the `jq` mechanics above don't apply. Note in both
+comments that this was a same-family fallback. Same rule as above: fix
+or explicitly disposition everything it raises, commit and push before
+any re-review, before continuing.
+
+With the review clean (nothing left unfixed without a stated reason,
+via whichever path ran), decide merge eligibility from the policy:
 - `human-only`: stop here. Report the PR as open and awaiting merge;
   don't attempt to merge it.
 - `agent-full`: eligible regardless of diff size or files touched.
@@ -322,3 +432,31 @@ there may be follow-up commits before a human merges it.
   by worktree" if the worktree still references it. `git worktree
   remove` first, then the branch delete, then `fetch --prune` to clear
   the now-dead remote-tracking ref.
+- **A Codex review at step 8 legitimately takes several minutes** — it
+  reads around the diff (NOTES.md, HANDOFF.md, prior commits) rather
+  than just pattern-matching the patch. Don't mistake a long-running
+  `--wait` call for a hang. If the harness auto-backgrounds the Bash
+  call itself (it may, past its own timeout), that's fine — the review
+  job is tracked independently by `codex-companion.mjs`; poll `node
+  "$CODEX_SCRIPT" status --all --json` or `result <job-id> --json`
+  rather than re-running the review.
+- **`status --all --json` can report a job as `"running"` long after
+  the underlying `codex` process has actually died.** Confirmed while
+  building this step: the process exited cleanly (macOS's unified log
+  showed a normal exit-handler sequence, not a crash) mid-review, but
+  the job tracker kept reporting `running` with a stale `updatedAt`
+  for 10+ minutes until manually `cancel`led — nothing timed it out on
+  its own. If a `--wait` call seems stuck, don't just trust `status`;
+  cross-check the reported `pid` is actually alive (`kill -0 <pid>`)
+  before waiting longer, and `cancel` + fall back if it isn't. Also
+  note `status --all --json`'s own output is occasionally truncated/
+  malformed mid-write (a transient parse failure, not evidence of
+  anything) — retry the status call once before treating a parse error
+  as a signal.
+- **Test the diff scope on something small before trusting it on a
+  real PR.** `--scope working-tree` against a directory full of
+  unrelated large/binary files (confirmed while building this step —
+  a pile of untracked art assets) made a review stall for 6+ minutes
+  reading files that had nothing to do with the change; `--scope
+  branch --base origin/main` against just the PR's actual commits is
+  the intended shape and stayed on-task.

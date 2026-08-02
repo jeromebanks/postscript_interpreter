@@ -380,10 +380,12 @@ fn pdf_string(s: &str) -> String {
 /// metadata: `%%Title:` and, for the author, `%%For:` (the DSC-correct
 /// keyword — takes precedence if both appear) or `%%Author:` (a common
 /// non-standard alias, used only when `%%For:` is absent). Stops at
-/// the first non-comment, non-blank line, since DSC requires header
-/// comments to precede any program content — this also keeps the scan
-/// from matching a `%%Title:`-looking string buried later in a
-/// comment, string literal, or data block.
+/// `%%EndComments` or the first non-comment, non-blank line, whichever
+/// comes first — `%%EndComments` is DSC's authoritative header
+/// boundary, and stopping there (rather than only at the first
+/// non-`%` line) keeps a comment-only prologue, or an embedded
+/// document's own `%%Title:`/`%%For:`, from overwriting the outer
+/// document's metadata.
 ///
 /// Verified against gs, this project's semantics oracle: `gs
 /// -sDEVICE=pdfwrite` on a file with `%%Title:`/`%%For:` header
@@ -405,7 +407,7 @@ pub fn scan_document_info(source: &[u8]) -> (Option<String>, Option<String>) {
             author = Some(rest.trim().to_string());
         } else if let Some(rest) = line.strip_prefix("%%Author:") {
             author.get_or_insert_with(|| rest.trim().to_string());
-        } else if !line.starts_with('%') {
+        } else if line.starts_with("%%EndComments") || !line.starts_with('%') {
             break;
         }
     }
@@ -447,6 +449,16 @@ mod tests {
         let src = b"%%Title: Real Title\n/x 1 def\n%%Title: Ignored\n";
         let (title, _) = scan_document_info(src);
         assert_eq!(title.as_deref(), Some("Real Title"));
+    }
+
+    #[test]
+    fn stops_at_end_comments_even_amid_a_comment_only_prologue() {
+        // A %%Title: after %%EndComments but still before any executable
+        // line (e.g. an embedded document's own header) must not override
+        // the outer document's metadata.
+        let src = b"%%Title: Outer\n%%EndComments\n%%Title: Inner, ignored\n/x 1 def\n";
+        let (title, _) = scan_document_info(src);
+        assert_eq!(title.as_deref(), Some("Outer"));
     }
 
     #[test]
