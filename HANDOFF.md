@@ -38,9 +38,15 @@ no-op'd whenever `--pdf` was used without `--svg` (NOTES.md's entry
 has the full story). Also done: issue #9, a tiling/tessellation
 library for artkit — `lattice`/`hex`/`tri`/`hexgrid`/`trigrid`/
 `truchet`, `examples/tiling.ps`, and the gallery piece `Woven
-Labyrinth` (NOTES.md's entry has the full story). Still open: issue
-#6, a procedural jittered-stroke Hangul face (jamo composition) — a
-real design project, not a quick follow-up.
+Labyrinth` (NOTES.md's entry has the full story). Also done: issue #6,
+a procedural jittered-stroke Hangul face (jamo composition) —
+`lib/hangul.ps`'s `/HangulScript`, built on a new interpreter-side
+extension (`/UnicodeBuildChar true`, FONTS.md's "Unicode-mode Type 3
+BuildChar" addendum) that lets a Type 3 `BuildChar` receive a full
+Unicode codepoint instead of a byte; Unicode's Hangul-syllable
+arithmetic decomposes each codepoint into its jamo, which compose from
+just 14 atomic consonant stroke shapes plus a handful of vowel
+primitives (NOTES.md's entry has the full story).
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
