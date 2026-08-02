@@ -1,0 +1,597 @@
+%!PS-Adobe-3.0
+%%Title: hangul.ps — the /HangulScript procedural jamo-composition font
+%%Creator: pscat — issue #6
+%%EndComments
+
+% A procedural, jittered-stroke Hangul face — lib/handscript.ps's idea
+% (every glyph generated fresh with rand-driven wobble; repeated
+% syllables never render identically) applied to Korean instead of
+% Latin. 11,172 precomposed Hangul syllables can't be hand-authored
+% one at a time the way handscript.ps's ~40 Latin letters were; this
+% file instead authors strokes for the ~14 unique jamo (letter)
+% *shapes* Hangul is actually built from, and composes them into a
+% syllable block at BuildChar time following Unicode's own Hangul
+% Syllables decomposition arithmetic and the standard syllable-block
+% layout classes every Korean font uses.
+%
+% pscat-only extension, not Ghostscript-compatible: BuildChar needs
+% the full Unicode codepoint of the syllable (up to U+D7A3, three
+% UTF-8 bytes), not a StandardEncoding byte — PostScript's classic
+% 256-slot Encoding model has no room for that. `/UnicodeBuildChar
+% true` in the font dict opts a Type 3 font into decoded-codepoint
+% BuildChar; see FONTS.md's "Unicode-mode Type 3 BuildChar" addendum
+% for the mechanism (a narrow, documented pscat-side deviation, in the
+% same spirit as the bundled-TrueType Unicode catalog faces from
+% Stage 22/23, but for a from-scratch procedural face instead).
+%
+% API — mirrors lib/handscript.ps's HSLayout shape:
+%
+%   << /Text (한글 손글씨)      % UTF-8 Korean text (may mix in ASCII)
+%      /Size 48                 % font size, points
+%      /Width 612 /Height 792  % page size the caller will render at
+%      /Margin 54               % page margin, points
+%      /Leading 1.5             % baseline spacing, multiple of Size
+%      /Jitter 12                % ink wobble, glyph units (1000/em)
+%      /Pen 24                   % stroke width, glyph units
+%      /Ink [0.1 0.1 0.1]       % RGB 0..1
+%      /Seed 1985                % rand seed; same seed, same page
+%   >>
+%
+%   opts hg-write      -> draws the text, word-wrapped to the column,
+%                         top-down from the first baseline.
+%   opts hg-linecount  -> pushes the line count the same wrap would
+%                         produce, drawing nothing.
+%
+% Wrapping measures by codepoint count, not bytes (UTF-8 is multi-byte
+% per Hangul syllable) and by a *uniform* per-syllable advance rather
+% than a per-glyph width table — both typographically correct for
+% Hangul (every syllable block occupies one even-width cell) and what
+% makes measuring exact without ever invoking BuildChar (which would
+% burn the same `rand` draws hs-linecount/hs-write's agreement
+% invariant depends on never doing — see lib/handscript.ps).
+%
+% Scope: modern Hangul only (the 19 choseong / 21 jungseong / 27+1
+% jongseong of the U+AC00-U+D7A3 block) — no archaic jamo. Non-Hangul
+% codepoints (spaces, ASCII, punctuation) get a half-width advance and
+% draw nothing; this is a dedicated Hangul face, not a mixed-script
+% one (same posture handscript.ps takes for Latin-only).
+%
+% Embedding elsewhere: cat lib/hangul.ps yourdriver.ps | pscat --page
+% ... - ; there is no Ghostscript path (see above).
+
+/HangulDict 24 dict def
+HangulDict begin
+
+  /FontType 3 def
+  /FontMatrix [0.001 0 0 0.001 0 0] def
+  /FontBBox [0 -30 1000 950] def
+  /UnicodeBuildChar true def
+
+  % --- the pen: same jitter+curve renderer as handscript.ps's, so a
+  % Hangul syllable and a Latin word wobble the same way. ------------
+  /J 12 def
+  /W 24 def
+  /jit { rand 2 J mul 1 add mod J sub } def
+
+  % [x y x y ...] drawstroke -  jitter the points, then draw a smooth
+  % open curve through them (interior points become quadratic control
+  % points, segment ends at midpoints).
+  /drawstroke {
+    /p exch def
+    /n p length 2 idiv def
+    /qx n array def
+    /qy n array def
+    0 1 n 1 sub {
+      /i exch def
+      qx i p i 2 mul get jit add put
+      qy i p i 2 mul 1 add get jit add put
+    } for
+    qx 0 get qy 0 get moveto
+    n 2 eq {
+      qx 1 get qy 1 get lineto
+    } {
+      /cx qx 0 get def
+      /cy qy 0 get def
+      1 1 n 2 sub {
+        /i exch def
+        /px qx i get def
+        /py qy i get def
+        i n 2 sub eq {
+          /ex qx n 1 sub get def
+          /ey qy n 1 sub get def
+        } {
+          /ex qx i get qx i 1 add get add 2 div def
+          /ey qy i get qy i 1 add get add 2 div def
+        } ifelse
+        cx px cx sub 2 mul 3 div add
+        cy py cy sub 2 mul 3 div add
+        ex px ex sub 2 mul 3 div add
+        ey py ey sub 2 mul 3 div add
+        ex ey curveto
+        /cx ex def
+        /cy ey def
+      } for
+    } ifelse
+  } def
+
+  % raw-points x0 y0 x1 y1 placepoints -> points remapped from their
+  % 0..1000 design box into the target sub-box (a jamo's stroke data
+  % is authored once, in its own unit square; every choseong/jongseong
+  % placement scales and translates it into the syllable-block cell it
+  % lands in for this composition).
+  /placepoints {
+    /by1 exch def /bx1 exch def /by0 exch def /bx0 exch def
+    /pts exch def
+    /sx bx1 bx0 sub 1000 div def
+    /sy by1 by0 sub 1000 div def
+    /n pts length 2 idiv def
+    /out n 2 mul array def
+    0 1 n 1 sub {
+      /i exch def
+      out i 2 mul bx0 pts i 2 mul get sx mul add put
+      out i 2 mul 1 add by0 pts i 2 mul 1 add get sy mul add put
+    } for
+    out
+  } def
+
+  % ---- the 14 atomic consonant shapes, each in its own 0..1000
+  % design square. Hangul's featural design means every choseong and
+  % jongseong — 19 + 28, most of them doubled or two-consonant
+  % clusters — reduces to these 14 plus a side-by-side compositor
+  % (drawshapes, below): no need to hand-author 47 more shapes.
+  /ConsonantDefs 16 dict def
+  ConsonantDefs begin
+    % g (ㄱ): top stroke, then a diagonal down to the bottom-left —
+    % two strokes sharing the corner point, not one curve-fit through
+    % it, so the corner stays sharp.
+    /g [ [200 900 780 900] [780 900 330 130] ] def
+    % n (ㄴ): left vertical, then along the bottom to the right.
+    /n [ [260 920 260 130] [260 130 800 130] ] def
+    % d (ㄷ): top, left, bottom — an open box facing right.
+    /d [ [820 900 260 900] [260 900 260 130] [260 130 820 130] ] def
+    % r/l (ㄹ): a stepped zigzag — each bend its own stroke, so
+    % drawstroke's curve-fit (built for cursive Latin corners) doesn't
+    % round Hangul's sharp ones away.
+    /r [ [220 910 760 910] [760 910 760 630] [760 630 260 630]
+         [260 630 260 150] [260 150 800 150] ] def
+    % m (ㅁ): a closed square, one stroke per side.
+    /m [ [250 900 250 130] [250 130 780 130]
+         [780 130 780 900] [780 900 250 900] ] def
+    % b (ㅂ): two legs, a top rail and a mid rail (ladder shape).
+    /b [ [250 900 250 130] [780 900 780 130]
+         [250 840 780 840] [250 480 780 480] ] def
+    % s (ㅅ): two strokes meeting near the top, like a tent.
+    /s [ [230 680 520 900] [520 900 800 130] ] def
+    % ng (ㅇ): a jittered circle — genuinely curved, so it keeps the
+    % smoothed multi-point loop.
+    /ng [ [850 500 745 205 500 100 255 205
+           150 500 255 795 500 900 745 795 850 500] ] def
+    % j (ㅈ): the s/tent shape plus a crossing stroke near the apex.
+    /j [ [230 680 520 900] [520 900 800 130] [340 760 660 760] ] def
+    % ch (ㅊ): j plus a short tick above the crossing stroke.
+    /ch [ [230 680 520 900] [520 900 800 130] [340 760 660 760]
+          [430 950 570 900] ] def
+    % k (ㅋ): g plus an internal bridging stroke (the aspirated tick).
+    /k [ [200 900 780 900] [780 900 330 130] [330 560 600 500] ] def
+    % t (ㅌ): d plus a middle horizontal rail.
+    /t [ [820 900 260 900] [260 900 260 130] [260 130 820 130]
+         [260 500 820 500] ] def
+    % p (ㅍ): a Pi shape — top rail, two legs.
+    /p [ [200 850 800 850] [300 850 300 130] [700 850 700 130] ] def
+    % h (ㅎ): a small top dash, a flattened hood (genuinely curved, so
+    % it stays one smoothed stroke), then ng's circle.
+    /h [ [400 940 600 940] [280 830 500 870 720 830]
+         [850 470 745 175 500 70 255 175
+          150 470 255 765 500 870 745 765 850 470] ] def
+  end
+
+  % name x0 y0 x1 y1 drawshape -> paint one atomic consonant's strokes,
+  % scaled/translated into the given cell.
+  /drawshape {
+    /by1 exch def /bx1 exch def /by0 exch def /bx0 exch def
+    /nm exch def
+    ConsonantDefs nm get {
+      bx0 by0 bx1 by1 placepoints drawstroke stroke
+    } forall
+  } def
+
+  % [names] x0 y0 x1 y1 drawshapes -> one shape filling the cell, or
+  % two side by side (doubled consonants, two-consonant jongseong
+  % clusters) with a small gap between them.
+  /drawshapes {
+    /by1 exch def /bx1 exch def /by0 exch def /bx0 exch def
+    /names exch def
+    names length 1 eq {
+      names 0 get bx0 by0 bx1 by1 drawshape
+    } {
+      /gap bx1 bx0 sub 0.08 mul def
+      /mid bx0 bx1 add 2 div def
+      names 0 get bx0 by0 mid gap 2 div sub by1 drawshape
+      names 1 get mid gap 2 div add by0 bx1 by1 drawshape
+    } ifelse
+  } def
+
+  % ---- vowel primitives. Every one of the 21 jungseong is a vertical
+  % bar with a right/left tick (the "vertical" class), a horizontal
+  % bar with an up/down tick (the "horizontal" class), or a horizontal
+  % component below a vertical one (the "mixed"/diphthong class,
+  % literally ㅗ/ㅜ/ㅡ + a vertical-class vowel — real Hangul
+  % composition, not an approximation).
+
+  % tickdir double extra x0 y0 x1 y1 drawVvowel
+  /drawVvowel {
+    /by1 exch def /bx1 exch def /by0 exch def /bx0 exch def
+    /extra exch def /double exch def /tickdir exch def
+    /x bx0 bx1 add 2 div def
+    [x by0 x by1] drawstroke stroke
+    tickdir 0 ne {
+      /tx2 tickdir 1 eq { bx1 } { bx0 } ifelse def
+      /ty by1 by0 sub 0.55 mul by0 add def
+      [x ty tx2 ty] drawstroke stroke
+      double {
+        /ty2 by1 by0 sub 0.3 mul by0 add def
+        [x ty2 tx2 ty2] drawstroke stroke
+      } if
+    } if
+    extra {
+      /ex bx1 bx0 sub 0.35 mul bx1 add def
+      [ex by0 ex by1] drawstroke stroke
+    } if
+  } def
+
+  % tickdir double x0 y0 x1 y1 drawHvowel
+  /drawHvowel {
+    /by1 exch def /bx1 exch def /by0 exch def /bx0 exch def
+    /double exch def /tickdir exch def
+    /y by0 by1 add 2 div def
+    [bx0 y bx1 y] drawstroke stroke
+    tickdir 0 ne {
+      /tx bx1 bx0 sub 0.55 mul bx0 add def
+      /ty2 tickdir 1 eq { by1 } { by0 } ifelse def
+      [tx y tx ty2] drawstroke stroke
+      double {
+        /tx2 bx1 bx0 sub 0.3 mul bx0 add def
+        [tx2 y tx2 ty2] drawstroke stroke
+      } if
+    } if
+  } def
+
+  % Jungseong table: index (Unicode order, 0=ㅏ .. 20=ㅣ) -> a spec.
+  % /V tickdir double extra  (tickdir: -1 left, 0 none, 1 right)
+  % /H tickdir double         (tickdir: -1 down, 0 none, 1 up)
+  % /M belowIdx rightIdx      (a real composition: below's H-vowel
+  %                            plus right's V-vowel, e.g. ㅘ = ㅗ + ㅏ)
+  /Jungseong 21 array def
+  Jungseong 0  [/V 1 false false] put   % a
+  Jungseong 1  [/V 1 false true]  put   % ae  = a + i
+  Jungseong 2  [/V 1 true false]  put   % ya
+  Jungseong 3  [/V 1 true true]   put   % yae = ya + i
+  Jungseong 4  [/V -1 false false] put  % eo
+  Jungseong 5  [/V -1 false true]  put  % e   = eo + i
+  Jungseong 6  [/V -1 true false]  put  % yeo
+  Jungseong 7  [/V -1 true true]   put  % ye  = yeo + i
+  Jungseong 8  [/H 1 false] put         % o
+  Jungseong 9  [/M 8 0] put             % wa  = o + a
+  Jungseong 10 [/M 8 1] put             % wae = o + ae
+  Jungseong 11 [/M 8 20] put            % oe  = o + i
+  Jungseong 12 [/H 1 true] put          % yo
+  Jungseong 13 [/H -1 false] put        % u
+  Jungseong 14 [/M 13 4] put            % weo = u + eo
+  Jungseong 15 [/M 13 5] put            % we  = u + e
+  Jungseong 16 [/M 13 20] put           % wi  = u + i
+  Jungseong 17 [/H -1 true] put         % yu
+  Jungseong 18 [/H 0 false] put         % eu
+  Jungseong 19 [/M 18 20] put           % yi/ui = eu + i
+  Jungseong 20 [/V 0 false false] put   % i
+
+  % Choseong table: index (Unicode order, 0=ㄱ .. 18=ㅎ) -> shape
+  % name(s) — doubled consonants are just the same shape twice.
+  /Choseong 19 array def
+  Choseong 0  [/g] put
+  Choseong 1  [/g /g] put
+  Choseong 2  [/n] put
+  Choseong 3  [/d] put
+  Choseong 4  [/d /d] put
+  Choseong 5  [/r] put
+  Choseong 6  [/m] put
+  Choseong 7  [/b] put
+  Choseong 8  [/b /b] put
+  Choseong 9  [/s] put
+  Choseong 10 [/s /s] put
+  Choseong 11 [/ng] put
+  Choseong 12 [/j] put
+  Choseong 13 [/j /j] put
+  Choseong 14 [/ch] put
+  Choseong 15 [/k] put
+  Choseong 16 [/t] put
+  Choseong 17 [/p] put
+  Choseong 18 [/h] put
+
+  % Jongseong table: index 0 = no final; 1..27 (Unicode order) -> shape
+  % name(s) — the eleven two-consonant clusters (ㄳㄵㄶㄺㄻㄼㄽㄾㄿㅀㅄ)
+  % are the same side-by-side compositor as doubled consonants, just
+  % with two different shapes.
+  /Jongseong 28 array def
+  Jongseong 0  [] put
+  Jongseong 1  [/g] put
+  Jongseong 2  [/g /g] put
+  Jongseong 3  [/g /s] put
+  Jongseong 4  [/n] put
+  Jongseong 5  [/n /j] put
+  Jongseong 6  [/n /h] put
+  Jongseong 7  [/d] put
+  Jongseong 8  [/r] put
+  Jongseong 9  [/r /g] put
+  Jongseong 10 [/r /m] put
+  Jongseong 11 [/r /b] put
+  Jongseong 12 [/r /s] put
+  Jongseong 13 [/r /t] put
+  Jongseong 14 [/r /p] put
+  Jongseong 15 [/r /h] put
+  Jongseong 16 [/m] put
+  Jongseong 17 [/b] put
+  Jongseong 18 [/b /s] put
+  Jongseong 19 [/s] put
+  Jongseong 20 [/s /s] put
+  Jongseong 21 [/ng] put
+  Jongseong 22 [/j] put
+  Jongseong 23 [/ch] put
+  Jongseong 24 [/k] put
+  Jongseong 25 [/t] put
+  Jongseong 26 [/p] put
+  Jongseong 27 [/h] put
+
+  % L V T composeSyllable -> draw one syllable block. Six layout
+  % classes (vowel class x final present/absent) — the standard set
+  % every Hangul font uses — pick where the choseong/jungseong/
+  % jongseong cells sit in the 1000-unit em square.
+  /composeSyllable {
+    /T exch def /V exch def /L exch def
+    /vspec Jungseong V get def
+    /vclass vspec 0 get def
+    /hasFinal T 0 gt def
+    vclass /V eq {
+      hasFinal {
+        Choseong L get 80 340 470 950 drawshapes
+        vspec 1 get vspec 2 get vspec 3 get 520 290 900 950 drawVvowel
+        Jongseong T get 80 60 900 300 drawshapes
+      } {
+        Choseong L get 80 150 470 900 drawshapes
+        vspec 1 get vspec 2 get vspec 3 get 520 100 900 900 drawVvowel
+      } ifelse
+    } {
+    vclass /H eq {
+      hasFinal {
+        Choseong L get 120 620 880 950 drawshapes
+        vspec 1 get vspec 2 get 120 350 880 600 drawHvowel
+        Jongseong T get 80 60 900 300 drawshapes
+      } {
+        Choseong L get 120 480 880 900 drawshapes
+        vspec 1 get vspec 2 get 120 100 880 430 drawHvowel
+      } ifelse
+    } {
+      % Mixed/diphthong: below-part (H) + right-part (V).
+      /belowIdx vspec 1 get def
+      /rightIdx vspec 2 get def
+      /belowSpec Jungseong belowIdx get def
+      /rightSpec Jungseong rightIdx get def
+      hasFinal {
+        Choseong L get 80 560 520 950 drawshapes
+        belowSpec 1 get belowSpec 2 get 80 300 900 540 drawHvowel
+        rightSpec 1 get rightSpec 2 get rightSpec 3 get 560 560 900 950 drawVvowel
+        Jongseong T get 80 60 900 280 drawshapes
+      } {
+        Choseong L get 100 480 550 900 drawshapes
+        belowSpec 1 get belowSpec 2 get 100 100 900 430 drawHvowel
+        rightSpec 1 get rightSpec 2 get rightSpec 3 get 620 480 900 900 drawVvowel
+      } ifelse
+    } ifelse
+    } ifelse
+  } def
+
+  % cp decompose -> L V T, per Unicode's Hangul Syllables arithmetic
+  % (21 medials x 28 finals = 588 syllables per initial).
+  /decompose {
+    16#AC00 sub /si exch def
+    si 588 idiv /L exch def
+    si 588 mod /vt exch def
+    vt 28 idiv /V exch def
+    vt 28 mod /T exch def
+    L V T
+  } def
+
+  /work 24 dict def
+  /BuildChar {
+    exch begin
+      work begin
+      /cp exch def
+      cp 16#AC00 lt cp 16#D7A3 gt or {
+        450 0 setcharwidth
+      } {
+        900 0 setcharwidth
+        % per-glyph humanity: the whole syllable leans and presses
+        % together, the way one hand-drawn block would.
+        [1 0 rand 150 mod 50 sub 1000 div 1 0 rand 40 mod 20 sub] concat
+        W rand 10 mod add setlinewidth
+        1 setlinecap
+        1 setlinejoin
+        cp decompose composeSyllable
+      } ifelse
+      end
+    end
+  } def
+
+end
+
+/HangulScript HangulDict definefont pop
+
+% -------------------------------------------------------------- layout
+% The wrap engine — same buffer/callback shape as lib/handscript.ps's
+% HSLayout (a fixed scratch buffer built up with putinterval, one
+% `lineproc` call per completed line), swapping its byte-indexed
+% CharDefs-width lookup for a UTF-8-aware one: Hangul syllables are
+% 3 bytes wide, so measuring by byte count doesn't work here the way
+% it does for handscript's Latin text.
+/HGLayout 24 dict def
+HGLayout begin
+
+  /defaults <<
+    /Size 48  /Width 612  /Height 792  /Margin 54
+    /Leading 1.5  /Jitter 12  /Pen 24
+    /Ink [0.1 0.1 0.1]
+    /Seed 1985
+  >> def
+
+  /getopt {
+    Opts 1 index known { Opts exch get } { defaults exch get } ifelse
+  } def
+
+  % (string) wordadv -> advance in points. Decodes UTF-8 fully (not
+  % just counting codepoints) because the two advance classes
+  % BuildChar draws by — 0.9em for a Hangul syllable, 0.45em for
+  % anything else — depend on the actual codepoint value, and this
+  % must match BuildChar's own choice exactly or hg-linecount and
+  % hg-write would disagree on where lines break (see file header;
+  % same invariant lib/handscript.ps's advof/wordadv keep for Latin).
+  % Loop-local names are prefixed (wi/wn/wb/wcp/wstep) rather than the
+  % bare i/n/b/cp/step it'd be tempting to use: this dict has no
+  % nested scratch dict of its own, so any name `def`'d here is visible
+  % to — and clobberable by — whatever called `wordadv` (addword,
+  % called from layout's own byte-scanning loop, which keeps its own
+  % /i). A collision here doesn't error; it silently corrupts the
+  % caller's loop counter, which is a much worse failure mode.
+  /wordadv {
+    /s exch def
+    /w 0 def
+    /wi 0 def
+    /wn s length def
+    {
+      wi wn ge { exit } if
+      /wb s wi get def
+      wb 16#80 lt {
+        /wcp wb def /wstep 1 def
+      } {
+        wb 16#E0 and 16#C0 eq {
+          /wcp wb 16#1F and 6 bitshift s wi 1 add get 16#3F and or def
+          /wstep 2 def
+        } {
+          wb 16#F0 and 16#E0 eq {
+            /wcp wb 16#0F and 12 bitshift
+                s wi 1 add get 16#3F and 6 bitshift or
+                s wi 2 add get 16#3F and or def
+            /wstep 3 def
+          } {
+            /wcp wb def /wstep 1 def
+          } ifelse
+        } ifelse
+      } ifelse
+      wcp 16#AC00 ge wcp 16#D7A3 le and {
+        /w w Size 0.9 mul add def
+      } {
+        /w w Size 0.45 mul add def
+      } ifelse
+      /wi wi wstep add def
+    } loop
+    w
+  } def
+
+  % (word) addword - greedy wrap: flush first if the word won't fit on
+  % the current line. A word wider than the whole column overflows on
+  % its own line rather than being split.
+  /addword {
+    dup length 0 eq { pop } {
+      dup wordadv /wadv exch def
+      blen 0 gt {
+        badv spaceadv add wadv add col gt { flushline } if
+      } if
+      blen 0 gt {
+        buf blen 32 put
+        /blen blen 1 add def
+        /badv badv spaceadv add def
+      } if
+      dup length /wlen exch def
+      wlen blen add buf length gt { /wlen buf length blen sub def } if
+      buf blen 3 -1 roll 0 wlen getinterval putinterval
+      /blen blen wlen add def
+      /badv badv wadv add def
+    } ifelse
+  } def
+
+  % Emit the buffered line (if any ink) through lineproc as
+  % `x y (line)`, then advance to the next baseline.
+  /flushline {
+    blen 0 gt {
+      margin
+      y0 lineno lead mul sub
+      buf 0 blen getinterval
+      lineproc
+    } if
+    /lineno lineno 1 add def
+    /blen 0 def
+    /badv 0 def
+  } def
+
+  % lineproc layout - scans Opts' /Text word by word (space/tab/CR
+  % delimit; newline forces a break), wraps to the column, and calls
+  % lineproc once per inked line. Leaves /lineno = total lines
+  % including blanks.
+  /layout {
+    /lineproc exch def
+    /Size /Size getopt def
+    /margin /Margin getopt def
+    /col /Width getopt margin 2 mul sub def
+    /lead /Leading getopt Size mul def
+    /y0 /Height getopt margin sub Size 0.75 mul sub def
+    /spaceadv Size 0.45 mul def
+    /src Opts /Text get def
+    /buf 1024 string def
+    /blen 0 def
+    /badv 0 def
+    /lineno 0 def
+    /wstart 0 def
+    /i 0 def
+    {
+      i src length ge { exit } if
+      /c src i get def
+      c 32 eq c 9 eq or c 13 eq or c 10 eq or {
+        src wstart i wstart sub getinterval addword
+        c 10 eq { flushline } if
+        /wstart i 1 add def
+      } if
+      /i i 1 add def
+    } loop
+    src wstart src length wstart sub getinterval addword
+    blen 0 gt { flushline } if
+  } def
+
+end
+
+% ------------------------------------------------------------- the API
+
+% opts hg-linecount -> n  (how many lines hg-write would produce)
+/hg-linecount {
+  HGLayout begin
+  /Opts exch def
+  { pop pop pop } layout
+  lineno
+  end
+} def
+
+% opts hg-write -  (draw the text; caller does showpage)
+/hg-write {
+  HGLayout begin
+  /Opts exch def
+  /Seed getopt srand
+  /Ink getopt aload pop setrgbcolor
+  /HangulScript findfont /Size getopt scalefont setfont
+  % scalefont/setfont installs a *copy* of HangulDict (derive_font
+  % flat-copies every key) — putting straight into HangulDict here
+  % would land in a dict `show` never reads again this call. `work`'s
+  % entry is that same copy's `/work` too (a shared Rc, not deep-copied),
+  % so overriding through it — lib/handscript.ps's exact idiom — reaches
+  % whichever copy BuildChar actually runs.
+  HangulDict /work get /J /Jitter getopt put
+  HangulDict /work get /W /Pen getopt put
+  { 3 1 roll moveto show } layout
+  end
+} def
