@@ -212,6 +212,58 @@ fn measuring_agrees_with_writing() {
 }
 
 #[test]
+fn wordadv_measures_four_byte_utf8_as_one_codepoint() {
+    // A supplementary-plane codepoint (an emoji, U+1F600) is 4 UTF-8
+    // bytes but exactly one Unicode scalar — the same one glyph real
+    // `show` (Rust-side UTF-8 decode) draws with a single 0.45em
+    // advance. wordadv must count it the same way; a decoder that
+    // falls through to "unknown byte, step 1" for 4-byte lead bytes
+    // would instead measure it as four separate half-width glyphs
+    // (4 x 0.45em = 1.8em instead of 0.45em).
+    let mut it = with_lib(50, 50);
+    it.run_str(
+        "HGLayout begin
+         /Size 100 def
+         (\u{1F600}) wordadv
+         end",
+    )
+    .unwrap_or_else(|e| panic!("wordadv failed: {}", it.error_report(&e)));
+    let repr = it.pop().expect("advance").repr();
+    let adv: f64 = repr.parse().expect("numeric advance");
+    assert!(
+        (adv - 45.0).abs() < 1e-6,
+        "one 4-byte codepoint should measure as 0.45em (45.0), got {adv}"
+    );
+}
+
+#[test]
+fn a_long_unspaced_word_is_not_truncated() {
+    // Hangul syllables are 3 bytes each with no space required
+    // between them the way Latin words are, so a single unspaced
+    // "word" can realistically exceed addword's scratch buffer — it
+    // must grow the buffer rather than silently dropping the tail of
+    // the caller's text. 400 repetitions of one syllable is 1200
+    // bytes, past the buffer's 1024-byte starting size.
+    let word = "\u{AC00}".repeat(400);
+    let mut it = with_lib(50, 50);
+    it.run_str(&format!(
+        "HGLayout begin
+         /Opts << /Text ({word}) /Size 10 /Width 100000 /Height 200 /Margin 10 >> def
+         {{ length /Got exch def pop pop }} layout
+         Got
+         end"
+    ))
+    .unwrap_or_else(|e| panic!("layout failed: {}", it.error_report(&e)));
+    let repr = it.pop().expect("Got").repr();
+    let got: usize = repr.parse().expect("numeric length");
+    assert_eq!(
+        got,
+        word.len(),
+        "the full word must reach lineproc, not a truncated prefix"
+    );
+}
+
+#[test]
 fn deterministic_across_runs() {
     let mut a = with_lib(300, 300);
     a.run_str(

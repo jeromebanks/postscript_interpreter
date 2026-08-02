@@ -481,7 +481,21 @@ HGLayout begin
                 s wi 2 add get 16#3F and or def
             /wstep 3 def
           } {
-            /wcp wb def /wstep 1 def
+            wb 16#F8 and 16#F0 eq {
+              % Four-byte (supplementary-plane, e.g. emoji): always
+              % outside the Hangul block regardless, but must still
+              % consume all four bytes as one codepoint — real `show`
+              % (Rust-side UTF-8 decode) does, and a fallback that
+              % miscounts it as four separate half-width glyphs would
+              % measure a line shorter than it actually is.
+              /wcp wb 16#07 and 18 bitshift
+                  s wi 1 add get 16#3F and 12 bitshift or
+                  s wi 2 add get 16#3F and 6 bitshift or
+                  s wi 3 add get 16#3F and or def
+              /wstep 4 def
+            } {
+              /wcp wb def /wstep 1 def
+            } ifelse
           } ifelse
         } ifelse
       } ifelse
@@ -495,6 +509,24 @@ HGLayout begin
     w
   } def
 
+  % Double buf (copying its live prefix across) until it can hold
+  % `need` more bytes past `blen`. Hangul syllables are 3 bytes each
+  % with no space required between them the way Latin words are, so a
+  % single unspaced "word" can realistically exceed a fixed buffer —
+  % growing it, rather than clamping the copy and silently dropping
+  % the tail (the truncation a fixed-size scratch string invites),
+  % keeps every byte of the caller's text.
+  /growbuf {
+    /need exch def
+    {
+      need blen add buf length le { exit } if
+      /newbuf buf length 2 mul string def
+      /oldlive buf 0 blen getinterval def
+      newbuf 0 oldlive putinterval
+      /buf newbuf def
+    } loop
+  } def
+
   % (word) addword - greedy wrap: flush first if the word won't fit on
   % the current line. A word wider than the whole column overflows on
   % its own line rather than being split.
@@ -505,12 +537,13 @@ HGLayout begin
         badv spaceadv add wadv add col gt { flushline } if
       } if
       blen 0 gt {
+        1 growbuf
         buf blen 32 put
         /blen blen 1 add def
         /badv badv spaceadv add def
       } if
       dup length /wlen exch def
-      wlen blen add buf length gt { /wlen buf length blen sub def } if
+      wlen growbuf
       buf blen 3 -1 roll 0 wlen getinterval putinterval
       /blen blen wlen add def
       /badv badv wadv add def
