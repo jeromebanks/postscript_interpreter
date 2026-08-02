@@ -958,7 +958,14 @@ impl ShowCtx {
         // inside BuildChar) may have changed it.
         let fs = gfx.state().font.clone().ok_or(PsError::InvalidFont)?;
         if fs.fid >= 0 {
-            let adv = if self.unicode_mode {
+            // Same re-check as the Type 3 branch below: `self.unicode_mode`
+            // is decided once for the whole show, but a kshow proc can
+            // switch fonts mid-string. A Unicode-mode font earlier in the
+            // string must not leave `code` routed through `unicode_glyph`
+            // for an ordinary byte-oriented outline font later in the same
+            // show — that's the wrong glyph-resolution path for it, not
+            // just an out-of-range code.
+            let adv = if self.unicode_mode && is_unicode_font(fs.fid) {
                 unicode_glyph(gfx, &fs, code, &self.mode, self.pen)?
             } else {
                 outline_glyph(gfx, &fs, code as u8, &self.mode, self.pen)?

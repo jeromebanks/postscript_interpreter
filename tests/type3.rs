@@ -361,3 +361,37 @@ fn kshow_font_switch_narrows_for_an_unflagged_type3_font() {
         _ => panic!("expected integer"),
     }
 }
+
+#[test]
+fn kshow_font_switch_narrows_for_an_ordinary_outline_font() {
+    // The same collision, in ShowCtx::step's *other* branch
+    // (`fs.fid >= 0`): switching from a /UnicodeBuildChar true Type 3
+    // font to an ordinary registered outline font (Helvetica) must not
+    // leave `self.unicode_mode` routing the outline font's glyphs
+    // through `unicode_glyph` (cmap-based) instead of `outline_glyph`
+    // (byte/Encoding-based) — the wrong resolution path entirely for a
+    // byte-oriented face. U+AC41's low byte is 0x41 = 'A' in
+    // StandardEncoding: if the byte path ran, the total advance is
+    // exactly Helvetica's own 'A' width (UniFont's first glyph is
+    // zero-width, per UNICODE_T3's BuildChar); if `unicode_glyph` ran
+    // instead, it resolves 0xAC41 through Helvetica's cmap — which
+    // doesn't cover Hangul — to some other (`.notdef`-shaped) advance,
+    // not 'A''s.
+    let mut it = run(&format!(
+        "{UNICODE_T3} /UniFont findfont 12 scalefont setfont
+         0 0 moveto
+         {{pop pop /Helvetica findfont 12 scalefont setfont}} (\u{AC00}\u{AC41}) kshow
+         currentpoint pop"
+    ));
+    let switched_x = pop_f64(&mut it);
+
+    let mut reference =
+        run("/Helvetica findfont 12 scalefont setfont 0 0 moveto (A) show currentpoint pop");
+    let a_advance = pop_f64(&mut reference);
+
+    assert!(
+        (switched_x - a_advance).abs() < 1e-6,
+        "expected Helvetica's own 'A' advance ({a_advance}), got {switched_x} \
+         — looks like unicode_glyph's cmap path ran instead of outline_glyph's"
+    );
+}
