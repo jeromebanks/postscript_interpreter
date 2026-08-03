@@ -54,7 +54,16 @@ hyperbolic geometry in the Poincare disk — `lib/artkit.ps`'s
 (NOTES.md's entry has the full story, including two real bugs a
 standalone Python prototype caught before either reached PostScript: a
 backwards circumradius convention, and a dedup-tolerance formula that
-silently capped tile growth with depth).
+silently capped tile growth with depth). Also done: issue #11, fractal
+/ self-similar-geometry procedures for artkit — `edgefractal`/
+`edgepoly` (generalized Koch-style edge replacement, any turn-delta
+generator, presets `/koch`/`/quadkoch` in `FractalGens`) and `gasket`/
+`carpet` (Sierpinski-style area subdivision, triangle and square),
+`examples/fractals.ps`, and the gallery piece `Recursive Peaks`
+(NOTES.md's entry has the full story, including why `gasket`/`carpet`
+ended up iterative rather than recursive — a recursive version leaves
+every ancestor's dict frame open exactly when a leaf invokes the
+caller's proc, silently breaking a plain `def`-based counter).
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;

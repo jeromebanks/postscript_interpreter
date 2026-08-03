@@ -1,0 +1,111 @@
+%!PS-Adobe-3.0
+%%Title: Recursive Peaks
+%%BoundingBox: 0 0 640 640
+%%Creator: Claude & a nostalgic LaserWriter fan
+%%EndComments
+
+% A night-time mountain range built entirely from artkit's fractals
+% section: each peak is one large triangle recursively subdivided by
+% `gasket`, with every facet shaded by its own altitude (dark rock at
+% the base, snow-white near the summit) -- a "low-poly" mountain look
+% that falls directly out of the Sierpinski subdivision itself, not a
+% separate rendering trick. The sky is a `carpet`-driven starfield: most
+% cells are skipped, the rest stamp a small dot, so the recursive square
+% subdivision reads as a scattered field of stars rather than a solid
+% tiling. Two `edgepoly` snowflakes (the /koch and /quadkoch generators)
+% float above the peaks. Run from the repo root:
+%
+%   pscat --page 640x640 gallery/recursive_peaks.ps
+
+(lib/artkit.ps) run
+11 srand
+
+% --- sky: banded gradient, nocturne dark-to-navy -------------------------
+0 1 31 {
+    /band exch def
+    /bt band 31 div def
+    /nocturne pal 0 get /nocturne pal 1 get bt mix3 setrgbcolor
+    newpath 0 band 640 mul 31 div 640 640 31 div 1 add rectfill
+} for
+
+% --- starfield: carpet subdivision, most cells skipped -------------------
+0 0 640 640 3 {
+    4 dict begin
+        /ch exch def /cw exch def /cy exch def /cx exch def
+        5 chance 0 eq {
+            /sx cx cw 2 div add 2 jit add def
+            /sy cy ch 2 div add 2 jit add def
+            4 chance 0 eq { /nocturne pal 4 get } { /nocturne pal 3 get } ifelse
+            aload pop setrgbcolor
+            newpath sx sy 1 frnd 1.6 mul add 0 360 arc fill
+        } if
+    end
+} carpet
+
+% --- mountains: gasket-subdivided triangles, shaded by altitude ---------
+% Each peak's leaf callback is passed the facet's three raw corners;
+% altitude is just their average y, normalized against that peak's own
+% base/apex so the shading works for peaks of any height or position.
+/mountain {                                      % basey apexy x1 y1 x2 y2 x3 y3 depth
+    9 dict begin
+        /mtdepth exch def
+        /mty3 exch def /mtx3 exch def
+        /mty2 exch def /mtx2 exch def
+        /mty1 exch def /mtx1 exch def
+        /mtapex exch def /mtbase exch def
+        % Solid undercoat first: gasket omits a sub-triangle at every
+        % recursion level by design (that's the fractal), so without
+        % this the omitted triangles would show sky straight through.
+        % Painted flat (mid-altitude shade), the gaps read as facets in
+        % shadow instead of holes once the shaded leaves go on top.
+        /stone pal 1 get 0.7 shade setrgbcolor
+        newpath mtx1 mty1 moveto mtx2 mty2 lineto mtx3 mty3 lineto closepath fill
+        mtx1 mty1 mtx2 mty2 mtx3 mty3 mtdepth {
+            9 dict begin
+                /gy3 exch def /gx3 exch def /gy2 exch def /gx2 exch def
+                /gy1 exch def /gx1 exch def
+                /galt gy1 gy2 add gy3 add 3 div mtbase sub mtapex mtbase sub div def
+                /galt galt 0 lt { 0 } { galt 1 gt { 1 } { galt } ifelse } ifelse def
+                % Cubic falloff: only facets near the very apex (galt
+                % close to 1) push the shade factor toward white, so
+                % most of the body stays a natural stone tone instead
+                % of washing out across the whole peak.
+                /galt3 galt dup mul galt mul def
+                /stone pal 1 get galt3 3.2 mul 0.55 add shade setrgbcolor
+                newpath gx1 gy1 moveto gx2 gy2 lineto gx3 gy3 lineto closepath fill
+            end
+        } gasket
+    end
+} def
+
+0 260   40 40  340 40  190 260  4 mountain
+0 340   260 40  560 40  410 340  4 mountain
+0 210   380 40  600 40  490 210  4 mountain
+
+% --- floating snowflakes --------------------------------------------------
+gsave
+    /nocturne pal 3 get aload pop setrgbcolor
+    1 setlinewidth
+    newpath [110 470 140 522.9 170 470] /koch fgen 3 edgepoly stroke
+grestore
+gsave
+    /nocturne pal 4 get aload pop setrgbcolor
+    0.8 setlinewidth
+    newpath [470 500 470 550 520 550 520 500] /quadkoch fgen 2 edgepoly stroke
+grestore
+gsave
+    1 1 1 setrgbcolor
+    0.7 setlinewidth
+    newpath [285 250 300 275.98 315 250] /koch fgen 2 edgepoly stroke
+grestore
+
+% --- title -----------------------------------------------------------------
+/Palatino-Bold findfont 26 scalefont setfont
+1 1 1 setrgbcolor
+(Recursive Peaks) 320 596 showctr
+/Palatino-Italic findfont 12 scalefont setfont
+/nocturne pal 3 get aload pop setrgbcolor
+(gasket-faceted mountains, a carpet starfield, edgepoly snow) 320 578 showctr
+
+showpage
+%%EOF

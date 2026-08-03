@@ -1,0 +1,74 @@
+%!PS-Adobe-3.0
+%%Title: Four Fractals — a specimen sheet for artkit's fractal library
+%%BoundingBox: 0 0 600 600
+%%EndComments
+
+% Specimen sheet for artkit's fractals section (lib/artkit.ps): four
+% quadrants, one technique each. Top-left is edgepoly with the /koch
+% generator — the classic snowflake, edge-replacement fractal geometry
+% (each edge of the base triangle is replaced by a scaled copy of the
+% Koch bump, recursively). Top-right is edgepoly with /quadkoch (the
+% Minkowski-sausage / "quadratic Koch" generator) on a square base, the
+% same edge-replacement machinery with a different 8-segment motif.
+% Bottom-left is gasket, the Sierpinski triangle: recursive area
+% subdivision into three corner sub-triangles, omitting the middle one.
+% Bottom-right is carpet, the square counterpart: a 3x3 grid recursing
+% into the 8 outer cells and skipping the center. Run from the repo
+% root:
+%
+%   pscat --page 600x600 examples/fractals.ps
+
+(lib/artkit.ps) run
+5 srand
+
+1 1 1 setrgbcolor clippath fill
+
+/Palatino-Bold findfont 22 scalefont setfont
+0.1 0.1 0.12 setrgbcolor
+(Four Fractals) 300 566 showctr
+/Palatino-Italic findfont 12 scalefont setfont
+(edgepoly + koch/quadkoch, gasket, carpet) 300 548 showctr
+
+% --- top-left: edgepoly + /koch (Koch snowflake) ------------------------
+% Vertices run clockwise so the generator's left-turning bumps point
+% outward (edgepoly's header has the full reasoning).
+gsave
+    /tide pal 1 get aload pop setrgbcolor
+    1.2 setlinewidth
+    newpath [70 320 145 449.9 220 320] /koch fgen 4 edgepoly
+    stroke
+grestore
+
+% --- top-right: edgepoly + /quadkoch (Minkowski sausage) ----------------
+gsave
+    /ember pal 2 get aload pop setrgbcolor
+    1 setlinewidth
+    newpath [320 300 320 450 470 450 470 300] /quadkoch fgen 2 edgepoly
+    stroke
+grestore
+
+% --- bottom-left: gasket (Sierpinski triangle) ---------------------------
+70 60 220 60 145 189.9 6 {
+    6 dict begin
+        /gy3 exch def /gx3 exch def /gy2 exch def /gx2 exch def
+        /gy1 exch def /gx1 exch def
+        gsave
+            newpath gx1 gy1 moveto gx2 gy2 lineto gx3 gy3 lineto closepath
+            /meadow pal oneof aload pop setrgbcolor fill
+        grestore
+    end
+} gasket
+
+% --- bottom-right: carpet (Sierpinski carpet) ----------------------------
+320 60 150 150 3 {
+    /carnival pal oneof aload pop setrgbcolor
+    newpath rectfill
+} carpet
+
+0.1 0.1 0.12 setrgbcolor
+/Palatino findfont 10 scalefont setfont
+1 setlinewidth
+newpath 300 30 moveto 300 540 lineto stroke
+newpath 20 300 moveto 580 300 lineto stroke
+
+showpage

@@ -55,6 +55,17 @@ here is *written*, rendered, looked at, and refined.
   thing to do) needs the inner call wrapped in its own `N dict begin
   ... end` — they share scratch names, same as `grid`/`ngon` already
   do; artkit.ps's tiling-section header has the details.
+- **Fractals**: `len angle turns scale depth edgefractal` (Koch-style
+  edge replacement — draws via `rlineto`, any turn-delta generator);
+  `[verts] turns scale depth edgepoly` walks it around a closed
+  polygon (vertices clockwise, so the bumps point outward — see its
+  header). `/koch` and `/quadkoch` are presets in `FractalGens`,
+  retrieved with `/name fgen` → `turns scale`. `x1 y1 x2 y2 x3 y3 depth
+  {proc} gasket` and `x y w h depth {proc} carpet` are Sierpinski-style
+  recursive area subdivision (triangle and square); both drive the
+  walk with an explicit stack array rather than recursing, so `proc`
+  always runs in your own dict — a plain `/n n 1 add def` counter
+  works the same as it does with `truchet`.
 
 ## Style packs (`lib/styles/`, load after artkit)
 
