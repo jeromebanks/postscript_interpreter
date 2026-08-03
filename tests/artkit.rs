@@ -1305,3 +1305,114 @@ fn gasket_and_carpet_paint_via_the_callers_proc_at_depth_zero() {
         "expected a filled box's ink, got {carpet_ink}"
     );
 }
+
+#[test]
+fn gasket_nested_in_its_own_leaf_needs_the_inner_call_wrapped_in_a_dict() {
+    // Regression test for a real bug caught by cross-model (Codex)
+    // review: gasket/carpet's own traversal state (gksp/gkstack/gkproc)
+    // is a set of plain globals, not dict-scoped -- fine for the
+    // ancestor-frame problem their own header explains, but it means a
+    // leaf proc that calls `gasket` again itself (nested fractals, a
+    // gasket of gaskets) clobbers the *outer* traversal's state the
+    // moment the inner call starts, since both bind the same names.
+    // Same shape, same fix, as the tiling section's tg-/tk- gotcha:
+    // wrap just the inner call in its own dict so its `def`s shadow
+    // there instead of landing on the outer's own bindings. This pins
+    // both halves -- the unwrapped case genuinely breaks (visits only
+    // 1 of the outer's 3 leaves, not 3) and the documented fix restores
+    // it (all 3, with the inner traversal's own count read via an
+    // array, since a plain `def` counter would itself be swallowed by
+    // that same wrapper -- the tiling section's *other* gotcha).
+    let got = eval(
+        "/outerN 0 def \
+         0 0 100 0 0 100 1 { \
+             pop pop pop pop pop pop \
+             /outerN outerN 1 add def \
+             outerN 1 eq { \
+                 0 0 10 0 0 10 1 { pop pop pop pop pop pop } gasket \
+             } if \
+         } gasket outerN",
+    );
+    assert_eq!(
+        got.last().unwrap(),
+        "1",
+        "expected the unwrapped nested call to break the outer traversal (visits only 1 leaf)"
+    );
+
+    let got = eval(
+        "/outerN 0 def /innerbox 1 array def innerbox 0 0 put \
+         0 0 100 0 0 100 1 { \
+             pop pop pop pop pop pop \
+             /outerN outerN 1 add def \
+             outerN 1 eq { \
+                 2 dict begin \
+                     0 0 10 0 0 10 1 { \
+                         pop pop pop pop pop pop \
+                         innerbox 0 innerbox 0 get 1 add put \
+                     } gasket \
+                 end \
+             } if \
+         } gasket outerN innerbox 0 get",
+    );
+    assert_eq!(
+        got[0], "3",
+        "wrapped: outer traversal should visit all 3 leaves"
+    );
+    assert_eq!(
+        got[1], "3",
+        "wrapped: inner traversal should also visit all 3 leaves"
+    );
+}
+
+#[test]
+fn carpet_nested_in_its_own_leaf_needs_the_inner_call_wrapped_in_a_dict() {
+    // Companion to gasket's own version of this regression -- same bug
+    // class (cpsp/cpstack/cpproc are the equivalent plain globals),
+    // same fix, pinned here with carpet's 8-ary branching (depth 1 = 8
+    // leaves instead of gasket's 3).
+    let got = eval(
+        "/outerN 0 def \
+         0 0 90 90 1 { pop pop pop pop /outerN outerN 1 add def } carpet outerN",
+    );
+    assert_eq!(got[0], "8", "sanity: unnested carpet visits all 8 leaves");
+
+    let got = eval(
+        "/outerN 0 def \
+         0 0 90 90 1 { \
+             pop pop pop pop \
+             /outerN outerN 1 add def \
+             outerN 1 eq { \
+                 0 0 9 9 1 { pop pop pop pop } carpet \
+             } if \
+         } carpet outerN",
+    );
+    assert!(
+        got[0].parse::<i64>().unwrap() < 8,
+        "expected the unwrapped nested call to break the outer traversal (fewer than 8 leaves), got {}",
+        got[0]
+    );
+
+    let got = eval(
+        "/outerN 0 def /innerbox 1 array def innerbox 0 0 put \
+         0 0 90 90 1 { \
+             pop pop pop pop \
+             /outerN outerN 1 add def \
+             outerN 1 eq { \
+                 2 dict begin \
+                     0 0 9 9 1 { \
+                         pop pop pop pop \
+                         innerbox 0 innerbox 0 get 1 add put \
+                     } carpet \
+                 end \
+             } if \
+         } carpet outerN innerbox 0 get",
+    );
+    assert_eq!(
+        got[0], "8",
+        "wrapped: outer traversal should visit all 8 leaves"
+    );
+    assert_eq!(
+        got[1], "8",
+        "wrapped: inner traversal should also visit all 8 leaves"
+    );
+}

@@ -687,6 +687,22 @@ end
 % always runs with the *caller's* own dict on top, exactly like every
 % other driver here, no caveat needed.
 %
+% Composition gotcha, same shape as the tiling section's tg-/tk- one
+% above (a cross-model review caught it here specifically): `gksp`/
+% `gkstack`/`gkproc` are plain globals, not dict-scoped, so a leaf proc
+% that calls `gasket` again itself (nested fractals — a gasket of
+% gaskets) clobbers the *outer* traversal's own state the instant the
+% inner call starts, since both bind the same names. Same fix as
+% hex/tri inside hexgrid/trigrid: wrap just the inner call in its own
+% `N dict begin ... end` so its `def`s shadow there instead — confirmed
+% this actually restores the outer traversal (a naive unwrapped nested
+% call visits only 1 of 3 outer leaves instead of 3; wrapped, all 3).
+% That wrap then reintroduces the *other* documented gotcha (a plain
+% `def` counter inside the inner proc is itself swallowed at the
+% wrapper's `end`) — same fix as there too: an array mutated with
+% `put`, immune to dict nesting. `carpet` below shares the identical
+% shape (`cpsp`/`cpstack`/`cpproc`) and the identical fix.
+%
 % The stack never holds more than `2*depth+1` pending records: each pop
 % immediately expands into its 3 children (pushed before anything else
 % is popped), so the walk behaves exactly like real call-stack
