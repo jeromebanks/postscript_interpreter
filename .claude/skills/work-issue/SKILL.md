@@ -31,8 +31,11 @@ check whether there's already an open PR claiming it (`gh pr list
 #<N>`/`Resolves #<N>`):
 - **Open PR exists**: stop and tell the user — someone (or another run
   of this skill) is genuinely already on it.
-- **No open PR**: this is a crashed or interrupted prior run, not a
-  live claim — resume it rather than halting. Check for
+- **No open PR**: don't assume crashed — an in-progress issue with no
+  PR yet is *also* the normal state of a session still mid-run (there
+  is no PR until step 7). Run the **live-run check** below before
+  resuming. If it comes back stale, this is a crashed or interrupted
+  prior run — resume it rather than halting. Check for
   `../<repo>-issue-<N>` (step 3 already contemplates reusing an
   existing worktree); if it exists, pick up from wherever it left off
   (uncommitted changes, a branch with commits but no PR, etc. are all
@@ -52,10 +55,12 @@ gh pr list --state open --json body --jq \
   '[.[].body | scan("(?:Closes|Fixes|Resolves) #([0-9]+)")[][0] | tonumber]'
 ```
 
-If any `in-progress` issue's number isn't in the open-PR list, resume
-the lowest-numbered one of those (same as the explicit-number path
-above — reuse its worktree if one exists) instead of continuing to the
-picker below.
+If any `in-progress` issue's number isn't in the open-PR list, run the
+same live-run check as the explicit-number path above before treating
+it as resumable, then resume the lowest-numbered one that comes back
+stale (reuse its worktree if one exists) instead of continuing to the
+picker below. If every candidate's heartbeat is still live, fall
+through to the picker below rather than resuming a running session.
 
 Otherwise, find the lowest-numbered open issue that isn't already
 labeled `in-progress` and isn't already the target of an open PR:
@@ -73,6 +78,41 @@ gh pr list --state open --json body --jq \
 Take the first candidate not in the open-PR list. If there are no
 candidates at all, report that the backlog is clear (or everything
 in-flight) instead of inventing work.
+
+### Live-run check (heartbeat)
+
+An `in-progress` issue with no open PR is ambiguous on its own — it's
+both the normal state of a session still mid-run *and* what a crashed
+session leaves behind. Steps 3, 4, 5, 6, and 8 each refresh a
+heartbeat timestamp in the worktree at their checkpoints; use it here
+to tell the two apart before resuming, rather than inferring
+abandonment purely from "no PR yet" (which used to misclassify a live
+run — see #29):
+
+```sh
+HEARTBEAT="$(git -C "../<repo>-issue-<N>" rev-parse --git-dir 2>/dev/null)/work-issue-heartbeat"
+if [ -s "$HEARTBEAT" ] && grep -qE '^[0-9]+$' "$HEARTBEAT"; then
+  AGE=$(( $(date +%s) - $(cat "$HEARTBEAT") ))
+else
+  AGE=999999   # missing, empty, or non-numeric (e.g. a write that died mid-truncation): treat as stale
+fi
+```
+
+- `AGE` under 2700 (45 min): still live. **Stop — don't resume.**
+  Report to the user that issue #<N> looks actively worked on
+  (heartbeat `$((AGE / 60))` min old) instead of silently racing a
+  live session's edits.
+- `AGE` at or above 2700, or no valid heartbeat file at all: stale —
+  safe to resume. Validating the content (not just presence) matters:
+  a heartbeat write interrupted between the `>` truncation and `date`
+  finishing leaves an empty file, and a bare `$(( ... - $(cat ...) ))`
+  against an empty or garbage value is a shell arithmetic error, not a
+  graceful "treat as stale."
+
+45 minutes is deliberately generous, not tight: PR #30 needed six
+Codex review rounds in one legitimate run (~62 min total, each round
+itself several minutes) — a false "still live" fully blocks resume,
+which is worse than a slower crash-detection window.
 
 ## 2. Mark it in-progress
 
@@ -109,13 +149,65 @@ BRANCH="${PREFIX}/<N>-${SLUG}"
 WORKTREE_DIR="../${REPO_DIR}-issue-<N>"
 
 git worktree add -b "$BRANCH" "$WORKTREE_DIR" origin/main
+
+HEARTBEAT="$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"
+date +%s > "$HEARTBEAT.tmp" && mv "$HEARTBEAT.tmp" "$HEARTBEAT"
 ```
+
+The heartbeat file lives in the worktree's git-dir (under the main
+repo's `.git/worktrees/<name>/`), not the tracked working tree — it
+never needs a `.gitignore` entry and never shows up in `git status` or
+a diff. Refresh it at the end of steps 4, 5, 6, and around each Codex
+review round in step 8 — and, since "commit checkpoints" or "step
+boundaries" can themselves be 45+ minutes apart during a long compile
+or a lengthy single edit, also refresh it before starting any single
+operation you expect to take a while (a big `cargo build`/`cargo
+test`, an `advisor` call, the Codex review) rather than only after it
+finishes — so the live-run check above can tell a session still
+working from one that crashed. Each Bash tool call is a fresh shell —
+a `$HEARTBEAT` variable set here won't survive to a later step's tool
+call — so those refreshes re-derive the path inline rather than
+trusting a remembered variable. Write it atomically (temp file + `mv`,
+which is atomic on the same filesystem) rather than a bare `>`
+redirect: a process that dies between the redirect's truncation and
+`date` finishing its write would otherwise leave a heartbeat file that
+exists but is empty — the live-run check above already treats that as
+stale, but only *because* it validates content, not just presence:
+
+```sh
+HEARTBEAT="$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"
+date +%s > "$HEARTBEAT.tmp" && mv "$HEARTBEAT.tmp" "$HEARTBEAT"
+```
+
+(same reasoning already applies to `$WORKTREE_DIR`/`$BRANCH` reused
+across steps 7-9 below — re-emit the assignment in each new Bash block
+rather than assuming it's still set.) `git -C ... rev-parse --git-dir`
+returns an absolute path even when `$WORKTREE_DIR` itself is relative
+(verified) — that matters given the cwd-reset pitfall below, since a
+relative write target would otherwise land wherever cwd happened to be
+for that particular Bash call, not where step 1's check reads from.
 
 Everything from here on — reading, editing, building, testing,
 committing — happens *inside `$WORKTREE_DIR`*, not the original
 directory. If a worktree for this issue already exists (a prior
-attempt), reuse it rather than erroring or clobbering it — ask the
-user if it looks stale.
+attempt — the live-run check above already confirmed it's stale),
+reuse it rather than erroring or clobbering it: set `WORKTREE_DIR` to
+the existing path, and read `BRANCH` from what's actually checked out
+there —
+
+```sh
+BRANCH="$(git -C "$WORKTREE_DIR" branch --show-current)"
+HEARTBEAT="$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"
+date +%s > "$HEARTBEAT.tmp" && mv "$HEARTBEAT.tmp" "$HEARTBEAT"
+```
+
+— instead of recomputing a fresh `SLUG`/`BRANCH` from the issue title.
+A freshly regenerated slug can differ from a prior run's (wording
+tweak, truncation difference) even though the worktree itself is being
+correctly reused, and every later branch assertion/push/cleanup in
+this skill trusts `$BRANCH` — pointing it at a name that doesn't match
+what's actually checked out silently targets the wrong branch instead
+of erroring (#29).
 
 ## 4. Plan, and get the plan reviewed before touching code
 
@@ -142,6 +234,10 @@ approach, revise the plan (and call `advisor` again if the revision is
 substantial) before writing any implementation code. Don't proceed to
 step 5 on a plan the advisor pushed back on without addressing why.
 
+Refresh the heartbeat before moving on (re-derive the path and write
+atomically, per step 3's note): `H="$(git -C "$WORKTREE_DIR" rev-parse
+--git-dir)/work-issue-heartbeat"; date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
+
 ## 5. Implement
 
 Follow the conventions already documented for this repo while you
@@ -151,19 +247,37 @@ the source of truth:
 - AGENTS.md's "Code quality bar" (no `unwrap`/`expect` on
   program-input-derived data, comments explain why not what, tests
   live alongside the code they test).
-- Commit at reasonable checkpoints, not one giant commit at the end.
+- Commit at reasonable checkpoints, not one giant commit at the end —
+  and refresh the heartbeat at each one (`H="$(git -C "$WORKTREE_DIR"
+  rev-parse --git-dir)/work-issue-heartbeat"; date +%s > "$H.tmp" &&
+  mv "$H.tmp" "$H"`). Without this, step 4's end and step 5's end are
+  the only two heartbeat refreshes bracketing the entire implementation
+  phase — for any real code change (edit/build/test cycles, not just a
+  doc tweak) that gap alone can exceed the 45-minute staleness
+  threshold, making a still-live implementation look crashed to a
+  concurrent invocation. Per-commit refreshes narrow that, but don't
+  by themselves bound a *single* long-running stretch with no commit
+  yet (e.g. one long compile or one big edit in progress) — also
+  refresh right before starting the quality-gate build below, and
+  again if any single step within it runs long.
 - Update `NOTES.md`/`HANDOFF.md`/`README.md` on the branch as
   capabilities land, per AGENTS.md — not as an afterthought.
 
-Before moving on, the quality bar from AGENTS.md must be clean *in the
-worktree*:
+Refresh the heartbeat before this build (it's often the single
+longest-running step of the whole implementation phase):
 
 ```sh
+H="$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"
+date +%s > "$H.tmp" && mv "$H.tmp" "$H"
 cargo build && cargo test && cargo clippy --all-targets && cargo fmt --all -- --check
 ```
 
 This is the same gate CI runs — clearing it locally first means the
 PR isn't the first place a break shows up.
+
+Refresh the heartbeat again once it's clean: `H="$(git -C
+"$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"; date +%s >
+"$H.tmp" && mv "$H.tmp" "$H"`.
 
 ## 6. Get the implementation reviewed before marking done
 
@@ -174,10 +288,24 @@ gets marked done, mirroring the plan review in step 4: catch problems
 while they're still on a branch nobody's looked at yet, not after the
 PR is open.
 
+Point it explicitly at the categories the Codex review in step 8 keeps
+catching that this pass tends to miss: state mutated across
+control-flow branches (e.g. font/graphics-state changes mid-loop that
+only bite on a later iteration), multi-byte/encoding edge cases, and
+implicit side effects (a call that looks read-only but isn't). Naming
+these up front costs nothing and has caught real bugs cheaper than
+waiting for the several-minutes-to-an-hour Codex round trip in step 8
+to find them (PR #30: a coordinate-collision bug in exactly this
+category survived the full unit test suite and needed a dedicated
+Codex round to catch).
+
 If the advisor surfaces something worth fixing, fix it, re-run the
 quality gate, and use your judgment on whether it's worth one more
 advisor pass — don't loop indefinitely chasing a clean bill of health
 on genuinely subjective feedback.
+
+Refresh the heartbeat: `H="$(git -C "$WORKTREE_DIR" rev-parse
+--git-dir)/work-issue-heartbeat"; date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
 
 ## 7. Open the PR, update the issue
 
@@ -213,6 +341,17 @@ Read `SDLC.md`'s frontmatter fresh (`merge_policy.mode` and, if
 config, not something to remember from a prior run or from having
 written the skill.
 
+**If this branch's diff touches
+`.claude/skills/work-issue/SKILL.md` itself**, note that explicitly in
+the PR/issue comments posted below: this session loaded `SKILL.md`
+before the change existed, so this very step-8 pass is running the
+*old* review logic even while reviewing a diff that may have changed
+it (confirmed happening for real in #26/#27 — the PR that added Codex
+review wasn't itself reviewed by Codex, because the fallback path was
+all the session had loaded). A human reading the comment then knows to
+re-check step 8's behavior against what actually merged, rather than
+trusting this run's self-report of "clean."
+
 **Review must come from a different model family than whichever one
 implemented the change.** This skill only ever runs as Claude, so its
 review dispatches to Codex — never a same-family blank-context `Agent`
@@ -245,15 +384,29 @@ is fixed.
 Otherwise, run the Codex review from inside `$WORKTREE_DIR` — cwd can
 reset between tool calls (see Pitfalls), and a review run from the
 wrong directory reviews the wrong tree and still returns a confident
-verdict, so assert the branch before trusting the output:
+verdict, so assert the branch before trusting the output. Refresh the
+heartbeat right before kicking it off — this is the longest-blocking
+step (minutes to tens of minutes per round) and the one most likely to
+make a still-live run look stale to a concurrent invocation:
 
 ```sh
 rm -f /tmp/codex-review-<N>.json && \
+  H="$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat" && \
+  date +%s > "$H.tmp" && mv "$H.tmp" "$H" && \
   cd "$WORKTREE_DIR" && git fetch origin main && \
   test "$(git rev-parse --abbrev-ref HEAD)" = "$BRANCH" && \
   node "$CODEX_SCRIPT" review --wait --json --scope branch --base origin/main \
   > /tmp/codex-review-<N>.json
 ```
+
+`rm -f` stays first in the chain, exactly as it originally was — if any
+later step in the chain fails (heartbeat write, branch assert,
+`$WORKTREE_DIR`/`$BRANCH` empty from a cwd/variable reset), the stale
+`/tmp/codex-review-<N>.json` from a *prior* round is already gone, so
+the "before posting anything" check below can't accept and post that
+prior round's output as if it were a review of the current diff — a
+short-circuit that isn't `rm -f`-first would silently do exactly that
+under `agent-full` merge authority.
 
 `rm -f` first so a short-circuited chain (the branch assert failing, or
 `$WORKTREE_DIR`/`$BRANCH`/`$CODEX_SCRIPT` coming up empty from a
@@ -272,9 +425,11 @@ silently returned `null` and would have posted nothing useful). The
 real content is `.codex.stdout`: free-form markdown — a short summary
 paragraph, then a "Full review comments:" section with bullets each
 tagged by priority (`[P1]`, `[P2]`, ...) inline in the prose, not
-structured fields. Treat that tagging as a rough heuristic, not a
-contract — it's model-generated text, not a schema, and its exact
-shape can drift between runs.
+structured fields. The mapping is `P0`=critical, `P1`=high,
+`P2`=medium, `P3`=low — stated here so it doesn't need re-deriving by
+reasoning every run. Treat the tagging itself as a rough heuristic,
+not a contract — it's model-generated text, not a schema, and its
+exact shape can drift between runs.
 
 **Read the whole thing yourself and decide what needs fixing —
 don't gate merge on a `[P1]`-only regex.** A finding describing a real
@@ -439,7 +594,17 @@ there may be follow-up commits before a human merges it.
   call itself (it may, past its own timeout), that's fine — the review
   job is tracked independently by `codex-companion.mjs`; poll `node
   "$CODEX_SCRIPT" status --all --json` or `result <job-id> --json`
-  rather than re-running the review.
+  rather than re-running the review. **Refresh the heartbeat at each
+  poll**, not just once before kicking the review off — this is the
+  one operation in the whole flow that can genuinely run past the
+  45-minute staleness threshold in a single blocking stretch, and a
+  pre-refresh alone doesn't cover that. Other single blocking calls in
+  this skill (a `cargo build`/`test` cycle, an `advisor` call) aren't
+  separately covered this way — they're not backgrounded/polled, so
+  there's no natural point to refresh mid-call; in practice they run
+  well under the threshold for this repo's size, but that's an
+  observation, not a guarantee, if the flow is reused somewhere the
+  build is much slower.
 - **`status --all --json` can report a job as `"running"` long after
   the underlying `codex` process has actually died.** Confirmed while
   building this step: the process exited cleanly (macOS's unified log
@@ -460,3 +625,10 @@ there may be follow-up commits before a human merges it.
   reading files that had nothing to do with the change; `--scope
   branch --base origin/main` against just the PR's actual commits is
   the intended shape and stayed on-task.
+- **`ScheduleWakeup` is for `/loop`, not for polling a backgrounded
+  Codex review job.** Observed misuse: once self-corrected mid-run
+  (wasted a cycle), once a stale fallback wakeup fired after the PR
+  was already merged and the worktree cleaned up. To wait on a
+  `codex-companion.mjs` review job, poll it directly (`status --all
+  --json` / `result <job-id> --json`, per the pitfall above) or via
+  `Monitor`/background-task notifications — not `ScheduleWakeup`.
