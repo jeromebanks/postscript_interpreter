@@ -686,14 +686,21 @@ end
 % `end` runs. Driving the walk with a stack array instead means `gkproc`
 % always runs with the *caller's* own dict on top, exactly like every
 % other driver here, no caveat needed.
-/gkmax 4096 def
+%
+% The stack never holds more than `2*depth+1` pending records: each pop
+% immediately expands into its 3 children (pushed before anything else
+% is popped), so the walk behaves exactly like real call-stack
+% recursion — depth generations of "2 siblings not yet visited" plus
+% the one record just popped, not the full 3^depth leaf count. Sized
+% from `gkdepth` at call time (no fixed cap, so no silent-truncation
+% path to document or to accidentally undertest).
 /gasket {
     /gkproc exch def
     /gkdepth exch def
     /gky3 exch def /gkx3 exch def
     /gky2 exch def /gkx2 exch def
     /gky1 exch def /gkx1 exch def
-    /gkstack gkmax 7 mul array def
+    /gkstack gkdepth 2 mul 1 add 7 mul array def
     gkstack 0 gkx1 put gkstack 1 gky1 put
     gkstack 2 gkx2 put gkstack 3 gky2 put
     gkstack 4 gkx3 put gkstack 5 gky3 put
@@ -720,30 +727,22 @@ end
             /gkmx31 gkcx3 gkcx1 add 2 div def
             /gkmy31 gkcy3 gkcy1 add 2 div def
             /gkcd1 gkcd 1 sub def
-            gksp gkmax lt {
-                /gkb gksp 7 mul def
-                gkstack gkb gkcx1 put gkstack gkb 1 add gkcy1 put
-                gkstack gkb 2 add gkmx12 put gkstack gkb 3 add gkmy12 put
-                gkstack gkb 4 add gkmx31 put gkstack gkb 5 add gkmy31 put
-                gkstack gkb 6 add gkcd1 put
-                /gksp gksp 1 add def
-            } if
-            gksp gkmax lt {
-                /gkb gksp 7 mul def
-                gkstack gkb gkmx12 put gkstack gkb 1 add gkmy12 put
-                gkstack gkb 2 add gkcx2 put gkstack gkb 3 add gkcy2 put
-                gkstack gkb 4 add gkmx23 put gkstack gkb 5 add gkmy23 put
-                gkstack gkb 6 add gkcd1 put
-                /gksp gksp 1 add def
-            } if
-            gksp gkmax lt {
-                /gkb gksp 7 mul def
-                gkstack gkb gkmx31 put gkstack gkb 1 add gkmy31 put
-                gkstack gkb 2 add gkmx23 put gkstack gkb 3 add gkmy23 put
-                gkstack gkb 4 add gkcx3 put gkstack gkb 5 add gkcy3 put
-                gkstack gkb 6 add gkcd1 put
-                /gksp gksp 1 add def
-            } if
+            /gkb gksp 7 mul def
+            gkstack gkb gkcx1 put gkstack gkb 1 add gkcy1 put
+            gkstack gkb 2 add gkmx12 put gkstack gkb 3 add gkmy12 put
+            gkstack gkb 4 add gkmx31 put gkstack gkb 5 add gkmy31 put
+            gkstack gkb 6 add gkcd1 put
+            /gkb gksp 1 add 7 mul def
+            gkstack gkb gkmx12 put gkstack gkb 1 add gkmy12 put
+            gkstack gkb 2 add gkcx2 put gkstack gkb 3 add gkcy2 put
+            gkstack gkb 4 add gkmx23 put gkstack gkb 5 add gkmy23 put
+            gkstack gkb 6 add gkcd1 put
+            /gkb gksp 2 add 7 mul def
+            gkstack gkb gkmx31 put gkstack gkb 1 add gkmy31 put
+            gkstack gkb 2 add gkmx23 put gkstack gkb 3 add gkmy23 put
+            gkstack gkb 4 add gkcx3 put gkstack gkb 5 add gkcy3 put
+            gkstack gkb 6 add gkcd1 put
+            /gksp gksp 3 add def
         } ifelse
     } loop
 } def
@@ -757,12 +756,15 @@ end
 % split scales independently per axis, so non-square boxes still tile
 % without a caveat). Same stack-array iteration as `gasket`, same
 % reason — `cpproc` must always run with no ancestor frame open.
-/cpmax 4096 def
+%
+% Same peak-size reasoning as `gasket`'s own stack, scaled for 8
+% children per non-leaf instead of 3: never more than `7*depth+1`
+% pending records, sized from `cpdepth` at call time.
 /carpet {
     /cpproc exch def
     /cpdepth exch def
     /cph exch def /cpw exch def /cpy exch def /cpx exch def
-    /cpstack cpmax 5 mul array def
+    /cpstack cpdepth 7 mul 1 add 5 mul array def
     cpstack 0 cpx put cpstack 1 cpy put
     cpstack 2 cpw put cpstack 3 cph put cpstack 4 cpdepth put
     /cpsp 1 def
@@ -786,15 +788,13 @@ end
                 0 1 2 {
                     /cpj exch def
                     cpi 1 eq cpj 1 eq and not {
-                        cpsp cpmax lt {
-                            /cpb cpsp 5 mul def
-                            cpstack cpb cpcx cpi cpw3 mul add put
-                            cpstack cpb 1 add cpcy cpj cph3 mul add put
-                            cpstack cpb 2 add cpw3 put
-                            cpstack cpb 3 add cph3 put
-                            cpstack cpb 4 add cpcd1 put
-                            /cpsp cpsp 1 add def
-                        } if
+                        /cpb cpsp 5 mul def
+                        cpstack cpb cpcx cpi cpw3 mul add put
+                        cpstack cpb 1 add cpcy cpj cph3 mul add put
+                        cpstack cpb 2 add cpw3 put
+                        cpstack cpb 3 add cph3 put
+                        cpstack cpb 4 add cpcd1 put
+                        /cpsp cpsp 1 add def
                     } if
                 } for
             } for
