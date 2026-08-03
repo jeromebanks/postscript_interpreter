@@ -810,41 +810,80 @@ fn horthocircle_does_not_special_case_points_merely_near_the_origin() {
 }
 
 #[test]
+fn horthocircle_isline_fallback_uses_the_radial_not_chord_direction() {
+    // Regression test for a real bug caught by a sixth round of
+    // cross-model review, in the same near-collinear-pair family as the
+    // tests above. The isline branch used to derive its diameter
+    // direction from the chord p2-p1 -- correct for *exactly* collinear
+    // points (where the chord and the radius agree), but wrong for a
+    // near-collinear pair let in by this branch's angular tolerance:
+    // when p1 and p2 have similar magnitude, p2-p1 can be dominated by
+    // their tiny angular offset and point almost tangentially rather
+    // than radially. This exact pair -- p1=(0.99,0), p2 a hair's width
+    // away in angle at nearly the same radius -- used to report
+    // isline=true with a chord direction far from (1,0), and reflecting
+    // p1 across it moved p1 to roughly (-0.99,-0.001) instead of fixing
+    // it. Fixed by taking the direction from whichever of p1/p2 is
+    // farther from the origin (better-conditioned, and exact whenever
+    // the pair really is collinear, since both points' own directions
+    // and the chord's then agree).
+    let got = eval("0.99 0 0.98999999995 0.000000099 horthocircle");
+    assert_eq!(got[3], "true", "should still take the isline fallback");
+
+    let fixed = eval("0.99 0 0.98999999995 0.000000099 horthocircle 0.99 0 hreflect");
+    let fx: f64 = fixed[0].parse().unwrap();
+    let fy: f64 = fixed[1].parse().unwrap();
+    assert!(
+        (fx - 0.99).abs() < 1e-6 && fy.abs() < 1e-6,
+        "p1 should be a fixed point of its own geodesic's reflection: got ({fx}, {fy})"
+    );
+}
+
+#[test]
+#[ignore = "exercises an unrealistic {10,10} depth-4 case (~8,200 tiles); \
+            takes ~30s release / minutes debug from the O(n^2) dedup scan \
+            alone, so it's excluded from the default `cargo test` run -- \
+            use `cargo test -- --ignored` to run it. The specific bugs it \
+            found now have cheap, direct regression tests above; this one's \
+            job is pinning the dedup mechanism's exact combinatorial output \
+            at an extreme case, which genuinely needs the full BFS."]
 fn httile_survives_catastrophic_cancellation_at_high_p_q() {
     // Regression test for a real bug caught by a fourth round of
-    // cross-model review, and its follow-up fifth round. `horthocircle`
-    // originally found the orthogonal circle by inverting p2 in the unit
-    // circle and solving a three-point circumcircle -- a formula whose
-    // determinant is a *different*, non-scale-invariant quantity from the
-    // angular collinearity test above, and can catastrophically cancel to
-    // near (or exactly) zero even when p1/p2 are genuinely non-collinear.
-    // Round four caught this as a crash (gs raised `undefinedresult`
-    // dividing by an `hod` that rounded to exactly 0.0 four generations
-    // into a {10,10} tiling) and an initial fix added a tight absolute
-    // guard on that determinant, routing the offending edge through the
-    // isline fallback. Round five's review found that guard was still
-    // wrong in the same family as the round-four crash: it also
-    // misclassified any point within 0.001 of the origin as collinear
-    // regardless of its partner's actual angle, and the guard itself was
-    // still an approximation of the underlying geometry rather than a fix
-    // to it. `horthocircle` now solves the orthogonal circle directly: a
-    // circle's orthogonality to the unit circle (|c|^2 = r^2+1) combined
-    // with passing through p_i (|c-p_i|^2 = r^2) collapses to one linear
-    // equation per point, c.p_i = (|p_i|^2+1)/2 -- a 2x2 system in c whose
-    // determinant is exactly the angular test's own cross product, so one
+    // cross-model review, and two follow-up rounds to get the fix right.
+    // `horthocircle` originally found the orthogonal circle by inverting
+    // p2 in the unit circle and solving a three-point circumcircle -- a
+    // formula whose determinant is a *different*, non-scale-invariant
+    // quantity from the angular collinearity test above, and can
+    // catastrophically cancel to near (or exactly) zero even when p1/p2
+    // are genuinely non-collinear. Round four caught this as a crash (gs
+    // raised `undefinedresult` dividing by an `hod` that rounded to
+    // exactly 0.0 four generations into a {10,10} tiling); rounds five
+    // and six (see the tests above) found the fixes still had two more
+    // real bugs in the same failure family. `horthocircle` now solves
+    // the orthogonal circle directly: a circle's orthogonality to the
+    // unit circle (|c|^2 = r^2+1) combined with passing through p_i
+    // (|c-p_i|^2 = r^2) collapses to one linear equation per point,
+    // c.p_i = (|p_i|^2+1)/2 -- a 2x2 system in c whose determinant is
+    // exactly the angular test's own cross product, so one
     // scale-invariant quantity now serves as both the sole degeneracy
-    // test and the sole divisor, with no separate near-origin special
-    // case or cancellation guard needed. This pins the resulting
-    // {10,10} depth-4 tile count (8191, distinct from both this fix's own
-    // intermediate values during debugging and the plain BFS growth
-    // series a reviewer estimated without accounting for dedup, which
-    // this algorithm's whole job is to do) and confirms {10,10} depth 4
-    // stays well under `htmax` (20000), so it's not a silent-truncation
-    // artifact either.
+    // test and the sole divisor.
+    //
+    // Separately, round six also showed the dedup tolerance itself (see
+    // httile's own comment on `httol`) was too loose at this extreme:
+    // the {10,10} tile-adjacency graph has girth q=10 (the shortest
+    // cycle comes from the 10 tiles meeting at a vertex), so no two
+    // walks of length <=4 from the root can reach the same tile without
+    // closing a cycle shorter than the girth allows -- the true count is
+    // the plain reflection-tree growth 1+10+90+810+7290=8201, and the
+    // old 0.3 factor gave 8191, merging ten genuinely distinct tiles.
+    // Tightened to 0.2, which recovers 8201 here at no extra runtime
+    // cost and leaves every other pinned {p,q,depth} in this file
+    // unchanged. This also confirms {10,10} depth 4 stays well under
+    // `htmax` (20000), so it's not a silent-truncation artifact either.
     let got = eval("/n 0 def 100 100 90 10 10 4 { pop /n n 1 add def } httile n");
     assert_eq!(
         got,
-        ["8191"],
+        ["8201"],
         "httile tile count for the {{10,10}} depth-4 cancellation case drifted"
     );
 }

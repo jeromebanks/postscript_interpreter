@@ -278,25 +278,81 @@ propagating a NaN.
 Reverified every discriminating case from rounds two through five
 against the rewrite: `hreflect_stays_exact_near_the_old_radius_cap_boundary`
 (radius ~51) and `horthocircle_collinearity_test_is_scale_invariant`
-(scale-invariant collinearity) both pass unchanged, a new
+(scale-invariant collinearity) both pass unchanged, and a new
 `horthocircle_does_not_special_case_points_merely_near_the_origin` pins
-the round-five near-origin counterexample, and
-`httile_survives_catastrophic_cancellation_at_high_p_q` pins the
-`{10,10}` depth-4 tile count — now 8,191, not the 7,612 the round-four
-band-aid produced (that number reflected the band-aid's own
-approximation error, not real geometry) and not the 8,201 round five's
-review estimated by hand from the tiling's plain reflection-tree growth
-without accounting for what the BFS's dedup step exists to do at all.
-8,191 is what the numerically stable solve actually computes for this
-case, cross-checked against the existing regular tests
-(`{5..8, 3..4}` at depths 3-5, all unchanged) and the fact that the
-`{7,3}` depth-4 gallery piece's render is byte-identical before and
-after this rewrite — the reformulation only changes behavior in the
-extreme regime that exposed it. `{10,10}` depth 4 also stays well under
-`htmax` (20,000), so this isn't a silent-truncation artifact either. The
-`gs`-compat driver in `tests/artkit.rs` runs a `{10,10}` depth-4
+the round-five near-origin counterexample.
+
+**Round six** found two more real bugs in what round five shipped, plus
+a real test-suite cost problem — proof that "the math is now provably
+right" is a stronger claim than "every counterexample so far passes,"
+and worth staying skeptical of even after a from-scratch rewrite:
+
+- The `{10,10}` depth-4 tile count the round-five rewrite computed,
+  8,191, was itself still wrong — by exactly 10, not by coincidence.
+  The `{p,q}` tile-adjacency graph's girth (shortest cycle) is `q`: `q`
+  tiles meet at every vertex, and each adjacent pair in that fan shares
+  an edge, closing a `q`-cycle in the adjacency graph with no shorter
+  cycle possible. For `{10,10}`, girth 10 means no two of a depth-<=4
+  BFS's root-to-tile walks (combined length <=8 < 10) can reach the same
+  tile without closing a cycle shorter than the girth allows — so the
+  *true* count at this depth is just the plain reflection-tree growth,
+  1 + 10 + 90 + 810 + 7,290 = 8,201 tiles, and the dedup step should
+  find zero genuine duplicates this shallow. It wasn't finding zero: the
+  edge-length-scaled dedup tolerance (`httol`, `0.3` times a candidate's
+  own max edge length) was loose enough to merge ten tiles that were
+  never actually duplicates. A sweep on the *rewritten* geometry (a
+  cleaner search than the same sweep run against the old, cancellation-
+  noisy formula in round four, which is likely why it looked
+  unreproducible then) found `0.3`/`0.25` give `8,191`/`8,201` — the
+  cliff is between them — and `0.2`/`0.05` both give `8,201` with no
+  runtime cost change (~31s either way; `0.02` and tighter start timing
+  out, the same O(n^2)-blowup-toward-`htmax` risk found in round four).
+  Retuned to `0.2`: recovers `8,201` here, leaves the shipped range
+  (`{7,3}` depth 4's 232, `{6,4}` depth 5's 1,711, `{7,3}` depth 2's 29)
+  and the gallery render (byte-identical) unchanged. The round-four/five
+  NOTES entries above that called `8,201` an overestimate from "not
+  accounting for what dedup exists to do" had the framing backwards —
+  dedup exists to catch *coincidental* re-visits from different walks,
+  and girth 10 rules those out entirely at this depth; the discrepancy
+  was the tolerance being too loose, not the growth-series estimate
+  being too naive.
+- The isline branch's diameter direction, `(p2-p1)/|p2-p1|` (the chord),
+  is only correct when p1/p2 are *exactly* collinear with the origin,
+  where it agrees with the true radial direction. For a near-collinear
+  pair let in by this branch's angular tolerance, if p1 and p2 have
+  similar magnitude, the chord can be dominated by their tiny angular
+  offset and point nearly tangentially instead — confirmed with
+  p1=(0.99, 0), p2 a hair's-width away in angle at nearly the same
+  radius: reflecting p1 across its own (isline-classified) geodesic
+  moved it to roughly `(-0.99, -0.001)` instead of fixing it, the same
+  defining-point violation as every other bug in this family. Fixed by
+  taking the direction from whichever of p1/p2 is farther from the
+  origin instead of their difference — better-conditioned, and exact
+  whenever the pair really is collinear (both points' own directions and
+  the chord's then agree). New regression test:
+  `horthocircle_isline_fallback_uses_the_radial_not_chord_direction`.
+- The `{10,10}` depth-4 regression test itself was an unbudgeted cost:
+  fine in release (~31s, tolerable for one test) but the plain `cargo
+  test` this repo's quality gate actually runs builds debug, where the
+  same O(n^2) dedup scan over ~8,200 tiles didn't finish in 90+ seconds.
+  Marked `#[ignore]` with an explanation and a pointer to run it
+  explicitly (`cargo test -- --ignored`) rather than shrinking it to a
+  smaller `{p,q,depth}` that wouldn't exercise the same girth-driven
+  "dedup should find nothing" property, since the whole point of this
+  particular test is pinning that behavior at the extreme case that
+  found it. The specific bugs it originally caught (the crash, the
+  near-origin misclassification, the chord-direction error) each have
+  their own cheap, direct `horthocircle`-level regression test now, so
+  losing this one test from the default run doesn't lose coverage of
+  any individual defect — only of the exact combinatorial tile count at
+  this one extreme configuration.
+
+`{10,10}` depth 4 stays well under `htmax` (20,000) even at the tighter
+`0.2` tolerance, so none of this is a silent-truncation artifact either.
+The `gs`-compat driver in `tests/artkit.rs` runs a `{10,10}` depth-4
 `httile` directly — the exact configuration that produced the original
-crash — so this is covered under `gs` itself, not just `pscat`.
+crash — so the crash fix is covered under `gs` itself on every default
+test run, even with the full tile-count regression test marked ignored.
 
 Deliberate omissions: only the Poincare disk model (the issue left model
 choice open; upper-half-plane wasn't needed for anything built here) and

@@ -650,20 +650,28 @@ end
     /hocross hox1 hoy2 mul hoy1 hox2 mul sub def
     /hodeg hocross dup mul 0.000001 dup mul hod1 mul hod2 mul le def
     hodeg {
-        /hodx hox2 hox1 sub def /hody hoy2 hoy1 sub def
-        /hodn hodx dup mul hody dup mul add sqrt def
-        % p1=p2 (a zero-length edge) has no defined direction; this is
-        % pre-existing degeneracy in this branch, not one this rewrite
-        % introduced, but the collinearity test above now routes more
-        % pairs into it -- confirmed reachable at {10,10} depth 4, where
-        % gs's arithmetic (rounding *very* slightly differently than
-        % this interpreter's, so this case doesn't fire under pscat on
-        % the same input) collapses two adjacent, already near-coincident
-        % rim vertices to bit-identical points and then divides 0/0.
-        % There's no principled direction to report for a degenerate
-        % edge, so fall back to an arbitrary unit vector rather than
-        % propagating a NaN into the rest of the BFS.
-        hodn 0 gt { hodx hodn div hody hodn div } { 1 0 } ifelse
+        % The direction of a true diameter is radial -- along the line
+        % through the origin and (either) defining point -- not along the
+        % chord p2-p1. Those agree only when p1/p2 are *exactly*
+        % collinear with the origin; for a near-collinear pair let in by
+        % this branch's tolerance, p2-p1 can be closer to tangential than
+        % radial when p1 and p2 have similar magnitude (a cross-model
+        % review counterexample: p1=(0.99,0), p2 a hair's-width away in
+        % angle at nearly the same radius -- the chord direction there is
+        % dominated by that tiny angular offset, nearly perpendicular to
+        % the true ~(1,0) radial direction, and reflecting p1 across it
+        % moved p1 to roughly (-0.99,-0.001) instead of fixing it). Use
+        % whichever point is farther from the origin (better-conditioned
+        % than the near-origin one, and exact for a true diameter since
+        % both points' own directions agree with each other and with the
+        % chord in that case).
+        hod1 hod2 gt { hox1 hoy1 } { hox2 hoy2 } ifelse
+        /hodry exch def /hodrx exch def
+        /hodrn hodrx dup mul hodry dup mul add sqrt def
+        % Both points at/near the origin (a zero-length or near-zero-length
+        % edge) has no defined direction; fall back to an arbitrary unit
+        % vector rather than propagating a NaN into the rest of the BFS.
+        hodrn 0 gt { hodrx hodrn div hodry hodrn div } { 1 0 } ifelse
         0 true
     } {
         /hok1 hod1 1 add 2 div def
@@ -952,7 +960,16 @@ end
                 } for
                 /htccx htccx htp div def
                 /htccy htccy htp div def
-                /httol htsc 0.3 mul def
+                % 0.2, not the original 0.3: a cross-model review showed
+                % 0.3 merges genuinely distinct tiles for {10,10} depth 4
+                % (dual-graph girth q=10 means no two of that BFS's walks
+                % of length <=4 can reach the same tile combinatorially,
+                % so the true count is the plain reflection-tree growth
+                % 1+10+90+810+7290=8201 -- 0.3 gave 8191, ten tiles
+                % short). 0.2 recovers 8201 here with no runtime cost
+                % (still ~31s, same as 0.3) and leaves every other pinned
+                % {p,q,depth} in this file unchanged (29, 232, 1711).
+                /httol htsc 0.2 mul def
                 /htdup false def
                 0 1 htqtail 1 sub {
                     /htm exch def
