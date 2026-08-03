@@ -91,10 +91,10 @@ run — see #29):
 
 ```sh
 HEARTBEAT="$(git -C "../<repo>-issue-<N>" rev-parse --git-dir 2>/dev/null)/work-issue-heartbeat"
-if [ -f "$HEARTBEAT" ]; then
+if [ -s "$HEARTBEAT" ] && grep -qE '^[0-9]+$' "$HEARTBEAT"; then
   AGE=$(( $(date +%s) - $(cat "$HEARTBEAT") ))
 else
-  AGE=999999   # no heartbeat: worktree never created, or crashed before step 3's first write
+  AGE=999999   # missing, empty, or non-numeric (e.g. a write that died mid-truncation): treat as stale
 fi
 ```
 
@@ -102,8 +102,12 @@ fi
   Report to the user that issue #<N> looks actively worked on
   (heartbeat `$((AGE / 60))` min old) instead of silently racing a
   live session's edits.
-- `AGE` at or above 2700, or no heartbeat file at all: stale — safe to
-  resume.
+- `AGE` at or above 2700, or no valid heartbeat file at all: stale —
+  safe to resume. Validating the content (not just presence) matters:
+  a heartbeat write interrupted between the `>` truncation and `date`
+  finishing leaves an empty file, and a bare `$(( ... - $(cat ...) ))`
+  against an empty or garbage value is a shell arithmetic error, not a
+  graceful "treat as stale."
 
 45 minutes is deliberately generous, not tight: PR #30 needed six
 Codex review rounds in one legitimate run (~62 min total, each round
@@ -147,21 +151,32 @@ WORKTREE_DIR="../${REPO_DIR}-issue-<N>"
 git worktree add -b "$BRANCH" "$WORKTREE_DIR" origin/main
 
 HEARTBEAT="$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"
-date +%s > "$HEARTBEAT"
+date +%s > "$HEARTBEAT.tmp" && mv "$HEARTBEAT.tmp" "$HEARTBEAT"
 ```
 
 The heartbeat file lives in the worktree's git-dir (under the main
 repo's `.git/worktrees/<name>/`), not the tracked working tree — it
 never needs a `.gitignore` entry and never shows up in `git status` or
 a diff. Refresh it at the end of steps 4, 5, 6, and around each Codex
-review round in step 8, so the live-run check above can tell a session
-still working from one that crashed. Each Bash tool call is a fresh
-shell — a `$HEARTBEAT` variable set here won't survive to a later
-step's tool call — so those refreshes re-derive the path inline rather
-than trusting a remembered variable:
+review round in step 8 — and, since "commit checkpoints" or "step
+boundaries" can themselves be 45+ minutes apart during a long compile
+or a lengthy single edit, also refresh it before starting any single
+operation you expect to take a while (a big `cargo build`/`cargo
+test`, an `advisor` call, the Codex review) rather than only after it
+finishes — so the live-run check above can tell a session still
+working from one that crashed. Each Bash tool call is a fresh shell —
+a `$HEARTBEAT` variable set here won't survive to a later step's tool
+call — so those refreshes re-derive the path inline rather than
+trusting a remembered variable. Write it atomically (temp file + `mv`,
+which is atomic on the same filesystem) rather than a bare `>`
+redirect: a process that dies between the redirect's truncation and
+`date` finishing its write would otherwise leave a heartbeat file that
+exists but is empty — the live-run check above already treats that as
+stale, but only *because* it validates content, not just presence:
 
 ```sh
-date +%s > "$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"
+HEARTBEAT="$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"
+date +%s > "$HEARTBEAT.tmp" && mv "$HEARTBEAT.tmp" "$HEARTBEAT"
 ```
 
 (same reasoning already applies to `$WORKTREE_DIR`/`$BRANCH` reused
@@ -183,7 +198,7 @@ there —
 ```sh
 BRANCH="$(git -C "$WORKTREE_DIR" branch --show-current)"
 HEARTBEAT="$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"
-date +%s > "$HEARTBEAT"
+date +%s > "$HEARTBEAT.tmp" && mv "$HEARTBEAT.tmp" "$HEARTBEAT"
 ```
 
 — instead of recomputing a fresh `SLUG`/`BRANCH` from the issue title.
@@ -219,8 +234,9 @@ approach, revise the plan (and call `advisor` again if the revision is
 substantial) before writing any implementation code. Don't proceed to
 step 5 on a plan the advisor pushed back on without addressing why.
 
-Refresh the heartbeat before moving on (re-derive the path, per step
-3's note): `date +%s > "$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"`.
+Refresh the heartbeat before moving on (re-derive the path and write
+atomically, per step 3's note): `H="$(git -C "$WORKTREE_DIR" rev-parse
+--git-dir)/work-issue-heartbeat"; date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
 
 ## 5. Implement
 
@@ -232,29 +248,36 @@ the source of truth:
   program-input-derived data, comments explain why not what, tests
   live alongside the code they test).
 - Commit at reasonable checkpoints, not one giant commit at the end —
-  and refresh the heartbeat at each one (`date +%s > "$(git -C
-  "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"`). Without
-  this, step 4's end and step 5's end are the only two heartbeat
-  refreshes bracketing the entire implementation phase — for any real
-  code change (edit/build/test cycles, not just a doc tweak) that gap
-  alone can exceed the 45-minute staleness threshold, making a still-
-  live implementation look crashed to a concurrent invocation. Per-
-  commit refreshes bound the gap by construction instead of by hoping
-  implementation is fast.
+  and refresh the heartbeat at each one (`H="$(git -C "$WORKTREE_DIR"
+  rev-parse --git-dir)/work-issue-heartbeat"; date +%s > "$H.tmp" &&
+  mv "$H.tmp" "$H"`). Without this, step 4's end and step 5's end are
+  the only two heartbeat refreshes bracketing the entire implementation
+  phase — for any real code change (edit/build/test cycles, not just a
+  doc tweak) that gap alone can exceed the 45-minute staleness
+  threshold, making a still-live implementation look crashed to a
+  concurrent invocation. Per-commit refreshes narrow that, but don't
+  by themselves bound a *single* long-running stretch with no commit
+  yet (e.g. one long compile or one big edit in progress) — also
+  refresh right before starting the quality-gate build below, and
+  again if any single step within it runs long.
 - Update `NOTES.md`/`HANDOFF.md`/`README.md` on the branch as
   capabilities land, per AGENTS.md — not as an afterthought.
 
-Before moving on, the quality bar from AGENTS.md must be clean *in the
-worktree*:
+Refresh the heartbeat before this build (it's often the single
+longest-running step of the whole implementation phase):
 
 ```sh
+H="$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"
+date +%s > "$H.tmp" && mv "$H.tmp" "$H"
 cargo build && cargo test && cargo clippy --all-targets && cargo fmt --all -- --check
 ```
 
 This is the same gate CI runs — clearing it locally first means the
 PR isn't the first place a break shows up.
 
-Refresh the heartbeat: `date +%s > "$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"`.
+Refresh the heartbeat again once it's clean: `H="$(git -C
+"$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"; date +%s >
+"$H.tmp" && mv "$H.tmp" "$H"`.
 
 ## 6. Get the implementation reviewed before marking done
 
@@ -281,7 +304,8 @@ quality gate, and use your judgment on whether it's worth one more
 advisor pass — don't loop indefinitely chasing a clean bill of health
 on genuinely subjective feedback.
 
-Refresh the heartbeat: `date +%s > "$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"`.
+Refresh the heartbeat: `H="$(git -C "$WORKTREE_DIR" rev-parse
+--git-dir)/work-issue-heartbeat"; date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
 
 ## 7. Open the PR, update the issue
 
@@ -366,7 +390,8 @@ step (minutes to tens of minutes per round) and the one most likely to
 make a still-live run look stale to a concurrent invocation:
 
 ```sh
-date +%s > "$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat" && \
+H="$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat" && \
+date +%s > "$H.tmp" && mv "$H.tmp" "$H" && \
 rm -f /tmp/codex-review-<N>.json && \
   cd "$WORKTREE_DIR" && git fetch origin main && \
   test "$(git rev-parse --abbrev-ref HEAD)" = "$BRANCH" && \
