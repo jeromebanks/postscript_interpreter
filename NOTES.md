@@ -168,6 +168,37 @@ math was right:
   correct limit of `1`. New regression test:
   `hpolar_stays_finite_for_a_large_hyperbolic_radius`.
 
+A third round, after pushing the fixes above, found one more in the same
+family as the radius-cap bug — same failure mode, different threshold.
+`horthocircle`'s collinearity check compared the raw circumcircle
+determinant (of p1, p2, and p2's unit-circle inversion) against an
+absolute tolerance. That determinant's magnitude scales with how far
+apart p1 and p2 happen to be, not with how collinear they are with the
+origin — two points a hair's width apart (exactly what `httile`'s own
+edges become a few reflection generations toward the rim) produce a
+tiny determinant regardless of the angle between them, so the absolute
+threshold false-positived as "collinear" for pairs that plainly weren't
+— confirmed with `(0.99, 0)` and `(0.98999999995, 0.0000099)`, distance
+apart ~1e-5 but with a real nonzero angle from the origin, previously
+returning `isline=true` and reflecting `(0.99, 0)` to roughly
+`(-0.99, -0.00001)` instead of fixing it. The same failure mode as the
+radius-cap bug (wrong branch of `hreflect` entirely, not an imprecision
+in the right one), and easy to miss for the same reason: neither the
+Python prototype (which never had this threshold in the first place —
+it tests collinearity the same corrected way described next) nor the
+existing test suite exercised a pair this close together non-collinearly
+until this round went looking for one. Fixed by testing collinearity
+angularly instead of by the determinant's raw size: sin(angle between
+p1 and p2 as seen from the origin) = (x1\*y2 - y1\*x2)/(|p1||p2|), a
+ratio with no dependence on how far apart p1 and p2 are, only on the
+angle between them — compared in squared form to skip two square roots.
+New regression test: `horthocircle_collinearity_test_is_scale_invariant`.
+Tile counts and every render were re-checked against this fix too
+(unchanged at every `{p,q,depth}` re-verified, including the 232-tile
+gallery piece and `{6,4}` depth 5's 1,711) — this specific configuration
+just hadn't come up yet in anything rendered so far, not evidence it
+never will.
+
 Verified against `gs` throughout, not just at the end: both the
 Ghostscript acceptance driver (`tests/artkit.rs`) and every render done
 while building this (`examples/hyperbolic.ps`, `gallery/

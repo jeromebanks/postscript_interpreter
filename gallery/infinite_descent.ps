@@ -31,10 +31,13 @@
     /hod2 hox2 dup mul hoy2 dup mul add def
     /hodeg hod1 0.000001 lt hod2 0.000001 lt or def
     hodeg not {
+        /hocross hox1 hoy2 mul hoy1 hox2 mul sub def
+        /hodeg hodeg hocross dup mul 0.000001 dup mul hod1 mul hod2 mul lt or def
+    } if
+    hodeg not {
         /hocx2 hox2 hod2 div def /hocy2 hoy2 hod2 div def
         /hod hox1 hoy2 hocy2 sub mul hox2 hocy2 hoy1 sub mul add
              hocx2 hoy1 hoy2 sub mul add 2 mul def
-        /hodeg hodeg hod abs 0.000001 lt or def
     } if
     hodeg {
         /hodx hox2 hox1 sub def /hody hoy2 hoy1 sub def

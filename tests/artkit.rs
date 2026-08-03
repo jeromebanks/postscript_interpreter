@@ -745,6 +745,36 @@ fn hreflect_stays_exact_near_the_old_radius_cap_boundary() {
 }
 
 #[test]
+fn horthocircle_collinearity_test_is_scale_invariant() {
+    // Regression test for a real bug caught by a third round of
+    // cross-model review: the collinearity check used the raw
+    // circumcircle determinant against an absolute threshold, whose
+    // magnitude scales with how far apart p1/p2 happen to be, not with
+    // how collinear they are with the origin. Two points a hair's width
+    // apart but clearly *not* collinear with the origin -- this exact
+    // pair, verified non-collinear since (0.99, 0) and
+    // (0.98999999995, 0.0000099) have a nonzero angle between them as
+    // seen from the origin -- used to false-positive as isline=true
+    // (the same failure mode as the radius-cap bug above: hreflect then
+    // mirrors across the wrong line and moves p1 instead of fixing it).
+    // Exactly the kind of pair `httile` produces a few reflection
+    // generations toward the rim, where edges shrink fast. Fixed by
+    // testing collinearity angularly (sin of the angle between p1 and
+    // p2 from the origin, via the cross product, scale-invariant by
+    // construction) instead of via the raw determinant's magnitude.
+    let got = eval("0.99 0 0.98999999995 0.0000099 horthocircle");
+    assert_eq!(got[3], "false", "should report a true circle, not isline");
+
+    let fixed = eval("0.99 0 0.98999999995 0.0000099 horthocircle 0.99 0 hreflect");
+    let fx: f64 = fixed[0].parse().unwrap();
+    let fy: f64 = fixed[1].parse().unwrap();
+    assert!(
+        (fx - 0.99).abs() < 1e-6 && fy.abs() < 1e-6,
+        "p1 should be a fixed point of its own geodesic's reflection: got ({fx}, {fy})"
+    );
+}
+
+#[test]
 fn httile_does_not_leak_a_callers_pre_existing_path_into_the_first_tile() {
     // Regression test for a real bug caught by cross-model review:
     // httile used to build each tile's path with hpoly alone, which only

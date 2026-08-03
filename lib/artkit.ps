@@ -619,6 +619,22 @@ end
     /hod2 hox2 dup mul hoy2 dup mul add def
     /hodeg hod1 0.000001 lt hod2 0.000001 lt or def
     hodeg not {
+        % Collinearity, tested angularly (sin of the angle between p1
+        % and p2 as seen from the origin, via the cross product) rather
+        % than by the raw circumcircle determinant below. The raw
+        % determinant's absolute magnitude scales with how far apart
+        % p1/p2 happen to be, not with how collinear they are with the
+        % origin -- two points a hair's width apart (as httile's own
+        % edges become a few reflection generations toward the rim)
+        % produce a tiny determinant regardless of angle, so an absolute
+        % threshold on it false-positives as "collinear" and routes
+        % hreflect through the wrong (mirror-across-a-line) formula.
+        % sin(angle) = (x1*y2 - y1*x2)/(|p1||p2|) has no such scale
+        % dependence; compared in squared form below to skip two sqrts.
+        /hocross hox1 hoy2 mul hoy1 hox2 mul sub def
+        /hodeg hodeg hocross dup mul 0.000001 dup mul hod1 mul hod2 mul lt or def
+    } if
+    hodeg not {
         /hocx2 hox2 hod2 div def
         /hocy2 hoy2 hod2 div def
         /hod
@@ -627,7 +643,6 @@ end
             hocx2 hoy1 hoy2 sub mul add
             2 mul
         def
-        /hodeg hodeg hod abs 0.000001 lt or def
     } if
     hodeg {
         /hodx hox2 hox1 sub def /hody hoy2 hoy1 sub def
