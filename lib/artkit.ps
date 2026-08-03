@@ -662,13 +662,34 @@ end
     % roughly eps times the magnitude of the terms being subtracted
     % (`|x1*y2| + |y1*x2|`), not a threshold relative to |p1||p2| (round
     % 7's failure mode) or an absolute zero (this round's own first,
-    % overcorrected attempt). eps=1e-12 recovers every pinned tile count
-    % (29, 232, 1711, 8201) and does not misclassify either the round-7
-    % counterexample above or round 3's (D=9.8e-6 there, ~1e6x this
-    % noise floor).
+    % overcorrected attempt).
+    %
+    % eps=1e-6, not the tighter value this file used briefly: round eight
+    % found `gs` computes PostScript reals in 32-bit float (confirmed:
+    % `1 3 div` prints `0.333333343` under `gs`, `0.3333333333333333`
+    % here), whose noise floor for a subtraction like this is around
+    % 1.2e-7 relative -- an order of magnitude looser than this
+    % interpreter's f64 noise floor, which a tight eps was tuned against.
+    % Too tight, `gs`'s own arithmetic corrupts `cx`/`cy` for pairs it
+    % can't reliably subtract, silently inflating tile counts (confirmed:
+    % the shipped {7,3} depth-4 gallery piece rendered 323 tiles under
+    % `gs` instead of 232). eps=1e-6 sits in the (narrow) window above
+    % `gs`'s noise floor and below the round-7 counterexample's own
+    % ratio (1.42e-6) -- the largest value that still keeps every pinned
+    % tile count exact under this interpreter's f64 arithmetic (29, 232,
+    % 1711, 8201) and doesn't misclassify either discriminator above.
+    % That narrowness is itself the finding: this interpreter's and
+    % `gs`'s noise floors are only about one order of magnitude apart
+    % under float32, so no single constant serves both exactly -- `gs`
+    % improves substantially (323 -> 233 tiles on the gallery piece) but
+    % isn't tile-count-exact with this interpreter even here, the same
+    % way it isn't for the *much* shallower {7,3} depth 2 (29 here, 30
+    % under `gs`) or {6,4} depth 5 (1711 here, 1653 under `gs`) --
+    % see NOTES.md for why this is a documented, expected precision
+    % difference rather than a bug to keep chasing.
     /hocross hox1 hoy2 mul hoy1 hox2 mul sub def
     /honoise hox1 hoy2 mul abs hoy1 hox2 mul abs add def
-    /hodeg hocross abs honoise 1e-12 mul le def
+    /hodeg hocross abs honoise 1e-6 mul le def
     hodeg {
         % The direction of a true diameter is radial -- along the line
         % through the origin and (either) defining point -- not along the

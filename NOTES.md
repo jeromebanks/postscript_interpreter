@@ -199,15 +199,34 @@ gallery piece and `{6,4}` depth 5's 1,711) — this specific configuration
 just hadn't come up yet in anything rendered so far, not evidence it
 never will.
 
-Verified against `gs` throughout, not just at the end: both the
+Checked against `gs` throughout, not just at the end: both the
 Ghostscript acceptance driver (`tests/artkit.rs`) and every render done
 while building this (`examples/hyperbolic.ps`, `gallery/
 infinite_descent.ps`) were run under both `pscat` and `gs` and compared
-by eye. Structurally identical in both; `gs`'s arcs facet more coarsely
-near the rim on the gallery piece, the same documented `flattenpath`
-tolerance difference `HANDOFF.md` already records (fixed quarter-pixel
-device-space tolerance vs. `gs`'s `setflat`-driven one — chord counts
-differ, shapes agree).
+by eye, and looked structurally identical there — but "by eye" is
+exactly what missed what round eight's cross-model review later found
+by actually counting tiles: `gs` computes PostScript reals in 32-bit
+float (`1 3 div` prints `0.333333343` under `gs`, `0.3333333333333333`
+here), a full order of magnitude less precise than the f64 arithmetic
+this file's degeneracy thresholds are tuned against, and that
+compounds through `httile`'s recursive reflections into a genuinely
+different tile count at *every* depth checked — not just the extreme
+`{10,10}` case, but the shipped `{7,3}` depth 4 (232 here, 233 under
+`gs` after round eight's fix, 323 before it) and even `{7,3}` depth 2
+(29 here, 30 under `gs`). This is the same category of difference as
+the already-documented `flattenpath` tolerance gap (fixed quarter-pixel
+device-space tolerance here vs. `gs`'s `setflat`-driven one — chord
+counts differ, shapes agree) but with a larger, harder-to-eyeball
+effect: a handful of tiles out of a couple hundred don't jump out
+visually the way a coarser arc facet does. The tile counts pinned in
+`tests/artkit.rs` (29, 232, 1,711, 8,201) are this interpreter's own —
+exact only here, not under `gs`. What *is* still verified under `gs`:
+it accepts and runs the library without error or crash (including the
+former `{10,10}` `undefinedresult`), produces a valid, in-bounds
+tiling, and its `{7,3}` depth-4 tile count stays within a sanity band
+(`ghostscript_accepts_artkit`) rather than asserted exact, since no
+single degeneracy threshold can be exact for two interpreters an order
+of magnitude apart in float precision — see round eight below.
 
 A fourth round, after pushing the third round's fix, found a real crash;
 fixing it properly took a fifth round to get right, since the first
@@ -404,6 +423,51 @@ plus a P2 dispositioned as out of scope rather than fixed:
   branch didn't introduce or change, not a defect in anything rounds
   four through seven touched. Left as a possible follow-up, not chased
   here.
+
+**Round eight** found one genuine bug and two real gaps, none of them
+another adjacent counterexample in the `{10,10}`-only family the
+previous rounds had been narrowing in on:
+
+- **Improved, not eliminated — see the `gs` precision paragraph
+  above.** The round-seven `eps=1e-12` threshold, tuned against this
+  interpreter's f64 arithmetic, was far tighter than `gs`'s own 32-bit
+  float precision needs: under `gs`, pairs whose `D` should trip the
+  degeneracy test instead fall through to a division `gs`'s own
+  arithmetic can't reliably compute, producing corrupted circle centers
+  — confirmed on the *shipped* `{7,3}` depth-4 gallery piece, which
+  rendered 323 tiles under `gs` instead of 232. Retuned to `eps=1e-6` —
+  the largest value that still keeps every pinned f64 tile count exact
+  and doesn't misclassify either the round-six or round-seven
+  discriminator pairs (whose own ratios are 9.67e-13 and 1.42e-6
+  respectively, so the admissible window for a single constant is
+  genuinely that narrow: about one order of magnitude, sandwiched
+  between `gs`'s ~1.2e-7 float32 epsilon and the round-seven pair's own
+  ratio). This took `gs`'s `{7,3}` depth-4 count from 323 to 233 — a
+  large improvement — but not to the exact 232 this interpreter
+  computes: even `{7,3}` depth 2 (three reflection generations, about
+  as shallow as this algorithm gets) diverges by one tile under `gs`
+  (29 vs 30). That ruled out chasing exact parity any further: if a
+  three-generation tiling doesn't match, no single-constant threshold
+  fix inside `horthocircle` is going to make a four- or five-generation
+  one match either — the gap is `gs`'s float32 arithmetic itself, not a
+  remaining defect in this formula. `ghostscript_accepts_artkit`
+  (`tests/artkit.rs`) now checks the `{7,3}` depth-4 tile count against
+  a `[200, 260]` sanity band under `gs` (catching a crash, a collapse,
+  or another round-eight-style inflation) instead of asserting an exact
+  count that `gs` cannot be relied on to hit; exact counts stay asserted
+  under this interpreter only.
+- **Fixed.** The new gallery piece wasn't linked from the published
+  site's gallery page (`site/gallery.html` — separate from
+  `gallery/README.md`, which was already updated when the piece
+  shipped; the site page is hand-authored and copies renders at build
+  time via `scripts/build_site.sh`, so adding the file wasn't enough).
+  Added the card.
+- **Fixed.** The root `README.md`'s "Making art" section, which
+  AGENTS.md requires kept current as capabilities land, still stopped
+  at the Euclidean tiling section and never mentioned the hyperbolic
+  toolkit added by this issue. Added a paragraph naming `hpoint`/
+  `hpolar`/`horthocircle`/`hgeo`/`hpoly`/`hreflect`/`httile` and
+  pointing at the gallery piece.
 
 Deliberate omissions: only the Poincare disk model (the issue left model
 choice open; upper-half-plane wasn't needed for anything built here) and

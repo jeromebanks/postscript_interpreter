@@ -269,8 +269,16 @@ string on the circle automatically. A tiling section adds a general
 drivers for the two other regular tessellations, and `truchet` — a
 single motif at a random quarter-turn per cell, the classic trick that
 turns a regular grid into a flowing, maze-like pattern (see gallery's
-Woven Labyrinth). All of it deterministic under `srand`, all of it
-running unchanged in Ghostscript.
+Woven Labyrinth). A hyperbolic-geometry section models the Poincaré
+disk: `hpoint`/`hpolar` place points by hyperbolic radius and angle,
+`horthocircle`/`hgeo`/`hpoly` build individual geodesics and closed
+geodesic polygons (circular arcs orthogonal to the unit disk, or
+diameters through the origin), `hreflect` reflects across one (circle
+inversion), and `httile` runs the reflections breadth-first to
+generate a regular `{p,q}` tessellation of the whole disk from one
+fundamental polygon (see gallery's Infinite Descent, a `{7,3}`
+tiling). All of it deterministic under `srand`, all of it running
+unchanged in Ghostscript.
 
 ```postscript
 (lib/artkit.ps) run

@@ -410,6 +410,25 @@ fn ghostscript_accepts_artkit() {
     // p,q pair this suite exercises) is the exact configuration that once
     // made gs raise `undefinedresult` dividing by a catastrophically
     // cancelled `hod` -- see httile_survives_catastrophic_cancellation_at_high_p_q.
+    //
+    // The {7,3} depth-4 call also counts its own tiles (`nbox`) rather
+    // than just painting, and that count is checked below against a
+    // *band*, not pscat's own exact pinned value (232, see
+    // httile_generates_the_expected_tile_count_and_calls_proc_that_many_times).
+    // A cross-model review (round 8) found gs computes PostScript reals
+    // in 32-bit float (`1 3 div` prints `0.333333343` under gs, vs this
+    // interpreter's `0.3333333333333333`) -- a full order of magnitude
+    // less precise than the f64 arithmetic horthocircle's degeneracy
+    // threshold is tuned against, so gs's own tile count diverges from
+    // this interpreter's at *every* depth this suite has checked (29 vs
+    // 30 at depth 2, 232 vs 233 at this depth 4, 1711 vs 1653 at {6,4}
+    // depth 5) -- a real, inherent precision difference between the two
+    // interpreters' arithmetic, not a defect (see NOTES.md). The band
+    // below exists to catch what actually matters under gs: a crash, a
+    // collapse back toward the round-8 bug's 323, or growth toward
+    // htmax -- not bit-for-bit parity with this interpreter, which
+    // recursive floating-point BFS reflection can't guarantee across
+    // different float widths.
     let driver = "3 srand \
         newpath 100 100 0 thome 1 1 60 { dup fd 89 tr pop } for stroke \
         newpath 200 50 90 thome (F) << (F) 0 get (F[+F]F) >> 3 lsys 3 20 ldraw stroke \
@@ -424,14 +443,16 @@ fn ghostscript_accepts_artkit() {
             newpath cx cy s up tri fill end } trigrid \
         0 0 60 60 3 3 { pop pop newpath 0 0 20 0 360 arc fill } truchet \
         300 300 15 0 0 15 3 3 { /y exch def /x exch def newpath x y 5 0 360 arc fill } lattice \
-        340 350 35 7 3 4 { pop 0.4 setgray fill } httile \
+        /nbox 1 array def nbox 0 0 put \
+        340 350 35 7 3 4 { pop nbox 0 nbox 0 get 1 add put 0.4 setgray fill } httile \
+        (GSTILES ) print nbox 0 get == \
         30 30 15 10 10 4 { pop } httile \
         showpage\n";
     let dir = std::env::temp_dir().join(format!("pscat-artkit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
     let combined = dir.join("artkit_gs.ps");
     std::fs::write(&combined, format!("{lib}\n{driver}")).expect("write");
-    let status = std::process::Command::new("gs")
+    let output = std::process::Command::new("gs")
         .args([
             "-dNOPAUSE",
             "-dBATCH",
@@ -442,9 +463,28 @@ fn ghostscript_accepts_artkit() {
             "-o/dev/null",
         ])
         .arg(&combined)
-        .status()
+        .output()
         .expect("run gs");
-    assert!(status.success(), "gs rejected artkit");
+    assert!(
+        output.status.success(),
+        "gs rejected artkit: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let tiles: i64 = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("GSTILES "))
+        .unwrap_or_else(|| panic!("gs didn't print a tile count: {stdout:?}"))
+        .trim()
+        .parse()
+        .expect("tile count parses as an integer");
+    assert!(
+        (200..=260).contains(&tiles),
+        "gs's {{7,3}} depth-4 tile count ({tiles}) is outside the sanity band \
+         [200, 260] -- either far tighter dedup collapse or the round-8-style \
+         inflation this band exists to catch (pscat's own exact count is 232, \
+         gs's own precision means somewhere nearby, not identical, is expected)"
+    );
 }
 
 #[test]
