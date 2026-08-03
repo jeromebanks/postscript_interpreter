@@ -414,6 +414,7 @@ fn ghostscript_accepts_artkit() {
             newpath cx cy s up tri fill end } trigrid \
         0 0 60 60 3 3 { pop pop newpath 0 0 20 0 360 arc fill } truchet \
         300 300 15 0 0 15 3 3 { /y exch def /x exch def newpath x y 5 0 360 arc fill } lattice \
+        340 350 35 7 3 2 { pop 0.4 setgray fill } httile \
         showpage\n";
     let dir = std::env::temp_dir().join(format!("pscat-artkit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
@@ -489,6 +490,205 @@ fn trigrid_stamp_calling_tri_with_a_whole_stamp_dict_wrap() {
             up,
             if *eup { 1.0 } else { 0.0 },
             "triangle {k}: wrong orientation"
+        );
+    }
+}
+
+#[test]
+fn horthocircle_produces_a_circle_orthogonal_to_the_unit_circle() {
+    // A circle (center C, radius r) is orthogonal to the unit circle iff
+    // |C|^2 = r^2 + 1 -- the defining property a hyperbolic geodesic's
+    // support circle must have. Checked on several non-collinear-with-
+    // origin point pairs (isline must come back false for each).
+    for (x1, y1, x2, y2) in [
+        (0.2, 0.1, 0.5, -0.3),
+        (-0.4, 0.6, 0.1, -0.5),
+        (0.7, 0.2, -0.3, 0.6),
+        (-0.6, -0.6, 0.5, -0.2),
+    ] {
+        let got = eval(&format!("{x1} {y1} {x2} {y2} horthocircle"));
+        assert_eq!(got[3], "false", "({x1},{y1})-({x2},{y2}) came back isline");
+        let a: f64 = got[0].parse().unwrap();
+        let b: f64 = got[1].parse().unwrap();
+        let r: f64 = got[2].parse().unwrap();
+        assert!(
+            (a * a + b * b - (r * r + 1.0)).abs() < 1e-9,
+            "({x1},{y1})-({x2},{y2}): center {a},{b} radius {r} not orthogonal to unit circle"
+        );
+    }
+}
+
+#[test]
+fn hreflect_is_an_involution_and_fixes_its_own_geodesic_points() {
+    // Reflecting a point across a geodesic twice must return it exactly
+    // (hreflect is its own inverse), and reflecting either point that
+    // *defines* the geodesic must fix it (it's already on the line/arc
+    // being reflected across). Covers both branches: a proper arc and
+    // the degenerate diameter (points collinear with the origin).
+    for (x1, y1, x2, y2, px, py) in [
+        (0.2, 0.1, 0.5, -0.3, 0.35, 0.42), // arc case
+        (0.3, 0.3, -0.2, -0.2, -0.1, 0.6), // diameter case
+    ] {
+        let fixed = eval(&format!(
+            "{x1} {y1} {x2} {y2} horthocircle {x1} {y1} hreflect"
+        ));
+        let fx: f64 = fixed[0].parse().unwrap();
+        let fy: f64 = fixed[1].parse().unwrap();
+        assert!(
+            (fx - x1).abs() < 1e-6 && (fy - y1).abs() < 1e-6,
+            "defining point ({x1},{y1}) not fixed: got ({fx},{fy})"
+        );
+
+        let twice = eval(&format!(
+            "/hc [{x1} {y1} {x2} {y2} horthocircle] def \
+             hc aload pop {px} {py} hreflect \
+             /ry exch def /rx exch def \
+             hc aload pop rx ry hreflect"
+        ));
+        let tx: f64 = twice[0].parse().unwrap();
+        let ty: f64 = twice[1].parse().unwrap();
+        assert!(
+            (tx - px).abs() < 1e-6 && (ty - py).abs() < 1e-6,
+            "double reflection of ({px},{py}) didn't return: got ({tx},{ty})"
+        );
+    }
+}
+
+#[test]
+fn httile_circumradius_formula_matches_independently_verified_values() {
+    // httile's fundamental-polygon radius: cosh(rh) = cot(pi/p)*cot(pi/q),
+    // R = tanh(rh/2), simplified to sqrt((C-1)/(C+1)) to avoid needing
+    // acosh (C = cosh(rh)). This re-runs that exact expression (mirrored
+    // from lib/artkit.ps's httile, not calling it -- httile has no public
+    // way to report R on its own) against values independently verified
+    // by building each {p,q}'s fundamental polygon at the candidate R and
+    // measuring the *Euclidean* tangent angle between adjacent edges at a
+    // shared vertex (equal to the hyperbolic angle there, since the disk
+    // model is conformal) -- confirmed to reproduce 360/q exactly for
+    // both pairs below (and three others) in a standalone prototype
+    // before this formula went into artkit.ps (see NOTES.md).
+    for (p, q, expected_r) in [(7, 3, 0.300742618746379), (6, 4, 0.5176380902050418)] {
+        let got = eval(&format!(
+            "180 {p} div cos 180 {p} div sin div \
+             180 {q} div cos 180 {q} div sin div mul \
+             dup 1 sub exch 1 add div sqrt"
+        ));
+        let r: f64 = got[0].parse().unwrap();
+        assert!(
+            (r - expected_r).abs() < 1e-12,
+            "{{{p},{q}}}: R = {r}, expected {expected_r}"
+        );
+    }
+}
+
+#[test]
+fn httile_and_hpoly_never_paint_outside_the_disk() {
+    // The single most likely place for a subtle bug: hgeo/hpoly's
+    // arc-direction picker (which of the two arcs on the geodesic's
+    // support circle stays inside the disk). A wrong branch produces an
+    // arc that bulges *outside* the unit circle -- fill the whole
+    // tessellation and assert not one pixel of ink lands outside the
+    // disk's own radius from its center (canvas sized to exactly match,
+    // so there's nowhere for stray ink to hide off-screen).
+    let mut it = Interp::with_page(300, 300).expect("page");
+    load(&mut it);
+    it.run_str(
+        "1 setgray newpath 0 0 300 300 rectfill \
+         150 150 145 7 3 4 { pop 0 setgray fill } httile",
+    )
+    .unwrap_or_else(|e| panic!("httile failed: {}", it.error_report(&e)));
+    let pixmap = &it.gfx().pixmap;
+    let (cx, cy, r) = (150.0_f64, 150.0_f64, 145.0_f64);
+    let margin = 2.0; // stroke/AA slack, not geometry slack
+    for y in 0..pixmap.height() {
+        for x in 0..pixmap.width() {
+            let p = pixmap.pixel(x, y).expect("in bounds");
+            if p.red() < 128 {
+                let dx = x as f64 + 0.5 - cx;
+                let dy = y as f64 + 0.5 - cy;
+                let dist = (dx * dx + dy * dy).sqrt();
+                assert!(
+                    dist <= r + margin,
+                    "ink at ({x},{y}), distance {dist:.2} from center exceeds disk radius {r}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn httile_generates_the_expected_tile_count_and_calls_proc_that_many_times() {
+    // Pins the whole BFS-plus-dedup pipeline's output size for one fixed
+    // {p,q,depth,frame} -- a regression net on the reflection generator
+    // and its edge-length-scaled dedup tolerance together, the way
+    // lattice_walks_the_expected_points pins lattice's exact points.
+    let got = eval("/n 0 def 100 100 90 7 3 2 { pop /n n 1 add def } httile n");
+    assert_eq!(
+        got,
+        ["30"],
+        "httile tile count drifted from its pinned value"
+    );
+}
+
+#[test]
+fn fundamental_polygon_edges_meet_at_the_expected_interior_angle() {
+    // Complements the circumradius arithmetic pin above with the
+    // geometric property the formula is *for*: q polygons meeting at
+    // every vertex means each interior angle is 360/q degrees. Measures
+    // it directly (not re-deriving the angle algebraically) off the
+    // fundamental polygon's own two edges at vertex 0, via each edge's
+    // true Euclidean tangent direction there (equal to the hyperbolic
+    // angle, since the disk model is conformal) -- horthocircle gives
+    // the supporting circle, and the tangent at a point on it is
+    // perpendicular to (point - center); the isline case's `a,b` is
+    // already a unit direction, no perpendicular needed. Each tangent's
+    // sign is disambiguated by which way points back toward the other
+    // vertex on that edge (the arcs in play here are always < 180 deg,
+    // so "closer to the straight chord" reliably picks the right one).
+    // Reproduces this repo's own construction, so this is checking the
+    // same claim the Python prototype (see NOTES.md) checked
+    // independently before this formula went into artkit.ps -- not a
+    // duplicate of the circumradius test above, since a bug in vertex
+    // ordering or the horthocircle/hreflect math itself (as opposed to
+    // just the R formula) would pass that test but fail this one.
+    const BODY: &str = "\
+             /C 180 p div cos 180 p div sin div \
+                180 q div cos 180 q div sin div mul def \
+             /R C 1 sub C 1 add div sqrt def \
+             /v0x R def /v0y 0 def \
+             /v1a 360 1 mul p div def \
+             /v1x R v1a cos mul def /v1y R v1a sin mul def \
+             /vpa 360 p 1 sub mul p div def \
+             /vpx R vpa cos mul def /vpy R vpa sin mul def \
+             /tangent { \
+                 /twy exch def /twx exch def \
+                 /pty exch def /ptx exch def \
+                 /isl exch def /r exch def /b exch def /a exch def \
+                 isl { /tx a def /ty b def } { \
+                     /tx pty b sub neg def /ty ptx a sub def \
+                     /tn tx dup mul ty dup mul add sqrt def \
+                     /tx tx tn div def /ty ty tn div def \
+                 } ifelse \
+                 tx twx ptx sub mul ty twy pty sub mul add 0 lt { \
+                     /tx tx neg def /ty ty neg def \
+                 } if \
+                 tx ty \
+             } def \
+             vpx vpy v0x v0y horthocircle v0x v0y vpx vpy tangent \
+             /t1y exch def /t1x exch def \
+             v0x v0y v1x v1y horthocircle v0x v0y v1x v1y tangent \
+             /t2y exch def /t2x exch def \
+             /dotp t1x t2x mul t1y t2y mul add def \
+             /crossp t1x t2y mul t1y t2x mul sub def \
+             /ang crossp dotp atan def \
+             ang 180 gt { 360 ang sub } { ang } ifelse";
+    for (p, q) in [(7, 3), (6, 4), (5, 4), (8, 3)] {
+        let got = eval(&format!("/p {p} def /q {q} def {BODY}"));
+        let angle: f64 = got[0].parse().unwrap();
+        let expected = 360.0 / q as f64;
+        assert!(
+            (angle - expected).abs() < 1e-6,
+            "{{{p},{q}}}: measured interior angle {angle}, expected {expected}"
         );
     }
 }

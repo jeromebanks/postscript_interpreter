@@ -3,6 +3,87 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Hyperbolic geometry in the Poincare disk (issue #10, 2026-08-02)
+
+Closes issue #10, the companion to issue #9's Euclidean tiling library
+("non-Euclidean visualizations tend to need their own coordinate/
+projection handling ... distinct from ordinary planar drawing, which is
+why it's split out as its own issue"). Added a new `lib/artkit.ps`
+section: `hpoint`/`hpolar` (logical-unit-disk <-> device mapping, and
+hyperbolic-radius/angle placement), `horthocircle` (the circle
+orthogonal to the unit circle through two points — a hyperbolic
+geodesic's support circle, or the degenerate diameter case), `hreflect`
+(circle inversion / mirror reflection across a geodesic), `hgeo`/`hpoly`
+(single geodesics and closed geodesic polygons built from them), and
+`httile` (a breadth-first-reflection generator for regular {p,q}
+hyperbolic tessellations). New demo `examples/hyperbolic.ps` (three
+panels: `httile`, `hpolar`, raw `hgeo`); new gallery piece
+`gallery/infinite_descent.ps`, a {7,3} tessellation (233 tiles, four
+reflection generations) colored in rings by BFS generation.
+
+Two real bugs, both caught by validating the algorithm in a standalone
+Python prototype before trusting the PostScript translation (matplotlib
+render compared by eye against the textbook {7,3}/{6,4} Poincare-disk
+tilings) rather than debugging the geometry live in PostScript:
+
+- **The circumradius convention was backwards on the first pass.** The
+  fundamental polygon's hyperbolic circumradius comes from splitting it
+  into right triangles with angles pi/p at the center and pi/q at the
+  vertex; the correct relation is `cosh(rh) = cot(pi/p)*cot(pi/q)`, not
+  the swapped `cot(pi/q)*cot(pi/p)`-with-different-angle-assignment
+  version tried first (same factors, different triangle, wrong answer —
+  {7,3} came out R~0.14, visibly too small once rendered). Caught by an
+  advisor review of the plan *before* any PostScript was written: it
+  flagged the convention as unverified and asked for a direct check, not
+  just re-reading the algebra. The direct check — build the fundamental
+  polygon at a candidate R and measure the *Euclidean* tangent angle
+  between adjacent edges at a shared vertex, equal to the hyperbolic
+  angle there since the Poincare disk is conformal — reproduces 360/q
+  exactly for the corrected formula across five different {p,q} pairs,
+  and is now also a permanent Rust regression test
+  (`fundamental_polygon_edges_meet_at_the_expected_interior_angle`), not
+  just a one-off script.
+- **The BFS dedup tolerance stopped the tiling from growing with depth**
+  once the geometry itself was right. Tolerance was first scaled to a
+  candidate tile's distance from the disk's origin, which stays close to
+  1 near the rim even as the tiles themselves keep shrinking there in
+  Euclidean terms — an increasingly loose tolerance relative to actual
+  tile size, so it started rejecting genuinely new neighbors as false
+  duplicates, silently capping {6,4} at 37 tiles regardless of requested
+  depth. Fixed by scaling to the candidate's own max edge length instead
+  (Mobius reflections are conformal, hence local similarities, so edge
+  length shrinks toward the rim exactly as fast as the tile's whole
+  footprint does) — {6,4} now reaches 1,711 tiles at depth 5, matching
+  the Python prototype exactly.
+
+One more edge case worth its own line: near-but-not-exactly-collinear
+input to `horthocircle` (three points almost, not quite, lined up
+through the origin) is mathematically valid but can produce an
+arbitrarily large circle radius as the true diameter limit is
+approached — large enough that `arc` chokes (`gs` raised `limitcheck` on
+one, found deep in a depth-4 BFS). No fixed threshold on the
+determinant that flags the degenerate/diameter case is scale-invariant
+here, so the radius itself is capped instead (>50 falls back to the
+diameter case) — visually identical to the true arc at that radius
+regardless of device scale.
+
+Verified against `gs` throughout, not just at the end: both the
+Ghostscript acceptance driver (`tests/artkit.rs`) and every render done
+while building this (`examples/hyperbolic.ps`, `gallery/
+infinite_descent.ps`) were run under both `pscat` and `gs` and compared
+by eye. Structurally identical in both; `gs`'s arcs facet more coarsely
+near the rim on the gallery piece, the same documented `flattenpath`
+tolerance difference `HANDOFF.md` already records (fixed quarter-pixel
+device-space tolerance vs. `gs`'s `setflat`-driven one — chord counts
+differ, shapes agree).
+
+Deliberate omissions: only the Poincare disk model (the issue left model
+choice open; upper-half-plane wasn't needed for anything built here) and
+only reflection-generated regular {p,q} tilings (no general Mobius
+transformation group, no irregular/non-edge-to-edge tilings) — sufficient
+for the "distinct coordinate/projection handling" the issue asked for
+without building machinery nothing here uses yet.
+
 ## A procedural jittered-stroke Hangul face (issue #6, 2026-08-02)
 
 Closes issue #6, set aside earlier (see issue #9's entry below) as "a
