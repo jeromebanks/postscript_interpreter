@@ -3,6 +3,479 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Hyperbolic geometry in the Poincare disk (issue #10, 2026-08-02)
+
+Closes issue #10, the companion to issue #9's Euclidean tiling library
+("non-Euclidean visualizations tend to need their own coordinate/
+projection handling ... distinct from ordinary planar drawing, which is
+why it's split out as its own issue"). Added a new `lib/artkit.ps`
+section: `hpoint`/`hpolar` (logical-unit-disk <-> device mapping, and
+hyperbolic-radius/angle placement), `horthocircle` (the circle
+orthogonal to the unit circle through two points — a hyperbolic
+geodesic's support circle, or the degenerate diameter case), `hreflect`
+(circle inversion / mirror reflection across a geodesic), `hgeo`/`hpoly`
+(single geodesics and closed geodesic polygons built from them), and
+`httile` (a breadth-first-reflection generator for regular {p,q}
+hyperbolic tessellations). New demo `examples/hyperbolic.ps` (three
+panels: `httile`, `hpolar`, raw `hgeo`); new gallery piece
+`gallery/infinite_descent.ps`, a {7,3} tessellation (232 tiles, four
+reflection generations) colored in rings by BFS generation.
+
+Two real bugs, both caught by validating the algorithm in a standalone
+Python prototype before trusting the PostScript translation (matplotlib
+render compared by eye against the textbook {7,3}/{6,4} Poincare-disk
+tilings) rather than debugging the geometry live in PostScript:
+
+- **The circumradius convention was backwards on the first pass.** The
+  fundamental polygon's hyperbolic circumradius comes from splitting it
+  into right triangles with angles pi/p at the center and pi/q at the
+  vertex; the correct relation is `cosh(rh) = cot(pi/p)*cot(pi/q)`, not
+  `cosh(rh) = cos(pi/p)/sin(pi/q)` — a different formula entirely (a
+  ratio, not a product of cotangents), tried first and wrong ({7,3} came
+  out R~0.14, visibly too small once rendered — a correct {7,3} occupies
+  roughly a third of the disk's radius, not a seventh). Caught by an
+  advisor review of the plan *before* any PostScript was written: it
+  flagged the convention as unverified and asked for a direct check, not
+  just re-reading the algebra. The direct check — build the fundamental
+  polygon at a candidate R and measure the *Euclidean* tangent angle
+  between adjacent edges at a shared vertex, equal to the hyperbolic
+  angle there since the Poincare disk is conformal — reproduces 360/q
+  exactly for the corrected formula across five different {p,q} pairs,
+  and is now also a permanent Rust regression test
+  (`fundamental_polygon_edges_meet_at_the_expected_interior_angle`), not
+  just a one-off script.
+- **The BFS dedup tolerance stopped the tiling from growing with depth**
+  once the geometry itself was right. Tolerance was first scaled to a
+  candidate tile's distance from the disk's origin, which stays close to
+  1 near the rim even as the tiles themselves keep shrinking there in
+  Euclidean terms — an increasingly loose tolerance relative to actual
+  tile size, so it started rejecting genuinely new neighbors as false
+  duplicates, silently capping {6,4} at 37 tiles regardless of requested
+  depth. Fixed by scaling to the candidate's own max edge length instead
+  (Mobius reflections are conformal, hence local similarities, so edge
+  length shrinks toward the rim exactly as fast as the tile's whole
+  footprint does) — {6,4} now reaches 1,711 tiles at depth 5, matching
+  the Python prototype exactly.
+
+One more edge case worth its own line: near-but-not-exactly-collinear
+input to `horthocircle` (three points almost, not quite, lined up
+through the origin) is mathematically valid but can produce an
+arbitrarily large circle radius as the true diameter limit is
+approached — large enough that `arc` chokes (`gs` raised `limitcheck` on
+one, found deep in a depth-4 BFS). No fixed threshold on the
+determinant that flags the degenerate/diameter case is scale-invariant
+here, so the radius itself is capped instead (>50 falls back to the
+diameter case) — visually identical to the true arc at that radius
+regardless of device scale.
+
+Two more real bugs, caught by cross-model review (Codex) after the
+Python-prototype-validated version above was already up and passing its
+own tests — both invisible to the tests that existed at that point,
+which is exactly the kind of gap independent review is for:
+
+- `httile` seeded its dedup-visited list with the fundamental polygon's
+  *vertex 0* (`htfund 0 get`/`htfund 1 get`) instead of its centroid —
+  which happens to be the origin by construction, but the code never
+  said so; it read two array slots that looked like they'd give the
+  center and didn't. Every `{p,q}` tiling reflects at least one gen-1
+  neighbor back across its shared edge into an exact copy of the
+  fundamental tile by depth 2 (an unavoidable involution, not an edge
+  case), and that copy's true centroid — the real origin — was never
+  actually in the visited list, so it passed the dedup check as "new"
+  and got enqueued as a bogus generation-2 duplicate sitting exactly on
+  top of generation 0. Silent in a render (the duplicate just repaints
+  the center in whatever color that generation gets) but not silent in
+  the tile count: this fully explains a ~1-tile discrepancy against the
+  Python prototype that earlier testing (see the arithmetic-pin test's
+  original comment, since corrected) wrongly wrote off as floating-point
+  noise near the dedup threshold — it was this bug, deterministically,
+  every time. Fixed by seeding `htvisited` with `0 0` outright rather
+  than reading it off `htfund`; tile counts now match the Python
+  prototype exactly at every `{p,q,depth}` checked (previously off by
+  one). The pinned regression test's count changed from 30 to 29
+  accordingly, and the gallery piece's tile count from "233" to "232" in
+  every place it's mentioned.
+- Both `examples/hyperbolic.ps` and `gallery/infinite_descent.ps`'s
+  `httile` paint callbacks did `fill` then `stroke` on the same
+  driver-built path, expecting the outline stroke to trace the same
+  shape just filled. `Gfx::fill` in this interpreter does an implicit
+  `newpath` after painting regardless of whether anything was actually
+  filled (`src/gfx.rs`: "Painting consumes the path... filled or not")
+  — a deliberate, documented deviation, but one this code didn't
+  account for, so every tile's outline stroke was silently a no-op (no
+  error, just no ink) in both files. Fixed with the idiom this
+  interpreter's own gsave/grestore semantics is built to support —
+  `gsave fill grestore stroke`, since (per the note above about
+  gsave/grestore restoring the path) that fill's implicit newpath is
+  itself undone by the grestore. `examples/tiling.ps`'s hexgrid/trigrid
+  stamps sidestep this differently (rebuilding the shape fresh before
+  stroking rather than relying on the path surviving fill) because they
+  have direct access to their own shape-building procs (`hex`/`tri`);
+  `httile`'s client callbacks don't (the driver, not the client, is the
+  one holding the curved-edge geometry), so gsave/grestore is the
+  fix that actually fits httile's contract.
+
+A second round of cross-model review, after pushing the two fixes above,
+found three more — this time in the geometry itself rather than around
+it, and worth taking seriously precisely because they came *after* the
+Python-prototype validation and the existing test suite both said the
+math was right:
+
+- **The single real correctness bug of the three.** The `hor 50 gt`
+  radius cap added to `horthocircle` (the near-collinear/`limitcheck`
+  fix above) approximated *any* large-radius support circle as a
+  diameter — a safe simplification for *drawing* (an arc that big and a
+  straight line are visually identical at any device scale this file
+  uses), but wrong for `hreflect`'s transformation math: a diameter's
+  reflection is a mirror across a line through the *origin*, and that
+  formula only agrees with true circle inversion when the two points are
+  actually collinear with the origin. A chord that merely has a large
+  orthogonal-circle radius without being collinear with the origin —
+  confirmed with `p1=(0.010195, 0.2)`, `p2=(0.010195, -0.2)`, radius
+  ~51 — got mirrored across the wrong line entirely: reflecting `p1`
+  moved it to `(-0.010195, 0.2)` instead of fixing it, breaking the one
+  invariant every geodesic reflection must have (a geodesic fixes its
+  own defining points). This is also the actual explanation for a
+  ~1-tile discrepancy against the Python prototype noted in the first
+  round of this issue's work and initially misdiagnosed as the
+  dedup-seed bug alone — both bugs were real and both contributed.
+  Fixed by keeping `horthocircle` mathematically exact (it always
+  returns the true circle now, however large) and moving the >50
+  drawing-only approximation into `hgeo` and `hpoly` specifically, each
+  keeping their own local copy of the "isline" flag rather than
+  mutating what `horthocircle` reports. New regression test:
+  `hreflect_stays_exact_near_the_old_radius_cap_boundary`, using the
+  exact point pair above.
+- `httile` built each tile's path with `hpoly` alone, which only
+  *appends* — so a caller who hadn't just called `newpath` (or any
+  leftover path state) would have that ink dragged into the first
+  tile's fill/stroke, contrary to the documented "proc sees one closed
+  p-gon" contract. Fixed with an explicit `newpath` before each tile's
+  `hpoly` call inside `httile` itself, so the driver's contract no
+  longer depends on caller discipline. Every shipped call site already
+  happened to newpath first (or had `fill`'s own implicit-newpath from
+  a prior paint op clear things anyway), so this didn't change any
+  rendered output — it closes a latent trap for the next caller, not a
+  bug that had actually fired here. New regression test:
+  `httile_does_not_leak_a_callers_pre_existing_path_into_the_first_tile`.
+- `hpolar` computed `tanh(hrad/2)` as `(e^hrad - 1)/(e^hrad + 1)`, which
+  overflows to `NaN NaN` once `e^hrad` exceeds `f64` range — a few
+  hundred is already enough, e.g. `710 0 hpolar`. Not reachable by
+  anything shipped here (every real call uses `hrad` under 4), but a
+  landmine for the next caller who wants a point genuinely far out
+  toward the rim. Rewritten as `(1 - e^-hrad)/(1 + e^-hrad)`, which
+  underflows harmlessly to `0` instead of overflowing, giving the
+  correct limit of `1`. New regression test:
+  `hpolar_stays_finite_for_a_large_hyperbolic_radius`.
+
+A third round, after pushing the fixes above, found one more in the same
+family as the radius-cap bug — same failure mode, different threshold.
+`horthocircle`'s collinearity check compared the raw circumcircle
+determinant (of p1, p2, and p2's unit-circle inversion) against an
+absolute tolerance. That determinant's magnitude scales with how far
+apart p1 and p2 happen to be, not with how collinear they are with the
+origin — two points a hair's width apart (exactly what `httile`'s own
+edges become a few reflection generations toward the rim) produce a
+tiny determinant regardless of the angle between them, so the absolute
+threshold false-positived as "collinear" for pairs that plainly weren't
+— confirmed with `(0.99, 0)` and `(0.98999999995, 0.0000099)`, distance
+apart ~1e-5 but with a real nonzero angle from the origin, previously
+returning `isline=true` and reflecting `(0.99, 0)` to roughly
+`(-0.99, -0.00001)` instead of fixing it. The same failure mode as the
+radius-cap bug (wrong branch of `hreflect` entirely, not an imprecision
+in the right one), and easy to miss for the same reason: neither the
+Python prototype (which never had this threshold in the first place —
+it tests collinearity the same corrected way described next) nor the
+existing test suite exercised a pair this close together non-collinearly
+until this round went looking for one. Fixed by testing collinearity
+angularly instead of by the determinant's raw size: sin(angle between
+p1 and p2 as seen from the origin) = (x1\*y2 - y1\*x2)/(|p1||p2|), a
+ratio with no dependence on how far apart p1 and p2 are, only on the
+angle between them — compared in squared form to skip two square roots.
+New regression test: `horthocircle_collinearity_test_is_scale_invariant`.
+Tile counts and every render were re-checked against this fix too
+(unchanged at every `{p,q,depth}` re-verified, including the 232-tile
+gallery piece and `{6,4}` depth 5's 1,711) — this specific configuration
+just hadn't come up yet in anything rendered so far, not evidence it
+never will.
+
+Checked against `gs` throughout, not just at the end: both the
+Ghostscript acceptance driver (`tests/artkit.rs`) and every render done
+while building this (`examples/hyperbolic.ps`, `gallery/
+infinite_descent.ps`) were run under both `pscat` and `gs` and compared
+by eye, and looked structurally identical there — but "by eye" is
+exactly what missed what round eight's cross-model review later found
+by actually counting tiles: `gs` computes PostScript reals in 32-bit
+float (`1 3 div` prints `0.333333343` under `gs`, `0.3333333333333333`
+here), a full order of magnitude less precise than the f64 arithmetic
+this file's degeneracy thresholds are tuned against, and that
+compounds through `httile`'s recursive reflections into a genuinely
+different tile count at *every* depth checked — not just the extreme
+`{10,10}` case, but the shipped `{7,3}` depth 4 (232 here, 233 under
+`gs` after round eight's fix, 323 before it) and even `{7,3}` depth 2
+(29 here, 30 under `gs`). This is the same category of difference as
+the already-documented `flattenpath` tolerance gap (fixed quarter-pixel
+device-space tolerance here vs. `gs`'s `setflat`-driven one — chord
+counts differ, shapes agree) but with a larger, harder-to-eyeball
+effect: a handful of tiles out of a couple hundred don't jump out
+visually the way a coarser arc facet does. The tile counts pinned in
+`tests/artkit.rs` (29, 232, 1,711, 8,201) are this interpreter's own —
+exact only here, not under `gs`. What *is* still verified under `gs`:
+it accepts and runs the library without error or crash (including the
+former `{10,10}` `undefinedresult`), produces a valid, in-bounds
+tiling, and its `{7,3}` depth-4 tile count stays within a sanity band
+(`ghostscript_accepts_artkit`) rather than asserted exact, since no
+single degeneracy threshold can be exact for two interpreters an order
+of magnitude apart in float precision — see round eight below.
+
+A fourth round, after pushing the third round's fix, found a real crash;
+fixing it properly took a fifth round to get right, since the first
+attempt was itself a band-aid in the same failure family as rounds two
+and three.
+
+**Round four.** Even past the angular collinearity test from round
+three, `hod` — the determinant of the three-point circumcircle
+`horthocircle` built by inverting p2 in the unit circle — can round to
+exactly `0.0` from catastrophic cancellation in its sum-of-products
+arithmetic, a property of that specific formula at extreme `{p,q}`, not
+of the angle between p1 and p2. Confirmed under `gs`, which raised
+`undefinedresult` dividing by it four generations into a `{10,10}`
+tiling. The first fix added a second, much tighter (`1e-9`) absolute
+guard on `hod` itself, routing the offending edge through the isline
+fallback — and, on the same instrumented `{10,10}` case, every one of
+43,470 pairs the new guard caught had `sin(angle) <= ~6.4e-5`, genuinely
+near-collinear, which looked at the time like a clean discrimination
+between "real cancellation" and "real separation."
+
+**Round five** found that framing itself was the mistake: cross-model
+review pointed out that `hod abs 1e-9 lt` was still an approximation
+layered on top of an ill-conditioned formula, not a fix to the
+conditioning — and produced a second, independent counterexample in the
+*other* early-exit this proc had, unrelated to `hod`: any point within
+0.001 of the origin (`hod1`/`hod2 < 0.000001`) was treated as
+"effectively at the origin" and short-circuited to isline=true,
+regardless of whether its partner was anywhere near collinear with it.
+`0.0005 0 0 0.5 horthocircle` reported isline=true and reflecting
+`(0.0005, 0)` across its own geodesic moved it to roughly
+`(-0.0005, -1e-6)` instead of fixing it — the same defining-point
+invariant violation as the round-two and round-three bugs, just in a
+third input regime.
+
+Both symptoms trace to the same root cause: the old formula used one
+(cancellation-prone, non-scale-invariant) determinant as its sole
+divisor and a *different* pair of ad hoc magnitude checks to decide when
+that divisor was unsafe, instead of using one well-conditioned quantity
+for both jobs. `horthocircle` is rewritten around a numerically stable
+closed form instead of patching threshold after threshold: a circle
+centered at `(cx,cy)` is orthogonal to the unit circle exactly when
+`cx^2+cy^2 = r^2+1`; combined with `|c-p_i|^2 = r^2` for each of p1, p2,
+the `r^2` term cancels and each point contributes one linear equation,
+`c.p_i = (|p_i|^2+1)/2`. Two points give a 2x2 linear system for `c`,
+solved by Cramer's rule with determinant `D = x1*y2 - y1*x2` — which is
+exactly the round-three angular test's own cross product (`sin(angle)`
+between p1 and p2 as seen from the origin, scaled by `|p1||p2|`), so `D`
+is small precisely when p1, p2, and the origin are close to collinear
+(including either point being at/near the origin, where `D` vanishes
+trivially) and nowhere else. One test, `D` near zero, now both decides
+degeneracy and is the only divisor in the non-degenerate branch — no
+separate near-origin cutoff, no separate cancellation guard. (One
+follow-on fix along the way: the degeneracy test needs `le`, not `lt` —
+when a point is exactly at the origin, `D` is exactly `0.0` too, and a
+strict `<` lets `0.0 <= 0.0`'s equal case fall through to divide by a
+literal zero. Caught the same way as the original P1: `gs`'s arithmetic
+rounds *very* slightly differently from this interpreter's own for the
+same nominal formula, so a pair that lands exactly on `D = 0.0` under
+`gs` can be a hair off zero under `pscat` and vice versa — this class of
+bug is only reliably caught by testing under both.) A second, unrelated
+latent bug surfaced by the same `{10,10}` case and fixed alongside: the
+isline branch's own direction formula (`(p2-p1)/|p2-p1|`) divides by
+zero if two supposedly-adjacent polygon vertices have numerically
+coincided, which can happen this deep in the BFS; it now falls back to
+an arbitrary unit vector for that (already-degenerate) edge instead of
+propagating a NaN.
+
+Reverified every discriminating case from rounds two through five
+against the rewrite: `hreflect_stays_exact_near_the_old_radius_cap_boundary`
+(radius ~51) and `horthocircle_collinearity_test_is_scale_invariant`
+(scale-invariant collinearity) both pass unchanged, and a new
+`horthocircle_does_not_special_case_points_merely_near_the_origin` pins
+the round-five near-origin counterexample.
+
+**Round six** found two more real bugs in what round five shipped, plus
+a real test-suite cost problem — proof that "the math is now provably
+right" is a stronger claim than "every counterexample so far passes,"
+and worth staying skeptical of even after a from-scratch rewrite:
+
+- The `{10,10}` depth-4 tile count the round-five rewrite computed,
+  8,191, was itself still wrong — by exactly 10, not by coincidence.
+  The `{p,q}` tile-adjacency graph's girth (shortest cycle) is `q`: `q`
+  tiles meet at every vertex, and each adjacent pair in that fan shares
+  an edge, closing a `q`-cycle in the adjacency graph with no shorter
+  cycle possible. For `{10,10}`, girth 10 means no two of a depth-<=4
+  BFS's root-to-tile walks (combined length <=8 < 10) can reach the same
+  tile without closing a cycle shorter than the girth allows — so the
+  *true* count at this depth is just the plain reflection-tree growth,
+  1 + 10 + 90 + 810 + 7,290 = 8,201 tiles, and the dedup step should
+  find zero genuine duplicates this shallow. It wasn't finding zero: the
+  edge-length-scaled dedup tolerance (`httol`, `0.3` times a candidate's
+  own max edge length) was loose enough to merge ten tiles that were
+  never actually duplicates. A sweep on the *rewritten* geometry (a
+  cleaner search than the same sweep run against the old, cancellation-
+  noisy formula in round four, which is likely why it looked
+  unreproducible then) found `0.3`/`0.25` give `8,191`/`8,201` — the
+  cliff is between them — and `0.2`/`0.05` both give `8,201` with no
+  runtime cost change (~31s either way; `0.02` and tighter start timing
+  out, the same O(n^2)-blowup-toward-`htmax` risk found in round four).
+  Retuned to `0.2`: recovers `8,201` here, leaves the shipped range
+  (`{7,3}` depth 4's 232, `{6,4}` depth 5's 1,711, `{7,3}` depth 2's 29)
+  and the gallery render (byte-identical) unchanged. The round-four/five
+  NOTES entries above that called `8,201` an overestimate from "not
+  accounting for what dedup exists to do" had the framing backwards —
+  dedup exists to catch *coincidental* re-visits from different walks,
+  and girth 10 rules those out entirely at this depth; the discrepancy
+  was the tolerance being too loose, not the growth-series estimate
+  being too naive.
+- The isline branch's diameter direction, `(p2-p1)/|p2-p1|` (the chord),
+  is only correct when p1/p2 are *exactly* collinear with the origin,
+  where it agrees with the true radial direction. For a near-collinear
+  pair let in by this branch's angular tolerance, if p1 and p2 have
+  similar magnitude, the chord can be dominated by their tiny angular
+  offset and point nearly tangentially instead — confirmed with
+  p1=(0.99, 0), p2 a hair's-width away in angle at nearly the same
+  radius: reflecting p1 across its own (isline-classified) geodesic
+  moved it to roughly `(-0.99, -0.001)` instead of fixing it, the same
+  defining-point violation as every other bug in this family. Fixed by
+  taking the direction from whichever of p1/p2 is farther from the
+  origin instead of their difference — better-conditioned, and exact
+  whenever the pair really is collinear (both points' own directions and
+  the chord's then agree). New regression test:
+  `horthocircle_isline_fallback_uses_the_radial_not_chord_direction`.
+- The `{10,10}` depth-4 regression test itself was an unbudgeted cost:
+  fine in release (~31s, tolerable for one test) but the plain `cargo
+  test` this repo's quality gate actually runs builds debug, where the
+  same O(n^2) dedup scan over ~8,200 tiles didn't finish in 90+ seconds.
+  Marked `#[ignore]` with an explanation and a pointer to run it
+  explicitly (`cargo test -- --ignored`) rather than shrinking it to a
+  smaller `{p,q,depth}` that wouldn't exercise the same girth-driven
+  "dedup should find nothing" property, since the whole point of this
+  particular test is pinning that behavior at the extreme case that
+  found it. The specific bugs it originally caught (the crash, the
+  near-origin misclassification, the chord-direction error) each have
+  their own cheap, direct `horthocircle`-level regression test now, so
+  losing this one test from the default run doesn't lose coverage of
+  any individual defect — only of the exact combinatorial tile count at
+  this one extreme configuration.
+
+`{10,10}` depth 4 stays well under `htmax` (20,000) even at the tighter
+`0.2` tolerance, so none of this is a silent-truncation artifact either.
+The `gs`-compat driver in `tests/artkit.rs` runs a `{10,10}` depth-4
+`httile` directly — the exact configuration that produced the original
+crash — so the crash fix is covered under `gs` itself on every default
+test run, even with the full tile-count regression test marked ignored.
+
+**Round seven** found one more real bug in the collinearity test itself,
+plus a P2 dispositioned as out of scope rather than fixed:
+
+- **Fixed.** The collinearity test compared `sin(angle between p1 and p2
+  as seen from the origin)` against a threshold relative to `|p1||p2|`
+  — scale-invariant with respect to how far p1/p2 are from the origin
+  (fixing round three's bug), but that turns out not to be the right
+  criterion at all: `sin(angle)` is also small whenever p1 and p2 are
+  simply *close together*, independent of whether the geodesic through
+  them is anywhere near a diameter. Confirmed with two real vertices from
+  a `{10,10}` depth-4 BFS, `(0.9371500703, 0.3489261063)` and
+  `(0.9371497472, 0.3489269739)` — about `9e-7` apart near the disk
+  boundary — where the old test reported `isline=true`, but the *true*
+  orthogonal circle there has radius about `9.17e-6`: a small, perfectly
+  well-conditioned circle, not remotely diameter-like. Treating it as a
+  diameter discarded correct, easily-computable geometry for a wrong
+  approximation. The first fix attempted — drop the tolerance to bare `D
+  = 0` exactly, reasoning that the linear solve is stable even at tiny
+  `D` so there's no geometric need to approximate anything — broke
+  ordinary, non-extreme cases (`{7,3}` depth 2's pinned count moved from
+  29 to 35, with ink landing outside the disk in the boundary-containment
+  test), because `D`'s own subtraction (`x1*y2 - y1*x2`) accumulates
+  rounding error through the chain of prior reflections composing its
+  inputs, so two values that are *mathematically* equal (true
+  collinearity) essentially never subtract to bit-exact `0.0` in
+  practice. The actual fix compares `D` against its own subtraction's
+  noise floor — `eps * (|x1*y2| + |y1*x2|)`, the standard robust-predicate
+  formulation, with `eps = 1e-12` — which is small only when there's
+  genuine floating-point cancellation in computing `D` itself, not merely
+  when p1/p2 happen to be nearby. This also meant retuning the round-six
+  regression test: its original pair no longer takes the isline branch at
+  all under the tighter threshold (correctly — it isn't actually
+  degenerate), so that test now uses a purpose-built pair (`(0.7, 0.3)`
+  perturbed by a `~7e-13` *purely tangential* nudge) tuned to still
+  exercise the isline branch's radial-vs-chord fix. New regression test:
+  `horthocircle_does_not_treat_close_together_points_as_collinear`.
+  Reverified: every previous discriminating case, all four pinned tile
+  counts (29, 232, 1,711, 8,201), the gallery render (byte-identical),
+  and the `gs` isolate case all still pass with the retuned threshold.
+- **Out of scope, not fixed.** The review also flagged that `hgeo`/
+  `hpoly`'s drawing-only `hor 50 gt` cutoff (approximating a large
+  orthogonal circle as a straight chord for rendering, added in the
+  original round-one `limitcheck` fix, well before this issue's
+  cross-model review rounds began) is a fixed logical-coordinate
+  threshold rather than one scaled to the actual device-space rendering
+  error (sagitta) at the frame size in use — true, and a reasonable
+  rendering-fidelity refinement, but it's pre-existing behavior this
+  branch didn't introduce or change, not a defect in anything rounds
+  four through seven touched. Left as a possible follow-up, not chased
+  here.
+
+**Round eight** found one genuine bug and two real gaps, none of them
+another adjacent counterexample in the `{10,10}`-only family the
+previous rounds had been narrowing in on:
+
+- **Improved, not eliminated — see the `gs` precision paragraph
+  above.** The round-seven `eps=1e-12` threshold, tuned against this
+  interpreter's f64 arithmetic, was far tighter than `gs`'s own 32-bit
+  float precision needs: under `gs`, pairs whose `D` should trip the
+  degeneracy test instead fall through to a division `gs`'s own
+  arithmetic can't reliably compute, producing corrupted circle centers
+  — confirmed on the *shipped* `{7,3}` depth-4 gallery piece, which
+  rendered 323 tiles under `gs` instead of 232. Retuned to `eps=1e-6` —
+  the largest value that still keeps every pinned f64 tile count exact
+  and doesn't misclassify either the round-six or round-seven
+  discriminator pairs (whose own ratios are 9.67e-13 and 1.42e-6
+  respectively, so the admissible window for a single constant is
+  genuinely that narrow: about one order of magnitude, sandwiched
+  between `gs`'s ~1.2e-7 float32 epsilon and the round-seven pair's own
+  ratio). This took `gs`'s `{7,3}` depth-4 count from 323 to 233 — a
+  large improvement — but not to the exact 232 this interpreter
+  computes: even `{7,3}` depth 2 (three reflection generations, about
+  as shallow as this algorithm gets) diverges by one tile under `gs`
+  (29 vs 30). That ruled out chasing exact parity any further: if a
+  three-generation tiling doesn't match, no single-constant threshold
+  fix inside `horthocircle` is going to make a four- or five-generation
+  one match either — the gap is `gs`'s float32 arithmetic itself, not a
+  remaining defect in this formula. `ghostscript_accepts_artkit`
+  (`tests/artkit.rs`) now checks the `{7,3}` depth-4 tile count against
+  a `[200, 260]` sanity band under `gs` (catching a crash, a collapse,
+  or another round-eight-style inflation) instead of asserting an exact
+  count that `gs` cannot be relied on to hit; exact counts stay asserted
+  under this interpreter only.
+- **Fixed.** The new gallery piece wasn't linked from the published
+  site's gallery page (`site/gallery.html` — separate from
+  `gallery/README.md`, which was already updated when the piece
+  shipped; the site page is hand-authored and copies renders at build
+  time via `scripts/build_site.sh`, so adding the file wasn't enough).
+  Added the card.
+- **Fixed.** The root `README.md`'s "Making art" section, which
+  AGENTS.md requires kept current as capabilities land, still stopped
+  at the Euclidean tiling section and never mentioned the hyperbolic
+  toolkit added by this issue. Added a paragraph naming `hpoint`/
+  `hpolar`/`horthocircle`/`hgeo`/`hpoly`/`hreflect`/`httile` and
+  pointing at the gallery piece.
+
+Deliberate omissions: only the Poincare disk model (the issue left model
+choice open; upper-half-plane wasn't needed for anything built here) and
+only reflection-generated regular {p,q} tilings (no general Mobius
+transformation group, no irregular/non-edge-to-edge tilings) — sufficient
+for the "distinct coordinate/projection handling" the issue asked for
+without building machinery nothing here uses yet.
+
 ## A procedural jittered-stroke Hangul face (issue #6, 2026-08-02)
 
 Closes issue #6, set aside earlier (see issue #9's entry below) as "a

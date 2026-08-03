@@ -400,6 +400,35 @@ fn ghostscript_accepts_artkit() {
         return;
     }
     let lib = std::fs::read_to_string("lib/artkit.ps").expect("artkit");
+    // The httile calls near the end run at depth 4 (not a shallower,
+    // faster depth): the near-collinear-with-origin edge case in
+    // horthocircle that produces an oversized arc radius -- caught once
+    // already as a gs `limitcheck`, since it's gs's own `arc` that has
+    // the tighter limit -- only actually arises a few reflection
+    // generations deep. A shallower depth would pass this check without
+    // ever exercising that path. The second httile ({10,10}, the highest
+    // p,q pair this suite exercises) is the exact configuration that once
+    // made gs raise `undefinedresult` dividing by a catastrophically
+    // cancelled `hod` -- see httile_survives_catastrophic_cancellation_at_high_p_q.
+    //
+    // The {7,3} depth-4 call also counts its own tiles (`nbox`) rather
+    // than just painting, and that count is checked below against a
+    // *band*, not pscat's own exact pinned value (232, see
+    // httile_generates_the_expected_tile_count_and_calls_proc_that_many_times).
+    // A cross-model review (round 8) found gs computes PostScript reals
+    // in 32-bit float (`1 3 div` prints `0.333333343` under gs, vs this
+    // interpreter's `0.3333333333333333`) -- a full order of magnitude
+    // less precise than the f64 arithmetic horthocircle's degeneracy
+    // threshold is tuned against, so gs's own tile count diverges from
+    // this interpreter's at *every* depth this suite has checked (29 vs
+    // 30 at depth 2, 232 vs 233 at this depth 4, 1711 vs 1653 at {6,4}
+    // depth 5) -- a real, inherent precision difference between the two
+    // interpreters' arithmetic, not a defect (see NOTES.md). The band
+    // below exists to catch what actually matters under gs: a crash, a
+    // collapse back toward the round-8 bug's 323, or growth toward
+    // htmax -- not bit-for-bit parity with this interpreter, which
+    // recursive floating-point BFS reflection can't guarantee across
+    // different float widths.
     let driver = "3 srand \
         newpath 100 100 0 thome 1 1 60 { dup fd 89 tr pop } for stroke \
         newpath 200 50 90 thome (F) << (F) 0 get (F[+F]F) >> 3 lsys 3 20 ldraw stroke \
@@ -414,12 +443,16 @@ fn ghostscript_accepts_artkit() {
             newpath cx cy s up tri fill end } trigrid \
         0 0 60 60 3 3 { pop pop newpath 0 0 20 0 360 arc fill } truchet \
         300 300 15 0 0 15 3 3 { /y exch def /x exch def newpath x y 5 0 360 arc fill } lattice \
+        /nbox 1 array def nbox 0 0 put \
+        340 350 35 7 3 4 { pop nbox 0 nbox 0 get 1 add put 0.4 setgray fill } httile \
+        (GSTILES ) print nbox 0 get == \
+        30 30 15 10 10 4 { pop } httile \
         showpage\n";
     let dir = std::env::temp_dir().join(format!("pscat-artkit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
     let combined = dir.join("artkit_gs.ps");
     std::fs::write(&combined, format!("{lib}\n{driver}")).expect("write");
-    let status = std::process::Command::new("gs")
+    let output = std::process::Command::new("gs")
         .args([
             "-dNOPAUSE",
             "-dBATCH",
@@ -430,9 +463,28 @@ fn ghostscript_accepts_artkit() {
             "-o/dev/null",
         ])
         .arg(&combined)
-        .status()
+        .output()
         .expect("run gs");
-    assert!(status.success(), "gs rejected artkit");
+    assert!(
+        output.status.success(),
+        "gs rejected artkit: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let tiles: i64 = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("GSTILES "))
+        .unwrap_or_else(|| panic!("gs didn't print a tile count: {stdout:?}"))
+        .trim()
+        .parse()
+        .expect("tile count parses as an integer");
+    assert!(
+        (200..=260).contains(&tiles),
+        "gs's {{7,3}} depth-4 tile count ({tiles}) is outside the sanity band \
+         [200, 260] -- either far tighter dedup collapse or the round-8-style \
+         inflation this band exists to catch (pscat's own exact count is 232, \
+         gs's own precision means somewhere nearby, not identical, is expected)"
+    );
 }
 
 #[test]
@@ -491,4 +543,476 @@ fn trigrid_stamp_calling_tri_with_a_whole_stamp_dict_wrap() {
             "triangle {k}: wrong orientation"
         );
     }
+}
+
+#[test]
+fn horthocircle_produces_a_circle_orthogonal_to_the_unit_circle() {
+    // A circle (center C, radius r) is orthogonal to the unit circle iff
+    // |C|^2 = r^2 + 1 -- the defining property a hyperbolic geodesic's
+    // support circle must have. Checked on several non-collinear-with-
+    // origin point pairs (isline must come back false for each).
+    for (x1, y1, x2, y2) in [
+        (0.2, 0.1, 0.5, -0.3),
+        (-0.4, 0.6, 0.1, -0.5),
+        (0.7, 0.2, -0.3, 0.6),
+        (-0.6, -0.6, 0.5, -0.2),
+    ] {
+        let got = eval(&format!("{x1} {y1} {x2} {y2} horthocircle"));
+        assert_eq!(got[3], "false", "({x1},{y1})-({x2},{y2}) came back isline");
+        let a: f64 = got[0].parse().unwrap();
+        let b: f64 = got[1].parse().unwrap();
+        let r: f64 = got[2].parse().unwrap();
+        assert!(
+            (a * a + b * b - (r * r + 1.0)).abs() < 1e-9,
+            "({x1},{y1})-({x2},{y2}): center {a},{b} radius {r} not orthogonal to unit circle"
+        );
+    }
+}
+
+#[test]
+fn hreflect_is_an_involution_and_fixes_its_own_geodesic_points() {
+    // Reflecting a point across a geodesic twice must return it exactly
+    // (hreflect is its own inverse), and reflecting either point that
+    // *defines* the geodesic must fix it (it's already on the line/arc
+    // being reflected across). Covers both branches: a proper arc and
+    // the degenerate diameter (points collinear with the origin).
+    for (x1, y1, x2, y2, px, py) in [
+        (0.2, 0.1, 0.5, -0.3, 0.35, 0.42), // arc case
+        (0.3, 0.3, -0.2, -0.2, -0.1, 0.6), // diameter case
+    ] {
+        let fixed = eval(&format!(
+            "{x1} {y1} {x2} {y2} horthocircle {x1} {y1} hreflect"
+        ));
+        let fx: f64 = fixed[0].parse().unwrap();
+        let fy: f64 = fixed[1].parse().unwrap();
+        assert!(
+            (fx - x1).abs() < 1e-6 && (fy - y1).abs() < 1e-6,
+            "defining point ({x1},{y1}) not fixed: got ({fx},{fy})"
+        );
+
+        let twice = eval(&format!(
+            "/hc [{x1} {y1} {x2} {y2} horthocircle] def \
+             hc aload pop {px} {py} hreflect \
+             /ry exch def /rx exch def \
+             hc aload pop rx ry hreflect"
+        ));
+        let tx: f64 = twice[0].parse().unwrap();
+        let ty: f64 = twice[1].parse().unwrap();
+        assert!(
+            (tx - px).abs() < 1e-6 && (ty - py).abs() < 1e-6,
+            "double reflection of ({px},{py}) didn't return: got ({tx},{ty})"
+        );
+    }
+}
+
+#[test]
+fn httile_circumradius_formula_matches_independently_verified_values() {
+    // httile's fundamental-polygon radius: cosh(rh) = cot(pi/p)*cot(pi/q),
+    // R = tanh(rh/2), simplified to sqrt((C-1)/(C+1)) to avoid needing
+    // acosh (C = cosh(rh)). This re-runs that exact expression (mirrored
+    // from lib/artkit.ps's httile, not calling it -- httile has no public
+    // way to report R on its own) against values independently verified
+    // by building each {p,q}'s fundamental polygon at the candidate R and
+    // measuring the *Euclidean* tangent angle between adjacent edges at a
+    // shared vertex (equal to the hyperbolic angle there, since the disk
+    // model is conformal) -- confirmed to reproduce 360/q exactly for
+    // both pairs below (and three others) in a standalone prototype
+    // before this formula went into artkit.ps (see NOTES.md).
+    for (p, q, expected_r) in [(7, 3, 0.300742618746379), (6, 4, 0.5176380902050418)] {
+        let got = eval(&format!(
+            "180 {p} div cos 180 {p} div sin div \
+             180 {q} div cos 180 {q} div sin div mul \
+             dup 1 sub exch 1 add div sqrt"
+        ));
+        let r: f64 = got[0].parse().unwrap();
+        assert!(
+            (r - expected_r).abs() < 1e-12,
+            "{{{p},{q}}}: R = {r}, expected {expected_r}"
+        );
+    }
+}
+
+#[test]
+fn httile_and_hpoly_never_paint_outside_the_disk() {
+    // The single most likely place for a subtle bug: hgeo/hpoly's
+    // arc-direction picker (which of the two arcs on the geodesic's
+    // support circle stays inside the disk). A wrong branch produces an
+    // arc that bulges *outside* the unit circle -- fill the whole
+    // tessellation (hpoly's path) and stroke a handful of standalone
+    // near-boundary geodesics (hgeo -- exercised nowhere else in this
+    // suite, and it duplicates hpoly's arc-direction logic rather than
+    // sharing it, so a bug fixed in one and not the other needs its own
+    // coverage) and assert not one pixel of ink lands outside the
+    // disk's own radius from its center (canvas sized to exactly match,
+    // so there's nowhere for stray ink to hide off-screen).
+    let mut it = Interp::with_page(300, 300).expect("page");
+    load(&mut it);
+    it.run_str(
+        "1 setgray newpath 0 0 300 300 rectfill \
+         150 150 145 7 3 4 { pop 0 setgray fill } httile \
+         0 setgray 1.5 setlinewidth \
+         newpath 150 150 145 0.85 0.1 -0.75 0.6 hgeo stroke \
+         newpath 150 150 145 -0.8 -0.2 0.3 -0.85 hgeo stroke \
+         newpath 150 150 145 0.1 0.9 -0.9 -0.15 hgeo stroke \
+         newpath 150 150 145 0.05 0.05 0.95 0.1 hgeo stroke",
+    )
+    .unwrap_or_else(|e| panic!("httile failed: {}", it.error_report(&e)));
+    let pixmap = &it.gfx().pixmap;
+    let (cx, cy, r) = (150.0_f64, 150.0_f64, 145.0_f64);
+    let margin = 2.0; // stroke/AA slack, not geometry slack
+    for y in 0..pixmap.height() {
+        for x in 0..pixmap.width() {
+            let p = pixmap.pixel(x, y).expect("in bounds");
+            if p.red() < 128 {
+                let dx = x as f64 + 0.5 - cx;
+                let dy = y as f64 + 0.5 - cy;
+                let dist = (dx * dx + dy * dy).sqrt();
+                assert!(
+                    dist <= r + margin,
+                    "ink at ({x},{y}), distance {dist:.2} from center exceeds disk radius {r}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn httile_generates_the_expected_tile_count_and_calls_proc_that_many_times() {
+    // Pins the whole BFS-plus-dedup pipeline's output size for one fixed
+    // {p,q,depth,frame} -- a regression net on the reflection generator
+    // and its edge-length-scaled dedup tolerance together, the way
+    // lattice_walks_the_expected_points pins lattice's exact points.
+    // Cross-checked against an independent Python prototype of the same
+    // algorithm, which agrees exactly at this and several other
+    // {p,q,depth} combinations (NOTES.md) -- this is a real invariant of
+    // the geometry, not an incidental snapshot of whatever the code
+    // happened to produce.
+    let got = eval("/n 0 def 100 100 90 7 3 2 { pop /n n 1 add def } httile n");
+    assert_eq!(
+        got,
+        ["29"],
+        "httile tile count drifted from its pinned value"
+    );
+}
+
+#[test]
+fn fundamental_polygon_edges_meet_at_the_expected_interior_angle() {
+    // Complements the circumradius arithmetic pin above with the
+    // geometric property the formula is *for*: q polygons meeting at
+    // every vertex means each interior angle is 360/q degrees. Measures
+    // it directly (not re-deriving the angle algebraically) off the
+    // fundamental polygon's own two edges at vertex 0, via each edge's
+    // true Euclidean tangent direction there (equal to the hyperbolic
+    // angle, since the disk model is conformal) -- horthocircle gives
+    // the supporting circle, and the tangent at a point on it is
+    // perpendicular to (point - center); the isline case's `a,b` is
+    // already a unit direction, no perpendicular needed. Each tangent's
+    // sign is disambiguated by which way points back toward the other
+    // vertex on that edge (the arcs in play here are always < 180 deg,
+    // so "closer to the straight chord" reliably picks the right one).
+    // Reproduces this repo's own construction, so this is checking the
+    // same claim the Python prototype (see NOTES.md) checked
+    // independently before this formula went into artkit.ps -- not a
+    // duplicate of the circumradius test above, since a bug in vertex
+    // ordering or the horthocircle/hreflect math itself (as opposed to
+    // just the R formula) would pass that test but fail this one.
+    const BODY: &str = "\
+             /C 180 p div cos 180 p div sin div \
+                180 q div cos 180 q div sin div mul def \
+             /R C 1 sub C 1 add div sqrt def \
+             /v0x R def /v0y 0 def \
+             /v1a 360 1 mul p div def \
+             /v1x R v1a cos mul def /v1y R v1a sin mul def \
+             /vpa 360 p 1 sub mul p div def \
+             /vpx R vpa cos mul def /vpy R vpa sin mul def \
+             /tangent { \
+                 /twy exch def /twx exch def \
+                 /pty exch def /ptx exch def \
+                 /isl exch def /r exch def /b exch def /a exch def \
+                 isl { /tx a def /ty b def } { \
+                     /tx pty b sub neg def /ty ptx a sub def \
+                     /tn tx dup mul ty dup mul add sqrt def \
+                     /tx tx tn div def /ty ty tn div def \
+                 } ifelse \
+                 tx twx ptx sub mul ty twy pty sub mul add 0 lt { \
+                     /tx tx neg def /ty ty neg def \
+                 } if \
+                 tx ty \
+             } def \
+             vpx vpy v0x v0y horthocircle v0x v0y vpx vpy tangent \
+             /t1y exch def /t1x exch def \
+             v0x v0y v1x v1y horthocircle v0x v0y v1x v1y tangent \
+             /t2y exch def /t2x exch def \
+             /dotp t1x t2x mul t1y t2y mul add def \
+             /crossp t1x t2y mul t1y t2x mul sub def \
+             /ang crossp dotp atan def \
+             ang 180 gt { 360 ang sub } { ang } ifelse";
+    for (p, q) in [(7, 3), (6, 4), (5, 4), (8, 3)] {
+        let got = eval(&format!("/p {p} def /q {q} def {BODY}"));
+        let angle: f64 = got[0].parse().unwrap();
+        let expected = 360.0 / q as f64;
+        assert!(
+            (angle - expected).abs() < 1e-6,
+            "{{{p},{q}}}: measured interior angle {angle}, expected {expected}"
+        );
+    }
+}
+
+#[test]
+fn hreflect_stays_exact_near_the_old_radius_cap_boundary() {
+    // Regression test for a real bug caught by cross-model review:
+    // horthocircle used to fall back to treating *any* large-radius
+    // support circle as a diameter -- a reasonable approximation for
+    // *drawing* (an enormous arc and a straight line are visually
+    // identical), but wrong for hreflect's transformation math, since
+    // the diameter reflection formula only agrees with true circle
+    // inversion when the two points really are collinear with the
+    // origin. This exact pair -- collinear-with-origin *except* for a
+    // small x offset -- has a real orthogonal-circle radius just above
+    // the old cap (~51) while being nowhere near an actual diameter: the
+    // old code reflected p1 to (-0.010195, 0.2) instead of fixing it.
+    // horthocircle must still report the true circle (isline=false), and
+    // hreflect must still fix p1 exactly. The >50 approximation now
+    // lives only in hgeo/hpoly's drawing code, not here.
+    let got = eval("0.010195 0.2 0.010195 -0.2 horthocircle");
+    assert_eq!(got[3], "false", "should report a true circle, not isline");
+    let r: f64 = got[2].parse().unwrap();
+    assert!(r > 50.0, "expected a radius past the old cap, got {r}");
+
+    let fixed = eval("0.010195 0.2 0.010195 -0.2 horthocircle 0.010195 0.2 hreflect");
+    let fx: f64 = fixed[0].parse().unwrap();
+    let fy: f64 = fixed[1].parse().unwrap();
+    assert!(
+        (fx - 0.010195).abs() < 1e-9 && (fy - 0.2).abs() < 1e-9,
+        "p1 should be a fixed point of its own geodesic's reflection: got ({fx}, {fy})"
+    );
+}
+
+#[test]
+fn horthocircle_collinearity_test_is_scale_invariant() {
+    // Regression test for a real bug caught by a third round of
+    // cross-model review: the collinearity check used the raw
+    // circumcircle determinant against an absolute threshold, whose
+    // magnitude scales with how far apart p1/p2 happen to be, not with
+    // how collinear they are with the origin. Two points a hair's width
+    // apart but clearly *not* collinear with the origin -- this exact
+    // pair, verified non-collinear since (0.99, 0) and
+    // (0.98999999995, 0.0000099) have a nonzero angle between them as
+    // seen from the origin -- used to false-positive as isline=true
+    // (the same failure mode as the radius-cap bug above: hreflect then
+    // mirrors across the wrong line and moves p1 instead of fixing it).
+    // Exactly the kind of pair `httile` produces a few reflection
+    // generations toward the rim, where edges shrink fast. Fixed by
+    // testing collinearity angularly (sin of the angle between p1 and
+    // p2 from the origin, via the cross product, scale-invariant by
+    // construction) instead of via the raw determinant's magnitude.
+    let got = eval("0.99 0 0.98999999995 0.0000099 horthocircle");
+    assert_eq!(got[3], "false", "should report a true circle, not isline");
+
+    let fixed = eval("0.99 0 0.98999999995 0.0000099 horthocircle 0.99 0 hreflect");
+    let fx: f64 = fixed[0].parse().unwrap();
+    let fy: f64 = fixed[1].parse().unwrap();
+    assert!(
+        (fx - 0.99).abs() < 1e-6 && fy.abs() < 1e-6,
+        "p1 should be a fixed point of its own geodesic's reflection: got ({fx}, {fy})"
+    );
+}
+
+#[test]
+fn horthocircle_does_not_special_case_points_merely_near_the_origin() {
+    // Regression test for a real bug caught by a fifth round of
+    // cross-model review, in the same failure family as the radius-cap
+    // and collinearity-scale bugs above: an earlier version of
+    // horthocircle short-circuited to isline=true whenever *either*
+    // point's squared norm was below an absolute 0.000001 (norm below
+    // 0.001) -- meant to keep a point genuinely at the origin (a true
+    // geometric special case: a geodesic through the exact center really
+    // is a diameter) from dividing by its own zero norm downstream, but
+    // wrong for any point merely *close* to the origin whose partner
+    // isn't also along that same direction. This exact pair -- p1 a
+    // hair's width from center, p2 nowhere near collinear with it and
+    // the origin -- used to report isline=true and move p1 under
+    // hreflect instead of fixing it. The rewritten horthocircle (see
+    // httile_survives_catastrophic_cancellation_at_high_p_q below) solves
+    // the orthogonal circle directly rather than special-casing either
+    // point's magnitude, so a near-origin point degenerates correctly
+    // only when it's actually collinear with its partner and the origin.
+    let got = eval("0.0005 0 0 0.5 horthocircle");
+    assert_eq!(got[3], "false", "should report a true circle, not isline");
+
+    let fixed = eval("0.0005 0 0 0.5 horthocircle 0.0005 0 hreflect");
+    let fx: f64 = fixed[0].parse().unwrap();
+    let fy: f64 = fixed[1].parse().unwrap();
+    assert!(
+        (fx - 0.0005).abs() < 1e-9 && fy.abs() < 1e-9,
+        "p1 should be a fixed point of its own geodesic's reflection: got ({fx}, {fy})"
+    );
+}
+
+#[test]
+fn horthocircle_isline_fallback_uses_the_radial_not_chord_direction() {
+    // Regression test for a real bug caught by a sixth round of
+    // cross-model review, in the same near-collinear-pair family as the
+    // tests above. The isline branch used to derive its diameter
+    // direction from the chord p2-p1 -- correct for *exactly* collinear
+    // points (where the chord and the radius agree, since any two
+    // distinct points on the same line through the origin have a
+    // difference vector parallel to that line), but wrong for a
+    // near-collinear pair let in by this branch's tolerance: when the
+    // displacement from p1 to p2 has a tangential component, the chord
+    // is no longer purely radial.
+    //
+    // Constructing a pair that actually exercises this took retuning
+    // after round seven's fix below changed how tight that tolerance is
+    // (see horthocircle_does_not_treat_close_together_points_as_collinear):
+    // p1=(0.7,0.3) with p2 displaced by a *purely tangential* nudge
+    // (perpendicular to p1, direction (-0.3,0.7)) small enough that D's
+    // subtraction genuinely cancels relative to its own noise floor. The
+    // old chord-direction formula's direction here is (-0.394, 0.919) --
+    // essentially perpendicular to the true radial direction
+    // (0.919, 0.394) -- so reflecting p1 across it would mirror across
+    // entirely the wrong line through the origin. Fixed by taking the
+    // direction from whichever of p1/p2 is farther from the origin
+    // instead (better-conditioned, and exact whenever the pair really is
+    // collinear, since both points' own directions and the chord's then
+    // agree).
+    let got = eval("0.7 0.3 0.6999999999997899 0.30000000000049 horthocircle");
+    assert_eq!(got[3], "true", "should take the isline fallback");
+
+    let fixed = eval("0.7 0.3 0.6999999999997899 0.30000000000049 horthocircle 0.7 0.3 hreflect");
+    let fx: f64 = fixed[0].parse().unwrap();
+    let fy: f64 = fixed[1].parse().unwrap();
+    assert!(
+        (fx - 0.7).abs() < 1e-6 && (fy - 0.3).abs() < 1e-6,
+        "p1 should be a fixed point of its own geodesic's reflection: got ({fx}, {fy})"
+    );
+}
+
+#[test]
+fn horthocircle_does_not_treat_close_together_points_as_collinear() {
+    // Regression test for a real bug caught by a seventh round of
+    // cross-model review. The collinearity test used to compare
+    // sin(angle between p1 and p2 as seen from the origin) against a
+    // fixed relative threshold -- scale-invariant in |p1||p2| (fixing
+    // round three's bug), but that isn't actually the right criterion:
+    // sin(angle) is also small whenever p1 and p2 are simply close
+    // together, regardless of whether the geodesic through them is
+    // anywhere near a diameter. This exact pair -- two vertices from a
+    // real {10,10} depth-4 httile BFS, ~9e-7 apart near the disk
+    // boundary -- has sin(angle) tiny purely from that proximity: the
+    // old test reported isline=true, but the true orthogonal circle here
+    // has radius ~9.17e-6, a small, perfectly well-conditioned circle,
+    // not anything diameter-like. Treating it as isline discarded real
+    // geometry for a wrong approximation. Fixed by testing D = x1*y2 -
+    // y1*x2 (the un-normalized cross product) against its own
+    // subtraction's noise floor instead -- eps * (|x1*y2| + |y1*x2|) --
+    // which is small only when there's genuine floating-point
+    // cancellation in computing D itself, not merely when p1/p2 happen
+    // to be nearby.
+    let got = eval("0.9371500703 0.3489261063 0.9371497472 0.3489269739 horthocircle");
+    assert_eq!(
+        got[3], "false",
+        "should report a true (small) circle, not isline"
+    );
+    let r: f64 = got[2].parse().unwrap();
+    assert!(
+        (r - 9.165692e-6).abs() < 1e-9,
+        "expected the true small-radius circle, got r={r}"
+    );
+}
+
+#[test]
+#[ignore = "exercises an unrealistic {10,10} depth-4 case (~8,200 tiles); \
+            takes ~30s release / minutes debug from the O(n^2) dedup scan \
+            alone, so it's excluded from the default `cargo test` run -- \
+            use `cargo test -- --ignored` to run it. The specific bugs it \
+            found now have cheap, direct regression tests above; this one's \
+            job is pinning the dedup mechanism's exact combinatorial output \
+            at an extreme case, which genuinely needs the full BFS."]
+fn httile_survives_catastrophic_cancellation_at_high_p_q() {
+    // Regression test for a real bug caught by a fourth round of
+    // cross-model review, and two follow-up rounds to get the fix right.
+    // `horthocircle` originally found the orthogonal circle by inverting
+    // p2 in the unit circle and solving a three-point circumcircle -- a
+    // formula whose determinant is a *different*, non-scale-invariant
+    // quantity from the angular collinearity test above, and can
+    // catastrophically cancel to near (or exactly) zero even when p1/p2
+    // are genuinely non-collinear. Round four caught this as a crash (gs
+    // raised `undefinedresult` dividing by an `hod` that rounded to
+    // exactly 0.0 four generations into a {10,10} tiling); rounds five
+    // and six (see the tests above) found the fixes still had two more
+    // real bugs in the same failure family. `horthocircle` now solves
+    // the orthogonal circle directly: a circle's orthogonality to the
+    // unit circle (|c|^2 = r^2+1) combined with passing through p_i
+    // (|c-p_i|^2 = r^2) collapses to one linear equation per point,
+    // c.p_i = (|p_i|^2+1)/2 -- a 2x2 system in c whose determinant is
+    // exactly the angular test's own cross product, so one
+    // scale-invariant quantity now serves as both the sole degeneracy
+    // test and the sole divisor.
+    //
+    // Separately, round six also showed the dedup tolerance itself (see
+    // httile's own comment on `httol`) was too loose at this extreme:
+    // the {10,10} tile-adjacency graph has girth q=10 (the shortest
+    // cycle comes from the 10 tiles meeting at a vertex), so no two
+    // walks of length <=4 from the root can reach the same tile without
+    // closing a cycle shorter than the girth allows -- the true count is
+    // the plain reflection-tree growth 1+10+90+810+7290=8201, and the
+    // old 0.3 factor gave 8191, merging ten genuinely distinct tiles.
+    // Tightened to 0.2, which recovers 8201 here at no extra runtime
+    // cost and leaves every other pinned {p,q,depth} in this file
+    // unchanged. This also confirms {10,10} depth 4 stays well under
+    // `htmax` (20000), so it's not a silent-truncation artifact either.
+    let got = eval("/n 0 def 100 100 90 10 10 4 { pop /n n 1 add def } httile n");
+    assert_eq!(
+        got,
+        ["8201"],
+        "httile tile count for the {{10,10}} depth-4 cancellation case drifted"
+    );
+}
+
+#[test]
+fn httile_does_not_leak_a_callers_pre_existing_path_into_the_first_tile() {
+    // Regression test for a real bug caught by cross-model review:
+    // httile used to build each tile's path with hpoly alone, which only
+    // *appends* to whatever path already existed -- so a caller who
+    // hadn't just called newpath (or a page with leftover path state)
+    // would have its first tile's fill/stroke drag in unrelated ink.
+    // httile now calls newpath itself before each tile.
+    let mut it = Interp::with_page(300, 300).expect("page");
+    load(&mut it);
+    it.run_str(
+        "newpath 5 5 moveto 6 6 lineto \
+         150 150 140 7 3 0 { pop } httile",
+    )
+    .unwrap_or_else(|e| panic!("httile failed: {}", it.error_report(&e)));
+    let (lx, ly, ux, uy) = it.gfx().path_bbox().expect("path exists");
+    // The stray (5,5)-(6,6) segment would pull the bbox's low corner
+    // down near the origin if it leaked into the tile's path; the
+    // fundamental heptagon at cx=cy=150, r=140 should have a bbox
+    // comfortably inside the page and nowhere near (5,5).
+    assert!(
+        lx > 50.0 && ly > 50.0 && ux < 300.0 && uy < 300.0,
+        "bbox ({lx}, {ly})-({ux}, {uy}) suggests the stray path leaked in"
+    );
+}
+
+#[test]
+fn hpolar_stays_finite_for_a_large_hyperbolic_radius() {
+    // Regression test for a real bug caught by cross-model review:
+    // hpolar computed tanh(hrad/2) as (e^hrad - 1)/(e^hrad + 1), which
+    // overflows to NaN once e^hrad exceeds f64 range (hrad a few hundred
+    // is already enough). Rewritten using e^-hrad, which underflows
+    // harmlessly to 0 instead, giving the correct limit of 1.
+    let got = eval("710 0 hpolar");
+    let x: f64 = got[0].parse().unwrap();
+    let y: f64 = got[1].parse().unwrap();
+    assert!(
+        x.is_finite() && y.is_finite(),
+        "got ({x}, {y}), expected finite"
+    );
+    assert!(
+        (x - 1.0).abs() < 1e-9,
+        "expected x -> 1 at this radius, got {x}"
+    );
+    assert!(y.abs() < 1e-9, "expected y -> 0 at angle 0, got {y}");
 }

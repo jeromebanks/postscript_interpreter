@@ -9,9 +9,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-PIECES=(golden_bloom cathedral_rose ember_tree fern silk_waves frost_mandala ring_of_type hundred_lines hortus woven_labyrinth)
-PAGES=(700x700 700x700 620x820 620x800 700x480 700x700 700x700 560x620 620x800 640x640)
-SPEEDS=(150 60 400 3000 150 150 200 250 600 400)
+PIECES=(golden_bloom cathedral_rose ember_tree fern silk_waves frost_mandala ring_of_type hundred_lines hortus woven_labyrinth infinite_descent)
+PAGES=(700x700 700x700 620x820 620x800 700x480 700x700 700x700 560x620 620x800 640x640 640x640)
+SPEEDS=(150 60 400 3000 150 150 200 250 600 400 500)
 
 if [[ "${1:-}" == "--live" ]]; then
   BIN=target/release/pscat

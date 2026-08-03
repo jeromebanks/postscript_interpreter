@@ -46,7 +46,15 @@ BuildChar" addendum) that lets a Type 3 `BuildChar` receive a full
 Unicode codepoint instead of a byte; Unicode's Hangul-syllable
 arithmetic decomposes each codepoint into its jamo, which compose from
 just 14 atomic consonant stroke shapes plus a handful of vowel
-primitives (NOTES.md's entry has the full story).
+primitives (NOTES.md's entry has the full story). Also done: issue #10,
+hyperbolic geometry in the Poincare disk — `lib/artkit.ps`'s
+`hpoint`/`hpolar`/`horthocircle`/`hreflect`/`hgeo`/`hpoly`/`httile`
+(a breadth-first-reflection generator for regular {p,q} tessellations),
+`examples/hyperbolic.ps`, and the gallery piece `Infinite Descent`
+(NOTES.md's entry has the full story, including two real bugs a
+standalone Python prototype caught before either reached PostScript: a
+backwards circumradius convention, and a dedup-tolerance formula that
+silently capped tile growth with depth).
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
