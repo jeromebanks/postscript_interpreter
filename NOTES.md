@@ -30,9 +30,10 @@ tilings) rather than debugging the geometry live in PostScript:
   fundamental polygon's hyperbolic circumradius comes from splitting it
   into right triangles with angles pi/p at the center and pi/q at the
   vertex; the correct relation is `cosh(rh) = cot(pi/p)*cot(pi/q)`, not
-  the swapped `cot(pi/q)*cot(pi/p)`-with-different-angle-assignment
-  version tried first (same factors, different triangle, wrong answer —
-  {7,3} came out R~0.14, visibly too small once rendered). Caught by an
+  `cosh(rh) = cos(pi/p)/sin(pi/q)` — a different formula entirely (a
+  ratio, not a product of cotangents), tried first and wrong ({7,3} came
+  out R~0.14, visibly too small once rendered — a correct {7,3} occupies
+  roughly a third of the disk's radius, not a seventh). Caught by an
   advisor review of the plan *before* any PostScript was written: it
   flagged the convention as unverified and asked for a direct check, not
   just re-reading the algebra. The direct check — build the fundamental

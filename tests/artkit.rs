@@ -400,6 +400,13 @@ fn ghostscript_accepts_artkit() {
         return;
     }
     let lib = std::fs::read_to_string("lib/artkit.ps").expect("artkit");
+    // The httile call near the end runs at depth 4 (not a shallower,
+    // faster depth): the near-collinear-with-origin edge case in
+    // horthocircle that produces an oversized arc radius -- caught once
+    // already as a gs `limitcheck`, since it's gs's own `arc` that has
+    // the tighter limit -- only actually arises a few reflection
+    // generations deep. A shallower depth would pass this check without
+    // ever exercising that path.
     let driver = "3 srand \
         newpath 100 100 0 thome 1 1 60 { dup fd 89 tr pop } for stroke \
         newpath 200 50 90 thome (F) << (F) 0 get (F[+F]F) >> 3 lsys 3 20 ldraw stroke \
@@ -414,7 +421,7 @@ fn ghostscript_accepts_artkit() {
             newpath cx cy s up tri fill end } trigrid \
         0 0 60 60 3 3 { pop pop newpath 0 0 20 0 360 arc fill } truchet \
         300 300 15 0 0 15 3 3 { /y exch def /x exch def newpath x y 5 0 360 arc fill } lattice \
-        340 350 35 7 3 2 { pop 0.4 setgray fill } httile \
+        340 350 35 7 3 4 { pop 0.4 setgray fill } httile \
         showpage\n";
     let dir = std::env::temp_dir().join(format!("pscat-artkit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
@@ -587,14 +594,23 @@ fn httile_and_hpoly_never_paint_outside_the_disk() {
     // arc-direction picker (which of the two arcs on the geodesic's
     // support circle stays inside the disk). A wrong branch produces an
     // arc that bulges *outside* the unit circle -- fill the whole
-    // tessellation and assert not one pixel of ink lands outside the
+    // tessellation (hpoly's path) and stroke a handful of standalone
+    // near-boundary geodesics (hgeo -- exercised nowhere else in this
+    // suite, and it duplicates hpoly's arc-direction logic rather than
+    // sharing it, so a bug fixed in one and not the other needs its own
+    // coverage) and assert not one pixel of ink lands outside the
     // disk's own radius from its center (canvas sized to exactly match,
     // so there's nowhere for stray ink to hide off-screen).
     let mut it = Interp::with_page(300, 300).expect("page");
     load(&mut it);
     it.run_str(
         "1 setgray newpath 0 0 300 300 rectfill \
-         150 150 145 7 3 4 { pop 0 setgray fill } httile",
+         150 150 145 7 3 4 { pop 0 setgray fill } httile \
+         0 setgray 1.5 setlinewidth \
+         newpath 150 150 145 0.85 0.1 -0.75 0.6 hgeo stroke \
+         newpath 150 150 145 -0.8 -0.2 0.3 -0.85 hgeo stroke \
+         newpath 150 150 145 0.1 0.9 -0.9 -0.15 hgeo stroke \
+         newpath 150 150 145 0.05 0.05 0.95 0.1 hgeo stroke",
     )
     .unwrap_or_else(|e| panic!("httile failed: {}", it.error_report(&e)));
     let pixmap = &it.gfx().pixmap;
@@ -622,6 +638,19 @@ fn httile_generates_the_expected_tile_count_and_calls_proc_that_many_times() {
     // {p,q,depth,frame} -- a regression net on the reflection generator
     // and its edge-length-scaled dedup tolerance together, the way
     // lattice_walks_the_expected_points pins lattice's exact points.
+    //
+    // This pin sits closer to a floating-point cliff than most: the
+    // dedup check is `distance < 0.3 * edge_length`, and at least one
+    // candidate tile in this {7,3} depth-2 configuration was observed to
+    // land within noise of that boundary (pscat and an independent
+    // Python prototype of the same algorithm agreed on every {p,q,depth}
+    // tried except this class of case, off by exactly one tile — see
+    // NOTES.md). If this test starts failing after an unrelated change
+    // (a trig implementation detail, a number-representation change),
+    // check whether the new count is still a plausible dense {7,3}
+    // tiling (render it) before assuming the reflection/dedup logic
+    // itself regressed -- it may just be a duplicate near the boundary
+    // resolving the other way.
     let got = eval("/n 0 def 100 100 90 7 3 2 { pop /n n 1 add def } httile n");
     assert_eq!(
         got,

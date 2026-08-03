@@ -807,10 +807,15 @@ end
 % scan is the one place this scales as O(tile-count^2); fine
 % through the depths (3-5) any single piece can actually show, not
 % pursued further. Tile count grows roughly geometrically with depth;
-% the queue/visited storage is capped at httmax and enqueueing silently
+% the queue/visited storage is capped at htmax and enqueueing silently
 % stops past it (same doctrine as lsys's 60000-character cap) — depth
 % 3-4 is already a dense, screen-filling tessellation for any {p,q}.
-/httmax 20000 def
+% htqueue/htvisited (htmax and 2*htmax slots) are allocated fresh on
+% every call, not shared/reused across calls — a few calls per piece
+% (the norm; see gallery/infinite_descent.ps and examples/hyperbolic.ps)
+% is 60k-120k array slots total, cheap; calling httile in a per-frame or
+% per-cell loop would not be, and isn't a usage this file optimizes for.
+/htmax 20000 def
 /httile {
     /htproc exch def
     /htdepth exch def
@@ -832,8 +837,8 @@ end
         htfund hti 2 mul htR hta cos mul put
         htfund hti 2 mul 1 add htR hta sin mul put
     } for
-    /htqueue httmax array def
-    /htvisited httmax 2 mul array def
+    /htqueue htmax array def
+    /htvisited htmax 2 mul array def
     /htqhead 0 def
     htqueue 0 [htfund 0] put
     /htqtail 1 def
@@ -904,7 +909,7 @@ end
                         } if
                     } if
                 } for
-                htdup not htqtail httmax lt and {
+                htdup not htqtail htmax lt and {
                     htqueue htqtail [htnb htgen 1 add] put
                     htvisited htqtail 2 mul htccx put
                     htvisited htqtail 2 mul 1 add htccy put
