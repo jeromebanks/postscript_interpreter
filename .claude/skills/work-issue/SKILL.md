@@ -390,14 +390,23 @@ step (minutes to tens of minutes per round) and the one most likely to
 make a still-live run look stale to a concurrent invocation:
 
 ```sh
-H="$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat" && \
-date +%s > "$H.tmp" && mv "$H.tmp" "$H" && \
 rm -f /tmp/codex-review-<N>.json && \
+  H="$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat" && \
+  date +%s > "$H.tmp" && mv "$H.tmp" "$H" && \
   cd "$WORKTREE_DIR" && git fetch origin main && \
   test "$(git rev-parse --abbrev-ref HEAD)" = "$BRANCH" && \
   node "$CODEX_SCRIPT" review --wait --json --scope branch --base origin/main \
   > /tmp/codex-review-<N>.json
 ```
+
+`rm -f` stays first in the chain, exactly as it originally was — if any
+later step in the chain fails (heartbeat write, branch assert,
+`$WORKTREE_DIR`/`$BRANCH` empty from a cwd/variable reset), the stale
+`/tmp/codex-review-<N>.json` from a *prior* round is already gone, so
+the "before posting anything" check below can't accept and post that
+prior round's output as if it were a review of the current diff — a
+short-circuit that isn't `rm -f`-first would silently do exactly that
+under `agent-full` merge authority.
 
 `rm -f` first so a short-circuited chain (the branch assert failing, or
 `$WORKTREE_DIR`/`$BRANCH`/`$CODEX_SCRIPT` coming up empty from a
@@ -585,7 +594,17 @@ there may be follow-up commits before a human merges it.
   call itself (it may, past its own timeout), that's fine — the review
   job is tracked independently by `codex-companion.mjs`; poll `node
   "$CODEX_SCRIPT" status --all --json` or `result <job-id> --json`
-  rather than re-running the review.
+  rather than re-running the review. **Refresh the heartbeat at each
+  poll**, not just once before kicking the review off — this is the
+  one operation in the whole flow that can genuinely run past the
+  45-minute staleness threshold in a single blocking stretch, and a
+  pre-refresh alone doesn't cover that. Other single blocking calls in
+  this skill (a `cargo build`/`test` cycle, an `advisor` call) aren't
+  separately covered this way — they're not backgrounded/polled, so
+  there's no natural point to refresh mid-call; in practice they run
+  well under the threshold for this repo's size, but that's an
+  observation, not a guarantee, if the flow is reused somewhere the
+  build is much slower.
 - **`status --all --json` can report a job as `"running"` long after
   the underlying `codex` process has actually died.** Confirmed while
   building this step: the process exited cleanly (macOS's unified log
