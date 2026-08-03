@@ -639,16 +639,36 @@ end
     /hoy1 exch def /hox1 exch def
     /hod1 hox1 dup mul hoy1 dup mul add def
     /hod2 hox2 dup mul hoy2 dup mul add def
-    % sin(angle) = D/(|p1||p2|); compared in squared form to skip two
-    % sqrts, same trick the old collinearity test used. `le`, not `lt`:
-    % when a point is exactly at the origin, hod1 or hod2 is exactly 0,
-    % D is exactly 0 too (cross product with the zero vector), and both
-    % sides of a strict `<` are then equal -- falling through to divide
-    % by a D that's exactly 0.0 (confirmed: gs raised `undefinedresult`
-    % on a {10,10} depth-4 tiling with a vertex landing exactly on the
-    % origin).
+    % D = 0 exactly iff p1, p2, and the origin are exactly collinear -- the
+    % one case with no well-defined finite-radius orthogonal circle, so
+    % it's the only case that *geometrically* needs the diameter fallback.
+    % A cross-model review (round 7) found that the previous *relative*
+    % threshold here (sin(angle) small compared to |p1||p2|) also fired
+    % for points simply close together near the disk boundary, regardless
+    % of collinearity -- confirmed with p1=(0.9371500703,0.3489261063),
+    % p2=(0.9371497472,0.3489269739), ~9e-7 apart, both near-boundary:
+    % sin(angle) there is tiny purely because the points are close
+    % together, not because the geodesic through them is anywhere near a
+    % diameter (its true orthogonal circle has radius ~9e-6, a small,
+    % perfectly well-conditioned circle the old relative test discarded
+    % for a wrong diameter approximation). But dropping the tolerance to
+    % bare equality broke ordinary, non-extreme cases ({7,3} depth 2's
+    % pinned tile count moved from 29 to 35, with ink landing outside the
+    % disk) -- `hox1*hoy2` and `hoy1*hox2` accumulate their own rounding
+    % error through the chain of prior reflections composing them, so two
+    % values that are *mathematically* equal (true collinearity) rarely
+    % subtract to bit-exact 0.0 in practice. The threshold needs to track
+    % that subtraction's own noise floor instead of either extreme:
+    % roughly eps times the magnitude of the terms being subtracted
+    % (`|x1*y2| + |y1*x2|`), not a threshold relative to |p1||p2| (round
+    % 7's failure mode) or an absolute zero (this round's own first,
+    % overcorrected attempt). eps=1e-12 recovers every pinned tile count
+    % (29, 232, 1711, 8201) and does not misclassify either the round-7
+    % counterexample above or round 3's (D=9.8e-6 there, ~1e6x this
+    % noise floor).
     /hocross hox1 hoy2 mul hoy1 hox2 mul sub def
-    /hodeg hocross dup mul 0.000001 dup mul hod1 mul hod2 mul le def
+    /honoise hox1 hoy2 mul abs hoy1 hox2 mul abs add def
+    /hodeg hocross abs honoise 1e-12 mul le def
     hodeg {
         % The direction of a true diameter is radial -- along the line
         % through the origin and (either) defining point -- not along the

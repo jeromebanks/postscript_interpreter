@@ -30,7 +30,8 @@
     /hod1 hox1 dup mul hoy1 dup mul add def
     /hod2 hox2 dup mul hoy2 dup mul add def
     /hocross hox1 hoy2 mul hoy1 hox2 mul sub def
-    /hodeg hocross dup mul 0.000001 dup mul hod1 mul hod2 mul le def
+    /honoise hox1 hoy2 mul abs hoy1 hox2 mul abs add def
+    /hodeg hocross abs honoise 1e-12 mul le def
     hodeg {
         hod1 hod2 gt { hox1 hoy1 } { hox2 hoy2 } ifelse
         /hodry exch def /hodrx exch def

@@ -354,6 +354,57 @@ The `gs`-compat driver in `tests/artkit.rs` runs a `{10,10}` depth-4
 crash — so the crash fix is covered under `gs` itself on every default
 test run, even with the full tile-count regression test marked ignored.
 
+**Round seven** found one more real bug in the collinearity test itself,
+plus a P2 dispositioned as out of scope rather than fixed:
+
+- **Fixed.** The collinearity test compared `sin(angle between p1 and p2
+  as seen from the origin)` against a threshold relative to `|p1||p2|`
+  — scale-invariant with respect to how far p1/p2 are from the origin
+  (fixing round three's bug), but that turns out not to be the right
+  criterion at all: `sin(angle)` is also small whenever p1 and p2 are
+  simply *close together*, independent of whether the geodesic through
+  them is anywhere near a diameter. Confirmed with two real vertices from
+  a `{10,10}` depth-4 BFS, `(0.9371500703, 0.3489261063)` and
+  `(0.9371497472, 0.3489269739)` — about `9e-7` apart near the disk
+  boundary — where the old test reported `isline=true`, but the *true*
+  orthogonal circle there has radius about `9.17e-6`: a small, perfectly
+  well-conditioned circle, not remotely diameter-like. Treating it as a
+  diameter discarded correct, easily-computable geometry for a wrong
+  approximation. The first fix attempted — drop the tolerance to bare `D
+  = 0` exactly, reasoning that the linear solve is stable even at tiny
+  `D` so there's no geometric need to approximate anything — broke
+  ordinary, non-extreme cases (`{7,3}` depth 2's pinned count moved from
+  29 to 35, with ink landing outside the disk in the boundary-containment
+  test), because `D`'s own subtraction (`x1*y2 - y1*x2`) accumulates
+  rounding error through the chain of prior reflections composing its
+  inputs, so two values that are *mathematically* equal (true
+  collinearity) essentially never subtract to bit-exact `0.0` in
+  practice. The actual fix compares `D` against its own subtraction's
+  noise floor — `eps * (|x1*y2| + |y1*x2|)`, the standard robust-predicate
+  formulation, with `eps = 1e-12` — which is small only when there's
+  genuine floating-point cancellation in computing `D` itself, not merely
+  when p1/p2 happen to be nearby. This also meant retuning the round-six
+  regression test: its original pair no longer takes the isline branch at
+  all under the tighter threshold (correctly — it isn't actually
+  degenerate), so that test now uses a purpose-built pair (`(0.7, 0.3)`
+  perturbed by a `~7e-13` *purely tangential* nudge) tuned to still
+  exercise the isline branch's radial-vs-chord fix. New regression test:
+  `horthocircle_does_not_treat_close_together_points_as_collinear`.
+  Reverified: every previous discriminating case, all four pinned tile
+  counts (29, 232, 1,711, 8,201), the gallery render (byte-identical),
+  and the `gs` isolate case all still pass with the retuned threshold.
+- **Out of scope, not fixed.** The review also flagged that `hgeo`/
+  `hpoly`'s drawing-only `hor 50 gt` cutoff (approximating a large
+  orthogonal circle as a straight chord for rendering, added in the
+  original round-one `limitcheck` fix, well before this issue's
+  cross-model review rounds began) is a fixed logical-coordinate
+  threshold rather than one scaled to the actual device-space rendering
+  error (sagitta) at the frame size in use — true, and a reasonable
+  rendering-fidelity refinement, but it's pre-existing behavior this
+  branch didn't introduce or change, not a defect in anything rounds
+  four through seven touched. Left as a possible follow-up, not chased
+  here.
+
 Deliberate omissions: only the Poincare disk model (the issue left model
 choice open; upper-half-plane wasn't needed for anything built here) and
 only reflection-generated regular {p,q} tilings (no general Mobius

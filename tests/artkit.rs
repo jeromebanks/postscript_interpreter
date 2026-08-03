@@ -815,27 +815,69 @@ fn horthocircle_isline_fallback_uses_the_radial_not_chord_direction() {
     // cross-model review, in the same near-collinear-pair family as the
     // tests above. The isline branch used to derive its diameter
     // direction from the chord p2-p1 -- correct for *exactly* collinear
-    // points (where the chord and the radius agree), but wrong for a
-    // near-collinear pair let in by this branch's angular tolerance:
-    // when p1 and p2 have similar magnitude, p2-p1 can be dominated by
-    // their tiny angular offset and point almost tangentially rather
-    // than radially. This exact pair -- p1=(0.99,0), p2 a hair's width
-    // away in angle at nearly the same radius -- used to report
-    // isline=true with a chord direction far from (1,0), and reflecting
-    // p1 across it moved p1 to roughly (-0.99,-0.001) instead of fixing
-    // it. Fixed by taking the direction from whichever of p1/p2 is
-    // farther from the origin (better-conditioned, and exact whenever
-    // the pair really is collinear, since both points' own directions
-    // and the chord's then agree).
-    let got = eval("0.99 0 0.98999999995 0.000000099 horthocircle");
-    assert_eq!(got[3], "true", "should still take the isline fallback");
+    // points (where the chord and the radius agree, since any two
+    // distinct points on the same line through the origin have a
+    // difference vector parallel to that line), but wrong for a
+    // near-collinear pair let in by this branch's tolerance: when the
+    // displacement from p1 to p2 has a tangential component, the chord
+    // is no longer purely radial.
+    //
+    // Constructing a pair that actually exercises this took retuning
+    // after round seven's fix below changed how tight that tolerance is
+    // (see horthocircle_does_not_treat_close_together_points_as_collinear):
+    // p1=(0.7,0.3) with p2 displaced by a *purely tangential* nudge
+    // (perpendicular to p1, direction (-0.3,0.7)) small enough that D's
+    // subtraction genuinely cancels relative to its own noise floor. The
+    // old chord-direction formula's direction here is (-0.394, 0.919) --
+    // essentially perpendicular to the true radial direction
+    // (0.919, 0.394) -- so reflecting p1 across it would mirror across
+    // entirely the wrong line through the origin. Fixed by taking the
+    // direction from whichever of p1/p2 is farther from the origin
+    // instead (better-conditioned, and exact whenever the pair really is
+    // collinear, since both points' own directions and the chord's then
+    // agree).
+    let got = eval("0.7 0.3 0.6999999999997899 0.30000000000049 horthocircle");
+    assert_eq!(got[3], "true", "should take the isline fallback");
 
-    let fixed = eval("0.99 0 0.98999999995 0.000000099 horthocircle 0.99 0 hreflect");
+    let fixed = eval("0.7 0.3 0.6999999999997899 0.30000000000049 horthocircle 0.7 0.3 hreflect");
     let fx: f64 = fixed[0].parse().unwrap();
     let fy: f64 = fixed[1].parse().unwrap();
     assert!(
-        (fx - 0.99).abs() < 1e-6 && fy.abs() < 1e-6,
+        (fx - 0.7).abs() < 1e-6 && (fy - 0.3).abs() < 1e-6,
         "p1 should be a fixed point of its own geodesic's reflection: got ({fx}, {fy})"
+    );
+}
+
+#[test]
+fn horthocircle_does_not_treat_close_together_points_as_collinear() {
+    // Regression test for a real bug caught by a seventh round of
+    // cross-model review. The collinearity test used to compare
+    // sin(angle between p1 and p2 as seen from the origin) against a
+    // fixed relative threshold -- scale-invariant in |p1||p2| (fixing
+    // round three's bug), but that isn't actually the right criterion:
+    // sin(angle) is also small whenever p1 and p2 are simply close
+    // together, regardless of whether the geodesic through them is
+    // anywhere near a diameter. This exact pair -- two vertices from a
+    // real {10,10} depth-4 httile BFS, ~9e-7 apart near the disk
+    // boundary -- has sin(angle) tiny purely from that proximity: the
+    // old test reported isline=true, but the true orthogonal circle here
+    // has radius ~9.17e-6, a small, perfectly well-conditioned circle,
+    // not anything diameter-like. Treating it as isline discarded real
+    // geometry for a wrong approximation. Fixed by testing D = x1*y2 -
+    // y1*x2 (the un-normalized cross product) against its own
+    // subtraction's noise floor instead -- eps * (|x1*y2| + |y1*x2|) --
+    // which is small only when there's genuine floating-point
+    // cancellation in computing D itself, not merely when p1/p2 happen
+    // to be nearby.
+    let got = eval("0.9371500703 0.3489261063 0.9371497472 0.3489269739 horthocircle");
+    assert_eq!(
+        got[3], "false",
+        "should report a true (small) circle, not isline"
+    );
+    let r: f64 = got[2].parse().unwrap();
+    assert!(
+        (r - 9.165692e-6).abs() < 1e-9,
+        "expected the true small-radius circle, got r={r}"
     );
 }
 
