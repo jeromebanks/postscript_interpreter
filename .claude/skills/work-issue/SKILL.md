@@ -166,7 +166,11 @@ date +%s > "$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"
 
 (same reasoning already applies to `$WORKTREE_DIR`/`$BRANCH` reused
 across steps 7-9 below — re-emit the assignment in each new Bash block
-rather than assuming it's still set.)
+rather than assuming it's still set.) `git -C ... rev-parse --git-dir`
+returns an absolute path even when `$WORKTREE_DIR` itself is relative
+(verified) — that matters given the cwd-reset pitfall below, since a
+relative write target would otherwise land wherever cwd happened to be
+for that particular Bash call, not where step 1's check reads from.
 
 Everything from here on — reading, editing, building, testing,
 committing — happens *inside `$WORKTREE_DIR`*, not the original
@@ -227,7 +231,16 @@ the source of truth:
 - AGENTS.md's "Code quality bar" (no `unwrap`/`expect` on
   program-input-derived data, comments explain why not what, tests
   live alongside the code they test).
-- Commit at reasonable checkpoints, not one giant commit at the end.
+- Commit at reasonable checkpoints, not one giant commit at the end —
+  and refresh the heartbeat at each one (`date +%s > "$(git -C
+  "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"`). Without
+  this, step 4's end and step 5's end are the only two heartbeat
+  refreshes bracketing the entire implementation phase — for any real
+  code change (edit/build/test cycles, not just a doc tweak) that gap
+  alone can exceed the 45-minute staleness threshold, making a still-
+  live implementation look crashed to a concurrent invocation. Per-
+  commit refreshes bound the gap by construction instead of by hoping
+  implementation is fast.
 - Update `NOTES.md`/`HANDOFF.md`/`README.md` on the branch as
   capabilities land, per AGENTS.md — not as an afterthought.
 
