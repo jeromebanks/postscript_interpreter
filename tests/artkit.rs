@@ -713,3 +713,80 @@ fn fundamental_polygon_edges_meet_at_the_expected_interior_angle() {
         );
     }
 }
+
+#[test]
+fn hreflect_stays_exact_near_the_old_radius_cap_boundary() {
+    // Regression test for a real bug caught by cross-model review:
+    // horthocircle used to fall back to treating *any* large-radius
+    // support circle as a diameter -- a reasonable approximation for
+    // *drawing* (an enormous arc and a straight line are visually
+    // identical), but wrong for hreflect's transformation math, since
+    // the diameter reflection formula only agrees with true circle
+    // inversion when the two points really are collinear with the
+    // origin. This exact pair -- collinear-with-origin *except* for a
+    // small x offset -- has a real orthogonal-circle radius just above
+    // the old cap (~51) while being nowhere near an actual diameter: the
+    // old code reflected p1 to (-0.010195, 0.2) instead of fixing it.
+    // horthocircle must still report the true circle (isline=false), and
+    // hreflect must still fix p1 exactly. The >50 approximation now
+    // lives only in hgeo/hpoly's drawing code, not here.
+    let got = eval("0.010195 0.2 0.010195 -0.2 horthocircle");
+    assert_eq!(got[3], "false", "should report a true circle, not isline");
+    let r: f64 = got[2].parse().unwrap();
+    assert!(r > 50.0, "expected a radius past the old cap, got {r}");
+
+    let fixed = eval("0.010195 0.2 0.010195 -0.2 horthocircle 0.010195 0.2 hreflect");
+    let fx: f64 = fixed[0].parse().unwrap();
+    let fy: f64 = fixed[1].parse().unwrap();
+    assert!(
+        (fx - 0.010195).abs() < 1e-9 && (fy - 0.2).abs() < 1e-9,
+        "p1 should be a fixed point of its own geodesic's reflection: got ({fx}, {fy})"
+    );
+}
+
+#[test]
+fn httile_does_not_leak_a_callers_pre_existing_path_into_the_first_tile() {
+    // Regression test for a real bug caught by cross-model review:
+    // httile used to build each tile's path with hpoly alone, which only
+    // *appends* to whatever path already existed -- so a caller who
+    // hadn't just called newpath (or a page with leftover path state)
+    // would have its first tile's fill/stroke drag in unrelated ink.
+    // httile now calls newpath itself before each tile.
+    let mut it = Interp::with_page(300, 300).expect("page");
+    load(&mut it);
+    it.run_str(
+        "newpath 5 5 moveto 6 6 lineto \
+         150 150 140 7 3 0 { pop } httile",
+    )
+    .unwrap_or_else(|e| panic!("httile failed: {}", it.error_report(&e)));
+    let (lx, ly, ux, uy) = it.gfx().path_bbox().expect("path exists");
+    // The stray (5,5)-(6,6) segment would pull the bbox's low corner
+    // down near the origin if it leaked into the tile's path; the
+    // fundamental heptagon at cx=cy=150, r=140 should have a bbox
+    // comfortably inside the page and nowhere near (5,5).
+    assert!(
+        lx > 50.0 && ly > 50.0 && ux < 300.0 && uy < 300.0,
+        "bbox ({lx}, {ly})-({ux}, {uy}) suggests the stray path leaked in"
+    );
+}
+
+#[test]
+fn hpolar_stays_finite_for_a_large_hyperbolic_radius() {
+    // Regression test for a real bug caught by cross-model review:
+    // hpolar computed tanh(hrad/2) as (e^hrad - 1)/(e^hrad + 1), which
+    // overflows to NaN once e^hrad exceeds f64 range (hrad a few hundred
+    // is already enough). Rewritten using e^-hrad, which underflows
+    // harmlessly to 0 instead, giving the correct limit of 1.
+    let got = eval("710 0 hpolar");
+    let x: f64 = got[0].parse().unwrap();
+    let y: f64 = got[1].parse().unwrap();
+    assert!(
+        x.is_finite() && y.is_finite(),
+        "got ({x}, {y}), expected finite"
+    );
+    assert!(
+        (x - 1.0).abs() < 1e-9,
+        "expected x -> 1 at this radius, got {x}"
+    );
+    assert!(y.abs() < 1e-9, "expected y -> 0 at angle 0, got {y}");
+}

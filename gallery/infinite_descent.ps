@@ -36,7 +36,11 @@
              hocx2 hoy1 hoy2 sub mul add 2 mul def
         /hodeg hodeg hod abs 0.000001 lt or def
     } if
-    hodeg not {
+    hodeg {
+        /hodx hox2 hox1 sub def /hody hoy2 hoy1 sub def
+        /hodn hodx dup mul hody dup mul add sqrt def
+        hodx hodn div hody hodn div 0 true
+    } {
         /hoa2 hod1 def /hob2 hod2 def
         /hoc2 hocx2 dup mul hocy2 dup mul add def
         /houx hoa2 hoy2 hocy2 sub mul hob2 hocy2 hoy1 sub mul add
@@ -44,13 +48,8 @@
         /houy hoa2 hocx2 hox2 sub mul hob2 hox1 hocx2 sub mul add
               hoc2 hox2 hox1 sub mul add hod div def
         /hor houx hox1 sub dup mul houy hoy1 sub dup mul add sqrt def
-        /hodeg hodeg hor 50 gt or def
-    } if
-    hodeg {
-        /hodx hox2 hox1 sub def /hody hoy2 hoy1 sub def
-        /hodn hodx dup mul hody dup mul add sqrt def
-        hodx hodn div hody hodn div 0 true
-    } { houx houy hor false } ifelse
+        houx houy hor false
+    } ifelse
 } def
 /hreflect {
     /hry exch def /hrx exch def
@@ -75,6 +74,7 @@
         /hyx2 hyverts hyj 2 mul get def /hyy2 hyverts hyj 2 mul 1 add get def
         hyx1 hyy1 hyx2 hyy2 horthocircle
         /hyisline exch def /hyor exch def /hyob exch def /hyoa exch def
+        /hyisline hyisline hyor 50 gt or def
         hyisline {
             hycx hyx2 hyr mul add hycy hyy2 hyr mul add lineto
         } {
@@ -119,6 +119,7 @@
         htqueue htqhead get aload pop
         /htgen exch def /htverts exch def
         /htqhead htqhead 1 add def
+        newpath
         htcx htcy htr htverts hpoly
         htgen htproc
         htgen htdepth lt {

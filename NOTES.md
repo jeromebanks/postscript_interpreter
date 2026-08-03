@@ -115,6 +115,59 @@ which is exactly the kind of gap independent review is for:
   one holding the curved-edge geometry), so gsave/grestore is the
   fix that actually fits httile's contract.
 
+A second round of cross-model review, after pushing the two fixes above,
+found three more — this time in the geometry itself rather than around
+it, and worth taking seriously precisely because they came *after* the
+Python-prototype validation and the existing test suite both said the
+math was right:
+
+- **The single real correctness bug of the three.** The `hor 50 gt`
+  radius cap added to `horthocircle` (the near-collinear/`limitcheck`
+  fix above) approximated *any* large-radius support circle as a
+  diameter — a safe simplification for *drawing* (an arc that big and a
+  straight line are visually identical at any device scale this file
+  uses), but wrong for `hreflect`'s transformation math: a diameter's
+  reflection is a mirror across a line through the *origin*, and that
+  formula only agrees with true circle inversion when the two points are
+  actually collinear with the origin. A chord that merely has a large
+  orthogonal-circle radius without being collinear with the origin —
+  confirmed with `p1=(0.010195, 0.2)`, `p2=(0.010195, -0.2)`, radius
+  ~51 — got mirrored across the wrong line entirely: reflecting `p1`
+  moved it to `(-0.010195, 0.2)` instead of fixing it, breaking the one
+  invariant every geodesic reflection must have (a geodesic fixes its
+  own defining points). This is also the actual explanation for a
+  ~1-tile discrepancy against the Python prototype noted in the first
+  round of this issue's work and initially misdiagnosed as the
+  dedup-seed bug alone — both bugs were real and both contributed.
+  Fixed by keeping `horthocircle` mathematically exact (it always
+  returns the true circle now, however large) and moving the >50
+  drawing-only approximation into `hgeo` and `hpoly` specifically, each
+  keeping their own local copy of the "isline" flag rather than
+  mutating what `horthocircle` reports. New regression test:
+  `hreflect_stays_exact_near_the_old_radius_cap_boundary`, using the
+  exact point pair above.
+- `httile` built each tile's path with `hpoly` alone, which only
+  *appends* — so a caller who hadn't just called `newpath` (or any
+  leftover path state) would have that ink dragged into the first
+  tile's fill/stroke, contrary to the documented "proc sees one closed
+  p-gon" contract. Fixed with an explicit `newpath` before each tile's
+  `hpoly` call inside `httile` itself, so the driver's contract no
+  longer depends on caller discipline. Every shipped call site already
+  happened to newpath first (or had `fill`'s own implicit-newpath from
+  a prior paint op clear things anyway), so this didn't change any
+  rendered output — it closes a latent trap for the next caller, not a
+  bug that had actually fired here. New regression test:
+  `httile_does_not_leak_a_callers_pre_existing_path_into_the_first_tile`.
+- `hpolar` computed `tanh(hrad/2)` as `(e^hrad - 1)/(e^hrad + 1)`, which
+  overflows to `NaN NaN` once `e^hrad` exceeds `f64` range — a few
+  hundred is already enough, e.g. `710 0 hpolar`. Not reachable by
+  anything shipped here (every real call uses `hrad` under 4), but a
+  landmine for the next caller who wants a point genuinely far out
+  toward the rim. Rewritten as `(1 - e^-hrad)/(1 + e^-hrad)`, which
+  underflows harmlessly to `0` instead of overflowing, giving the
+  correct limit of `1`. New regression test:
+  `hpolar_stays_finite_for_a_large_hyperbolic_radius`.
+
 Verified against `gs` throughout, not just at the end: both the
 Ghostscript acceptance driver (`tests/artkit.rs`) and every render done
 while building this (`examples/hyperbolic.ps`, `gallery/

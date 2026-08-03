@@ -566,15 +566,20 @@ end
 
 % hrad theta hpolar -> x y   (hyperbolic radius + angle(deg) -> logical
 % Poincare coords: x = tanh(hrad/2)*cos(theta), y = tanh(hrad/2)*sin(theta).
-% tanh(t/2) = (e^t - 1)/(e^t + 1); PostScript's `exp` is base^exponent,
-% not e^x, hence the literal base below. Places things at genuine
-% hyperbolic distances from the disk's center — the crowding toward the
-% rim as hrad grows is the signature look of this model, not a bug to
-% correct for.
+% tanh(t/2) = (1 - e^-t) / (1 + e^-t); PostScript's `exp` is
+% base^exponent, not e^x, hence the literal base below. Written with the
+% negative exponent (not the algebraically-equivalent (e^t-1)/(e^t+1))
+% specifically so it stays finite for any hrad a caller might actually
+% pass: e^-t underflows harmlessly to 0 as hrad grows, giving the
+% correct limit of 1, whereas e^t overflows to infinity long before that
+% and produces NaN. hrad is assumed >= 0, like a radius anywhere else in
+% this file. Places things at genuine hyperbolic distances from the
+% disk's center — the crowding toward the rim as hrad grows is the
+% signature look of this model, not a bug to correct for.
 /hpolar {
     /hath exch def /harad exch def
-    /hau 2.718281828459045 harad exp def
-    /haR hau 1 sub hau 1 add div def
+    /hau 2.718281828459045 harad neg exp def
+    /haR 1 hau sub 1 hau add div def
     haR hath cos mul
     haR hath sin mul
 } def
@@ -591,18 +596,22 @@ end
 % back to isline=true, with a,b repurposed as p2-p1's *unit direction*
 % (not a circle) — hreflect below relies on that repurposing.
 %
-% Near-but-not-quite-collinear input is degenerate too, just less
-% obviously: as p1,p2,origin approach collinearity the true orthogonal
-% circle's radius grows without bound (a diameter *is* the r=infinity
-% limit), so a determinant just above the exact-zero threshold still
-% produces a valid but enormous radius — enormous enough that `arc`
-% chokes on it (confirmed: gs raised `limitcheck` on one, deep in a
-% depth-4 httile BFS where the near-collinear case actually arises).
-% Caught after the fact instead of tightening the determinant threshold,
-% since no fixed threshold on the determinant is scale-invariant here:
-% cap the resulting radius instead and fall back to isline past it — at
-% that radius the arc and the true diameter are visually identical at
-% any device scale this file draws at anyway.
+% Always the *true* circle, however large its radius — this is also
+% hreflect's transformation math, and approximating a large-but-finite
+% circle as a diameter is a real, visible distortion there, not just a
+% harmless simplification: a diameter's reflection formula is a mirror
+% across a line THROUGH THE ORIGIN, so applying it to a chord that
+% merely *looks* like a diameter (large orthogonal-circle radius, but
+% not collinear with the origin) does not fix that chord's own defining
+% points, breaking the one invariant every geodesic reflection must have
+% (confirmed empirically: reflecting p1 across the near-diameter through
+% p1=(0.010195, 0.2), p2=(0.010195, -0.2) — radius ~51, not a true
+% diameter — moved p1 to (-0.010195, 0.2) instead of fixing it). The
+% radius still legitimately overwhelms `arc` for *drawing* purposes
+% (confirmed: gs raised `limitcheck` on one, deep in a depth-4 httile
+% BFS) — hgeo/hpoly fall back to a straight chord there, but that's a
+% device-space rendering approximation scoped to those two procs, not a
+% change to what this proc reports.
 /horthocircle {
     /hoy2 exch def /hox2 exch def
     /hoy1 exch def /hox1 exch def
@@ -620,7 +629,11 @@ end
         def
         /hodeg hodeg hod abs 0.000001 lt or def
     } if
-    hodeg not {
+    hodeg {
+        /hodx hox2 hox1 sub def /hody hoy2 hoy1 sub def
+        /hodn hodx dup mul hody dup mul add sqrt def
+        hodx hodn div hody hodn div 0 true
+    } {
         /hoa2 hod1 def /hob2 hod2 def
         /hoc2 hocx2 dup mul hocy2 dup mul add def
         /houx
@@ -636,13 +649,6 @@ end
             hod div
         def
         /hor houx hox1 sub dup mul houy hoy1 sub dup mul add sqrt def
-        /hodeg hodeg hor 50 gt or def
-    } if
-    hodeg {
-        /hodx hox2 hox1 sub def /hody hoy2 hoy1 sub def
-        /hodn hodx dup mul hody dup mul add sqrt def
-        hodx hodn div hody hodn div 0 true
-    } {
         houx houy hor false
     } ifelse
 } def
@@ -684,6 +690,13 @@ end
     /hgr exch def /hgcy exch def /hgcx exch def
     hgx1 hgy1 hgx2 hgy2 horthocircle
     /hgisline exch def /hgor exch def /hgob exch def /hgoa exch def
+    % Drawing-only approximation: a large-but-finite orthogonal-circle
+    % radius overwhelms `arc` (gs raised limitcheck on one) long before
+    % it's visually distinguishable from a straight chord at any device
+    % scale here. Scoped to this proc's own hgisline copy -- horthocircle
+    % itself always reports the true circle, since hreflect needs it
+    % (see horthocircle's header).
+    /hgisline hgisline hgor 50 gt or def
     hgcx hgx1 hgr mul add hgcy hgy1 hgr mul add moveto
     hgisline {
         hgcx hgx2 hgr mul add hgcy hgy2 hgr mul add lineto
@@ -733,6 +746,8 @@ end
         /hyy2 hyverts hyj 2 mul 1 add get def
         hyx1 hyy1 hyx2 hyy2 horthocircle
         /hyisline exch def /hyor exch def /hyob exch def /hyoa exch def
+        % Same drawing-only large-radius fallback as hgeo -- see there.
+        /hyisline hyisline hyor 50 gt or def
         hyisline {
             hycx hyx2 hyr mul add hycy hyy2 hyr mul add lineto
         } {
@@ -856,6 +871,12 @@ end
         htqueue htqhead get aload pop      % verts gen
         /htgen exch def /htverts exch def
         /htqhead htqhead 1 add def
+        % newpath first: hpoly only ever *appends* a subpath, so without
+        % this a caller who didn't newpath before calling httile (or a
+        % proc that leaves ink-free path segments lying around) leaks
+        % into the very first tile's path instead of the documented
+        % "proc sees exactly one closed p-gon" contract.
+        newpath
         htcx htcy htr htverts hpoly
         htgen htproc
         htgen htdepth lt {
