@@ -209,6 +209,68 @@ tolerance difference `HANDOFF.md` already records (fixed quarter-pixel
 device-space tolerance vs. `gs`'s `setflat`-driven one — chord counts
 differ, shapes agree).
 
+A fourth round, after pushing the third round's fix, found one P1 (a real
+crash) and one P2 (a precision claim I could not independently confirm):
+
+- **P1, fixed.** Even past the angular collinearity test from round
+  three, `hod` (the circumcircle determinant, computed from `hocx2`/
+  `hocy2` after the angular test already says "not collinear") can still
+  round to exactly `0.0` from catastrophic cancellation in its
+  sum-of-products arithmetic — a property of this specific formula at
+  extreme `{p,q}`, not of the angle itself. Confirmed under `gs`, which
+  raised `undefinedresult` dividing by it four generations into a
+  `{10,10}` tiling; `pscat` doesn't trap the divide the way `gs` does, so
+  the same input would have silently produced an `Inf`/`NaN` coordinate
+  and propagated it through the rest of the BFS instead of erroring —
+  arguably worse, since nothing would have flagged it. Fixed with a
+  second, much tighter (`1e-9`) absolute guard on `hod` itself, routing
+  that edge through the isline fallback exactly like a true collinear
+  pair. Before trusting that this doesn't just paper over a
+  misclassification (the same failure mode as the round-two and
+  round-three bugs — approximating a chord as a diameter when the two
+  points genuinely aren't collinear), instrumented `horthocircle` to
+  record the angular separation of every pair that trips the new guard
+  during the `{10,10}` depth-4 case that found the bug: 43,470 firings,
+  every one with `sin(angle) <= ~6.4e-5` — genuinely near-collinear-with-
+  the-origin pairs sitting just under the coarser `1e-6` angular
+  threshold from round three, not well-separated pairs being
+  misclassified. New regression test:
+  `httile_survives_catastrophic_cancellation_at_high_p_q`, pinning the
+  `{10,10}` depth-4 tile count post-fix at 7,612 (down from 8,191
+  pre-fix — expected, since dividing by a near-zero `hod` was producing
+  numerically unreliable, spuriously "distinct" tile positions rather
+  than genuine additional geometry) and confirming it stays well under
+  `htmax` (20,000), so the drop isn't a silent-truncation artifact
+  either. The `gs`-compat driver in `tests/artkit.rs` now also runs a
+  `{10,10}` depth-4 `httile` — the exact configuration that produced the
+  real crash — so this is covered under `gs` itself, not just `pscat`.
+- **P2, not fixed — disposition below.** The claim was that the
+  edge-length-scaled dedup tolerance (`httol`, 0.3x the candidate tile's
+  own max edge length) undercounts `{10,10}` depth 4 by roughly
+  10 tiles (a specific alternative count, 8,201, was proposed, reachable
+  by tightening the factor to 0.01). I could not reproduce that specific
+  claim: sweeping the factor on this exact case gave 0.5->5,423,
+  0.3->7,612 (now the correct post-P1-fix baseline, confirmed
+  deterministic across repeated runs), 0.1->7,986, 0.05->8,076, and
+  0.01 timed out — the tolerance gets tight enough that near-duplicate
+  centroids keep re-passing the dedup check, driving the queue toward
+  `htmax` under O(n^2) per-candidate dedup cost rather than converging.
+  No factor tried lands on 8,201. Disposition: this tolerance is
+  validated — against an independent Python prototype, exactly — across
+  `{5..8, 3..4}` at depths 3-5, which covers everything this repo
+  actually ships (`{7,3}` depth 4 in the gallery, `{6,4}` depth 5 in the
+  test suite). It is *not* separately validated at the `{10,10}`-class
+  extreme, and tightening it enough to plausibly matter there trades a
+  small, unquantified precision gap for a demonstrated new risk (query
+  timeout, or hitting `htmax` and silently truncating) that would apply
+  to every `{p,q}`, not just the extreme one. Given no reproducible
+  target count to tighten toward and a worse failure mode on the other
+  side, left as-is rather than chasing an unreproducible number —
+  `{10,10}`-class tilings past depth 3 or so are outside this tool's
+  validated envelope for exact tile counts (they're still numerically
+  safe and bounded post-P1-fix, just not pinned-precise the way the
+  shipped `{p,q}` range is).
+
 Deliberate omissions: only the Poincare disk model (the issue left model
 choice open; upper-half-plane wasn't needed for anything built here) and
 only reflection-generated regular {p,q} tilings (no general Mobius

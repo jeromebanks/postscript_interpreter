@@ -38,6 +38,7 @@
         /hocx2 hox2 hod2 div def /hocy2 hoy2 hod2 div def
         /hod hox1 hoy2 hocy2 sub mul hox2 hocy2 hoy1 sub mul add
              hocx2 hoy1 hoy2 sub mul add 2 mul def
+        /hodeg hod abs 1e-9 lt def
     } if
     hodeg {
         /hodx hox2 hox1 sub def /hody hoy2 hoy1 sub def

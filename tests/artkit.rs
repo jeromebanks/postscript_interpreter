@@ -400,13 +400,16 @@ fn ghostscript_accepts_artkit() {
         return;
     }
     let lib = std::fs::read_to_string("lib/artkit.ps").expect("artkit");
-    // The httile call near the end runs at depth 4 (not a shallower,
+    // The httile calls near the end run at depth 4 (not a shallower,
     // faster depth): the near-collinear-with-origin edge case in
     // horthocircle that produces an oversized arc radius -- caught once
     // already as a gs `limitcheck`, since it's gs's own `arc` that has
     // the tighter limit -- only actually arises a few reflection
     // generations deep. A shallower depth would pass this check without
-    // ever exercising that path.
+    // ever exercising that path. The second httile ({10,10}, the highest
+    // p,q pair this suite exercises) is the exact configuration that once
+    // made gs raise `undefinedresult` dividing by a catastrophically
+    // cancelled `hod` -- see httile_survives_catastrophic_cancellation_at_high_p_q.
     let driver = "3 srand \
         newpath 100 100 0 thome 1 1 60 { dup fd 89 tr pop } for stroke \
         newpath 200 50 90 thome (F) << (F) 0 get (F[+F]F) >> 3 lsys 3 20 ldraw stroke \
@@ -422,6 +425,7 @@ fn ghostscript_accepts_artkit() {
         0 0 60 60 3 3 { pop pop newpath 0 0 20 0 360 arc fill } truchet \
         300 300 15 0 0 15 3 3 { /y exch def /x exch def newpath x y 5 0 360 arc fill } lattice \
         340 350 35 7 3 4 { pop 0.4 setgray fill } httile \
+        30 30 15 10 10 4 { pop } httile \
         showpage\n";
     let dir = std::env::temp_dir().join(format!("pscat-artkit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
@@ -771,6 +775,37 @@ fn horthocircle_collinearity_test_is_scale_invariant() {
     assert!(
         (fx - 0.99).abs() < 1e-6 && fy.abs() < 1e-6,
         "p1 should be a fixed point of its own geodesic's reflection: got ({fx}, {fy})"
+    );
+}
+
+#[test]
+fn httile_survives_catastrophic_cancellation_at_high_p_q() {
+    // Regression test for a real bug caught by a fourth round of
+    // cross-model review: even past the angular collinearity test above,
+    // `hod` (the circumcircle determinant) can round to exactly 0.0 from
+    // catastrophic cancellation in the sum-of-products arithmetic --
+    // confirmed empirically under gs, which raised `undefinedresult`
+    // dividing by it four generations into a {10,10} tiling. `pscat`
+    // itself doesn't trap the divide, so it would have silently propagated
+    // a NaN/Inf coordinate through the rest of the BFS instead of
+    // crashing -- worse, since nothing here would have caught it. Fixed
+    // with a second, much tighter (1e-9) absolute guard on `hod` itself,
+    // routing that edge through the isline fallback the same as a true
+    // collinear pair. Diagnostic instrumentation on this exact case
+    // (100 100 90 10 10 4, ~43,470 firings) confirmed every firing has
+    // sin(angle) <= ~6.4e-5 -- genuinely near-collinear-with-origin pairs
+    // just under the coarser 1e-6 angular threshold above, not real
+    // separation the guard is misclassifying. This pins the resulting
+    // tile count (down from 8191 pre-guard, since dividing by a
+    // near-zero `hod` was producing numerically unreliable, spuriously
+    // "distinct" tiles, not genuine additional geometry) and confirms
+    // {10,10} depth 4 stays well under `htmax` (20000), so it's not a
+    // silent truncation artifact either.
+    let got = eval("/n 0 def 100 100 90 10 10 4 { pop /n n 1 add def } httile n");
+    assert_eq!(
+        got,
+        ["7612"],
+        "httile tile count for the {{10,10}} depth-4 cancellation case drifted"
     );
 }
 

@@ -643,6 +643,18 @@ end
             hocx2 hoy1 hoy2 sub mul add
             2 mul
         def
+        % A second, much tighter safety net past the angular test above:
+        % `hod` is a sum of products that can catastrophically cancel to
+        % exactly (or almost exactly) zero for reasons particular to
+        % this arithmetic -- not genuine near-collinearity, which the
+        % angular test already rules out here -- deep enough into a BFS
+        % that coordinates have gone through many reflection compositions
+        % (confirmed: gs raised `undefinedresult` dividing by an `hod`
+        % that rounded to exactly 0.0, four generations into a {10,10}
+        % tiling). A threshold this tight only catches genuine
+        % cancellation, not the close-but-not-collinear pairs the
+        % angular test above already handles correctly on its own.
+        /hodeg hod abs 1e-9 lt def
     } if
     hodeg {
         /hodx hox2 hox1 sub def /hody hoy2 hoy1 sub def
