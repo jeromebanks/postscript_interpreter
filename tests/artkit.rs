@@ -779,32 +779,72 @@ fn horthocircle_collinearity_test_is_scale_invariant() {
 }
 
 #[test]
+fn horthocircle_does_not_special_case_points_merely_near_the_origin() {
+    // Regression test for a real bug caught by a fifth round of
+    // cross-model review, in the same failure family as the radius-cap
+    // and collinearity-scale bugs above: an earlier version of
+    // horthocircle short-circuited to isline=true whenever *either*
+    // point's squared norm was below an absolute 0.000001 (norm below
+    // 0.001) -- meant to keep a point genuinely at the origin (a true
+    // geometric special case: a geodesic through the exact center really
+    // is a diameter) from dividing by its own zero norm downstream, but
+    // wrong for any point merely *close* to the origin whose partner
+    // isn't also along that same direction. This exact pair -- p1 a
+    // hair's width from center, p2 nowhere near collinear with it and
+    // the origin -- used to report isline=true and move p1 under
+    // hreflect instead of fixing it. The rewritten horthocircle (see
+    // httile_survives_catastrophic_cancellation_at_high_p_q below) solves
+    // the orthogonal circle directly rather than special-casing either
+    // point's magnitude, so a near-origin point degenerates correctly
+    // only when it's actually collinear with its partner and the origin.
+    let got = eval("0.0005 0 0 0.5 horthocircle");
+    assert_eq!(got[3], "false", "should report a true circle, not isline");
+
+    let fixed = eval("0.0005 0 0 0.5 horthocircle 0.0005 0 hreflect");
+    let fx: f64 = fixed[0].parse().unwrap();
+    let fy: f64 = fixed[1].parse().unwrap();
+    assert!(
+        (fx - 0.0005).abs() < 1e-9 && fy.abs() < 1e-9,
+        "p1 should be a fixed point of its own geodesic's reflection: got ({fx}, {fy})"
+    );
+}
+
+#[test]
 fn httile_survives_catastrophic_cancellation_at_high_p_q() {
     // Regression test for a real bug caught by a fourth round of
-    // cross-model review: even past the angular collinearity test above,
-    // `hod` (the circumcircle determinant) can round to exactly 0.0 from
-    // catastrophic cancellation in the sum-of-products arithmetic --
-    // confirmed empirically under gs, which raised `undefinedresult`
-    // dividing by it four generations into a {10,10} tiling. `pscat`
-    // itself doesn't trap the divide, so it would have silently propagated
-    // a NaN/Inf coordinate through the rest of the BFS instead of
-    // crashing -- worse, since nothing here would have caught it. Fixed
-    // with a second, much tighter (1e-9) absolute guard on `hod` itself,
-    // routing that edge through the isline fallback the same as a true
-    // collinear pair. Diagnostic instrumentation on this exact case
-    // (100 100 90 10 10 4, ~43,470 firings) confirmed every firing has
-    // sin(angle) <= ~6.4e-5 -- genuinely near-collinear-with-origin pairs
-    // just under the coarser 1e-6 angular threshold above, not real
-    // separation the guard is misclassifying. This pins the resulting
-    // tile count (down from 8191 pre-guard, since dividing by a
-    // near-zero `hod` was producing numerically unreliable, spuriously
-    // "distinct" tiles, not genuine additional geometry) and confirms
-    // {10,10} depth 4 stays well under `htmax` (20000), so it's not a
-    // silent truncation artifact either.
+    // cross-model review, and its follow-up fifth round. `horthocircle`
+    // originally found the orthogonal circle by inverting p2 in the unit
+    // circle and solving a three-point circumcircle -- a formula whose
+    // determinant is a *different*, non-scale-invariant quantity from the
+    // angular collinearity test above, and can catastrophically cancel to
+    // near (or exactly) zero even when p1/p2 are genuinely non-collinear.
+    // Round four caught this as a crash (gs raised `undefinedresult`
+    // dividing by an `hod` that rounded to exactly 0.0 four generations
+    // into a {10,10} tiling) and an initial fix added a tight absolute
+    // guard on that determinant, routing the offending edge through the
+    // isline fallback. Round five's review found that guard was still
+    // wrong in the same family as the round-four crash: it also
+    // misclassified any point within 0.001 of the origin as collinear
+    // regardless of its partner's actual angle, and the guard itself was
+    // still an approximation of the underlying geometry rather than a fix
+    // to it. `horthocircle` now solves the orthogonal circle directly: a
+    // circle's orthogonality to the unit circle (|c|^2 = r^2+1) combined
+    // with passing through p_i (|c-p_i|^2 = r^2) collapses to one linear
+    // equation per point, c.p_i = (|p_i|^2+1)/2 -- a 2x2 system in c whose
+    // determinant is exactly the angular test's own cross product, so one
+    // scale-invariant quantity now serves as both the sole degeneracy
+    // test and the sole divisor, with no separate near-origin special
+    // case or cancellation guard needed. This pins the resulting
+    // {10,10} depth-4 tile count (8191, distinct from both this fix's own
+    // intermediate values during debugging and the plain BFS growth
+    // series a reviewer estimated without accounting for dedup, which
+    // this algorithm's whole job is to do) and confirms {10,10} depth 4
+    // stays well under `htmax` (20000), so it's not a silent-truncation
+    // artifact either.
     let got = eval("/n 0 def 100 100 90 10 10 4 { pop /n n 1 add def } httile n");
     assert_eq!(
         got,
-        ["7612"],
+        ["8191"],
         "httile tile count for the {{10,10}} depth-4 cancellation case drifted"
     );
 }

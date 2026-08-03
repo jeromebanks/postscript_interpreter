@@ -209,67 +209,94 @@ tolerance difference `HANDOFF.md` already records (fixed quarter-pixel
 device-space tolerance vs. `gs`'s `setflat`-driven one — chord counts
 differ, shapes agree).
 
-A fourth round, after pushing the third round's fix, found one P1 (a real
-crash) and one P2 (a precision claim I could not independently confirm):
+A fourth round, after pushing the third round's fix, found a real crash;
+fixing it properly took a fifth round to get right, since the first
+attempt was itself a band-aid in the same failure family as rounds two
+and three.
 
-- **P1, fixed.** Even past the angular collinearity test from round
-  three, `hod` (the circumcircle determinant, computed from `hocx2`/
-  `hocy2` after the angular test already says "not collinear") can still
-  round to exactly `0.0` from catastrophic cancellation in its
-  sum-of-products arithmetic — a property of this specific formula at
-  extreme `{p,q}`, not of the angle itself. Confirmed under `gs`, which
-  raised `undefinedresult` dividing by it four generations into a
-  `{10,10}` tiling; `pscat` doesn't trap the divide the way `gs` does, so
-  the same input would have silently produced an `Inf`/`NaN` coordinate
-  and propagated it through the rest of the BFS instead of erroring —
-  arguably worse, since nothing would have flagged it. Fixed with a
-  second, much tighter (`1e-9`) absolute guard on `hod` itself, routing
-  that edge through the isline fallback exactly like a true collinear
-  pair. Before trusting that this doesn't just paper over a
-  misclassification (the same failure mode as the round-two and
-  round-three bugs — approximating a chord as a diameter when the two
-  points genuinely aren't collinear), instrumented `horthocircle` to
-  record the angular separation of every pair that trips the new guard
-  during the `{10,10}` depth-4 case that found the bug: 43,470 firings,
-  every one with `sin(angle) <= ~6.4e-5` — genuinely near-collinear-with-
-  the-origin pairs sitting just under the coarser `1e-6` angular
-  threshold from round three, not well-separated pairs being
-  misclassified. New regression test:
-  `httile_survives_catastrophic_cancellation_at_high_p_q`, pinning the
-  `{10,10}` depth-4 tile count post-fix at 7,612 (down from 8,191
-  pre-fix — expected, since dividing by a near-zero `hod` was producing
-  numerically unreliable, spuriously "distinct" tile positions rather
-  than genuine additional geometry) and confirming it stays well under
-  `htmax` (20,000), so the drop isn't a silent-truncation artifact
-  either. The `gs`-compat driver in `tests/artkit.rs` now also runs a
-  `{10,10}` depth-4 `httile` — the exact configuration that produced the
-  real crash — so this is covered under `gs` itself, not just `pscat`.
-- **P2, not fixed — disposition below.** The claim was that the
-  edge-length-scaled dedup tolerance (`httol`, 0.3x the candidate tile's
-  own max edge length) undercounts `{10,10}` depth 4 by roughly
-  10 tiles (a specific alternative count, 8,201, was proposed, reachable
-  by tightening the factor to 0.01). I could not reproduce that specific
-  claim: sweeping the factor on this exact case gave 0.5->5,423,
-  0.3->7,612 (now the correct post-P1-fix baseline, confirmed
-  deterministic across repeated runs), 0.1->7,986, 0.05->8,076, and
-  0.01 timed out — the tolerance gets tight enough that near-duplicate
-  centroids keep re-passing the dedup check, driving the queue toward
-  `htmax` under O(n^2) per-candidate dedup cost rather than converging.
-  No factor tried lands on 8,201. Disposition: this tolerance is
-  validated — against an independent Python prototype, exactly — across
-  `{5..8, 3..4}` at depths 3-5, which covers everything this repo
-  actually ships (`{7,3}` depth 4 in the gallery, `{6,4}` depth 5 in the
-  test suite). It is *not* separately validated at the `{10,10}`-class
-  extreme, and tightening it enough to plausibly matter there trades a
-  small, unquantified precision gap for a demonstrated new risk (query
-  timeout, or hitting `htmax` and silently truncating) that would apply
-  to every `{p,q}`, not just the extreme one. Given no reproducible
-  target count to tighten toward and a worse failure mode on the other
-  side, left as-is rather than chasing an unreproducible number —
-  `{10,10}`-class tilings past depth 3 or so are outside this tool's
-  validated envelope for exact tile counts (they're still numerically
-  safe and bounded post-P1-fix, just not pinned-precise the way the
-  shipped `{p,q}` range is).
+**Round four.** Even past the angular collinearity test from round
+three, `hod` — the determinant of the three-point circumcircle
+`horthocircle` built by inverting p2 in the unit circle — can round to
+exactly `0.0` from catastrophic cancellation in its sum-of-products
+arithmetic, a property of that specific formula at extreme `{p,q}`, not
+of the angle between p1 and p2. Confirmed under `gs`, which raised
+`undefinedresult` dividing by it four generations into a `{10,10}`
+tiling. The first fix added a second, much tighter (`1e-9`) absolute
+guard on `hod` itself, routing the offending edge through the isline
+fallback — and, on the same instrumented `{10,10}` case, every one of
+43,470 pairs the new guard caught had `sin(angle) <= ~6.4e-5`, genuinely
+near-collinear, which looked at the time like a clean discrimination
+between "real cancellation" and "real separation."
+
+**Round five** found that framing itself was the mistake: cross-model
+review pointed out that `hod abs 1e-9 lt` was still an approximation
+layered on top of an ill-conditioned formula, not a fix to the
+conditioning — and produced a second, independent counterexample in the
+*other* early-exit this proc had, unrelated to `hod`: any point within
+0.001 of the origin (`hod1`/`hod2 < 0.000001`) was treated as
+"effectively at the origin" and short-circuited to isline=true,
+regardless of whether its partner was anywhere near collinear with it.
+`0.0005 0 0 0.5 horthocircle` reported isline=true and reflecting
+`(0.0005, 0)` across its own geodesic moved it to roughly
+`(-0.0005, -1e-6)` instead of fixing it — the same defining-point
+invariant violation as the round-two and round-three bugs, just in a
+third input regime.
+
+Both symptoms trace to the same root cause: the old formula used one
+(cancellation-prone, non-scale-invariant) determinant as its sole
+divisor and a *different* pair of ad hoc magnitude checks to decide when
+that divisor was unsafe, instead of using one well-conditioned quantity
+for both jobs. `horthocircle` is rewritten around a numerically stable
+closed form instead of patching threshold after threshold: a circle
+centered at `(cx,cy)` is orthogonal to the unit circle exactly when
+`cx^2+cy^2 = r^2+1`; combined with `|c-p_i|^2 = r^2` for each of p1, p2,
+the `r^2` term cancels and each point contributes one linear equation,
+`c.p_i = (|p_i|^2+1)/2`. Two points give a 2x2 linear system for `c`,
+solved by Cramer's rule with determinant `D = x1*y2 - y1*x2` — which is
+exactly the round-three angular test's own cross product (`sin(angle)`
+between p1 and p2 as seen from the origin, scaled by `|p1||p2|`), so `D`
+is small precisely when p1, p2, and the origin are close to collinear
+(including either point being at/near the origin, where `D` vanishes
+trivially) and nowhere else. One test, `D` near zero, now both decides
+degeneracy and is the only divisor in the non-degenerate branch — no
+separate near-origin cutoff, no separate cancellation guard. (One
+follow-on fix along the way: the degeneracy test needs `le`, not `lt` —
+when a point is exactly at the origin, `D` is exactly `0.0` too, and a
+strict `<` lets `0.0 <= 0.0`'s equal case fall through to divide by a
+literal zero. Caught the same way as the original P1: `gs`'s arithmetic
+rounds *very* slightly differently from this interpreter's own for the
+same nominal formula, so a pair that lands exactly on `D = 0.0` under
+`gs` can be a hair off zero under `pscat` and vice versa — this class of
+bug is only reliably caught by testing under both.) A second, unrelated
+latent bug surfaced by the same `{10,10}` case and fixed alongside: the
+isline branch's own direction formula (`(p2-p1)/|p2-p1|`) divides by
+zero if two supposedly-adjacent polygon vertices have numerically
+coincided, which can happen this deep in the BFS; it now falls back to
+an arbitrary unit vector for that (already-degenerate) edge instead of
+propagating a NaN.
+
+Reverified every discriminating case from rounds two through five
+against the rewrite: `hreflect_stays_exact_near_the_old_radius_cap_boundary`
+(radius ~51) and `horthocircle_collinearity_test_is_scale_invariant`
+(scale-invariant collinearity) both pass unchanged, a new
+`horthocircle_does_not_special_case_points_merely_near_the_origin` pins
+the round-five near-origin counterexample, and
+`httile_survives_catastrophic_cancellation_at_high_p_q` pins the
+`{10,10}` depth-4 tile count — now 8,191, not the 7,612 the round-four
+band-aid produced (that number reflected the band-aid's own
+approximation error, not real geometry) and not the 8,201 round five's
+review estimated by hand from the tiling's plain reflection-tree growth
+without accounting for what the BFS's dedup step exists to do at all.
+8,191 is what the numerically stable solve actually computes for this
+case, cross-checked against the existing regular tests
+(`{5..8, 3..4}` at depths 3-5, all unchanged) and the fact that the
+`{7,3}` depth-4 gallery piece's render is byte-identical before and
+after this rewrite — the reformulation only changes behavior in the
+extreme regime that exposed it. `{10,10}` depth 4 also stays well under
+`htmax` (20,000), so this isn't a silent-truncation artifact either. The
+`gs`-compat driver in `tests/artkit.rs` runs a `{10,10}` depth-4
+`httile` directly — the exact configuration that produced the original
+crash — so this is covered under `gs` itself, not just `pscat`.
 
 Deliberate omissions: only the Poincare disk model (the issue left model
 choice open; upper-half-plane wasn't needed for anything built here) and

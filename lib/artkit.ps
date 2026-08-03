@@ -588,13 +588,35 @@ end
 % The geodesic through two logical points: the circle orthogonal to the
 % unit circle that passes through both (or, when the points are
 % collinear with the origin, the diameter through them — the one
-% geodesic that isn't a proper arc). Method: a circle orthogonal to the
-% unit circle is invariant under inversion in the unit circle, so if it
-% passes through p2 it also passes through p2's inversion (p2/|p2|^2) —
-% giving three points and an ordinary circumcircle. Degenerate input
-% (either point at/near the origin, or the three points collinear) falls
-% back to isline=true, with a,b repurposed as p2-p1's *unit direction*
-% (not a circle) — hreflect below relies on that repurposing.
+% geodesic that isn't a proper arc). Method: a circle centered at (cx,cy)
+% is orthogonal to the unit circle exactly when cx^2+cy^2 = r^2+1: combine
+% that with |c-p|^2 = r^2 for each of p1, p2 and the r^2 cancels,
+% collapsing to one linear equation per point, c.p = (|p|^2+1)/2. Two
+% points give a 2x2 linear system for c, solved by Cramer's rule with
+% determinant D = x1*y2 - y1*x2 -- exactly sin(angle between p1 and p2 as
+% seen from the origin) scaled by |p1||p2|, so D is small precisely when
+% p1, p2, and the origin are close to collinear (including either point
+% being at/near the origin, where D vanishes trivially) and nowhere else.
+% Degenerate input (D near zero) falls back to isline=true, with a,b
+% repurposed as p2-p1's *unit direction* (not a circle) — hreflect below
+% relies on that repurposing.
+%
+% This replaced an earlier version that inverted p2 in the unit circle
+% and solved a circumcircle through three points instead of this direct
+% 2x2 system. That formulation used a *different* determinant (of the
+% circumcircle, not of the linear system above) as both its collinearity
+% test and its sole divisor -- a quantity that, unlike D here, is not
+% scale-invariant and can catastrophically cancel to near-zero even when
+% p1/p2 are genuinely non-collinear, forcing two band-aid guards (an
+% absolute near-origin cutoff, and a second tight cutoff on the
+% cancelling determinant) that a cross-model review (round 4) showed both
+% misclassify real, non-collinear geodesics as diameters: one on any
+% point within 0.001 of the origin regardless of its partner's angle
+% (`0.0005 0 0 0.5 horthocircle` reported isline=true and reflecting
+% p1 across it moved p1 instead of fixing it), the other on the {10,10}
+% depth-4 tiling used in this file's own tests. D as the single
+% degeneracy test and the single divisor removes both band-aids and both
+% failure modes at once, rather than tightening either threshold further.
 %
 % Always the *true* circle, however large its radius — this is also
 % hreflect's transformation math, and approximating a large-but-finite
@@ -617,66 +639,44 @@ end
     /hoy1 exch def /hox1 exch def
     /hod1 hox1 dup mul hoy1 dup mul add def
     /hod2 hox2 dup mul hoy2 dup mul add def
-    /hodeg hod1 0.000001 lt hod2 0.000001 lt or def
-    hodeg not {
-        % Collinearity, tested angularly (sin of the angle between p1
-        % and p2 as seen from the origin, via the cross product) rather
-        % than by the raw circumcircle determinant below. The raw
-        % determinant's absolute magnitude scales with how far apart
-        % p1/p2 happen to be, not with how collinear they are with the
-        % origin -- two points a hair's width apart (as httile's own
-        % edges become a few reflection generations toward the rim)
-        % produce a tiny determinant regardless of angle, so an absolute
-        % threshold on it false-positives as "collinear" and routes
-        % hreflect through the wrong (mirror-across-a-line) formula.
-        % sin(angle) = (x1*y2 - y1*x2)/(|p1||p2|) has no such scale
-        % dependence; compared in squared form below to skip two sqrts.
-        /hocross hox1 hoy2 mul hoy1 hox2 mul sub def
-        /hodeg hodeg hocross dup mul 0.000001 dup mul hod1 mul hod2 mul lt or def
-    } if
-    hodeg not {
-        /hocx2 hox2 hod2 div def
-        /hocy2 hoy2 hod2 div def
-        /hod
-            hox1 hoy2 hocy2 sub mul
-            hox2 hocy2 hoy1 sub mul add
-            hocx2 hoy1 hoy2 sub mul add
-            2 mul
-        def
-        % A second, much tighter safety net past the angular test above:
-        % `hod` is a sum of products that can catastrophically cancel to
-        % exactly (or almost exactly) zero for reasons particular to
-        % this arithmetic -- not genuine near-collinearity, which the
-        % angular test already rules out here -- deep enough into a BFS
-        % that coordinates have gone through many reflection compositions
-        % (confirmed: gs raised `undefinedresult` dividing by an `hod`
-        % that rounded to exactly 0.0, four generations into a {10,10}
-        % tiling). A threshold this tight only catches genuine
-        % cancellation, not the close-but-not-collinear pairs the
-        % angular test above already handles correctly on its own.
-        /hodeg hod abs 1e-9 lt def
-    } if
+    % sin(angle) = D/(|p1||p2|); compared in squared form to skip two
+    % sqrts, same trick the old collinearity test used. `le`, not `lt`:
+    % when a point is exactly at the origin, hod1 or hod2 is exactly 0,
+    % D is exactly 0 too (cross product with the zero vector), and both
+    % sides of a strict `<` are then equal -- falling through to divide
+    % by a D that's exactly 0.0 (confirmed: gs raised `undefinedresult`
+    % on a {10,10} depth-4 tiling with a vertex landing exactly on the
+    % origin).
+    /hocross hox1 hoy2 mul hoy1 hox2 mul sub def
+    /hodeg hocross dup mul 0.000001 dup mul hod1 mul hod2 mul le def
     hodeg {
         /hodx hox2 hox1 sub def /hody hoy2 hoy1 sub def
         /hodn hodx dup mul hody dup mul add sqrt def
-        hodx hodn div hody hodn div 0 true
+        % p1=p2 (a zero-length edge) has no defined direction; this is
+        % pre-existing degeneracy in this branch, not one this rewrite
+        % introduced, but the collinearity test above now routes more
+        % pairs into it -- confirmed reachable at {10,10} depth 4, where
+        % gs's arithmetic (rounding *very* slightly differently than
+        % this interpreter's, so this case doesn't fire under pscat on
+        % the same input) collapses two adjacent, already near-coincident
+        % rim vertices to bit-identical points and then divides 0/0.
+        % There's no principled direction to report for a degenerate
+        % edge, so fall back to an arbitrary unit vector rather than
+        % propagating a NaN into the rest of the BFS.
+        hodn 0 gt { hodx hodn div hody hodn div } { 1 0 } ifelse
+        0 true
     } {
-        /hoa2 hod1 def /hob2 hod2 def
-        /hoc2 hocx2 dup mul hocy2 dup mul add def
-        /houx
-            hoa2 hoy2 hocy2 sub mul
-            hob2 hocy2 hoy1 sub mul add
-            hoc2 hoy1 hoy2 sub mul add
-            hod div
-        def
-        /houy
-            hoa2 hocx2 hox2 sub mul
-            hob2 hox1 hocx2 sub mul add
-            hoc2 hox2 hox1 sub mul add
-            hod div
-        def
-        /hor houx hox1 sub dup mul houy hoy1 sub dup mul add sqrt def
-        houx houy hor false
+        /hok1 hod1 1 add 2 div def
+        /hok2 hod2 1 add 2 div def
+        /hocx hok1 hoy2 mul hok2 hoy1 mul sub hocross div def
+        /hocy hox1 hok2 mul hox2 hok1 mul sub hocross div def
+        % Clamp against rounding noise right at the boundary of the
+        % collinearity test above, where |c| can compute fractionally
+        % under 1 even though it's mathematically always > 1 for two
+        % distinct interior points.
+        /hor2 hocx dup mul hocy dup mul add 1 sub def
+        /hor hor2 0 gt { hor2 sqrt } { 0 } ifelse def
+        hocx hocy hor false
     } ifelse
 } def
 

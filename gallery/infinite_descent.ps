@@ -29,30 +29,21 @@
     /hoy2 exch def /hox2 exch def /hoy1 exch def /hox1 exch def
     /hod1 hox1 dup mul hoy1 dup mul add def
     /hod2 hox2 dup mul hoy2 dup mul add def
-    /hodeg hod1 0.000001 lt hod2 0.000001 lt or def
-    hodeg not {
-        /hocross hox1 hoy2 mul hoy1 hox2 mul sub def
-        /hodeg hodeg hocross dup mul 0.000001 dup mul hod1 mul hod2 mul lt or def
-    } if
-    hodeg not {
-        /hocx2 hox2 hod2 div def /hocy2 hoy2 hod2 div def
-        /hod hox1 hoy2 hocy2 sub mul hox2 hocy2 hoy1 sub mul add
-             hocx2 hoy1 hoy2 sub mul add 2 mul def
-        /hodeg hod abs 1e-9 lt def
-    } if
+    /hocross hox1 hoy2 mul hoy1 hox2 mul sub def
+    /hodeg hocross dup mul 0.000001 dup mul hod1 mul hod2 mul le def
     hodeg {
         /hodx hox2 hox1 sub def /hody hoy2 hoy1 sub def
         /hodn hodx dup mul hody dup mul add sqrt def
-        hodx hodn div hody hodn div 0 true
+        hodn 0 gt { hodx hodn div hody hodn div } { 1 0 } ifelse
+        0 true
     } {
-        /hoa2 hod1 def /hob2 hod2 def
-        /hoc2 hocx2 dup mul hocy2 dup mul add def
-        /houx hoa2 hoy2 hocy2 sub mul hob2 hocy2 hoy1 sub mul add
-              hoc2 hoy1 hoy2 sub mul add hod div def
-        /houy hoa2 hocx2 hox2 sub mul hob2 hox1 hocx2 sub mul add
-              hoc2 hox2 hox1 sub mul add hod div def
-        /hor houx hox1 sub dup mul houy hoy1 sub dup mul add sqrt def
-        houx houy hor false
+        /hok1 hod1 1 add 2 div def
+        /hok2 hod2 1 add 2 div def
+        /hocx hok1 hoy2 mul hok2 hoy1 mul sub hocross div def
+        /hocy hox1 hok2 mul hox2 hok1 mul sub hocross div def
+        /hor2 hocx dup mul hocy dup mul add 1 sub def
+        /hor hor2 0 gt { hor2 sqrt } { 0 } ifelse def
+        hocx hocy hor false
     } ifelse
 } def
 /hreflect {
