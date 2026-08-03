@@ -447,6 +447,15 @@ fn ghostscript_accepts_artkit() {
         340 350 35 7 3 4 { pop nbox 0 nbox 0 get 1 add put 0.4 setgray fill } httile \
         (GSTILES ) print nbox 0 get == \
         30 30 15 10 10 4 { pop } httile \
+        newpath [150 20 180 71.96 210 20] /koch fgen 3 edgepoly fill \
+        150 100 210 100 180 151.96 3 { \
+            6 dict begin /gy3 exch def /gx3 exch def /gy2 exch def /gx2 exch def \
+                /gy1 exch def /gx1 exch def \
+                newpath gx1 gy1 moveto gx2 gy2 lineto gx3 gy3 lineto closepath \
+                0.5 setgray fill \
+            end \
+        } gasket \
+        230 20 60 60 2 { newpath 0.3 setgray rectfill } carpet \
         showpage\n";
     let dir = std::env::temp_dir().join(format!("pscat-artkit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
@@ -1015,4 +1024,395 @@ fn hpolar_stays_finite_for_a_large_hyperbolic_radius() {
         "expected x -> 1 at this radius, got {x}"
     );
     assert!(y.abs() < 1e-9, "expected y -> 0 at angle 0, got {y}");
+}
+
+#[test]
+fn edgefractal_presets_close_exactly_confirming_the_scale_divisor() {
+    // Regression test for the actual bug this feature caught during
+    // development: a first draft divided segment length by the turn
+    // array's own length (4 for koch, 8 for quadkoch) instead of by a
+    // separately-tracked "scale" -- the number of base-edge-lengths the
+    // generator spans end to end, which for koch is 3 (not 4: the
+    // bump's two slanted sides fold back across each other) and for
+    // quadkoch is 4 (not 8). Get the divisor wrong and edgefractal
+    // silently draws a curve at the wrong total length instead of
+    // erroring. Checked at depth 1 (the divisor's direct effect) and
+    // depth 3 (confirming the scale holds recursively, not just once).
+    for (name, len, depth) in [
+        ("koch", 90.0, 1),
+        ("koch", 90.0, 3),
+        ("quadkoch", 80.0, 1),
+        ("quadkoch", 80.0, 3),
+    ] {
+        let got = eval(&format!(
+            "newpath 0 0 moveto {len} 0 /{name} fgen {depth} edgefractal currentpoint"
+        ));
+        let x: f64 = got[0].parse().unwrap();
+        let y: f64 = got[1].parse().unwrap();
+        assert!(
+            (x - len).abs() < 1e-6 && y.abs() < 1e-6,
+            "{name} depth {depth}: expected ({len}, 0), got ({x}, {y})"
+        );
+    }
+}
+
+#[test]
+fn fractal_gens_presets_have_zero_net_turn_and_the_documented_scale() {
+    // Independent of edgefractal itself: walks each preset's turn array
+    // as plain unit-length turtle steps (the exact by-hand check that
+    // caught the scale-divisor bug above) and confirms it closes -- net
+    // turn a multiple of 360, net displacement (scale, 0) -- the
+    // defining property of a valid Koch-family generator. A caller
+    // extending FractalGens with a new preset that doesn't satisfy this
+    // draws a curve that silently drifts off axis or the wrong length;
+    // this pins the two shipped presets so a future edit can't quietly
+    // break the property this feature depends on.
+    for (name, expected_scale) in [("koch", 3.0), ("quadkoch", 4.0)] {
+        let got = eval(&format!(
+            "/turns /{name} fgen pop def
+             /h 0 def /x 0 def /y 0 def
+             turns {{
+                 h add /h exch def
+                 x h cos add /x exch def
+                 y h sin add /y exch def
+             }} forall
+             h 360 mod x y"
+        ));
+        let h_mod: f64 = got[0].parse().unwrap();
+        let x: f64 = got[1].parse().unwrap();
+        let y: f64 = got[2].parse().unwrap();
+        assert!(
+            h_mod.abs() < 1e-9 || (h_mod.abs() - 360.0).abs() < 1e-9,
+            "{name}: net turn {h_mod} is not a multiple of 360"
+        );
+        assert!(
+            (x - expected_scale).abs() < 1e-9,
+            "{name}: net x displacement {x}, expected scale {expected_scale}"
+        );
+        assert!(y.abs() < 1e-9, "{name}: net y displacement {y}, expected 0");
+    }
+}
+
+#[test]
+fn edgepoly_builds_a_closed_snowflake_that_bulges_outward_with_depth() {
+    // Winding matters for edgepoly (documented in its header): clockwise
+    // vertices put the koch/quadkoch bumps (whose first nonzero turn is
+    // positive, i.e. a left turn) on the outside. Confirmed by
+    // rendering both orderings during development -- counterclockwise
+    // folds the bumps inward instead. This pins the outward case two
+    // ways: ink strictly increases with depth (each generation adds
+    // area, the classic snowflake growth) and the path actually closes
+    // (currentpoint lands back on the first vertex).
+    let verts = "[0 0 75 129.9038 150 0]"; // clockwise equilateral triangle
+    let base_ink = ink_of("newpath 0 0 moveto 75 129.9038 lineto 150 0 lineto closepath fill");
+    let mut prev_ink = base_ink;
+    for depth in 1..=3 {
+        let ink = ink_of(&format!("newpath {verts} /koch fgen {depth} edgepoly fill"));
+        assert!(
+            ink > prev_ink,
+            "depth {depth} ink ({ink}) did not grow past the previous depth's ({prev_ink}) -- \
+             bumps should be adding outward area, not folding inward"
+        );
+        prev_ink = ink;
+    }
+
+    let got = eval(&format!(
+        "newpath {verts} /koch fgen 3 edgepoly currentpoint"
+    ));
+    let x: f64 = got[0].parse().unwrap();
+    let y: f64 = got[1].parse().unwrap();
+    assert!(
+        x.abs() < 1e-3 && y.abs() < 1e-3,
+        "edgepoly should close back at the first vertex (0,0), got ({x}, {y})"
+    );
+}
+
+#[test]
+fn gasket_visits_exactly_3_to_the_depth_leaves() {
+    // Regression test for the real bug this feature caught during
+    // development: a first draft implemented gasket as a recursive
+    // PostScript proc wrapping every level in its own `dict begin/end`
+    // (mirroring koch/edgefractal). But unlike those, gasket also
+    // invokes a *caller-supplied* proc at the leaves -- and since a
+    // recursive call happens before its own `end`, every ancestor
+    // level's dict is still open at that moment, so a stamp as simple
+    // as `{ /n n 1 add def }` (the exact idiom
+    // truchet_calls_proc_once_per_cell_with_the_cell_size below already
+    // relies on for a non-recursive driver) silently rebound `/n` into
+    // an ancestor's throwaway frame instead of the caller's own dict --
+    // confirmed empirically (the counter always read back 0). Rewritten
+    // to drive the walk with an explicit stack array (same reason
+    // httile below doesn't recurse either), so gkproc always runs with
+    // no gasket-owned frame open, exactly like every other driver in
+    // this file. This test is the regression: a bare `def` counter,
+    // unlike the array-based counters other tests in this file
+    // sometimes need for a *different* reason (composition, not this
+    // one).
+    for depth in 0..=4 {
+        let got = eval(&format!(
+            "/n 0 def \
+             0 0 100 0 0 100 {depth} {{ pop pop pop pop pop pop /n n 1 add def }} gasket n"
+        ));
+        let expected = 3i64.pow(depth);
+        assert_eq!(
+            got.last().unwrap(),
+            &expected.to_string(),
+            "depth {depth}: expected {expected} leaves"
+        );
+    }
+}
+
+#[test]
+fn gasket_depth1_leaves_match_the_expected_midpoint_split() {
+    // Pins the exact three sub-triangles for a simple right triangle
+    // (0,0)-(100,0)-(0,100), verified by hand against the documented
+    // midpoint split (mx12,my12)=(50,0), (mx23,my23)=(50,50),
+    // (mx31,my31)=(0,50) -- and the actual visiting order, C then B
+    // then A (the reverse of the push order), since the walk is an
+    // explicit LIFO stack, not a queue.
+    // The leaf closure wraps in its own dict (to name x1..y3 for
+    // readability), so the running index can't be a plain `/hi hi 6 add
+    // def` -- that `def` would land in the closure's own wrapper dict
+    // and be discarded at `end`, same failure mode as the scoping bug
+    // gasket itself just got fixed for. Same fix the tiling section's
+    // own tests already use: a 1-element array mutated with `put`.
+    let got = eval(
+        "/hits 18 array def /idxbox 1 array def idxbox 0 0 put \
+         0 0 100 0 0 100 1 { \
+             6 dict begin \
+                 /gy3 exch def /gx3 exch def /gy2 exch def /gx2 exch def \
+                 /gy1 exch def /gx1 exch def \
+                 /hi idxbox 0 get def \
+                 hits hi gx1 put hits hi 1 add gy1 put \
+                 hits hi 2 add gx2 put hits hi 3 add gy2 put \
+                 hits hi 4 add gx3 put hits hi 5 add gy3 put \
+                 idxbox 0 hi 6 add put \
+             end \
+         } gasket hits aload pop",
+    );
+    let nums: Vec<f64> = got.iter().map(|s| s.parse().unwrap()).collect();
+    let expected = [
+        // C: (mx31,my31)-(mx23,my23)-(x3,y3)
+        (0.0, 50.0, 50.0, 50.0, 0.0, 100.0),
+        // B: (mx12,my12)-(x2,y2)-(mx23,my23)
+        (50.0, 0.0, 100.0, 0.0, 50.0, 50.0),
+        // A: (x1,y1)-(mx12,my12)-(mx31,my31)
+        (0.0, 0.0, 50.0, 0.0, 0.0, 50.0),
+    ];
+    for (k, exp) in expected.iter().enumerate() {
+        let base = k * 6;
+        let got6 = (
+            nums[base],
+            nums[base + 1],
+            nums[base + 2],
+            nums[base + 3],
+            nums[base + 4],
+            nums[base + 5],
+        );
+        assert_eq!(got6, *exp, "leaf {k} mismatch");
+    }
+}
+
+#[test]
+fn carpet_visits_exactly_8_to_the_depth_leaves() {
+    // Companion to gasket's leaf-count regression test above -- same
+    // bug class, same fix (an explicit stack array instead of
+    // recursion), pinned here with carpet's own 8-ary branching.
+    for depth in 0..=3 {
+        let got = eval(&format!(
+            "/m 0 def \
+             0 0 90 90 {depth} {{ pop pop pop pop /m m 1 add def }} carpet m"
+        ));
+        let expected = 8i64.pow(depth);
+        assert_eq!(
+            got.last().unwrap(),
+            &expected.to_string(),
+            "depth {depth}: expected {expected} leaves"
+        );
+    }
+}
+
+#[test]
+fn carpet_depth1_leaves_are_the_eight_outer_cells_with_the_center_missing() {
+    // Pins the exact 8 surviving cells of a 90x90 box split into a 3x3
+    // grid of 30x30 cells, and separately confirms the center cell
+    // (30,30) -- the one Sierpinski's carpet always removes -- is not
+    // among them. Visiting order is the reverse of the nested-loop push
+    // order (LIFO stack, same reason as gasket's own test above).
+    // Same array-based-counter fix as gasket's own leaf-coordinate test
+    // above, same reason (the closure's own dict wrap would swallow a
+    // plain `/hi hi 4 add def`).
+    let got = eval(
+        "/hits 32 array def /idxbox 1 array def idxbox 0 0 put \
+         0 0 90 90 1 { \
+             4 dict begin \
+                 /ch exch def /cw exch def /cy exch def /cx exch def \
+                 /hi idxbox 0 get def \
+                 hits hi cx put hits hi 1 add cy put \
+                 hits hi 2 add cw put hits hi 3 add ch put \
+                 idxbox 0 hi 4 add put \
+             end \
+         } carpet hits aload pop",
+    );
+    let nums: Vec<f64> = got.iter().map(|s| s.parse().unwrap()).collect();
+    let expected_origins = [
+        (60.0, 60.0),
+        (60.0, 30.0),
+        (60.0, 0.0),
+        (30.0, 60.0),
+        (30.0, 0.0),
+        (0.0, 60.0),
+        (0.0, 30.0),
+        (0.0, 0.0),
+    ];
+    for (k, (ex, ey)) in expected_origins.iter().enumerate() {
+        let base = k * 4;
+        assert_eq!(nums[base], *ex, "leaf {k} cx");
+        assert_eq!(nums[base + 1], *ey, "leaf {k} cy");
+        assert_eq!(nums[base + 2], 30.0, "leaf {k} cw");
+        assert_eq!(nums[base + 3], 30.0, "leaf {k} ch");
+    }
+    assert!(
+        !expected_origins.contains(&(30.0, 30.0)),
+        "sanity: the center cell must not be one of the 8 surviving cells"
+    );
+}
+
+#[test]
+fn gasket_and_carpet_paint_via_the_callers_proc_at_depth_zero() {
+    // Smoke test that the basic fill path works end to end: at depth 0
+    // each driver should call its proc exactly once, on the whole
+    // shape, and a caller building+filling that shape should see ink
+    // roughly matching a plain fill of the same region.
+    let gasket_ink = ink_of(
+        "newpath 20 20 moveto 380 20 lineto 200 340 lineto closepath \
+         20 20 380 20 200 340 0 { \
+             6 dict begin \
+                 /gy3 exch def /gx3 exch def /gy2 exch def /gx2 exch def \
+                 /gy1 exch def /gx1 exch def \
+                 newpath gx1 gy1 moveto gx2 gy2 lineto gx3 gy3 lineto closepath fill \
+             end \
+         } gasket",
+    );
+    assert!(
+        gasket_ink > 10000,
+        "expected a filled triangle's ink, got {gasket_ink}"
+    );
+
+    let carpet_ink = ink_of("20 20 360 360 0 { newpath rectfill } carpet");
+    assert!(
+        carpet_ink > 100000,
+        "expected a filled box's ink, got {carpet_ink}"
+    );
+}
+
+#[test]
+fn gasket_nested_in_its_own_leaf_needs_the_inner_call_wrapped_in_a_dict() {
+    // Regression test for a real bug caught by cross-model (Codex)
+    // review: gasket/carpet's own traversal state (gksp/gkstack/gkproc)
+    // is a set of plain globals, not dict-scoped -- fine for the
+    // ancestor-frame problem their own header explains, but it means a
+    // leaf proc that calls `gasket` again itself (nested fractals, a
+    // gasket of gaskets) clobbers the *outer* traversal's state the
+    // moment the inner call starts, since both bind the same names.
+    // Same shape, same fix, as the tiling section's tg-/tk- gotcha:
+    // wrap just the inner call in its own dict so its `def`s shadow
+    // there instead of landing on the outer's own bindings. This pins
+    // both halves -- the unwrapped case genuinely breaks (visits only
+    // 1 of the outer's 3 leaves, not 3) and the documented fix restores
+    // it (all 3, with the inner traversal's own count read via an
+    // array, since a plain `def` counter would itself be swallowed by
+    // that same wrapper -- the tiling section's *other* gotcha).
+    let got = eval(
+        "/outerN 0 def \
+         0 0 100 0 0 100 1 { \
+             pop pop pop pop pop pop \
+             /outerN outerN 1 add def \
+             outerN 1 eq { \
+                 0 0 10 0 0 10 1 { pop pop pop pop pop pop } gasket \
+             } if \
+         } gasket outerN",
+    );
+    assert_eq!(
+        got.last().unwrap(),
+        "1",
+        "expected the unwrapped nested call to break the outer traversal (visits only 1 leaf)"
+    );
+
+    let got = eval(
+        "/outerN 0 def /innerbox 1 array def innerbox 0 0 put \
+         0 0 100 0 0 100 1 { \
+             pop pop pop pop pop pop \
+             /outerN outerN 1 add def \
+             outerN 1 eq { \
+                 2 dict begin \
+                     0 0 10 0 0 10 1 { \
+                         pop pop pop pop pop pop \
+                         innerbox 0 innerbox 0 get 1 add put \
+                     } gasket \
+                 end \
+             } if \
+         } gasket outerN innerbox 0 get",
+    );
+    assert_eq!(
+        got[0], "3",
+        "wrapped: outer traversal should visit all 3 leaves"
+    );
+    assert_eq!(
+        got[1], "3",
+        "wrapped: inner traversal should also visit all 3 leaves"
+    );
+}
+
+#[test]
+fn carpet_nested_in_its_own_leaf_needs_the_inner_call_wrapped_in_a_dict() {
+    // Companion to gasket's own version of this regression -- same bug
+    // class (cpsp/cpstack/cpproc are the equivalent plain globals),
+    // same fix, pinned here with carpet's 8-ary branching (depth 1 = 8
+    // leaves instead of gasket's 3).
+    let got = eval(
+        "/outerN 0 def \
+         0 0 90 90 1 { pop pop pop pop /outerN outerN 1 add def } carpet outerN",
+    );
+    assert_eq!(got[0], "8", "sanity: unnested carpet visits all 8 leaves");
+
+    let got = eval(
+        "/outerN 0 def \
+         0 0 90 90 1 { \
+             pop pop pop pop \
+             /outerN outerN 1 add def \
+             outerN 1 eq { \
+                 0 0 9 9 1 { pop pop pop pop } carpet \
+             } if \
+         } carpet outerN",
+    );
+    assert!(
+        got[0].parse::<i64>().unwrap() < 8,
+        "expected the unwrapped nested call to break the outer traversal (fewer than 8 leaves), got {}",
+        got[0]
+    );
+
+    let got = eval(
+        "/outerN 0 def /innerbox 1 array def innerbox 0 0 put \
+         0 0 90 90 1 { \
+             pop pop pop pop \
+             /outerN outerN 1 add def \
+             outerN 1 eq { \
+                 2 dict begin \
+                     0 0 9 9 1 { \
+                         pop pop pop pop \
+                         innerbox 0 innerbox 0 get 1 add put \
+                     } carpet \
+                 end \
+             } if \
+         } carpet outerN innerbox 0 get",
+    );
+    assert_eq!(
+        got[0], "8",
+        "wrapped: outer traversal should visit all 8 leaves"
+    );
+    assert_eq!(
+        got[1], "8",
+        "wrapped: inner traversal should also visit all 8 leaves"
+    );
 }

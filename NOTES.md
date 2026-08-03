@@ -3,6 +3,73 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Fractal / self-similar-geometry procedures for artkit (issue #11, 2026-08-03)
+
+Closes issue #11. `examples/koch_snowflake.ps` and `examples/sierpinski.ps`
+already showed the pictures were achievable, but both had the
+recursion/geometry hand-written inline with nothing reusable a new piece
+could reach for. L-systems (Stage 19) already cover recursive branching
+(trees, plants), so this section is deliberately the other two
+well-known fractal genres the issue itself named: edge replacement
+(Koch-curve-style) and area subdivision (Sierpinski-style).
+
+Added `edgefractal` (a generalized Koch-style edge-replacement curve —
+takes any `turns` array of cumulative turn-deltas plus a separate
+`scale` divisor, draws via `rlineto` like `koch`/`fd`) and `edgepoly`
+(walks it around a closed `[verts]` polygon, generalizing the one-off
+`snowflake`). Two verified presets in `FractalGens` (`/koch`, the
+classic bump; `/quadkoch`, the Minkowski-sausage/quadratic-Koch
+8-segment generator), retrieved via a new `fgen` convenience (mirrors
+`pal`/`palpick`'s exch-and-get pattern).
+
+Also added `gasket` (the Sierpinski triangle, generalizing
+`examples/sierpinski.ps`) and `carpet` (its square counterpart — a
+distinct algorithm, not a reparameterization). Both are proc-driven
+like every other driver in the tiling section (`grid`/`lattice`/
+`hexgrid`/`trigrid`/`truchet`), not self-painting.
+
+Two real bugs caught during development, both by direct arithmetic
+verification rather than by reading the algebra:
+
+- **`edgefractal`'s length divisor was wrong on the first draft** — it
+  divided segment length by the turn array's own length (4 for koch, 8
+  for quadkoch) instead of tracking `scale` — the number of
+  base-edge-lengths the generator spans end to end — separately. Koch
+  has 4 segments but spans only 3 (the bump's two slanted sides fold
+  back across each other); get this wrong and the curve silently draws
+  at half or three-quarters the requested length instead of erroring.
+  Caught by an advisor review of the plan, which asked for a direct
+  check rather than trusting recall: walking each preset's turn array
+  as unit-length turtle steps confirms both presets close exactly (net
+  turn a multiple of 360, net displacement `(scale, 0)`) — now a
+  permanent regression test
+  (`fractal_gens_presets_have_zero_net_turn_and_the_documented_scale`),
+  not just a one-off script.
+- **`gasket`/`carpet`'s first draft was a recursive PostScript proc**,
+  each level wrapped in its own `dict begin/end` (mirroring `koch`'s
+  own scoping, needed for the same reason — see `edgefractal`'s header).
+  But unlike `koch`, these also invoke a *caller-supplied* proc at the
+  leaves, and a recursive call happens before its own `end`, so every
+  ancestor level's dict is still open at the moment a leaf runs —
+  confirmed empirically that a stamp as simple as `{ /n n 1 add def }`
+  (the exact idiom `truchet`'s own existing test relies on) silently
+  rebinds `/n` into a throwaway ancestor frame instead of the caller's
+  own dict, and the count is lost the instant that frame closes. Fixed
+  by driving the walk with an explicit stack array instead of PostScript
+  recursion (same reason `httile` doesn't recurse either), so the
+  caller's proc always runs with no extra frame open, exactly like
+  every other driver in the file.
+
+New demo: `examples/fractals.ps`, a four-quadrant specimen (`edgepoly`
++koch, `edgepoly`+quadkoch, `gasket`, `carpet`) in the same style as
+`examples/tiling.ps`. New gallery piece: `gallery/recursive_peaks.ps`,
+"Recursive Peaks" — a night mountain range where each peak is a
+`gasket`-subdivided triangle shaded by altitude (a low-poly look that
+falls directly out of the subdivision itself, cubic falloff so only
+facets near the apex go snow-white), a `carpet`-driven sparse
+starfield (most cells skipped, the rest stamp a dot), and floating
+`edgepoly` koch/quadkoch snowflakes.
+
 ## Hyperbolic geometry in the Poincare disk (issue #10, 2026-08-02)
 
 Closes issue #10, the companion to issue #9's Euclidean tiling library

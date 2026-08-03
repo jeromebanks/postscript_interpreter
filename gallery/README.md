@@ -24,6 +24,7 @@ overridden per line through the font's scratch dict.
 | Hortus Machinalis | `hortus.ps` | (Stage 19) A herbarium plate: three L-system plants grown by turtle, dried blossoms stamped along the plant's own path with `pathforall`, Palatino letterpress |
 | Woven Labyrinth | `woven_labyrinth.ps` | Sébastien Truchet's 1704 two-triangle tile, randomly quarter-turned 256 times (artkit's `truchet`) — the single motif chains into a continuous flowing quilt pattern |
 | Infinite Descent | `infinite_descent.ps` | A Poincaré-disk {7,3} hyperbolic tessellation (artkit's `httile`) — one heptagon reflected across its own edges out to four generations, 232 tiles colored in rings by generation |
+| Recursive Peaks | `recursive_peaks.ps` | A night mountain range built entirely from artkit's fractals section: `gasket`-subdivided low-poly peaks shaded by altitude, a `carpet`-driven sparse starfield, and `edgepoly` koch/quadkoch snowflakes floating overhead |
 
 ## Viewing the gallery
 

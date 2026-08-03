@@ -277,8 +277,14 @@ diameters through the origin), `hreflect` reflects across one (circle
 inversion), and `httile` runs the reflections breadth-first to
 generate a regular `{p,q}` tessellation of the whole disk from one
 fundamental polygon (see gallery's Infinite Descent, a `{7,3}`
-tiling). All of it deterministic under `srand`, all of it running
-unchanged in Ghostscript.
+tiling). A fractals section adds `edgefractal`/`edgepoly` — a
+Koch-style edge-replacement curve generalized to any turn-delta
+generator (presets `/koch` and `/quadkoch` in `FractalGens`, retrieved
+with `fgen`), walked around any closed polygon — and `gasket`/`carpet`,
+Sierpinski-style recursive area subdivision for a triangle and a
+square (see gallery's Recursive Peaks, gasket-faceted mountains under
+a carpet-driven starfield). All of it deterministic under `srand`, all
+of it running unchanged in Ghostscript.
 
 ```postscript
 (lib/artkit.ps) run

@@ -24,15 +24,19 @@
 %   tiling    x0 y0 v1 v2 n1 n2 {x y ...} lattice | cx cy r hex
 %             cx cy s up tri | x y w h cols rows {...} hexgrid | trigrid
 %             | truchet
+%   fractals  len angle turns scale depth edgefractal | [verts] turns
+%             scale depth edgepoly | /koch or /quadkoch fgen
+%             | x1 y1 x2 y2 x3 y3 depth {...} gasket
+%             | x y w h depth {...} carpet
 %   hyperbolic (Poincare disk)  cx cy r x y hpoint | hr ang hpolar
 %             x1 y1 x2 y2 horthocircle | cx cy r x1 y1 x2 y2 hgeo
 %             cx cy r [verts] hpoly | a b r isline x y hreflect
 %             cx cy r p q depth {proc} httile
 %
 % Convention: helper names are lowercase and short; internal scratch
-% names carry two-letter prefixes (ap-, ct-, ha-, hg-, ho-, hp-, hr-,
-% ht-, hy-, ld-, ls-, pt-, tg-, tk-) — avoid redefining those inside
-% brush/draw procs.
+% names carry two-letter prefixes (ap-, ct-, cp-, ef-, ep-, gk-, ha-,
+% hg-, ho-, hp-, hr-, ht-, hy-, ld-, ls-, pt-, tg-, tk-) — avoid
+% redefining those inside brush/draw procs.
 
 % --- random ----------------------------------------------------------
 % Deterministic (rand), reproducible under srand. Drawn from rand's
@@ -532,6 +536,286 @@ end
             grestore
         } for
     } for
+} def
+
+% --- fractals: edge-replacement and area-subdivision -------------------
+% Two distinct self-similar-geometry genres, generalized from the
+% one-off `koch` in examples/koch_snowflake.ps and `sierpinski` in
+% examples/sierpinski.ps. L-systems (above) already cover recursive
+% branching (trees, plants) via lsys/ldraw — this section is
+% deliberately the other two well-known fractal genres: replacing each
+% edge of a shape with a scaled copy of a generator motif (Koch-style),
+% and recursively subdividing an area into self-similar sub-regions,
+% omitting some (Sierpinski-style).
+
+% len angle turns scale depth edgefractal -  (draws via rlineto from
+% currentpoint, like `fd`/`koch` — stroke it yourself)
+% `turns` is an array of N turn-deltas (degrees), applied cumulatively
+% before each of N equal-length segments; `scale` is how many
+% segments' worth of *straight-line* length the whole generator spans
+% end to end (NOT necessarily N — see below). At depth 0, draws one
+% straight segment of the requested length at the requested angle; at
+% deeper levels, divides length by `scale` and recurses once per turn
+% in `turns`.
+%
+% The classic Koch generator is the reason `scale` can't just be
+% `turns length`: it has 4 segments (the two sides of the bump plus
+% the two straight ends) but spans only 3 segment-lengths end to end
+% (the bump's two sides fold back across each other). Verified by
+% walking `[0 60 -120 60]` as unit-length turtle steps from heading 0:
+% displacements (1,0) (cos60,sin60) (cos-60,sin-60) (1,0) sum to
+% exactly (3,0) — zero net turn, net forward displacement 3, matching
+% examples/koch_snowflake.ps's own `len 3 div` with its 4 recursive
+% calls. A caller-supplied `turns` that doesn't close this way (net
+% turn a multiple of 360, net unit-step displacement (scale,0)) will
+% silently draw a curve that drifts off axis or the wrong length —
+% same "caller's contract, not validated" doctrine as this file's
+% other shape procs.
+%
+% Recurses into itself, so — like `koch`/`sierpinski` before it, and
+% unlike this file's non-recursive shape procs — its whole body is
+% scoped inside its own `dict begin/end`. Without that, a recursive
+% call's `def`s would land in the *same* dict as the caller's own loop
+% state (there being no other frame to receive them), clobbering `efa`
+% between iterations of the `for` loop below the instant the first
+% recursive call returns — confirmed while building this section, the
+% same failure mode the tiling section's header already documents for
+% tg-/tk- collisions, just self-inflicted via recursion instead of
+% caller composition.
+/edgefractal {
+    5 dict begin
+        /efdepth exch def
+        /efscale exch def
+        /efturns exch def
+        /efangle exch def
+        /eflen exch def
+
+        efdepth 0 eq {
+            efangle cos eflen mul efangle sin eflen mul rlineto
+        } {
+            /efseg eflen efscale div def
+            /efa efangle def
+            0 1 efturns length 1 sub {
+                /efi exch def
+                /efa efa efturns efi get add def
+                efseg efa efturns efscale efdepth 1 sub edgefractal
+            } for
+        } ifelse
+    end
+} def
+
+% Two verified generators (own dict, `Palettes`-style): `/koch` is the
+% classic bump (verified above); `/quadkoch` is an 8-segment generator
+% (the Minkowski-sausage / "quadratic Koch" family) verified the same
+% way — walking `[0 90 -90 -90 0 90 90 -90]` as unit steps from
+% heading 0 sums to exactly (4,0), zero net turn, so `scale` is 4, not
+% 8. `/name fgen` (mirrors `pal`/`palpick`'s exch-and-get convenience)
+% pushes `turns scale`, the order edgefractal/edgepoly expect.
+/FractalGens <<
+    /koch     [[0 60 -120 60] 3]
+    /quadkoch [[0 90 -90 -90 0 90 90 -90] 4]
+>> def
+/fgen { FractalGens exch get aload pop } def   % /name -> turns scale
+
+% [x0 y0 x1 y1 ... ] turns scale depth edgepoly -  (closed subpath
+% appended to current path — stroke or fill it yourself)
+% Generalizes `snowflake` in examples/koch_snowflake.ps from a
+% hardcoded triangle to any closed polygon: moveto the first vertex,
+% then edgefractal each edge in turn (wrapping last back to first),
+% closepath. Vertices are supplied directly, same contract as hpoly's
+% `[verts]` — this file has no regular-polygon vertex generator (ngon
+% appends straight path segments rather than returning coordinates);
+% compute a small vertex array by hand for a triangle/square base, the
+% same way httile hand-computes its own fundamental polygon.
+%
+% Winding direction matters: a generator whose first nonzero turn is
+% positive (both presets above) bulges to the *left* of each edge's own
+% direction of travel. For those bumps to point outward from the
+% polygon (the classic snowflake look) the vertices must run clockwise
+% — confirmed by rendering both orderings: counterclockwise vertices
+% here produce bumps folding inward instead (same reasoning
+% examples/koch_snowflake.ps's own header already gives for its
+% hardcoded triangle, generalized to any polygon here).
+/edgepoly {
+    /epdepth exch def
+    /epscale exch def
+    /epturns exch def
+    /epverts exch def
+    /epn epverts length 2 idiv def
+
+    epverts 0 get epverts 1 get moveto
+    0 1 epn 1 sub {
+        /epi exch def
+        /epj epi 1 add epn mod def
+        /epx1 epverts epi 2 mul get def
+        /epy1 epverts epi 2 mul 1 add get def
+        /epx2 epverts epj 2 mul get def
+        /epy2 epverts epj 2 mul 1 add get def
+        /epdx epx2 epx1 sub def
+        /epdy epy2 epy1 sub def
+        /eplen epdx dup mul epdy dup mul add sqrt def
+        /epang epdy epdx atan def
+        eplen epang epturns epscale epdepth edgefractal
+    } for
+    closepath
+} def
+
+% x1 y1 x2 y2 x3 y3 depth {x1 y1 x2 y2 x3 y3 -} gasket -
+% The Sierpinski gasket: at depth 0, calls proc with the triangle's
+% three corners (paint it however you like — fill, stroke, stamp);
+% otherwise recurses into the three corner sub-triangles formed by the
+% edge midpoints (same split as examples/sierpinski.ps). Every other
+% driver in this file (grid/lattice/hexgrid/trigrid/truchet) hands the
+% caller a proc instead of painting for them, so this does too.
+%
+% Iterative (an explicit array-backed stack), not a recursive PostScript
+% proc calling itself, even though the algorithm is naturally recursive
+% — same reason `httile` below drives its own BFS with a queue array
+% instead of recursing. A recursive version needs each level's own
+% `dict begin/end` (same reason `koch`/`edgefractal` do — see there),
+% but unlike those, this proc doesn't just recurse into itself, it also
+% invokes a *caller-supplied* proc at the leaves; confirmed empirically
+% while building this that a naive recursive version leaves every
+% ancestor level's `dict` open at the moment a leaf calls `gkproc` (each
+% recursive call happens *before* its own `end`, not after), so a stamp
+% as simple as `{ /n n 1 add def }` — the exact idiom this file's own
+% `truchet_calls_proc_once_per_cell_with_the_cell_size` test already
+% relies on for a non-recursive driver — silently rebinds `/n` into
+% whichever ancestor frame happens to be innermost instead of the
+% caller's own dict, and the count is lost the moment that frame's
+% `end` runs. Driving the walk with a stack array instead means `gkproc`
+% always runs with the *caller's* own dict on top, exactly like every
+% other driver here, no caveat needed.
+%
+% Composition gotcha, same shape as the tiling section's tg-/tk- one
+% above (a cross-model review caught it here specifically): `gksp`/
+% `gkstack`/`gkproc` are plain globals, not dict-scoped, so a leaf proc
+% that calls `gasket` again itself (nested fractals — a gasket of
+% gaskets) clobbers the *outer* traversal's own state the instant the
+% inner call starts, since both bind the same names. Same fix as
+% hex/tri inside hexgrid/trigrid: wrap just the inner call in its own
+% `N dict begin ... end` so its `def`s shadow there instead — confirmed
+% this actually restores the outer traversal (a naive unwrapped nested
+% call visits only 1 of 3 outer leaves instead of 3; wrapped, all 3).
+% That wrap then reintroduces the *other* documented gotcha (a plain
+% `def` counter inside the inner proc is itself swallowed at the
+% wrapper's `end`) — same fix as there too: an array mutated with
+% `put`, immune to dict nesting. `carpet` below shares the identical
+% shape (`cpsp`/`cpstack`/`cpproc`) and the identical fix.
+%
+% The stack never holds more than `2*depth+1` pending records: each pop
+% immediately expands into its 3 children (pushed before anything else
+% is popped), so the walk behaves exactly like real call-stack
+% recursion — depth generations of "2 siblings not yet visited" plus
+% the one record just popped, not the full 3^depth leaf count. Sized
+% from `gkdepth` at call time (no fixed cap, so no silent-truncation
+% path to document or to accidentally undertest).
+/gasket {
+    /gkproc exch def
+    /gkdepth exch def
+    /gky3 exch def /gkx3 exch def
+    /gky2 exch def /gkx2 exch def
+    /gky1 exch def /gkx1 exch def
+    /gkstack gkdepth 2 mul 1 add 7 mul array def
+    gkstack 0 gkx1 put gkstack 1 gky1 put
+    gkstack 2 gkx2 put gkstack 3 gky2 put
+    gkstack 4 gkx3 put gkstack 5 gky3 put
+    gkstack 6 gkdepth put
+    /gksp 1 def
+    {
+        gksp 0 eq { exit } if
+        /gksp gksp 1 sub def
+        /gkbase gksp 7 mul def
+        gkstack gkbase get /gkcx1 exch def
+        gkstack gkbase 1 add get /gkcy1 exch def
+        gkstack gkbase 2 add get /gkcx2 exch def
+        gkstack gkbase 3 add get /gkcy2 exch def
+        gkstack gkbase 4 add get /gkcx3 exch def
+        gkstack gkbase 5 add get /gkcy3 exch def
+        gkstack gkbase 6 add get /gkcd exch def
+        gkcd 0 eq {
+            gkcx1 gkcy1 gkcx2 gkcy2 gkcx3 gkcy3 gkproc
+        } {
+            /gkmx12 gkcx1 gkcx2 add 2 div def
+            /gkmy12 gkcy1 gkcy2 add 2 div def
+            /gkmx23 gkcx2 gkcx3 add 2 div def
+            /gkmy23 gkcy2 gkcy3 add 2 div def
+            /gkmx31 gkcx3 gkcx1 add 2 div def
+            /gkmy31 gkcy3 gkcy1 add 2 div def
+            /gkcd1 gkcd 1 sub def
+            /gkb gksp 7 mul def
+            gkstack gkb gkcx1 put gkstack gkb 1 add gkcy1 put
+            gkstack gkb 2 add gkmx12 put gkstack gkb 3 add gkmy12 put
+            gkstack gkb 4 add gkmx31 put gkstack gkb 5 add gkmy31 put
+            gkstack gkb 6 add gkcd1 put
+            /gkb gksp 1 add 7 mul def
+            gkstack gkb gkmx12 put gkstack gkb 1 add gkmy12 put
+            gkstack gkb 2 add gkcx2 put gkstack gkb 3 add gkcy2 put
+            gkstack gkb 4 add gkmx23 put gkstack gkb 5 add gkmy23 put
+            gkstack gkb 6 add gkcd1 put
+            /gkb gksp 2 add 7 mul def
+            gkstack gkb gkmx31 put gkstack gkb 1 add gkmy31 put
+            gkstack gkb 2 add gkmx23 put gkstack gkb 3 add gkmy23 put
+            gkstack gkb 4 add gkcx3 put gkstack gkb 5 add gkcy3 put
+            gkstack gkb 6 add gkcd1 put
+            /gksp gksp 3 add def
+        } ifelse
+    } loop
+} def
+
+% x y w h depth {x y w h -} carpet -
+% The Sierpinski carpet: the square/rectangle counterpart to `gasket`
+% (a distinct algorithm, not a reparameterization of it) — splits the
+% box into a 3x3 grid and recurses into the 8 outer cells, skipping
+% the center one, down to depth 0 where proc paints each surviving
+% cell. Unlike hexgrid/trigrid, both w and h are load-bearing (a 3x3
+% split scales independently per axis, so non-square boxes still tile
+% without a caveat). Same stack-array iteration as `gasket`, same
+% reason — `cpproc` must always run with no ancestor frame open.
+%
+% Same peak-size reasoning as `gasket`'s own stack, scaled for 8
+% children per non-leaf instead of 3: never more than `7*depth+1`
+% pending records, sized from `cpdepth` at call time.
+/carpet {
+    /cpproc exch def
+    /cpdepth exch def
+    /cph exch def /cpw exch def /cpy exch def /cpx exch def
+    /cpstack cpdepth 7 mul 1 add 5 mul array def
+    cpstack 0 cpx put cpstack 1 cpy put
+    cpstack 2 cpw put cpstack 3 cph put cpstack 4 cpdepth put
+    /cpsp 1 def
+    {
+        cpsp 0 eq { exit } if
+        /cpsp cpsp 1 sub def
+        /cpbase cpsp 5 mul def
+        cpstack cpbase get /cpcx exch def
+        cpstack cpbase 1 add get /cpcy exch def
+        cpstack cpbase 2 add get /cpcw exch def
+        cpstack cpbase 3 add get /cpch exch def
+        cpstack cpbase 4 add get /cpcd exch def
+        cpcd 0 eq {
+            cpcx cpcy cpcw cpch cpproc
+        } {
+            /cpw3 cpcw 3 div def
+            /cph3 cpch 3 div def
+            /cpcd1 cpcd 1 sub def
+            0 1 2 {
+                /cpi exch def
+                0 1 2 {
+                    /cpj exch def
+                    cpi 1 eq cpj 1 eq and not {
+                        /cpb cpsp 5 mul def
+                        cpstack cpb cpcx cpi cpw3 mul add put
+                        cpstack cpb 1 add cpcy cpj cph3 mul add put
+                        cpstack cpb 2 add cpw3 put
+                        cpstack cpb 3 add cph3 put
+                        cpstack cpb 4 add cpcd1 put
+                        /cpsp cpsp 1 add def
+                    } if
+                } for
+            } for
+        } ifelse
+    } loop
 } def
 
 % --- hyperbolic geometry (Poincare disk model) ------------------------
