@@ -18,7 +18,7 @@ geodesic's support circle, or the degenerate diameter case), `hreflect`
 `httile` (a breadth-first-reflection generator for regular {p,q}
 hyperbolic tessellations). New demo `examples/hyperbolic.ps` (three
 panels: `httile`, `hpolar`, raw `hgeo`); new gallery piece
-`gallery/infinite_descent.ps`, a {7,3} tessellation (233 tiles, four
+`gallery/infinite_descent.ps`, a {7,3} tessellation (232 tiles, four
 reflection generations) colored in rings by BFS generation.
 
 Two real bugs, both caught by validating the algorithm in a standalone
@@ -67,6 +67,53 @@ determinant that flags the degenerate/diameter case is scale-invariant
 here, so the radius itself is capped instead (>50 falls back to the
 diameter case) — visually identical to the true arc at that radius
 regardless of device scale.
+
+Two more real bugs, caught by cross-model review (Codex) after the
+Python-prototype-validated version above was already up and passing its
+own tests — both invisible to the tests that existed at that point,
+which is exactly the kind of gap independent review is for:
+
+- `httile` seeded its dedup-visited list with the fundamental polygon's
+  *vertex 0* (`htfund 0 get`/`htfund 1 get`) instead of its centroid —
+  which happens to be the origin by construction, but the code never
+  said so; it read two array slots that looked like they'd give the
+  center and didn't. Every `{p,q}` tiling reflects at least one gen-1
+  neighbor back across its shared edge into an exact copy of the
+  fundamental tile by depth 2 (an unavoidable involution, not an edge
+  case), and that copy's true centroid — the real origin — was never
+  actually in the visited list, so it passed the dedup check as "new"
+  and got enqueued as a bogus generation-2 duplicate sitting exactly on
+  top of generation 0. Silent in a render (the duplicate just repaints
+  the center in whatever color that generation gets) but not silent in
+  the tile count: this fully explains a ~1-tile discrepancy against the
+  Python prototype that earlier testing (see the arithmetic-pin test's
+  original comment, since corrected) wrongly wrote off as floating-point
+  noise near the dedup threshold — it was this bug, deterministically,
+  every time. Fixed by seeding `htvisited` with `0 0` outright rather
+  than reading it off `htfund`; tile counts now match the Python
+  prototype exactly at every `{p,q,depth}` checked (previously off by
+  one). The pinned regression test's count changed from 30 to 29
+  accordingly, and the gallery piece's tile count from "233" to "232" in
+  every place it's mentioned.
+- Both `examples/hyperbolic.ps` and `gallery/infinite_descent.ps`'s
+  `httile` paint callbacks did `fill` then `stroke` on the same
+  driver-built path, expecting the outline stroke to trace the same
+  shape just filled. `Gfx::fill` in this interpreter does an implicit
+  `newpath` after painting regardless of whether anything was actually
+  filled (`src/gfx.rs`: "Painting consumes the path... filled or not")
+  — a deliberate, documented deviation, but one this code didn't
+  account for, so every tile's outline stroke was silently a no-op (no
+  error, just no ink) in both files. Fixed with the idiom this
+  interpreter's own gsave/grestore semantics is built to support —
+  `gsave fill grestore stroke`, since (per the note above about
+  gsave/grestore restoring the path) that fill's implicit newpath is
+  itself undone by the grestore. `examples/tiling.ps`'s hexgrid/trigrid
+  stamps sidestep this differently (rebuilding the shape fresh before
+  stroking rather than relying on the path surviving fill) because they
+  have direct access to their own shape-building procs (`hex`/`tri`);
+  `httile`'s client callbacks don't (the driver, not the client, is the
+  one holding the curved-edge geometry), so gsave/grestore is the
+  fix that actually fits httile's contract.
 
 Verified against `gs` throughout, not just at the end: both the
 Ghostscript acceptance driver (`tests/artkit.rs`) and every render done

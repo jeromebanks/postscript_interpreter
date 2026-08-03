@@ -43,7 +43,8 @@ cx cy r 7 3 4 {
     gen 5 mod 1 eq { /dusk pal 2 get } {
     gen 5 mod 2 eq { /dusk pal 3 get } {
     gen 5 mod 3 eq { /tide pal 2 get } { /tide pal 3 get } ifelse } ifelse } ifelse } ifelse
-    aload pop setrgbcolor fill
+    aload pop setrgbcolor
+    gsave fill grestore
     0.15 0.15 0.18 setrgbcolor 0.5 setlinewidth stroke
 } httile
 

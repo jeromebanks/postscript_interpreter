@@ -638,23 +638,15 @@ fn httile_generates_the_expected_tile_count_and_calls_proc_that_many_times() {
     // {p,q,depth,frame} -- a regression net on the reflection generator
     // and its edge-length-scaled dedup tolerance together, the way
     // lattice_walks_the_expected_points pins lattice's exact points.
-    //
-    // This pin sits closer to a floating-point cliff than most: the
-    // dedup check is `distance < 0.3 * edge_length`, and at least one
-    // candidate tile in this {7,3} depth-2 configuration was observed to
-    // land within noise of that boundary (pscat and an independent
-    // Python prototype of the same algorithm agreed on every {p,q,depth}
-    // tried except this class of case, off by exactly one tile — see
-    // NOTES.md). If this test starts failing after an unrelated change
-    // (a trig implementation detail, a number-representation change),
-    // check whether the new count is still a plausible dense {7,3}
-    // tiling (render it) before assuming the reflection/dedup logic
-    // itself regressed -- it may just be a duplicate near the boundary
-    // resolving the other way.
+    // Cross-checked against an independent Python prototype of the same
+    // algorithm, which agrees exactly at this and several other
+    // {p,q,depth} combinations (NOTES.md) -- this is a real invariant of
+    // the geometry, not an incidental snapshot of whatever the code
+    // happened to produce.
     let got = eval("/n 0 def 100 100 90 7 3 2 { pop /n n 1 add def } httile n");
     assert_eq!(
         got,
-        ["30"],
+        ["29"],
         "httile tile count drifted from its pinned value"
     );
 }

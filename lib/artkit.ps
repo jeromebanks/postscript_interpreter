@@ -842,8 +842,15 @@ end
     /htqhead 0 def
     htqueue 0 [htfund 0] put
     /htqtail 1 def
-    htvisited 0 htfund 0 get put
-    htvisited 1 htfund 1 get put
+    % The fundamental polygon's centroid is the origin by construction
+    % (it's built centered there) -- NOT htfund's own vertex 0, which is
+    % what a naive "read the first two slots of htfund" would give. Get
+    % this wrong and the dedup scan below never matches the fundamental
+    % tile against its own true position, so the first neighbor to
+    % reflect back across a shared edge (unavoidable by depth 2) reads as
+    % a brand new tile at the disk's center instead of a duplicate.
+    htvisited 0 0 put
+    htvisited 1 0 put
     {
         htqhead htqtail ge { exit } if
         htqueue htqhead get aload pop      % verts gen
