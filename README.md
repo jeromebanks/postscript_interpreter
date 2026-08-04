@@ -317,6 +317,26 @@ four specimen posters.
 agent: the render-look-refine loop, the toolkit, the style packs,
 type as material, and the composition habits that keep pieces good.
 
+A sibling library, `lib/graph.ps`, covers mathematical plotting
+instead of freehand generative art: `setframe` maps a data-space
+domain onto a device-space viewport, `plotfn`/`plotparam`/`plotpolar`
+sample a function/parametric curve/polar curve into the current path,
+and `axes` draws a bordered, ticked frame around them. A 3D side adds
+`setview` (an azimuth/elevation camera), `project3`, and `plotsurface`
+— a `z=f(x,y)` wireframe mesh, row by row and column by column, with
+no hidden-surface removal (a deliberate scope cut; see the gallery's
+Ripple Range for the cheap per-row-occlusion trick that works for a
+single swept height field without needing a general solver). Neither
+library depends on the other. `examples/graphing.ps` is a four-quadrant
+specimen sheet exercising all four drivers.
+
+```postscript
+(lib/graph.ps) run
+0 -1.2 6.283185 1.2 60 60 480 360 setframe   % domain -> viewport
+newpath 0 6.283185 200 { sin } plotfn stroke % y = sin(x)
+newpath 5 4 6 axes stroke                    % border + ticks
+```
+
 ## The website
 
 **[jeromebanks.github.io/postscript_interpreter](https://jeromebanks.github.io/postscript_interpreter/)**

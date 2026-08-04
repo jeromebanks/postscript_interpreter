@@ -3,6 +3,153 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## 2D/3D function-graphing procedures for artkit (issue #13, 2026-08-03)
+
+Closes issue #13. The issue asked for reusable plotting/projection
+primitives — 2D curves and 3D surfaces — "added to `lib/artkit.ps` or a
+clearly-scoped sibling library," leaving the projection method,
+coordinate systems, and demo equations to the implementer. Went with a
+sibling: `lib/graph.ps`, no dependency on artkit either way, since
+sampling/projection math is a genuinely separate concern from artkit's
+random/color/turtle/L-system/brush/tiling/hyperbolic/fractal toolkit
+and didn't need any of it.
+
+Four sections, mirroring artkit's own header/section/prefix
+conventions:
+
+- **frame**: `setframe` maps a data-space domain onto a device-space
+  viewport (persistent `GraphFrame` state, same shape as artkit's
+  `TurtleState`); `gmapx`/`gmapy` expose the mapping directly for
+  callers who want it (tick labels, custom annotations); `gmoveto`/
+  `glineto` build path points from data coordinates.
+- **2D curves**: `plotfn` (y=f(x)), `plotparam` (parametric), and
+  `plotpolar` (polar, theta in degrees — PostScript's native `cos`/
+  `sin` and artkit's turtle heading are both degrees, so this stays
+  consistent rather than picking radians for "more mathematical"
+  reasons) all sample n+1 points and append to the current path, same
+  "caller strokes/fills" contract as artkit's shape procs. `axes`
+  draws a bordered, ticked frame — tick marks only, no numeric labels;
+  a caller wanting labels has `gmapx`/`gmapy` to place exact `show`
+  calls itself, the same latitude the issue grants implementers
+  generally.
+- **3D view**: `setview` (azimuth/elevation camera, degrees) +
+  `project3` (rotate about Z by az, then tilt by el — a negated
+  X-rotation, chosen so positive z renders up the page instead of down
+  — then drop depth orthographically and scale/translate onto the
+  page) — the "some form of projection" the issue asked for, without
+  needing a full matrix/quaternion library for one camera.
+- **3D surfaces**: `surfacerow`/`surfacecol` each draw one polyline
+  through `project3`; `plotsurface` walks a full grid, rows then
+  columns, into a wireframe mesh. Deliberately no hidden-surface
+  removal — that needs polygon depth-sorting, a separate project, the
+  same call artkit's tiling section already made about Penrose tiling.
+
+Two real bugs, both caught before merge rather than by review:
+
+- **Prefix collision across the composition chain.** First draft used
+  one scratch prefix for the whole file. `plotsurface` calls
+  `surfacerow`/`surfacecol`, which call `project3` — exactly the
+  composition depth artkit's own `tg-` gotcha (hexgrid/trigrid calling
+  hex/tri unwrapped, issue #9) warns about, and a first advisor pass
+  caught it before any code existed: `project3`'s scratch would
+  silently overwrite `plotsurface`'s outer-loop position state the
+  moment a caller's sampling proc itself called back into the library.
+  Fixed with four disjoint prefixes (`gp` 2D drivers/axes, `gv` the
+  view/project3, `g3` surfacerow/surfacecol/axes3, `gsf` plotsurface
+  specifically, since it's the one proc that calls into the `g3`
+  group) instead of one shared prefix, plus the same wrap-the-inner-
+  call-in-its-own-dict guidance issue #9 already documented, extended
+  to cover this file.
+- **Forwarding a captured proc by bare name auto-executes it.** Found
+  empirically, not by review: `plotsurface`'s first draft passed its
+  captured sampling proc onward to `surfacerow`/`surfacecol` as
+  `gsfnx gsffn surfacerow` — but a bare reference to a name bound to
+  an executable array *invokes* it on the spot in PostScript, rather
+  than pushing it as an operand, the instant it's encountered outside
+  a fresh `{ }`. `surfacerow` never saw a proc argument at all; it saw
+  a stack one item short and failed with `stackunderflow`. This is
+  exactly artkit's own `alongpath` pattern (`{ aponepitch } exch
+  alintern`, not bare `aponepitch`) — under-applied here rather than
+  a new kind of bug, fixed by wrapping the forward as `{ gsffn }`, and
+  now has a dedicated regression test (`plotsurface_forwards_the_
+  sampling_proc_without_invoking_it_early` in `tests/graph.rs`) that
+  counts calls rather than just checking ink, since a silent zero-call
+  failure wouldn't show up as "less ink," it'd show up as no path at
+  all or a crash — the test pins the actual call count instead
+  (2×(nx+1)×(ny+1): rows and columns each resample every vertex on
+  their own independent pass, no z caching between them).
+
+A third, more serious bug surfaced at the step-6 advisor review of the
+finished diff, not by any test above: `project3`'s screen-y formula
+subtracted the z term (`gvy1 cos(el) - gvz sin(el)`), so height
+rendered *downward* on screen — a peak at higher z landed lower on the
+page. Every pinned `project3`/`axes3` test used either z=0 or el=0,
+where that term's sign can't matter (multiplied by zero either way),
+so nothing caught it. Confirmed empirically before touching anything:
+`0 0 1 0 0 setview` (identity) placed `(0,0,8)` correctly at devy 240
+above the origin's 180 once flipped to `+`, versus 119.8 *below* it
+before. Fixed by flipping the sign to `add`; a new test
+(`project3_renders_positive_z_upward_at_nonzero_elevation`) isolates
+the z term exactly by setting el=90 (sin=1, cos=0), so `(0,0,z)` must
+land at precisely `(0,z)` — the gap the other tests left. The fix
+mattered beyond direction alone: Ripple Range's back-to-front
+occlusion claim turned out to depend on it in a way that was masked by
+two errors partially canceling — the original row sweep (`0 1 ny2`)
+actually drew near rows first and far rows last (backwards for
+painter's algorithm), but combined with the inverted z sign, the
+result still *looked* like a plausible ripple field. Verified with a
+dedicated test scene (an isolated tall spike on an otherwise flat
+field, rendered both sweep directions): the buggy order visibly
+chopped the spike's peak off under later-drawn "farther" rows; the
+corrected order (`ny2 -1 0`, drawn genuinely far-to-near) rendered it
+as a clean, fully unoccluded silhouette. Both `lib/graph.ps`'s
+`project3` and the gallery piece's own inlined copy needed the same
+one-character sign fix — the second copy is exactly the risk the
+self-containment doctrine accepts (a fix to the library doesn't
+propagate to pieces that inlined it before the fix landed) in exchange
+for pieces staying runnable standalone.
+
+Also from that review: `axes` was defining its per-tick loop counters
+(`gpi`/`gppx`/`gpj`/`gppy`) *inside* `GraphFrame begin ... end` — since
+`def` always targets the innermost open dict, every call was leaking
+loop scratch into the frame's own 8-slot dict instead of userdict,
+the exact `tg-`-style composition trap this file's own header warns
+about, just against a data dict instead of another driver. Didn't fail
+today (both pscat and gs auto-grow dicts past their declared size),
+but it violated the library's own stated rule in a way a future
+reviewer would flag. Fixed by pulling `px`/`py`/`pw`/`ph` into local
+variables and closing `GraphFrame`'s dict before looping, rather than
+threading the whole tick computation through it.
+
+New demo: `examples/graphing.ps`, a four-quadrant specimen sheet
+(plotfn: a two-harmonic wave; plotparam: a 3:2 Lissajous figure;
+plotpolar: a five-petaled rose; plotsurface: a radial ripple under
+`setview`) — inlines a one-line `showctr` rather than adding an
+artkit dependency just for text centering. New gallery piece:
+`gallery/ripple_range.ps`, "Ripple Range" — two decaying ripple
+sources summed into one height field, swept row by row far-to-near
+under `project3`. Per-row rendering is the one case where cheap
+painter's-algorithm occlusion *does* work without a general hidden-
+surface solver: fill each row from its ridge line down to a shallow
+margin below itself, in strict back-to-front order, and each nearer
+row's opaque fill correctly hides whatever farther terrain would
+otherwise show through underneath it — legitimate specifically because
+a height field swept along one axis has no self-overlap ambiguity, the
+condition plotsurface's own header names as the general case that
+needs real depth-sorting instead. Inlines `project3`/`setview` from
+`lib/graph.ps` and `mix3` from `lib/artkit.ps` per the gallery's
+self-containment doctrine (see `hortus.ps`/`woven_labyrinth.ps`).
+
+`tests/graph.rs`: arithmetic pinned wherever the trig lands on clean
+values (multiples of 90 degrees, matching cos/sin's exact float
+results) for frame mapping, all three 2D drivers, `axes`'s tick-
+extended bbox, and `project3`'s camera; ink-coverage checks for
+`surfacerow`/`surfacecol`/`plotsurface` the same way artkit's `ldraw`
+test works, since a mesh doesn't reduce to one clean number the way a
+single sampled point does; a Ghostscript-compatibility test combining
+all of it in one driver, mirroring `tests/artkit.rs`'s
+`ghostscript_accepts_artkit`.
+
 ## Fractal / self-similar-geometry procedures for artkit (issue #11, 2026-08-03)
 
 Closes issue #11. `examples/koch_snowflake.ps` and `examples/sierpinski.ps`
