@@ -1,0 +1,208 @@
+%!PS-Adobe-3.0
+%%Title: graph.ps — 2D/3D function-graphing procedures for pscat
+%%Creator: pscat — issue #13, the graphing library
+%%EndComments
+
+% Reusable procedures for plotting mathematical functions and
+% equations: 2D curves (y=f(x), parametric, polar) and 3D surfaces
+% (z=f(x,y), axonometric wireframe projection). Defines into the
+% current dict (userdict, normally), draws nothing on load, runs
+% unchanged in Ghostscript. A sibling to lib/artkit.ps rather than a
+% section of it — no dependency either way; load whichever (or both)
+% a piece needs.
+%
+%   (lib/graph.ps) run          % from the repo root
+%
+% What's inside (details at each section):
+%   frame   x0 y0 x1 y1 px py pw ph setframe | x gmapx | y gmapy
+%           | x y gmoveto | x y glineto
+%   curves  x0 x1 n {x->y} plotfn | t0 t1 n {t->x y} plotparam
+%           | th0 th1 n {theta->r} plotpolar (degrees)
+%   axes    nx ny tlen axes
+%   3D view az el scale cx cy setview | x y z project3
+%   surface x0 x1 y0 y1 nx ny {x y->z} plotsurface
+%           | x0 x1 y nx {x y->z} surfacerow
+%           | y0 y1 x ny {x y->z} surfacecol | lx ly lz axes3
+%
+% Convention: each section's internal scratch names carry their own
+% short prefix (gp- 2D curves/axes, gv- the 3D view/project3, g3-
+% surfacerow/surfacecol/axes3, gsf- plotsurface) — deliberately
+% distinct per section, not one prefix for the whole file, because
+% plotsurface calls surfacerow/surfacecol which call project3: sharing
+% a prefix across that call chain would let an outer loop's position
+% state get silently overwritten by the callee's own scratch of the
+% same name. Same reasoning as artkit's tg- composition gotcha for
+% hexgrid/trigrid — and the same fix applies if *your* sampling proc
+% (passed to plotfn/plotparam/plotpolar/plotsurface/surfacerow/
+% surfacecol) calls back into one of these drivers itself: wrap that
+% inner call in its own small dict (`n dict begin ... end`) so its
+% defs land there instead of clobbering the driver's loop state.
+% plotsurface itself hands its captured sampling proc onward to
+% surfacerow/surfacecol wrapped as `{ gsffn }`, not bare `gsffn` — a
+% bare reference to a name bound to an executable array *invokes* it
+% on the spot instead of pushing it as an operand (plain PostScript
+% semantics, easy to trip over the moment a proc is forwarded rather
+% than called directly; a fresh `{ }` around the name defers that).
+%
+% Deliberate scope: plotsurface/surfacerow/surfacecol draw a wireframe
+% only — no hidden-line/hidden-surface removal. That needs polygon
+% depth-sorting, a separate project, the same call artkit's tiling
+% section already made about Penrose tiling (see the gallery piece
+% Ripple Range for a cheap per-row-shading way to fake depth instead).
+% axes draws tick marks, not numeric labels — a caller wanting labels
+% has gmapx/gmapy to place its own `show` calls at exact tick
+% positions. Angles are degrees throughout (plotpolar's theta,
+% setview's az/el), matching PostScript's native cos/sin and artkit's
+% turtle heading.
+
+% --- frame: map a data-space domain onto a device-space viewport -----
+% setframe -> a GraphFrame the rest of this section reads implicitly
+% (same persistent-state shape as artkit's TurtleState); call it once
+% before plotfn/plotparam/plotpolar/axes/gmoveto/glineto.
+
+/GraphFrame 8 dict def
+
+/setframe {                                      % x0 y0 x1 y1 px py pw ph setframe -
+    GraphFrame begin
+        /ph exch def /pw exch def /py exch def /px exch def
+        /y1 exch def /x1 exch def /y0 exch def /x0 exch def
+    end
+} def
+
+/gmapx { GraphFrame begin x0 sub x1 x0 sub div pw mul px add end } def  % x -> device x
+/gmapy { GraphFrame begin y0 sub y1 y0 sub div ph mul py add end } def  % y -> device y
+
+/gmoveto { exch gmapx exch gmapy moveto } def    % x y gmoveto -
+/glineto { exch gmapx exch gmapy lineto } def    % x y glineto -
+
+% --- 2D curves ---------------------------------------------------------
+% All three sample n+1 points and append to the current path (moveto
+% the first, lineto the rest) via gmoveto/glineto — same "appended to
+% current path" contract as artkit's shape procs; newpath and
+% stroke/fill are the caller's job. Call setframe first.
+
+/plotfn {                                        % x0 x1 n {x->y} plotfn -
+    /gpfn exch def /gpn exch def /gpx1 exch def /gpx0 exch def
+    0 1 gpn {
+        /gpi exch def
+        /gpx gpx0 gpx1 gpx0 sub gpi gpn div mul add def
+        gpx gpfn /gpy exch def
+        gpx gpy gpi 0 eq { gmoveto } { glineto } ifelse
+    } for
+} def
+
+/plotparam {                                     % t0 t1 n {t->x y} plotparam -
+    /gpfn exch def /gpn exch def /gpt1 exch def /gpt0 exch def
+    0 1 gpn {
+        /gpi exch def
+        /gpt gpt0 gpt1 gpt0 sub gpi gpn div mul add def
+        gpt gpfn
+        gpi 0 eq { gmoveto } { glineto } ifelse
+    } for
+} def
+
+/plotpolar {                                     % th0 th1 n {theta->r} plotpolar -
+    /gpfn exch def /gpn exch def /gpth1 exch def /gpth0 exch def
+    0 1 gpn {
+        /gpi exch def
+        /gpth gpth0 gpth1 gpth0 sub gpi gpn div mul add def
+        gpth gpfn /gpr exch def
+        gpr gpth cos mul gpr gpth sin mul
+        gpi 0 eq { gmoveto } { glineto } ifelse
+    } for
+} def
+
+% --- axes ---------------------------------------------------------------
+
+% nx ny tlen axes -   (domain border + nx ticks along the bottom edge,
+% ny ticks along the left edge, tlen device units long, projecting
+% outward past the border; appended to current path, caller strokes)
+/axes {
+    /gptlen exch def /gpny exch def /gpnx exch def
+    GraphFrame begin
+        px py moveto px pw add py lineto
+        px pw add py ph add lineto px py ph add lineto closepath
+        0 1 gpnx {
+            /gpi exch def
+            /gppx px pw gpi mul gpnx div add def
+            gppx py moveto gppx py gptlen sub lineto
+        } for
+        0 1 gpny {
+            /gpj exch def
+            /gppy py ph gpj mul gpny div add def
+            px gppy moveto px gptlen sub gppy lineto
+        } for
+    end
+} def
+
+% --- 3D view: azimuth/elevation camera + orthographic projection ------
+% Rotate about Z by az, then about X by el, then drop depth (orthographic)
+% and scale/translate onto the page. Call setview first.
+
+/Graph3D 8 dict def
+
+/setview {                                       % az el scale cx cy setview -
+    Graph3D begin
+        /vcy exch def /vcx exch def /vs exch def /vel exch def /vaz exch def
+    end
+} def
+
+/project3 {                                      % x y z project3 -> devx devy
+    /gvz exch def /gvy exch def /gvx exch def
+    Graph3D begin
+        /gvx1 gvx vaz cos mul gvy vaz sin mul sub def
+        /gvy1 gvx vaz sin mul gvy vaz cos mul add def
+        /gvy2 gvy1 vel cos mul gvz vel sin mul sub def
+        gvx1 vs mul vcx add
+        gvy2 vs mul vcy add
+    end
+} def
+
+% --- 3D surfaces: wireframe mesh of z=f(x,y) ---------------------------
+% surfacerow/surfacecol each draw one polyline (a fixed y sweeping x, or
+% a fixed x sweeping y) through project3, appended to current path.
+% plotsurface walks a full nx x ny grid: all rows, then all columns —
+% the wireframe-mesh look, no hidden-surface removal (see header).
+% Call setview first.
+
+/surfacerow {                                    % x0 x1 y nx {x y->z} surfacerow -
+    /g3fn exch def /g3nx exch def /g3y exch def /g3x1 exch def /g3x0 exch def
+    0 1 g3nx {
+        /g3i exch def
+        /g3x g3x0 g3x1 g3x0 sub g3i g3nx div mul add def
+        g3x g3y 2 copy g3fn project3
+        g3i 0 eq { moveto } { lineto } ifelse
+    } for
+} def
+
+/surfacecol {                                    % y0 y1 x ny {x y->z} surfacecol -
+    /g3fn exch def /g3ny exch def /g3x exch def /g3y1 exch def /g3y0 exch def
+    0 1 g3ny {
+        /g3j exch def
+        /g3y g3y0 g3y1 g3y0 sub g3j g3ny div mul add def
+        g3x g3y 2 copy g3fn project3
+        g3j 0 eq { moveto } { lineto } ifelse
+    } for
+} def
+
+/plotsurface {                                   % x0 x1 y0 y1 nx ny {x y->z} plotsurface -
+    /gsffn exch def /gsfny exch def /gsfnx exch def
+    /gsfy1 exch def /gsfy0 exch def /gsfx1 exch def /gsfx0 exch def
+    0 1 gsfny {
+        /gsfj exch def
+        gsfx0 gsfx1 gsfy0 gsfy1 gsfy0 sub gsfj gsfny div mul add gsfnx { gsffn } surfacerow
+    } for
+    0 1 gsfnx {
+        /gsfi exch def
+        gsfy0 gsfy1 gsfx0 gsfx1 gsfx0 sub gsfi gsfnx div mul add gsfny { gsffn } surfacecol
+    } for
+} def
+
+% lx ly lz axes3 -   (three axis segments from the 3D origin, current view)
+/axes3 {
+    /g3lz exch def /g3ly exch def /g3lx exch def
+    0 0 0 project3 moveto g3lx 0 0 project3 lineto
+    0 0 0 project3 moveto 0 g3ly 0 project3 lineto
+    0 0 0 project3 moveto 0 0 g3lz project3 lineto
+} def
+%%EOF

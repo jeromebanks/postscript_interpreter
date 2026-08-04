@@ -1,0 +1,65 @@
+%!PS-Adobe-3.0
+%%Title: Four Graphs — a specimen sheet for graph.ps
+%%BoundingBox: 0 0 620 700
+%%EndComments
+
+% Specimen sheet for the graphing library (lib/graph.ps): one quadrant
+% per technique. Top-left is plotfn, a two-harmonic wave y = sin(x) +
+% 0.4 sin(3x) (x in degrees — plotfn/plotparam/plotpolar don't impose
+% units, they just hand your sample value to your proc, and this proc
+% uses PostScript's native degree-based sin/cos directly); top-right
+% is plotparam tracing a 3:2 Lissajous figure; bottom-left is
+% plotpolar tracing a five-petaled rose, r = cos(5*theta); bottom-
+% right is plotsurface, a radial ripple z = cos(80*sqrt(x^2+y^2))
+% rendered as a wireframe mesh under an azimuth/elevation camera
+% (setview), with axes3 marking the three axes from the origin. Run
+% from the repo root:
+%
+%   pscat --page 620x700 examples/graphing.ps
+
+(lib/graph.ps) run
+
+% Not from graph.ps or artkit — this sheet only exercises graph.ps, so
+% it inlines the one text-centering helper it wants rather than adding
+% a dependency on artkit.ps just for showctr.
+/showctr { /tky exch def /tkx exch def /tks exch def
+    tkx tks stringwidth pop 2 div sub tky moveto tks show } def
+
+1 1 1 setrgbcolor clippath fill
+
+/Palatino-Bold findfont 22 scalefont setfont
+0.1 0.1 0.12 setrgbcolor
+(Four Graphs) 310 666 showctr
+/Palatino-Italic findfont 12 scalefont setfont
+(plotfn, plotparam, plotpolar, plotsurface) 310 648 showctr
+
+0.1 0.1 0.12 setrgbcolor
+0.8 setlinewidth
+
+% --- top-left: plotfn, y = sin(x) + 0.4 sin(3x) -------------------------
+0 -1.6 1440 1.6 40 350 260 270 setframe
+newpath 0 1440 240 { dup sin exch 3 mul sin 0.4 mul add } plotfn stroke
+newpath 4 4 6 axes stroke
+/Palatino findfont 10 scalefont setfont
+(plotfn: sin x + 0.4 sin 3x) 170 336 showctr
+
+% --- top-right: plotparam, a 3:2 Lissajous figure -----------------------
+-1.1 -1.1 1.1 1.1 320 350 260 270 setframe
+newpath 0 360 300 { dup 3 mul sin exch 2 mul sin } plotparam stroke
+newpath 4 4 6 axes stroke
+(plotparam: sin 3t, sin 2t) 450 336 showctr
+
+% --- bottom-left: plotpolar, a five-petaled rose ------------------------
+-1.1 -1.1 1.1 1.1 40 60 260 270 setframe
+newpath 0 360 300 { 5 mul cos } plotpolar stroke
+newpath 4 4 6 axes stroke
+(plotpolar: r = cos 5theta) 170 46 showctr
+
+% --- bottom-right: plotsurface, a radial ripple -------------------------
+25 22 21 450 195 setview
+newpath -4 4 -4 4 16 16 { dup mul exch dup mul add sqrt 80 mul cos } plotsurface stroke
+newpath 4.5 4.5 3 axes3 stroke
+(plotsurface: cos 80r under setview) 450 46 showctr
+
+showpage
+%%EOF

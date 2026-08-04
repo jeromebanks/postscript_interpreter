@@ -1,0 +1,109 @@
+%!PS-Adobe-3.0
+%%Title: Ripple Range
+%%BoundingBox: 0 0 680 560
+%%EndComments
+
+% Two ripple sources — off-center, different wavelengths, both decaying
+% with distance like waves on a pond — summed into one height field and
+% swept row by row (near x, far y) under an azimuth/elevation camera.
+% Each row is filled from its own ridge line down to a shallow margin
+% below itself before the next (nearer) row is drawn on top: simple
+% back-to-front painter's algorithm, correct here because a height
+% field swept along one axis never needs anything cleverer. graph.ps's
+% own plotsurface deliberately stops short of this (a general-purpose
+% hidden-surface remover is a separate project, per its header) —
+% this piece is the "one specific case where the cheap trick works"
+% payoff.
+%
+% Gallery II (issue #13, the graphing library) — inlines Graph3D/
+% setview/project3 from lib/graph.ps and mix3 from lib/artkit.ps per
+% the gallery's self-containment doctrine (see hortus.ps).
+%
+%   pscat --page 680x560 gallery/ripple_range.ps
+
+% --- the toolkit subset (from lib/graph.ps and lib/artkit.ps) --------
+/Graph3D 8 dict def
+/setview {                                       % az el scale cx cy setview -
+    Graph3D begin
+        /vcy exch def /vcx exch def /vs exch def /vel exch def /vaz exch def
+    end
+} def
+/project3 {                                      % x y z project3 -> devx devy
+    /gvz exch def /gvy exch def /gvx exch def
+    Graph3D begin
+        /gvx1 gvx vaz cos mul gvy vaz sin mul sub def
+        /gvy1 gvx vaz sin mul gvy vaz cos mul add def
+        /gvy2 gvy1 vel cos mul gvz vel sin mul sub def
+        gvx1 vs mul vcx add
+        gvy2 vs mul vcy add
+    end
+} def
+/mix3 {
+    /tkt exch def /tkb exch def /tka exch def
+    tka 0 get tkb 0 get tka 0 get sub tkt mul add
+    tka 1 get tkb 1 get tka 1 get sub tkt mul add
+    tka 2 get tkb 2 get tka 2 get sub tkt mul add
+} def
+
+% --- the height field: two decaying ripples, summed -------------------
+/zf {                                            % x y -> z
+    /gy exch def /gx exch def
+    gx 3 sub dup mul gy 2.5 add dup mul add sqrt /r1 exch def
+    gx 4.5 add dup mul gy 3 sub dup mul add sqrt /r2 exch def
+    6 r1 30 mul cos mul 1 r1 0.35 mul add div
+    3 r2 42 mul cos mul 1 r2 0.5 mul add div add
+} def
+
+/cream [0.96 0.94 0.90] def
+/dusk  [0.20 0.24 0.42] def
+/ember [0.86 0.42 0.22] def
+/ink   [0.15 0.10 0.08] def
+
+cream aload pop setrgbcolor
+newpath 0 0 moveto 680 0 lineto 680 560 lineto 0 560 lineto closepath fill
+
+18 10 24 340 260 setview
+
+% --- the sweep: rows far-to-near, each an occluding filled ridge ------
+-8 8 -6 6 56 46
+{
+  /ny2 exch def /nx2 exch def
+  /y1v exch def /y0v exch def /x1v exch def /x0v exch def
+  0 1 ny2 {
+    /j exch def
+    /rowy y0v y1v y0v sub j ny2 div mul add def
+    /t j ny2 div def
+    newpath
+    0 1 nx2 {
+        /i exch def
+        /rowx x0v x1v x0v sub i nx2 div mul add def
+        rowx rowy rowx rowy zf project3
+        i 0 eq { moveto } { lineto } ifelse
+    } for
+    x1v rowy x1v rowy zf 2.4 sub project3 lineto
+    x0v rowy x0v rowy zf 2.4 sub project3 lineto
+    closepath
+    dusk ember t mix3 setrgbcolor
+    fill
+    newpath
+    0 1 nx2 {
+        /i exch def
+        /rowx x0v x1v x0v sub i nx2 div mul add def
+        rowx rowy rowx rowy zf project3
+        i 0 eq { moveto } { lineto } ifelse
+    } for
+    ink aload pop setrgbcolor
+    0.6 setlinewidth
+    stroke
+  } for
+} exec
+
+% --- title -------------------------------------------------------------
+ink aload pop setrgbcolor
+/Palatino-Bold findfont 28 scalefont setfont
+(RIPPLE RANGE) dup stringwidth pop 2 div 340 exch sub 30 moveto show
+/Palatino-Italic findfont 11 scalefont setfont
+(two sources, one wavefront each, painter's-order occlusion) dup stringwidth pop 2 div 340 exch sub 14 moveto show
+
+showpage
+%%EOF

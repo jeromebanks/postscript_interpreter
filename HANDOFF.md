@@ -63,7 +63,18 @@ generator, presets `/koch`/`/quadkoch` in `FractalGens`) and `gasket`/
 (NOTES.md's entry has the full story, including why `gasket`/`carpet`
 ended up iterative rather than recursive — a recursive version leaves
 every ancestor's dict frame open exactly when a leaf invokes the
-caller's proc, silently breaking a plain `def`-based counter).
+caller's proc, silently breaking a plain `def`-based counter). Also
+done: issue #13, 2D/3D function-graphing procedures — a new sibling
+library, `lib/graph.ps` (no dependency on artkit either way):
+`setframe`/`gmapx`/`gmapy`/`gmoveto`/`glineto` map a data-space domain
+onto a device-space viewport, `plotfn`/`plotparam`/`plotpolar` sample
+curves into the current path, `axes` frames them; `setview`/
+`project3` add an azimuth/elevation camera and `plotsurface`/
+`surfacerow`/`surfacecol`/`axes3` a `z=f(x,y)` wireframe mesh (no
+hidden-surface removal — a documented scope cut). `examples/graphing.ps`
+is the specimen sheet; the gallery piece Ripple Range demonstrates the
+one-piece-specific trick that gets occlusion anyway: back-to-front
+filled rows (NOTES.md's entry has the full story).
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
