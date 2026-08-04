@@ -33,10 +33,11 @@ conventions:
   calls itself, the same latitude the issue grants implementers
   generally.
 - **3D view**: `setview` (azimuth/elevation camera, degrees) +
-  `project3` (rotate about Z then X, orthographic-project, scale and
-  translate onto the page) — the "some form of projection" the issue
-  asked for, without needing a full matrix/quaternion library for one
-  camera.
+  `project3` (rotate about Z by az, then tilt by el — a negated
+  X-rotation, chosen so positive z renders up the page instead of down
+  — then drop depth orthographically and scale/translate onto the
+  page) — the "some form of projection" the issue asked for, without
+  needing a full matrix/quaternion library for one camera.
 - **3D surfaces**: `surfacerow`/`surfacecol` each draw one polyline
   through `project3`; `plotsurface` walks a full grid, rows then
   columns, into a wireframe mesh. Deliberately no hidden-surface

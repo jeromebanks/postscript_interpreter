@@ -48,7 +48,8 @@
 % only — no hidden-line/hidden-surface removal. That needs polygon
 % depth-sorting, a separate project, the same call artkit's tiling
 % section already made about Penrose tiling (see the gallery piece
-% Ripple Range for a cheap per-row-shading way to fake depth instead).
+% Ripple Range for a cheap per-row-occlusion trick that works instead,
+% for the specific case of one height field swept along one axis).
 % axes draws tick marks, not numeric labels — a caller wanting labels
 % has gmapx/gmapy to place its own `show` calls at exact tick
 % positions. Angles are degrees throughout (plotpolar's theta,
@@ -142,8 +143,12 @@
 } def
 
 % --- 3D view: azimuth/elevation camera + orthographic projection ------
-% Rotate about Z by az, then about X by el, then drop depth (orthographic)
-% and scale/translate onto the page. Call setview first.
+% Rotate about Z by az; el then tilts the camera to look down from
+% above (a negated X-rotation, not the textbook +el one -- the z term
+% is added rather than subtracted, chosen deliberately so positive z
+% renders up the page instead of down). Depth is dropped afterward
+% (orthographic, no perspective divide), then scale/translate lands it
+% on the page. Call setview first.
 
 /Graph3D 8 dict def
 
