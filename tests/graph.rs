@@ -123,6 +123,22 @@ fn setview_and_project3_pin_exact_camera_angles() {
 }
 
 #[test]
+fn project3_renders_positive_z_upward_at_nonzero_elevation() {
+    // Regression guard: an earlier draft subtracted the z term in
+    // project3's screen-y formula, so height rendered *downward* --
+    // invisible in every test above, since they all use z=0 or el=0,
+    // where the sign of that term never matters (it's multiplied by
+    // sin(el) or by z itself, either of which was zero). el=90 makes
+    // sin(el)=1 and cos(el)=0 exactly, isolating the z contribution
+    // completely: with az=0 and x=y=0, (0,0,z) must project to
+    // exactly (0, z) -- higher z, higher devy, i.e. up the page.
+    let got = eval_f64("0 90 1 0 0 setview 0 0 5 project3");
+    assert_eq!(got, [0.0, 5.0]);
+    let got = eval_f64("0 90 1 0 0 setview 0 0 -5 project3");
+    assert_eq!(got, [0.0, -5.0]);
+}
+
+#[test]
 fn axes3_draws_three_segments_from_the_projected_origin() {
     let got = eval_f64("0 0 1 0 0 setview newpath 5 6 7 axes3 pathbbox");
     // Identity view: origin (0,0,0)->(0,0); endpoints (5,0,0),(0,6,0),

@@ -119,20 +119,26 @@
 % outward past the border; appended to current path, caller strokes)
 /axes {
     /gptlen exch def /gpny exch def /gpnx exch def
-    GraphFrame begin
-        px py moveto px pw add py lineto
-        px pw add py ph add lineto px py ph add lineto closepath
-        0 1 gpnx {
-            /gpi exch def
-            /gppx px pw gpi mul gpnx div add def
-            gppx py moveto gppx py gptlen sub lineto
-        } for
-        0 1 gpny {
-            /gpj exch def
-            /gppy py ph gpj mul gpny div add def
-            px gppy moveto px gptlen sub gppy lineto
-        } for
-    end
+    % Pull the four frame numbers out and close GraphFrame's dict
+    % before looping -- def inside begin/end always targets the
+    % innermost dict, so a loop counter left open here would land in
+    % GraphFrame itself instead of userdict (the same tg- composition
+    % trap the header warns about, just against a data dict this time
+    % instead of another driver's scratch).
+    GraphFrame begin px pw py ph end
+    /gpph exch def /gppy exch def /gppw exch def /gppx exch def
+    gppx gppy moveto gppx gppw add gppy lineto
+    gppx gppw add gppy gpph add lineto gppx gppy gpph add lineto closepath
+    0 1 gpnx {
+        /gpi exch def
+        /gptx gppx gppw gpi mul gpnx div add def
+        gptx gppy moveto gptx gppy gptlen sub lineto
+    } for
+    0 1 gpny {
+        /gpj exch def
+        /gpty gppy gpph gpj mul gpny div add def
+        gppx gpty moveto gppx gptlen sub gpty lineto
+    } for
 } def
 
 % --- 3D view: azimuth/elevation camera + orthographic projection ------
@@ -152,7 +158,7 @@
     Graph3D begin
         /gvx1 gvx vaz cos mul gvy vaz sin mul sub def
         /gvy1 gvx vaz sin mul gvy vaz cos mul add def
-        /gvy2 gvy1 vel cos mul gvz vel sin mul sub def
+        /gvy2 gvy1 vel cos mul gvz vel sin mul add def
         gvx1 vs mul vcx add
         gvy2 vs mul vcy add
     end

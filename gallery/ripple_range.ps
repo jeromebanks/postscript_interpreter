@@ -33,7 +33,7 @@
     Graph3D begin
         /gvx1 gvx vaz cos mul gvy vaz sin mul sub def
         /gvy1 gvx vaz sin mul gvy vaz cos mul add def
-        /gvy2 gvy1 vel cos mul gvz vel sin mul sub def
+        /gvy2 gvy1 vel cos mul gvz vel sin mul add def
         gvx1 vs mul vcx add
         gvy2 vs mul vcy add
     end
@@ -69,7 +69,7 @@ newpath 0 0 moveto 680 0 lineto 680 560 lineto 0 560 lineto closepath fill
 {
   /ny2 exch def /nx2 exch def
   /y1v exch def /y0v exch def /x1v exch def /x0v exch def
-  0 1 ny2 {
+  ny2 -1 0 {
     /j exch def
     /rowy y0v y1v y0v sub j ny2 div mul add def
     /t j ny2 div def

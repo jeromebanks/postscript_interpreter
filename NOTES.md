@@ -78,6 +78,48 @@ Two real bugs, both caught before merge rather than by review:
   (2×(nx+1)×(ny+1): rows and columns each resample every vertex on
   their own independent pass, no z caching between them).
 
+A third, more serious bug surfaced at the step-6 advisor review of the
+finished diff, not by any test above: `project3`'s screen-y formula
+subtracted the z term (`gvy1 cos(el) - gvz sin(el)`), so height
+rendered *downward* on screen — a peak at higher z landed lower on the
+page. Every pinned `project3`/`axes3` test used either z=0 or el=0,
+where that term's sign can't matter (multiplied by zero either way),
+so nothing caught it. Confirmed empirically before touching anything:
+`0 0 1 0 0 setview` (identity) placed `(0,0,8)` correctly at devy 240
+above the origin's 180 once flipped to `+`, versus 119.8 *below* it
+before. Fixed by flipping the sign to `add`; a new test
+(`project3_renders_positive_z_upward_at_nonzero_elevation`) isolates
+the z term exactly by setting el=90 (sin=1, cos=0), so `(0,0,z)` must
+land at precisely `(0,z)` — the gap the other tests left. The fix
+mattered beyond direction alone: Ripple Range's back-to-front
+occlusion claim turned out to depend on it in a way that was masked by
+two errors partially canceling — the original row sweep (`0 1 ny2`)
+actually drew near rows first and far rows last (backwards for
+painter's algorithm), but combined with the inverted z sign, the
+result still *looked* like a plausible ripple field. Verified with a
+dedicated test scene (an isolated tall spike on an otherwise flat
+field, rendered both sweep directions): the buggy order visibly
+chopped the spike's peak off under later-drawn "farther" rows; the
+corrected order (`ny2 -1 0`, drawn genuinely far-to-near) rendered it
+as a clean, fully unoccluded silhouette. Both `lib/graph.ps`'s
+`project3` and the gallery piece's own inlined copy needed the same
+one-character sign fix — the second copy is exactly the risk the
+self-containment doctrine accepts (a fix to the library doesn't
+propagate to pieces that inlined it before the fix landed) in exchange
+for pieces staying runnable standalone.
+
+Also from that review: `axes` was defining its per-tick loop counters
+(`gpi`/`gppx`/`gpj`/`gppy`) *inside* `GraphFrame begin ... end` — since
+`def` always targets the innermost open dict, every call was leaking
+loop scratch into the frame's own 8-slot dict instead of userdict,
+the exact `tg-`-style composition trap this file's own header warns
+about, just against a data dict instead of another driver. Didn't fail
+today (both pscat and gs auto-grow dicts past their declared size),
+but it violated the library's own stated rule in a way a future
+reviewer would flag. Fixed by pulling `px`/`py`/`pw`/`ph` into local
+variables and closing `GraphFrame`'s dict before looping, rather than
+threading the whole tick computation through it.
+
 New demo: `examples/graphing.ps`, a four-quadrant specimen sheet
 (plotfn: a two-harmonic wave; plotparam: a 3:2 Lissajous figure;
 plotpolar: a five-petaled rose; plotsurface: a radial ripple under
