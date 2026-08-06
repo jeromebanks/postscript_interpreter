@@ -210,12 +210,29 @@ end } def
 % — getting the inner arc's direction backwards is the one way this
 % silently turns into a solid pie instead of a donut, so it's pinned
 % by a background-pixel-at-center regression test.
+%
+% A negative entry has no meaningful wedge angle (true of every
+% pie/donut design, not a gap specific to this one), but left
+% un-clamped it does worse than just misrender its own slice: it
+% shrinks the running total, which can push some *other* wedge's
+% share above 360 degrees and wrap `arcn` past a full turn, silently
+% painting over earlier wedges entirely. Each wedge's own sweep and
+% the shared total both clamp negative values to zero, so any single
+% negative entry degrades to a zero-width wedge — same "degenerate
+% input draws nothing" treatment used everywhere else in this file —
+% without ever letting the rest of the pie exceed 360 degrees. The
+% color callback still sees the caller's original, unclamped value.
 
 /piechart {                                      % [vals] cx cy r ir {i v -> r g b} piechart -
     /dpproc exch def /dpir exch def /dpr exch def
     /dpcy exch def /dpcx exch def /dpvals exch def
     /dpn dpvals length def
-    /dptotal dpvals dvsum def
+    /dptotal 0 def
+    dpvals {
+        /dpvi exch def
+        dpvi 0 lt { /dpvi 0 def } if
+        /dptotal dptotal dpvi add def
+    } forall
     /dpang 90 def
     % A nonempty series summing to zero (e.g. [0 0], every category
     % filtered to nothing) has no proportions to divide out -- same
@@ -225,7 +242,8 @@ end } def
         0 1 dpn 1 sub {
             /dpi exch def
             /dpv dpvals dpi get def
-            /dpsweep dpv dptotal div 360 mul def
+            /dpvclamped dpv 0 lt { 0 } { dpv } ifelse def
+            /dpsweep dpvclamped dptotal div 360 mul def
             /dpa0 dpang def
             /dpa1 dpang dpsweep sub def
             /dpang dpa1 def

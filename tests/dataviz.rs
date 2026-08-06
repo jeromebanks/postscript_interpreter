@@ -304,6 +304,48 @@ fn piechart_is_a_no_op_on_a_zero_total_series() {
 }
 
 #[test]
+fn piechart_clamps_negative_entries_so_other_wedges_stay_visible() {
+    // Regression guard (found by cross-model review, round 3): an
+    // un-clamped negative entry shrinks the running total, which can
+    // push some *other* wedge's share past 360 degrees -- arcn wraps
+    // rather than erroring, silently painting over earlier wedges.
+    // [5 3 -2 4]: clamping both the total and each wedge's own share
+    // to >=0 gives a clamped total of 12, so wedges 0/1/3 (values
+    // 5/3/4) get 150/90/120 degrees and wedge 2 (value -2, clamped to
+    // 0) is an invisible zero-width wedge. Verify all three positive
+    // wedges are actually visible at their own angles rather than
+    // overpainted -- confirmed empirically broken before this fix
+    // (rendering [5 3 -2 4] showed only 2 of 4 wedges).
+    let mut it = Interp::with_page(200, 200).expect("page");
+    load(&mut it);
+    it.run_str("newpath [5 3 -2 4] 100 100 80 0 { pop dvcolor } piechart")
+        .unwrap_or_else(|e| panic!("piechart failed: {}", it.error_report(&e)));
+    let sample = |deg: f64| {
+        pixel_at(
+            &it,
+            100.0 + 50.0 * deg.to_radians().cos(),
+            100.0 + 50.0 * deg.to_radians().sin(),
+            200,
+        )
+    };
+    let w0 = sample(15.0); // wedge 0 (value 5) midpoint
+    assert!(
+        w0.2 > w0.0 && w0.2 > w0.1,
+        "wedge 0 should be blue-dominant, got {w0:?}"
+    );
+    let w1 = sample(-105.0); // wedge 1 (value 3) midpoint
+    assert!(
+        w1.0 > w1.2,
+        "wedge 1 should be reddish (not overpainted), got {w1:?}"
+    );
+    let w3 = sample(150.0); // wedge 3 (value 4) midpoint
+    assert!(
+        w3.0 > w3.2,
+        "wedge 3 should be orange (not overpainted), got {w3:?}"
+    );
+}
+
+#[test]
 fn dvaxes_draws_the_border_plus_outward_ticks() {
     // Same px/py/pw/ph/tlen as graph.rs's own axes test, for an easy
     // cross-check: the border sets [20,30,420,330]; x-ticks (category

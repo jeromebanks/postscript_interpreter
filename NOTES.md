@@ -129,6 +129,28 @@ change bar height's meaning from "the value" to "distance from the
 domain edge," a worse outcome than documenting the expectation, which
 `lib/dataviz.ps`'s `barchart` header now does.
 
+A third review round found one more, and this one turned out to be a
+real visible defect, not just a documentable domain quirk like the
+baseline case: `piechart` divided each wedge's sweep by the *raw*
+sum, so a negative entry (e.g. `[5 3 -2 4]`) shrank the total enough
+that other, perfectly ordinary positive wedges' shares exceeded 360
+degrees. `arcn` doesn't error on that — it wraps past a full turn and
+silently paints over earlier wedges. Rendering `[5 3 -2 4]` before the
+fix showed only 2 of the 4 wedges; the other two were completely
+overpainted. Fixed by clamping both the running total and each
+wedge's own share to `>= 0` — a negative entry becomes a zero-width
+no-op (same "degenerate input draws nothing" treatment as the other
+three fixes) while every remaining wedge's sweep stays bounded within
+one turn, since the sum of non-negative clamped values can never
+exceed the clamped total by construction. The color callback still
+receives the caller's original, unclamped value, only the geometry is
+clamped. Confirmed by re-rendering the reproduction case: all three
+positive wedges visible again, correctly proportioned (150/90/120
+degrees for values 5/3/4), and the two chart pieces already
+built (`examples/dataviz.ps`, the gallery's Field Notes) render
+byte-identical before and after, since neither ever passes a negative
+value.
+
 ## 2D/3D function-graphing procedures for artkit (issue #13, 2026-08-03)
 
 Closes issue #13. The issue asked for reusable plotting/projection
