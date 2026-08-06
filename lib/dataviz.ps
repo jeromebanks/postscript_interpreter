@@ -155,9 +155,11 @@ end } def
         dai dan dvcatx dav dvmapy
         dai 0 eq { moveto } { lineto } ifelse
     } for
-    dan 1 sub dan dvcatx 0 dvmapy lineto
-    0 dan dvcatx 0 dvmapy lineto
-    closepath
+    dan 0 gt {
+        dan 1 sub dan dvcatx 0 dvmapy lineto
+        0 dan dvcatx 0 dvmapy lineto
+        closepath
+    } if
 } def
 
 % --- scatter chart -----------------------------------------------------

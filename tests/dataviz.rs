@@ -188,6 +188,18 @@ fn areachart_closes_down_to_the_baseline() {
 }
 
 #[test]
+fn areachart_is_a_no_op_on_an_empty_series() {
+    // Regression guard (found by cross-model review): the baseline-
+    // closing code ran unconditionally, calling dvcatx with n=0 and
+    // dividing by zero, even though the loop above it already treats
+    // an empty series as a no-op -- same as every other driver here.
+    let mut it = Interp::with_page(100, 100).expect("page");
+    load(&mut it);
+    it.run_str("0 10 0 0 100 100 setdvframe newpath [] areachart")
+        .unwrap_or_else(|e| panic!("areachart on [] failed: {}", it.error_report(&e)));
+}
+
+#[test]
 fn setscatterframe_maps_continuous_x_and_y() {
     let got = eval_f64(
         "0 0 10 10 50 50 400 300 setscatterframe \
