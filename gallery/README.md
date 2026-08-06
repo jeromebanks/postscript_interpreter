@@ -26,6 +26,7 @@ overridden per line through the font's scratch dict.
 | Infinite Descent | `infinite_descent.ps` | A Poincaré-disk {7,3} hyperbolic tessellation (artkit's `httile`) — one heptagon reflected across its own edges out to four generations, 232 tiles colored in rings by generation |
 | Recursive Peaks | `recursive_peaks.ps` | A night mountain range built entirely from artkit's fractals section: `gasket`-subdivided low-poly peaks shaded by altitude, a `carpet`-driven sparse starfield, and `edgepoly` koch/quadkoch snowflakes floating overhead |
 | Ripple Range | `ripple_range.ps` | (issue #13) Two decaying ripple sources summed into a height field and swept row by row under `graph.ps`'s `project3` camera — each row an occluding filled ridge, back-to-front painter's algorithm |
+| Field Notes | `field_notes.ps` | (issue #14) A marsh census styled as a naturalist's field journal: `dataviz.ps`'s `barchart` and `linechart` sharing one category axis (weekly sightings against a temperature trend), a species-mix donut with a hand-drawn legend, all lettered in the Stage 12 /HandScript font |
 
 ## Viewing the gallery
 

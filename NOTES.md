@@ -3,6 +3,107 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## A data-visualization chart library for artkit (issue #14, 2026-08-06)
+
+Closes issue #14. The issue asked for "a comprehensive library of
+reusable data-visualization procedures — bar charts, line/area
+charts, pie charts, scatter plots" — breadth of chart types was the
+ask, with data format and styling left to the implementer. Went with
+a third sibling, `lib/dataviz.ps`, no dependency on `artkit.ps` or
+`graph.ps` either way, matching issue #13's precedent for the same
+"clearly-scoped sibling library" language.
+
+Six sections, mirroring the `graph.ps`/`artkit.ps` header/section/
+prefix conventions:
+
+- **frame**: `setdvframe` (value domain + device viewport) backs
+  `dvmapy` (continuous value -> device y) and `dvcatx` (category `i`
+  of `n` -> a centered device x) — deliberately category-*centers*,
+  not edge-to-edge, so a bar chart and a line chart sharing the same
+  category count sit precisely under/over each other (the gallery
+  piece's bar+line combo is the reason). `dvbarw`, `dvbounds`
+  (raw min/max), and `dvsum` round out the section.
+- **bar/line/area**: `barchart` fills each bar directly rather than
+  building a path for the caller to finish, since every bar can carry
+  its own color via a per-element callback (`{i v -> r g b}`, the
+  same shape as artkit's `grid`); baseline is `0 dvmapy`, not the
+  viewport floor, so negative values draw below the line correctly.
+  `linechart`/`areachart` follow `graph.ps`'s "build path, caller
+  strokes/fills" convention instead, since there's exactly one series
+  and no per-point coloring need.
+- **scatter**: its own persistent frame, `setscatterframe` — the same
+  8-arg shape as `graph.ps`'s `setframe`, deliberately, since it's a
+  genuinely continuous 2D domain unlike the categorical bar/line
+  frame.
+- **pie/donut**: one proc, `piechart`, with an inner-radius argument
+  rather than two near-duplicate procs — `ir=0` draws plain wedges
+  (center point + outer arc), `ir>0` draws annular sectors (outer arc
+  out, straight step in, inner arc back). Wedges start at 12 o'clock
+  and sweep clockwise, the usual chart-library convention (same
+  clockwise-for-legibility call artkit's `ctext` already made about
+  circular text).
+- **axes**: `dvaxes` decorates the categorical frame — border, x-ticks
+  at category centers (matching `dvcatx`, not edges the way
+  `graph.ps`'s `axes` places them — the one place this deliberately
+  differs), y-ticks at even value divisions. Scoped to bar/line/area
+  only; scatter's continuous frame has no axes helper (a documented
+  scope cut — a caller wanting a border there draws four lines by
+  hand).
+- **color**: an 8-entry default qualitative cycle, `dvcolor`, so
+  `{ pop dvcolor }` is a one-line default color callback for any
+  chart type.
+
+Every color callback (bar, pie, scatter) is called *before* that
+element's path is built, not between path-building and `fill` — a
+proc that mishandles the path (a stray `newpath`, an unbalanced
+`gsave`) can't silently drop or corrupt the element that way. Same
+hazard artkit's `alongpath` documents for its own stamp proc; repeated
+here since every chart driver in this file has it.
+
+An `advisor` review of the plan (before any code existed) flagged the
+exact bug class that bit `graph.ps` twice: an ink-count test passes
+identically whether a donut is a real ring or filled solid to the
+center, and whether a pie sweeps clockwise or counterclockwise — same
+total ink either way. `tests/dataviz.rs` has two tests aimed
+specifically at that: `piechart_with_inner_radius_leaves_the_center_
+empty` samples the actual center pixel (a donut filled solid would
+pass any ink check but fail this one), and `piechart_sweeps_clockwise_
+from_twelve_oclock` samples two quadrant points and checks which
+wedge's color landed where, since a reversed sweep direction paints
+the same total area in the wrong place. Both bugs would have been
+completely invisible to the ink-coverage-only testing style
+`graph.ps`'s `plotsurface`/`surfacerow`/`surfacecol` tests use.
+
+One real implementation bug, caught by manual testing before any
+test was written: `dvbarw`'s first draft divided the viewport width
+by the gap fraction instead of the category count (`pw gap div`
+instead of `pw n div`) — a stack-ordering mistake from trying to
+write it as a point-free one-liner like `dvmapy`/`dvcatx`. Rewritten
+with named scratch variables instead, same as every other multi-step
+helper in this file; only `dvmapy`/`dvcatx` stay point-free, since
+they're genuinely single expressions.
+
+Also found while building the gallery piece: this interpreter's
+`fill`/`stroke` consume the current path (implicit `newpath`, a
+documented deviation from the PLRM — see `HANDOFF.md`'s "Deliberate
+deviations"), so `pathbbox` can't inspect geometry after a driver
+that paints internally (`barchart`/`piechart`/`scatterchart`) the way
+`graph.rs`'s tests inspect `plotfn`/`axes` paths that are never
+filled. `tests/dataviz.rs`'s bar-geometry tests (including the
+negative-value case) sample pixels instead.
+
+`examples/dataviz.ps` is a six-panel specimen sheet, one per chart
+type. The gallery piece, Field Notes, is a naturalist's field-journal
+page: a bar chart (weekly marsh-bird sightings) and a line chart (a
+temperature trend, dashed) sharing one category axis, plus a
+species-mix donut with a hand-drawn legend — lettered throughout in
+the Stage 12 `/HandScript` dynamic font. One piece, not several, same
+as issue #13's Ripple Range: the comprehensive breadth lives in the
+specimen sheet, the gallery piece is where the composition/craft
+lives (`HandScript`'s glyph set doesn't include parentheses or colons,
+a font-limitation caught only by rendering the piece and looking —
+worth a note for whoever reaches for it next).
+
 ## 2D/3D function-graphing procedures for artkit (issue #13, 2026-08-03)
 
 Closes issue #13. The issue asked for reusable plotting/projection

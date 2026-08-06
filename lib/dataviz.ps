@@ -1,0 +1,269 @@
+%!PS-Adobe-3.0
+%%Title: dataviz.ps — data-visualization chart library for pscat
+%%Creator: pscat — issue #14, the dataviz library
+%%EndComments
+
+% Reusable chart-drawing procedures: bar, line, area, scatter, and
+% pie/donut, plus a categorical-axis decoration and a small default
+% color cycle. Defines into the current dict (userdict, normally),
+% draws nothing on load, runs unchanged in Ghostscript. A sibling to
+% lib/artkit.ps and lib/graph.ps — no dependency on either, same as
+% graph.ps's own "no dependency either way" (issue #13's precedent).
+%
+%   (lib/dataviz.ps) run          % from the repo root
+%
+% What's inside (details at each section):
+%   frame    y0 y1 px py pw ph setdvframe | y dvmapy | i n dvcatx
+%            | n gap dvbarw | [vals] dvbounds -> lo hi
+%            | [vals] dvsum -> total
+%   bar      [vals] gap {i v -> r g b} barchart
+%   line     [vals] linechart | [vals] areachart
+%   scatter  x0 y0 x1 y1 px py pw ph setscatterframe
+%            | [[x y] ...] rad {i x y -> r g b} scatterchart
+%   pie      [vals] cx cy r ir {i v -> r g b} piechart  (ir=0 pie, >0 donut)
+%   axes     n ny tlen dvaxes
+%   color    DVColors | i dvcolor -> r g b
+%
+% Convention: each section's scratch names carry their own short
+% prefix (dvf- frame, dvb- bar, dvl- line/area, dvs- scatter, dvp-
+% pie) — deliberately distinct per section, the same discipline
+% graph.ps adopted after a real bug: one driver forwarding a captured
+% proc to another driver let their scratch collide. This file avoids
+% that shape entirely — no chart driver calls another chart driver —
+% but keeps disjoint prefixes anyway as cheap insurance. `dvmapy` and
+% `dvcatx` specifically are pure stack expressions with no local `def`
+% at all, so calling *those* from inside any driver's loop can never
+% clobber that loop's own state, regardless of prefix; `dvbarw` and
+% `dvbounds` do define their own dvf-prefixed scratch, same as any
+% other leaf helper, and stay safe only because nothing else in this
+% file shares that prefix.
+%
+% Color contract: every chart driver takes a per-element callback
+% `{i v -> r g b}` (bar, pie) or `{i x y -> r g b}` (scatter) and
+% calls it *before* building that element's path — geometry is pure
+% arithmetic up to that point, so a proc that misbehaves (a stray
+% `newpath`, an unbalanced `gsave`, a `show`) can't silently drop or
+% corrupt the element the way it could if the proc ran between path-
+% building and `fill`. Same hazard artkit's `alongpath` documents for
+% its stamp proc, worth repeating here since every chart type in this
+% file has it. `{ pop dvcolor }` (bar/pie) or `{ pop pop dvcolor }`
+% (scatter) is a one-line default using the built-in color cycle.
+%
+% Deliberate scope: line/area charts map their x the same
+% category-center way bar charts do (`dvcatx`), not edge-to-edge —
+% so a bar chart and a line chart sharing the same category count sit
+% precisely under/over each other (see the gallery piece Field Notes,
+% a bar+line combo). A standalone line chart is therefore inset
+% slightly from both edges of its viewport rather than touching them;
+% that's this choice's cost, not a bug. `dvaxes` only decorates the
+% bar/line/area frame (`DVFrame`) — scatter's frame is a separate,
+% fully continuous domain (`DVScatterFrame`, same 8-arg shape as
+% graph.ps's own `setframe`) with no axes helper of its own; a caller
+% wanting a border there draws four lines by hand. `piechart` takes
+% one inner-radius argument rather than being two procs (pie vs
+% donut) since the geometry differs by exactly that one parameter.
+
+% --- frame: category/value domain -> device viewport ------------------
+% setdvframe -> a DVFrame the bar/line/area section and dvaxes read
+% implicitly (same persistent-state shape as artkit's TurtleState and
+% graph.ps's GraphFrame). Call it once before barchart/linechart/
+% areachart/dvaxes.
+
+/DVFrame 6 dict def
+
+/setdvframe {                                    % y0 y1 px py pw ph setdvframe -
+    DVFrame begin
+        /ph exch def /pw exch def /py exch def /px exch def
+        /y1 exch def /y0 exch def
+    end
+} def
+
+/dvmapy { DVFrame begin y0 sub y1 y0 sub div ph mul py add end } def  % v -> device y
+/dvcatx { DVFrame begin                          % i n dvcatx -> device x
+    exch 0.5 add exch div pw mul px add
+end } def
+
+/dvbarw {                                        % n gap dvbarw -> width
+    /dvfgap exch def /dvfn exch def
+    DVFrame begin pw end dvfn div 1 dvfgap sub mul
+} def
+
+% [vals] dvbounds -> lo hi   (raw min/max; no auto-padding, caller's call)
+/dvbounds {
+    /dvfvals exch def
+    /dvflo dvfvals 0 get def
+    /dvfhi dvflo def
+    dvfvals {
+        /dvfx exch def
+        dvfx dvflo lt { /dvflo dvfx def } if
+        dvfx dvfhi gt { /dvfhi dvfx def } if
+    } forall
+    dvflo dvfhi
+} def
+
+% [vals] dvsum -> total
+/dvsum { 0 exch { add } forall } def
+
+% --- bar chart -----------------------------------------------------------
+% [vals] gap {i v -> r g b} barchart -   Each bar's color comes from the
+% callback; baseline is `0 dvmapy`, not the viewport floor, so negative
+% values draw correctly below zero. Call setdvframe first.
+
+/barchart {                                      % [vals] gap {i v -> r g b} barchart -
+    /dbproc exch def /dbgap exch def /dbvals exch def
+    /dbn dbvals length def
+    0 1 dbn 1 sub {
+        /dbi exch def
+        /dbv dbvals dbi get def
+        /dbx dbi dbn dvcatx def
+        /dbw dbn dbgap dvbarw def
+        /dby0 0 dvmapy def
+        /dby1 dbv dvmapy def
+        dbi dbv dbproc setrgbcolor
+        newpath
+            dbx dbw 2 div sub dby0 moveto
+            dbx dbw 2 div add dby0 lineto
+            dbx dbw 2 div add dby1 lineto
+            dbx dbw 2 div sub dby1 lineto
+        closepath fill
+    } for
+} def
+
+% --- line / area chart -----------------------------------------------------
+% Both sample values at category centers (dvcatx) and dvmapy; appended
+% to the current path, caller strokes (linechart) or fills (areachart)
+% — same "caller finishes the path" contract as graph.ps's plotfn.
+% Call setdvframe first.
+
+/linechart {                                     % [vals] linechart -
+    /dlvals exch def
+    /dln dlvals length def
+    0 1 dln 1 sub {
+        /dli exch def
+        /dlv dlvals dli get def
+        dli dln dvcatx dlv dvmapy
+        dli 0 eq { moveto } { lineto } ifelse
+    } for
+} def
+
+/areachart {                                     % [vals] areachart -
+    /davals exch def
+    /dan davals length def
+    0 1 dan 1 sub {
+        /dai exch def
+        /dav davals dai get def
+        dai dan dvcatx dav dvmapy
+        dai 0 eq { moveto } { lineto } ifelse
+    } for
+    dan 1 sub dan dvcatx 0 dvmapy lineto
+    0 dan dvcatx 0 dvmapy lineto
+    closepath
+} def
+
+% --- scatter chart -----------------------------------------------------
+% Its own persistent frame (continuous x, unlike bar/line's categorical
+% one) — same 8-arg shape as graph.ps's setframe, deliberately, since
+% it's the same kind of mapping. Call setscatterframe first.
+
+/DVScatterFrame 8 dict def
+
+/setscatterframe {                               % x0 y0 x1 y1 px py pw ph setscatterframe -
+    DVScatterFrame begin
+        /ph exch def /pw exch def /py exch def /px exch def
+        /y1 exch def /x1 exch def /y0 exch def /x0 exch def
+    end
+} def
+
+/dvsmapx { DVScatterFrame begin x0 sub x1 x0 sub div pw mul px add end } def
+/dvsmapy { DVScatterFrame begin y0 sub y1 y0 sub div ph mul py add end } def
+
+/scatterchart {                                  % [[x y] ...] rad {i x y -> r g b} scatterchart -
+    /dsproc exch def /dsrad exch def /dspts exch def
+    /dsn dspts length def
+    0 1 dsn 1 sub {
+        /dsi exch def
+        /dspt dspts dsi get def
+        /dsx dspt 0 get def /dsy dspt 1 get def
+        /dsdx dsx dvsmapx def /dsdy dsy dvsmapy def
+        dsi dsx dsy dsproc setrgbcolor
+        newpath dsdx dsdy dsrad 0 360 arc closepath fill
+    } for
+} def
+
+% --- pie / donut chart -----------------------------------------------------
+% [vals] cx cy r ir {i v -> r g b} piechart -   Wedges start at 12
+% o'clock and sweep clockwise, proportional to value/sum (the usual
+% chart-library orientation — see artkit's ctext for the same
+% clockwise-for-legibility call made about circular text). ir=0 draws
+% plain pie wedges (center + outer arc); ir>0 draws an annular sector
+% per wedge instead (outer arc out, straight step in, inner arc back)
+% — getting the inner arc's direction backwards is the one way this
+% silently turns into a solid pie instead of a donut, so it's pinned
+% by a background-pixel-at-center regression test.
+
+/piechart {                                      % [vals] cx cy r ir {i v -> r g b} piechart -
+    /dpproc exch def /dpir exch def /dpr exch def
+    /dpcy exch def /dpcx exch def /dpvals exch def
+    /dpn dpvals length def
+    /dptotal dpvals dvsum def
+    /dpang 90 def
+    0 1 dpn 1 sub {
+        /dpi exch def
+        /dpv dpvals dpi get def
+        /dpsweep dpv dptotal div 360 mul def
+        /dpa0 dpang def
+        /dpa1 dpang dpsweep sub def
+        /dpang dpa1 def
+        dpi dpv dpproc setrgbcolor
+        newpath
+        dpir 0 gt {
+            dpcx dpa0 cos dpir mul add dpcy dpa0 sin dpir mul add moveto
+            dpcx dpcy dpr dpa0 dpa1 arcn
+            dpcx dpa1 cos dpir mul add dpcy dpa1 sin dpir mul add lineto
+            dpcx dpcy dpir dpa1 dpa0 arc
+        } {
+            dpcx dpcy moveto
+            dpcx dpcy dpr dpa0 dpa1 arcn
+        } ifelse
+        closepath fill
+    } for
+} def
+
+% --- axes: border + category ticks + value gridlines ----------------------
+% n ny tlen dvaxes -   Decorates DVFrame: n x-ticks at category centers
+% (matching dvcatx, so they land under bars/line points rather than
+% between them — the one place this deliberately differs from
+% graph.ps's edge-based axes) and ny y-ticks at even value divisions
+% (edge-based, like graph.ps's axes, since the value axis is
+% continuous). Call setdvframe first.
+
+/dvaxes {
+    /davtlen exch def /davny exch def /davn exch def
+    DVFrame begin px pw py ph end
+    /davph exch def /davpy exch def /davpw exch def /davpx exch def
+    davpx davpy moveto davpx davpw add davpy lineto
+    davpx davpw add davpy davph add lineto davpx davpy davph add lineto closepath
+    0 1 davn 1 sub {
+        /davi exch def
+        /davtx davi davn dvcatx def
+        davtx davpy moveto davtx davpy davtlen sub lineto
+    } for
+    0 1 davny {
+        /davj exch def
+        /davty davpy davph davj mul davny div add def
+        davpx davty moveto davpx davtlen sub davty lineto
+    } for
+} def
+
+% --- default qualitative color cycle -----------------------------------
+% Eight distinguishable hues, cycling by index. `i dvcolor -> r g b`.
+% `{ pop dvcolor }` (bar/pie) or `{ pop pop dvcolor }` (scatter) is a
+% one-line default color proc.
+
+/DVColors [
+    [0.20 0.47 0.75] [0.85 0.33 0.20] [0.24 0.63 0.44] [0.90 0.65 0.15]
+    [0.55 0.35 0.75] [0.35 0.72 0.80] [0.80 0.35 0.55] [0.55 0.55 0.20]
+] def
+
+/dvcolor { DVColors length mod DVColors exch get aload pop } def
+%%EOF

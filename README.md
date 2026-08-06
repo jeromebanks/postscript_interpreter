@@ -337,6 +337,30 @@ newpath 0 6.283185 200 { sin } plotfn stroke % y = sin(x)
 newpath 5 4 6 axes stroke                    % border + ticks
 ```
 
+A second sibling, `lib/dataviz.ps`, covers chart-drawing instead of
+mathematical plotting: `setdvframe` maps a value domain and category
+count onto a device viewport, and `barchart`/`linechart`/`areachart`
+read it directly — a per-element color callback (`{i v -> r g b}`,
+same shape as artkit's `grid`) lets every bar or wedge pick its own
+color, called before that element's path is built so a misbehaving
+callback can't silently drop it. `scatterchart` has its own continuous
+2D frame (`setscatterframe`, the same 8-arg shape as `graph.ps`'s
+`setframe`); `piechart` draws pie wedges or, given a nonzero inner
+radius, donuts — clockwise from 12 o'clock, the usual chart-library
+convention. `dvaxes` decorates the categorical frame with a bordered,
+ticked frame the same way `graph.ps`'s `axes` does. Independent of
+both `artkit.ps` and `graph.ps`. `examples/dataviz.ps` is a six-panel
+specimen sheet; the gallery's Field Notes pairs a bar chart and a line
+chart on one shared category axis (weekly sightings against a
+temperature trend) alongside a species-mix donut.
+
+```postscript
+(lib/dataviz.ps) run
+0 10 60 60 480 360 setdvframe                  % value range -> viewport
+newpath [3 7 2 9 5] 0.25 { pop dvcolor } barchart
+newpath 5 4 6 dvaxes stroke                     % border + ticks
+```
+
 ## The website
 
 **[jeromebanks.github.io/postscript_interpreter](https://jeromebanks.github.io/postscript_interpreter/)**
