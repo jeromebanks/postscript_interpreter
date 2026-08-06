@@ -74,11 +74,12 @@ the same total area in the wrong place. Both bugs would have been
 completely invisible to the ink-coverage-only testing style
 `graph.ps`'s `plotsurface`/`surfacerow`/`surfacecol` tests use.
 
-One real implementation bug, caught by manual testing before any
-test was written: `dvbarw`'s first draft divided the viewport width
-by the gap fraction instead of the category count (`pw gap div`
-instead of `pw n div`) — a stack-ordering mistake from trying to
-write it as a point-free one-liner like `dvmapy`/`dvcatx`. Rewritten
+One real implementation bug, caught while hand-tracing the stack
+during authoring, before any test was written: `dvbarw`'s first draft
+divided the viewport width by the gap fraction instead of the
+category count (`pw gap div` instead of `pw n div`) — a stack-ordering
+mistake from trying to write it as a point-free one-liner like
+`dvmapy`/`dvcatx`. Rewritten
 with named scratch variables instead, same as every other multi-step
 helper in this file; only `dvmapy`/`dvcatx` stay point-free, since
 they're genuinely single expressions.

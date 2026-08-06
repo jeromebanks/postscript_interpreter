@@ -128,16 +128,35 @@ fn barchart_draws_negative_values_below_the_baseline() {
 }
 
 #[test]
-fn barchart_calls_the_color_proc_once_per_bar() {
-    // Regression guard for the "call color before touching the path"
-    // ordering the header promises: a proc that runs at all (rather
-    // than being skipped by a path mishap) must fire exactly n times.
-    let got = eval_f64(
-        "0 10 0 0 100 100 setdvframe /calls 0 def \
-         newpath [1 2 3 4] 0.2 { pop pop /calls calls 1 add def 0 0 0 } barchart \
-         calls",
+fn barchart_survives_a_color_proc_that_touches_the_path() {
+    // Direct check of the header's ordering promise: the color proc
+    // runs before each bar's path is built, specifically so a
+    // misbehaving proc (here, a stray newpath -- the exact hazard the
+    // header names) can't drop the element. n=4, gap=0.2 over a
+    // 100x100 viewport: centers 12.5/37.5/62.5/87.5, widths 20;
+    // values 1..4 map to tops 10/20/30/40.
+    let mut it = Interp::with_page(100, 100).expect("page");
+    load(&mut it);
+    it.run_str(
+        "0 10 0 0 100 100 setdvframe \
+         newpath [1 2 3 4] 0.2 { pop pop newpath 0.2 0.4 0.8 } barchart",
+    )
+    .unwrap_or_else(|e| panic!("barchart failed: {}", it.error_report(&e)));
+    for (cx, top) in [12.5, 37.5, 62.5, 87.5]
+        .iter()
+        .zip([10.0, 20.0, 30.0, 40.0].iter())
+    {
+        assert_ne!(
+            pixel_at(&it, *cx, top / 2.0, 100),
+            (255, 255, 255),
+            "expected the bar at x={cx} to render despite the proc's stray newpath"
+        );
+    }
+    assert_eq!(
+        pixel_at(&it, 50.0, 90.0, 100),
+        (255, 255, 255),
+        "expected background well above every bar"
     );
-    assert_eq!(got, [4.0]);
 }
 
 #[test]
@@ -210,8 +229,8 @@ fn piechart_sweeps_clockwise_from_twelve_oclock() {
         200,
     );
     assert!(
-        ne.2 > ne.0,
-        "NE point should be wedge 0 (blue-dominant), got {ne:?}"
+        ne.2 > ne.0 && ne.2 > ne.1,
+        "NE point should be wedge 0 ([0.20 0.47 0.75], blue highest), got {ne:?}"
     );
     // 135 degrees from center: NW quadrant.
     let nw = pixel_at(
@@ -294,15 +313,27 @@ fn dvaxes_x_ticks_land_under_category_centers() {
     // pathbbox of just the last x-tick segment isn't isolated, so
     // instead confirm ink exists directly under dvcatx(2,5) at the
     // tick's y-range (py down to py-tlen = 30 down to 22).
-    let ink_under_tick = (22u32..30).any(|y| {
-        it.gfx()
-            .pixmap
-            .pixel(tick_x.round() as u32, 400 - y)
-            .is_some_and(|p| p.red() < 128)
-    });
+    let has_ink_at = |it: &Interp, x: u32| {
+        (22u32..30).any(|y| {
+            it.gfx()
+                .pixmap
+                .pixel(x, 400 - y)
+                .is_some_and(|p| p.red() < 128)
+        })
+    };
     assert!(
-        ink_under_tick,
+        has_ink_at(&it, tick_x.round() as u32),
         "expected a tick directly under dvcatx(2,5)={tick_x}"
+    );
+    // The pair of assertions is what actually pins "centers, not
+    // edges": an edge-based tick (graph.ps's own axes convention,
+    // px + pw*i/nx) for nx=5 would land at 20,100,180,260,340,420 --
+    // 180 is the edge nearest category 2's center (220) and is not
+    // itself a valid center for any i, so ink there would mean the
+    // edge-tick convention crept back in.
+    assert!(
+        !has_ink_at(&it, 180),
+        "expected no tick at the edge position 180 (only at category centers)"
     );
 }
 
