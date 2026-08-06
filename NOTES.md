@@ -105,6 +105,30 @@ lives (`HandScript`'s glyph set doesn't include parentheses or colons,
 a font-limitation caught only by rendering the piece and looking —
 worth a note for whoever reaches for it next).
 
+Cross-model (Codex) review of the PR found three more edge-case bugs,
+all of the same shape — a driver that's a clean no-op on an empty
+array still had *some* piece of code executing an unconditional
+division when the array is nonempty but degenerate:
+`areachart`'s baseline-closing lines ran even when the sampled loop
+above them was empty, calling `dvcatx` with `n=0`; `piechart` divided
+each wedge's sweep by `dptotal` without checking a nonempty series
+summing to zero (`[0 0]`, every category filtered away) wasn't
+dividing by zero; `dvaxes`'s y-tick loop (`0 1 davny for`) still runs
+once when `davny=0` (0 <= 0), and that one iteration divides by
+`davny`. All three got the same fix — wrap the division-bearing code
+in a `> 0` guard so a degenerate-but-nonempty input draws nothing,
+matching how every other empty-array case in this file already
+behaves — plus a regression test each. A fourth Codex finding
+(`barchart`/`areachart`'s zero baseline can fall outside a value
+domain that doesn't bracket zero, e.g. `5 10 setdvframe`, and paint
+past the viewport) was deliberately *not* fixed: that's the same
+unclamped-baseline property every mainstream bar-chart library has,
+and a domain excluding zero for a bar/area chart is itself the
+well-known "truncated axis" anti-pattern — clamping would silently
+change bar height's meaning from "the value" to "distance from the
+domain edge," a worse outcome than documenting the expectation, which
+`lib/dataviz.ps`'s `barchart` header now does.
+
 ## 2D/3D function-graphing procedures for artkit (issue #13, 2026-08-03)
 
 Closes issue #13. The issue asked for reusable plotting/projection

@@ -291,6 +291,19 @@ fn piechart_with_inner_radius_leaves_the_center_empty() {
 }
 
 #[test]
+fn piechart_is_a_no_op_on_a_zero_total_series() {
+    // Regression guard (found by cross-model review): a nonempty
+    // series summing to zero (every category filtered to nothing)
+    // divided by dptotal=0 and aborted with undefinedresult, even
+    // though this is exactly the "nothing to draw" case every other
+    // driver in this file already treats as a no-op.
+    let mut it = Interp::with_page(200, 200).expect("page");
+    load(&mut it);
+    it.run_str("newpath [0 0] 100 100 80 0 { pop dvcolor } piechart")
+        .unwrap_or_else(|e| panic!("piechart on [0 0] failed: {}", it.error_report(&e)));
+}
+
+#[test]
 fn dvaxes_draws_the_border_plus_outward_ticks() {
     // Same px/py/pw/ph/tlen as graph.rs's own axes test, for an easy
     // cross-check: the border sets [20,30,420,330]; x-ticks (category
@@ -301,6 +314,19 @@ fn dvaxes_draws_the_border_plus_outward_ticks() {
     // placement convention.
     let got = eval_f64("0 10 20 30 400 300 setdvframe newpath 5 5 8 dvaxes pathbbox");
     assert_eq!(got, [12.0, 22.0, 420.0, 330.0]);
+}
+
+#[test]
+fn dvaxes_with_zero_y_ticks_draws_the_border_only() {
+    // Regression guard (found by cross-model review): `0 1 davny for`
+    // with davny=0 still runs once (0<=0), and the tick-position
+    // formula divides by davny -- a caller asking for a bordered axis
+    // with no value gridlines used to hit undefinedresult instead.
+    // With no y-ticks, only the x-ticks push the bbox below py=30
+    // (to 22); the left edge stays at px=20 since no y-tick projects
+    // leftward.
+    let got = eval_f64("0 10 20 30 400 300 setdvframe newpath 5 0 8 dvaxes pathbbox");
+    assert_eq!(got, [20.0, 22.0, 420.0, 330.0]);
 }
 
 #[test]

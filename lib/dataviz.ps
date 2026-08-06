@@ -107,7 +107,15 @@ end } def
 % --- bar chart -----------------------------------------------------------
 % [vals] gap {i v -> r g b} barchart -   Each bar's color comes from the
 % callback; baseline is `0 dvmapy`, not the viewport floor, so negative
-% values draw correctly below zero. Call setdvframe first.
+% values draw correctly below zero. Call setdvframe first. This
+% deliberately does not clamp the baseline into `[y0,y1]`: a value
+% domain that excludes zero (e.g. `5 10 ... setdvframe`) is the
+% well-known bar-chart anti-pattern of a truncated axis, and every
+% mainstream charting library has this same unclamped-baseline
+% property rather than silently reinterpreting bar height as
+% "distance from the domain edge" — pick a domain that brackets zero
+% for bar/area charts, the same responsibility a caller already has
+% choosing any other domain.
 
 /barchart {                                      % [vals] gap {i v -> r g b} barchart -
     /dbproc exch def /dbgap exch def /dbvals exch def
@@ -209,26 +217,32 @@ end } def
     /dpn dpvals length def
     /dptotal dpvals dvsum def
     /dpang 90 def
-    0 1 dpn 1 sub {
-        /dpi exch def
-        /dpv dpvals dpi get def
-        /dpsweep dpv dptotal div 360 mul def
-        /dpa0 dpang def
-        /dpa1 dpang dpsweep sub def
-        /dpang dpa1 def
-        dpi dpv dpproc setrgbcolor
-        newpath
-        dpir 0 gt {
-            dpcx dpa0 cos dpir mul add dpcy dpa0 sin dpir mul add moveto
-            dpcx dpcy dpr dpa0 dpa1 arcn
-            dpcx dpa1 cos dpir mul add dpcy dpa1 sin dpir mul add lineto
-            dpcx dpcy dpir dpa1 dpa0 arc
-        } {
-            dpcx dpcy moveto
-            dpcx dpcy dpr dpa0 dpa1 arcn
-        } ifelse
-        closepath fill
-    } for
+    % A nonempty series summing to zero (e.g. [0 0], every category
+    % filtered to nothing) has no proportions to divide out -- same
+    % "draw nothing" treatment as an empty array gets everywhere else
+    % in this file, rather than dividing by dptotal.
+    dptotal 0 gt {
+        0 1 dpn 1 sub {
+            /dpi exch def
+            /dpv dpvals dpi get def
+            /dpsweep dpv dptotal div 360 mul def
+            /dpa0 dpang def
+            /dpa1 dpang dpsweep sub def
+            /dpang dpa1 def
+            dpi dpv dpproc setrgbcolor
+            newpath
+            dpir 0 gt {
+                dpcx dpa0 cos dpir mul add dpcy dpa0 sin dpir mul add moveto
+                dpcx dpcy dpr dpa0 dpa1 arcn
+                dpcx dpa1 cos dpir mul add dpcy dpa1 sin dpir mul add lineto
+                dpcx dpcy dpir dpa1 dpa0 arc
+            } {
+                dpcx dpcy moveto
+                dpcx dpcy dpr dpa0 dpa1 arcn
+            } ifelse
+            closepath fill
+        } for
+    } if
 } def
 
 % --- axes: border + category ticks + value gridlines ----------------------
@@ -250,11 +264,13 @@ end } def
         /davtx davi davn dvcatx def
         davtx davpy moveto davtx davpy davtlen sub lineto
     } for
-    0 1 davny {
-        /davj exch def
-        /davty davpy davph davj mul davny div add def
-        davpx davty moveto davpx davtlen sub davty lineto
-    } for
+    davny 0 gt {
+        0 1 davny {
+            /davj exch def
+            /davty davpy davph davj mul davny div add def
+            davpx davty moveto davpx davtlen sub davty lineto
+        } for
+    } if
 } def
 
 % --- default qualitative color cycle -----------------------------------
