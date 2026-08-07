@@ -1,0 +1,89 @@
+%!PS-Adobe-3.0
+%%Title: Field Notes — a naturalist's data page (issue #14, dataviz.ps)
+%%BoundingBox: 0 0 700 600
+%%EndComments
+
+% A marsh census written up like a field journal: a bar+line combo
+% (weekly sightings against a temperature trend, sharing one category
+% axis — the reason dataviz.ps's linechart deliberately samples at
+% the same category centers barchart uses) and a species-mix donut
+% with a hand-drawn legend. Ink and captions in the Stage 12
+% /HandScript dynamic font; everything data-shaped comes from
+% lib/dataviz.ps's default color cycle rather than hand-picked colors,
+% so the two libraries stay cleanly separable. Run from the repo root:
+%
+%   pscat --page 700x600 gallery/field_notes.ps
+
+(lib/dataviz.ps) run
+(lib/handscript.ps) run
+
+/showctr { /tky exch def /tkx exch def /tks exch def
+    tkx tks stringwidth pop 2 div sub tky moveto tks show } def
+
+% --- parchment page ---------------------------------------------------
+0.98 0.965 0.93 setrgbcolor clippath fill
+0.55 0.47 0.34 setrgbcolor 1 setlinewidth
+newpath 18 18 moveto 682 18 lineto 682 582 lineto 18 582 lineto closepath stroke
+newpath 24 24 moveto 676 24 lineto 676 576 lineto 24 576 lineto closepath stroke
+
+0.18 0.13 0.07 setrgbcolor
+
+% --- title -------------------------------------------------------------
+/HandScript findfont 44 scalefont setfont
+50 528 moveto (field notes) show
+/HandScript findfont 16 scalefont setfont
+52 496 moveto (marsh census -- eight weeks) show
+0.55 0.47 0.34 setrgbcolor 0.8 setlinewidth
+newpath 50 484 moveto 650 484 lineto stroke
+
+% --- left panel: sightings (bars) + temperature/5 (line) ------------------
+/Sightings [4 7 5 9 12 8 14 10] def
+/Temps5    [6 6.5 7 8 9 9.5 10 10.5] def
+
+0 16 50 100 380 330 setdvframe
+
+newpath Sightings 0.3 { pop dvcolor } barchart
+
+0.30 0.20 0.10 setrgbcolor 2 setlinewidth
+[4 3] 0 setdash
+newpath Temps5 linechart stroke
+[] 0 setdash
+
+0.55 0.47 0.34 setrgbcolor 0.6 setlinewidth
+newpath 8 4 6 dvaxes stroke
+
+0.18 0.13 0.07 setrgbcolor
+/HandScript findfont 11 scalefont setfont
+/wkbuf 3 string def
+0 1 7 {
+    /wk exch def
+    wk 1 add wkbuf cvs
+    wk 8 dvcatx 78 showctr
+} for
+
+/HandScript findfont 14 scalefont setfont
+(sightings as bars, temperature over 5 as dashed line) 240 60 showctr
+
+% --- right panel: species mix (donut) + legend -----------------------------
+/Species [32 24 18 14 12] def
+/SpeciesNames [(heron) (egret) (tern) (plover) (sandpiper)] def
+
+Species 560 340 105 52 { pop dvcolor } piechart
+
+0.18 0.13 0.07 setrgbcolor
+/HandScript findfont 16 scalefont setfont
+(species mix) 560 460 showctr
+
+/HandScript findfont 13 scalefont setfont
+0 1 4 {
+    /si exch def
+    si dvcolor setrgbcolor
+    newpath 490 190 si 22 mul sub moveto
+        12 0 rlineto 0 12 rlineto -12 0 rlineto closepath fill
+    0.18 0.13 0.07 setrgbcolor
+    508 190 si 22 mul sub 3 add moveto
+    SpeciesNames si get show
+} for
+
+showpage
+%%EOF

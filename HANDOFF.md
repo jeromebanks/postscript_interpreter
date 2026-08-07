@@ -74,7 +74,20 @@ curves into the current path, `axes` frames them; `setview`/
 hidden-surface removal — a documented scope cut). `examples/graphing.ps`
 is the specimen sheet; the gallery piece Ripple Range demonstrates the
 one-piece-specific trick that gets occlusion anyway: back-to-front
-filled rows (NOTES.md's entry has the full story).
+filled rows (NOTES.md's entry has the full story). Also done: issue
+#14, a data-visualization chart library — `lib/dataviz.ps` (also no
+dependency on artkit or graph.ps): `setdvframe`/`dvmapy`/`dvcatx` map
+a value domain and category count onto a device viewport for
+`barchart`/`linechart`/`areachart`; `setscatterframe` (the same 8-arg
+shape as graph.ps's `setframe`) backs `scatterchart`; `piechart` draws
+pie wedges or, given a nonzero inner radius, donuts; `dvaxes` frames
+the categorical charts. `examples/dataviz.ps` is a six-panel specimen
+sheet; the gallery piece Field Notes pairs a bar chart and a line
+chart on one shared category axis with a species-mix donut (NOTES.md's
+entry has the full story, including two bug classes deliberately
+tested for — a donut filled solid to the center, and a pie wedge
+sweeping the wrong direction — both invisible to a plain ink-count
+check).
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
