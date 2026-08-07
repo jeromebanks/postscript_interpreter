@@ -133,6 +133,10 @@ EtchLayout begin
   % ---------------------------------------------------------- engraving
 
   % x y -> darkness in [0,1], nearest-neighbor from buf/width/height/ncomp.
+  % buf is an array of per-row strings (see et-draw), not one
+  % width*height*ncomp string — a single string that size overflows
+  % this interpreter's 16MB string limit on an ordinary phone photo
+  % (e.g. 4032x3024 RGB is ~36.6MB), where a single row never does.
   % ett- prefixed scratch — leaf helper, but prefixed anyway per
   % dataviz.ps's discipline: cheap insurance against whatever calls it
   % next sharing a name by accident.
@@ -142,14 +146,15 @@ EtchLayout begin
     ettsx width ge { /ettsx width 1 sub def } if
     ettsy 0 lt { /ettsy 0 def } if
     ettsy height ge { /ettsy height 1 sub def } if
-    /ettidx ettsy width mul ettsx add ncomp mul def
+    /ettrow buf ettsy get def
+    /ettidx ettsx ncomp mul def
     ncomp 1 eq {
-      /ettlum buf ettidx get def
+      /ettlum ettrow ettidx get def
     } {
       /ettlum
-        buf ettidx get 0.2126 mul
-        buf ettidx 1 add get 0.7152 mul add
-        buf ettidx 2 add get 0.0722 mul add
+        ettrow ettidx get 0.2126 mul
+        ettrow ettidx 1 add get 0.7152 mul add
+        ettrow ettidx 2 add get 0.0722 mul add
       def
     } ifelse
     1 ettlum 255 div sub
@@ -177,6 +182,11 @@ EtchLayout begin
     /ethnbuck ethwidths length def
     /ethsstep spacing 0.5 mul def
     ethsstep 0.25 lt { /ethsstep 0.25 def } if
+    % Guards a /Threshold2 of exactly 1: without this, a pure-black
+    % sample (darkness 1) would compute nd as 0 1 sub 1 1 sub div,
+    % i.e. 0 0 div -- undefinedresult, not a bucket-1 stroke.
+    /ethdenom 1 ethmind sub def
+    ethdenom 0.0001 lt { /ethdenom 0.0001 def } if
     /ethcx pw 2 div def
     /ethcy ph 2 div def
     ethhalf neg spacing ethhalf {
@@ -197,7 +207,7 @@ EtchLayout begin
           /ethsy ph ethy sub height mul ph div cvi def
           ethsx ethsy et-tone /ethdk exch def
           ethdk ethmind ge {
-            /ethnd ethdk ethmind sub 1 ethmind sub div def
+            /ethnd ethdk ethmind sub ethdenom div def
             ethnd 1 gt { /ethnd 1 def } if
             /ethb ethnd ethnbuck 1 sub mul cvi 1 add def
           } if
@@ -253,13 +263,23 @@ end
     /ncomp exch def /height exch def /width exch def
     ncomp 1 eq ncomp 3 eq or not { et-unsupported-ncomp } if
     photopath (r) file /DCTDecode filter /jf exch def
-    /buf width height mul ncomp mul string def
-    jf buf readstring pop pop
+    % One string per row, not one width*height*ncomp string for the
+    % whole image — that single allocation overflows this
+    % interpreter's 16MB string limit well within ordinary photo
+    % sizes (see et-tone's comment), where a single row never does.
+    /buf height array def
+    0 1 height 1 sub {
+      /etdi exch def
+      /etdrow width ncomp mul string def
+      jf etdrow readstring pop pop
+      buf etdi etdrow put
+    } for
     jf closefile
 
     /pw /PageWidth getopt def
     /ph /PageHeight getopt def
     /spacing /Spacing getopt def
+    spacing 0 le { et-spacing-must-be-positive } if
     /thresh2 /Threshold2 getopt def
     /ang /Angle getopt def
     /ink /Ink getopt def

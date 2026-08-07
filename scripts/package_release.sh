@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # package_release.sh — build pscat + pscat-mcp and assemble a
 # standalone, installable bundle: the binaries plus the runtime
-# assets they need (lib/, fonts/catalog/, scripts/handwrite.sh),
-# with no git checkout or cargo required to use it afterward.
+# assets they need (lib/, fonts/catalog/, scripts/handwrite.sh,
+# scripts/photo_etch.sh), with no git checkout or cargo required to
+# use it afterward.
 #
 #   ./scripts/package_release.sh
 #   ./scripts/package_release.sh /tmp/out         # custom output dir
@@ -38,6 +39,8 @@ cp -R "$ROOT/fonts/catalog" "$BUNDLE/fonts/catalog" # wholesale, license .txt fi
 mkdir -p "$BUNDLE/scripts"
 cp "$ROOT/scripts/handwrite.sh" "$BUNDLE/scripts/handwrite.sh"
 chmod +x "$BUNDLE/scripts/handwrite.sh"
+cp "$ROOT/scripts/photo_etch.sh" "$BUNDLE/scripts/photo_etch.sh"
+chmod +x "$BUNDLE/scripts/photo_etch.sh"
 
 cat > "$BUNDLE/README.md" <<EOF
 # pscat $VERSION ($OS/$ARCH)
@@ -51,17 +54,18 @@ Add this directory to your \`PATH\`, then run \`pscat\` from anywhere:
     export PATH="\$PWD:\$PATH"
     pscat --png out.png some_file.ps
 
-\`lib/\`, \`fonts/catalog/\`, and \`scripts/handwrite.sh\` are found
-automatically as long as they stay next to the \`pscat\` binary (this
-directory). If you move the binary elsewhere, set \`PSCAT_ROOT\` to
-this directory instead.
+\`lib/\`, \`fonts/catalog/\`, \`scripts/handwrite.sh\`, and
+\`scripts/photo_etch.sh\` are found automatically as long as they stay
+next to the \`pscat\` binary (this directory). If you move the binary
+elsewhere, set \`PSCAT_ROOT\` to this directory instead.
 
 ## What's here
 
 - \`pscat\`, \`pscat-mcp\` — the interpreter and its MCP server
-- \`lib/\` — artkit.ps, handscript.ps, the Type 3 font programs, style packs
+- \`lib/\` — artkit.ps, handscript.ps, etching.ps, the Type 3 font programs, style packs
 - \`fonts/catalog/\` — the bundled TrueType/OpenType font catalog
 - \`scripts/handwrite.sh\` — the handwritten-note tool
+- \`scripts/photo_etch.sh\` — the photo-to-line-etching tool
 
 Full docs, source, and the \`examples/\`/\`gallery/\` demo material:
 https://github.com/jeromebanks/postscript_interpreter
@@ -82,6 +86,8 @@ echo "$FONTS" | grep -q "Bangers" ||
   { echo "FAIL: fonts/catalog/ did not resolve standalone" >&2; exit 1; }
 env -u PSCAT_ROOT "$BUNDLE/pscat" -e '(lib/artkit.ps) run' ||
   { echo "FAIL: lib/artkit.ps did not resolve standalone" >&2; exit 1; }
+env -u PSCAT_ROOT "$BUNDLE/pscat" -e '(lib/etching.ps) run' ||
+  { echo "FAIL: lib/etching.ps did not resolve standalone" >&2; exit 1; }
 
 # The other realistic install shape: a symlink into some bin/ dir
 # pointing back at the bundle (what `brew`, and this project's own
