@@ -3,6 +3,108 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## A photo-to-line-etching/sketch utility (issue #15, 2026-08-07)
+
+Closes issue #15. The issue asked for "a utility to take a photo and
+produce a line-etching/sketch rendering of it in PostScript," citing
+`src/image.rs`/`src/ops/image.rs` (image reading) and `src/halftone.rs`
+(tone-based dot patterns) as existing foundation, with edge detection
+vs. hatching, Rust vs. PostScript, and output format all left open.
+
+**The one decision that shaped everything else**: whether a PS program
+can get at a JPEG's decoded pixel samples at all, since `image` just
+rasterizes straight to canvas without exposing them back to the
+operand stack. Checked empirically before writing any design doc line
+two: `/DCTDecode` is a general filter in this interpreter (`src/file.rs`'s
+`Decoder::Dct`), not special-cased to the `image` operator, so
+`(photo.jpg) (r) file /DCTDecode filter N string readstring` hands back
+raw decoded bytes directly. That meant the whole feature could be a
+third sibling PostScript library — `lib/etching.ps`, no dependency on
+`artkit.ps`/`graph.ps`/`dataviz.ps` — with **zero new Rust code**,
+which is a very different shape than the first draft plan (a
+`halftone.rs`-sibling Rust raster filter) that got flagged and dropped
+in `advisor` review before implementation started.
+
+Two entry points:
+
+- **`et-dims`**: given a photo path, walks the JPEG's marker segments
+  (SOI, then each marker's own length field to jump to the next one —
+  not naive byte-scanning, which JPEG payload bytes make unsafe, since
+  arbitrary entropy-coded bytes can coincidentally look like a marker)
+  until it finds a SOFn frame header, then reads its precision/height/
+  width/component-count fields straight out of the file. No decode.
+  Cheap enough to run as a measure pre-pass, the same shape as
+  `lib/handscript.ps`'s `hs-linecount`.
+- **`et-draw`**: opens the same path through `/DCTDecode`, reads the
+  full sample buffer in one `readstring` (the Rust side already loops
+  internally to fill it — confirmed by testing a 120,000-byte string
+  allocation directly rather than assuming it), then hatches: a
+  primary pass of parallel lines at `/Angle` degrees whose stroke width
+  is quantized into a few darkness-driven buckets, plus a perpendicular
+  crosshatch pass gated to `/Threshold2` and above — the actual
+  historical line-engraving technique newspapers and books used before
+  halftone screens, not edge/contour detection, which the issue's
+  framing (`src/halftone.rs` cited as precedent, not an edge-detection
+  library) already pointed toward.
+
+**The run-length-bucketing decision** (flagged in review before
+writing the hatcher): the first design marched every sample point and
+would have stroked one tiny segment per sample — thousands of
+individual `stroke` calls, each a full tiny-skia rasterization. Instead
+each hatch line tracks its current darkness bucket and only emits a
+`stroke` when the bucket changes (or the line ends), so a uniform-tone
+run of the image costs one stroke regardless of how many samples it
+spans. An 800x600 render (a real gallery-scale page) finishes in about
+2.6s; a 200x150 photo at native size is under 0.15s.
+
+**A real bug the coverage tests caught, not eyeballing**: the first
+version's `sy` sample-row mapping used the device `y` coordinate
+directly. PostScript's `y` runs bottom-up from the page origin; the
+decoded JPEG sample buffer's rows run top-down (row 0 is the top of
+the photo, straight out of the decoder) — so every photo rendered
+upside down. `darker_regions_get_denser_hatching` (comparing a real
+photo's darker sky band against its lighter ground band) happened to
+still pass with the bug in place, purely by luck of which regions got
+sampled; it was a dedicated synthetic fixture (`tests/data/topdark.jpg`,
+built specifically to have an unambiguous dark-top/light-bottom
+signature) and a direct visual render that actually exposed it. Fixed
+with a `ph y sub` flip in the sample lookup; `tests/etching.rs`'s
+`photo_orientation_is_not_flipped` pins it down so it can't silently
+regress, and the two coverage-based tests got re-derived against the
+corrected (and independently visually verified) output rather than
+left passing for the wrong reason.
+
+**Scope, stated rather than discovered later**: JPEG input only — this
+interpreter has no PNG decode path in PostScript, which isn't a gap,
+since real PostScript doesn't have one either (`/DCTDecode` is the
+only raster filter here, same as a real RIP). Grayscale or RGB (1 or 3
+components); CMYK/YCCK JPEGs are rejected by name (`et-unsupported-ncomp`,
+the same "raise on an undefined executable name" idiom `et-dims` uses
+for a missing SOF marker or a truncated file) rather than silently
+misreading the channel layout.
+
+`scripts/photo_etch.sh` wraps it end to end — a headless `et-dims`
+pre-pass sizes the output page to the photo's real aspect ratio, then
+the real render — the same two-pass shape as `scripts/handwrite.sh`,
+down to reusing its `BIN` bundle/dev-checkout resolution fallback
+verbatim. `examples/etching_demo.ps` is the specimen sheet, rendering
+`examples/etching_source.jpg` (a synthetic still life generated for
+this demo — three shaded spheres, not a real photograph, to avoid any
+rights question). `tests/etching.rs` covers `et-dims` against known
+fixtures (including the pre-existing `tests/data/gray8.jpg`/`red4.jpg`)
+and two malformed-input paths (non-JPEG data, a file truncated
+mid-header), plus the three `et-draw` coverage/orientation checks
+above.
+
+**Deferred**: progressive JPEGs decode fine through the existing
+`/DCTDecode` path (zune-jpeg doesn't care), and `et-dims` recognizes
+any SOFn marker rather than only baseline's C0 for exactly that
+reason, but this wasn't tested against an actual progressive fixture.
+No SVG/PDF output size benchmarking beyond a single 200x150 spot check
+(37KB PDF, 77KB SVG) — a much larger photo at fine `/Spacing` could
+produce a large vector file, since every stroke run is a separate path
+element; not a correctness problem, just an unexplored tuning axis.
+
 ## A data-visualization chart library for artkit (issue #14, 2026-08-06)
 
 Closes issue #14. The issue asked for "a comprehensive library of
