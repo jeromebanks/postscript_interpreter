@@ -42,7 +42,7 @@
 % baseline's — et-dims/et-draw recognize any SOFn marker, not just
 % baseline's C0, for exactly that reason.
 
-/EtchLayout 32 dict def
+/EtchLayout 64 dict def
 EtchLayout begin
 
   /defaults <<
@@ -132,24 +132,27 @@ EtchLayout begin
 
   % ---------------------------------------------------------- engraving
 
-  % x y -> darkness in [0,1], nearest-neighbor from buf/width/height/ncomp
+  % x y -> darkness in [0,1], nearest-neighbor from buf/width/height/ncomp.
+  % ett- prefixed scratch — leaf helper, but prefixed anyway per
+  % dataviz.ps's discipline: cheap insurance against whatever calls it
+  % next sharing a name by accident.
   /et-tone {
-    /sy exch def /sx exch def
-    sx 0 lt { /sx 0 def } if
-    sx width ge { /sx width 1 sub def } if
-    sy 0 lt { /sy 0 def } if
-    sy height ge { /sy height 1 sub def } if
-    /idx sy width mul sx add ncomp mul def
+    /ettsy exch def /ettsx exch def
+    ettsx 0 lt { /ettsx 0 def } if
+    ettsx width ge { /ettsx width 1 sub def } if
+    ettsy 0 lt { /ettsy 0 def } if
+    ettsy height ge { /ettsy height 1 sub def } if
+    /ettidx ettsy width mul ettsx add ncomp mul def
     ncomp 1 eq {
-      /lum buf idx get def
+      /ettlum buf ettidx get def
     } {
-      /lum
-        buf idx get 0.2126 mul
-        buf idx 1 add get 0.7152 mul add
-        buf idx 2 add get 0.0722 mul add
+      /ettlum
+        buf ettidx get 0.2126 mul
+        buf ettidx 1 add get 0.7152 mul add
+        buf ettidx 2 add get 0.0722 mul add
       def
     } ifelse
-    1 lum 255 div sub
+    1 ettlum 255 div sub
   } def
 
   % angleDeg minDarkness -> draws one hatch direction across the page.
@@ -157,69 +160,72 @@ EtchLayout begin
   % into a few stroke-width buckets, emitting one stroke per run of
   % constant bucket (not one stroke per sample) — the stroke count is
   % what a naive per-sample version would pay for, and it dominates
-  % render time far more than the sampling itself.
+  % render time far more than the sampling itself. eth- prefixed
+  % scratch throughout (dataviz.ps's discipline again) — et-draw's own
+  % /Angle-derived /ang would otherwise collide with this proc's own
+  % angle parameter, correct today only by evaluation-order luck.
   /et-hatch {
-    /mind exch def
-    /ang exch def
-    /dx ang cos def
-    /dy ang sin def
-    /nx ang 90 add cos def
-    /ny ang 90 add sin def
-    /diag pw dup mul ph dup mul add sqrt def
-    /half diag 2 div def
-    /widths [0.5 1.0 1.6 2.4] def
-    /nbuck widths length def
-    /sstep spacing 0.5 mul def
-    sstep 0.25 lt { /sstep 0.25 def } if
-    /cx pw 2 div def
-    /cy ph 2 div def
-    half neg spacing half {
-      /k exch def
-      /runb 0 def
-      /runt0 half neg def
-      half neg sstep half {
-        /t exch def
-        /x cx nx k mul add dx t mul add def
-        /y cy ny k mul add dy t mul add def
-        /b 0 def
-        x 0 ge x pw le and y 0 ge y ph le and {
-          /sx x width mul pw div cvi def
+    /ethmind exch def
+    /ethang exch def
+    /ethdx ethang cos def
+    /ethdy ethang sin def
+    /ethnx ethang 90 add cos def
+    /ethny ethang 90 add sin def
+    /ethdiag pw dup mul ph dup mul add sqrt def
+    /ethhalf ethdiag 2 div def
+    /ethwidths [0.5 1.0 1.6 2.4] def
+    /ethnbuck ethwidths length def
+    /ethsstep spacing 0.5 mul def
+    ethsstep 0.25 lt { /ethsstep 0.25 def } if
+    /ethcx pw 2 div def
+    /ethcy ph 2 div def
+    ethhalf neg spacing ethhalf {
+      /ethk exch def
+      /ethrunb 0 def
+      /ethrunt0 ethhalf neg def
+      ethhalf neg ethsstep ethhalf {
+        /etht exch def
+        /ethx ethcx ethnx ethk mul add ethdx etht mul add def
+        /ethy ethcy ethny ethk mul add ethdy etht mul add def
+        /ethb 0 def
+        ethx 0 ge ethx pw le and ethy 0 ge ethy ph le and {
+          /ethsx ethx width mul pw div cvi def
           % PostScript's y runs bottom-up; the decoded sample buffer's
           % rows run top-down (row 0 first out of the JPEG), so this
           % flips or the photo prints upside down (caught by
           % tests/etching.rs's orientation check).
-          /sy ph y sub height mul ph div cvi def
-          sx sy et-tone /dk exch def
-          dk mind ge {
-            /nd dk mind sub 1 mind sub div def
-            nd 1 gt { /nd 1 def } if
-            /b nd nbuck 1 sub mul cvi 1 add def
+          /ethsy ph ethy sub height mul ph div cvi def
+          ethsx ethsy et-tone /ethdk exch def
+          ethdk ethmind ge {
+            /ethnd ethdk ethmind sub 1 ethmind sub div def
+            ethnd 1 gt { /ethnd 1 def } if
+            /ethb ethnd ethnbuck 1 sub mul cvi 1 add def
           } if
         } if
-        b runb ne {
-          runb 0 gt {
-            widths runb 1 sub get setlinewidth
+        ethb ethrunb ne {
+          ethrunb 0 gt {
+            ethwidths ethrunb 1 sub get setlinewidth
             newpath
-            cx nx k mul add dx runt0 mul add
-            cy ny k mul add dy runt0 mul add
+            ethcx ethnx ethk mul add ethdx ethrunt0 mul add
+            ethcy ethny ethk mul add ethdy ethrunt0 mul add
             moveto
-            cx nx k mul add dx t mul add
-            cy ny k mul add dy t mul add
+            ethcx ethnx ethk mul add ethdx etht mul add
+            ethcy ethny ethk mul add ethdy etht mul add
             lineto
             stroke
           } if
-          /runt0 t def
-          /runb b def
+          /ethrunt0 etht def
+          /ethrunb ethb def
         } if
       } for
-      runb 0 gt {
-        widths runb 1 sub get setlinewidth
+      ethrunb 0 gt {
+        ethwidths ethrunb 1 sub get setlinewidth
         newpath
-        cx nx k mul add dx runt0 mul add
-        cy ny k mul add dy runt0 mul add
+        ethcx ethnx ethk mul add ethdx ethrunt0 mul add
+        ethcy ethny ethk mul add ethdy ethrunt0 mul add
         moveto
-        cx nx k mul add dx half mul add
-        cy ny k mul add dy half mul add
+        ethcx ethnx ethk mul add ethdx ethhalf mul add
+        ethcy ethny ethk mul add ethdy ethhalf mul add
         lineto
         stroke
       } if
