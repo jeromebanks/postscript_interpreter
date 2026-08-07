@@ -1,0 +1,37 @@
+%!PS-Adobe-3.0
+%%Title: Three Spheres — a specimen for lib/etching.ps
+%%BoundingBox: 0 0 400 340
+%%EndComments
+
+% Demo for the photo-to-line-etching library (issue #15,
+% lib/etching.ps): et-draw reads a JPEG straight off disk (via
+% /DCTDecode, no new Rust code — see the library's header comment) and
+% hatches it into a line engraving with ordinary moveto/lineto/stroke.
+% examples/etching_source.jpg is a synthetic still life (three shaded
+% spheres) generated for this demo, not a real photograph. Run from
+% the repo root:
+%
+%   pscat --page 400x340 examples/etching_demo.ps
+%
+% Or convert any JPEG of your own — no PostScript required:
+%
+%   ./scripts/photo_etch.sh -o out.png your_photo.jpg
+
+(lib/etching.ps) run
+
+1 1 1 setrgbcolor clippath fill
+
+20 20 translate
+<< /Photo (examples/etching_source.jpg)
+   /PageWidth 320 /PageHeight 240
+>> et-draw
+
+0 0 0.5 0.5 setcmykcolor
+1 setlinewidth
+newpath 0 0 moveto 320 0 lineto 320 240 lineto 0 240 lineto closepath stroke
+
+0.1 0.1 0.12 setrgbcolor
+/Palatino-Italic findfont 12 scalefont setfont
+0 -16 moveto (lib/etching.ps -- tone-driven hatching, no edge detection) show
+
+showpage
