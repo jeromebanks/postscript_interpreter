@@ -264,16 +264,27 @@ the source of truth:
   capabilities land, per AGENTS.md — not as an afterthought.
 - If the feature has something a human could actually look at (a new
   art capability, template, chart type, font, etc.), give it a demo
-  somewhere it's actually seen — a `gallery/` piece (`gallery/show.sh`,
-  `gallery/README.md`), or the published site, whose three lists
-  (`scripts/build_site.sh`'s render loop, a card in
-  `site/gallery.html`, an entry in `site/playground.html`'s example
-  picker) are each hand-maintained and none generates another — copy
-  an existing similar entry's pattern rather than updating just one.
-  An `examples/*.ps` file alone is a regression fixture, not a demo;
-  it's fine as the *only* artifact when the feature genuinely has no
-  visible surface (an internal fix, a lint check, a Rust-only
-  refactor), but don't let that be the default reason to skip this.
+  somewhere it's actually seen — and match the surface's real
+  requirements, not just its most visible file:
+  - A generative-art piece: add it to `gallery/show.sh`'s `PIECES`
+    array and `gallery/README.md`, *and* render + commit
+    `gallery/renders/<name>.png` — `show.sh`'s default (non-`--live`)
+    mode silently skips any piece missing that PNG, which defeats the
+    whole point.
+  - The published site: a card in `site/gallery.html` plus a `render`
+    call in `scripts/build_site.sh` works for any `.ps` file. An
+    `<option>` in `site/playground.html`'s picker additionally
+    requires the file be self-contained — no `(lib/x.ps) run` of a
+    sibling library, since the wasm build has no filesystem — and
+    copied into `build_site.sh`'s own source loop, or the playground
+    fetches a 404.
+
+  Copy an existing similar entry's pattern rather than guessing which
+  of these apply. An `examples/*.ps` file alone is a regression
+  fixture, not a demo; it's fine as the *only* artifact when the
+  feature genuinely has no visible surface (an internal fix, a lint
+  check, a Rust-only refactor), but don't let that be the default
+  reason to skip this.
 
 Refresh the heartbeat before this build (it's often the single
 longest-running step of the whole implementation phase):
