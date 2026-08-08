@@ -275,13 +275,21 @@ the source of truth:
     `gallery/renders/<name>.png` — `show.sh`'s default (non-`--live`)
     mode silently skips any piece missing that PNG, which defeats the
     whole point.
-  - The published site: a card in `site/gallery.html` plus a `render`
-    call in `scripts/build_site.sh` works for any `.ps` file. An
-    `<option>` in `site/playground.html`'s picker additionally
-    requires the file be self-contained — no `(lib/x.ps) run` of a
-    sibling library, since the wasm build has no filesystem — and
-    copied into `build_site.sh`'s own source loop, or the playground
-    fetches a 404.
+  - The published site: a card in `site/gallery.html`, backed by a
+    PNG in `_site/assets/renders/`. For a gallery piece, that PNG
+    comes free from `build_site.sh`'s existing
+    `gallery/renders/*.png` wildcard copy — don't *also* add a
+    `render` call targeting the same basename, since `render` runs
+    after that copy and would overwrite the committed, intentionally
+    2×-supersampled still with a plain canonical-size one
+    (`gallery/README.md`'s "Re-rendering the stills" explains the
+    supersampling). A `render` call in `scripts/build_site.sh` is for
+    anything *without* a pre-rendered gallery still — most
+    `examples/*.ps` pieces. An `<option>` in `site/playground.html`'s
+    picker additionally requires the file be self-contained — no
+    `(lib/x.ps) run` of a sibling library, since the wasm build has no
+    filesystem — and copied into `build_site.sh`'s own source loop, or
+    the playground fetches a 404.
 
   Copy an existing similar entry's pattern rather than guessing which
   of these apply. An `examples/*.ps` file alone is a regression
