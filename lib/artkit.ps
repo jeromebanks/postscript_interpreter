@@ -370,12 +370,18 @@ end
 % engine (tfflow), and two conveniences over it (tfblock for a plain
 % rectangle, tfcols for columns). No hyphenation -- a word wider than
 % its line is placed alone rather than split, the same scope cut
-% pathtext documents for its plain-stringwidth advance. Runs of
-% whitespace around a wrap point are preserved verbatim into the line
-% that keeps them rather than collapsed. An embedded newline (char 10)
-% in the source string always forces a line break, whether or not the
-% line so far is anywhere near full -- that's what lets a caller pass
-% multiple paragraphs (or manual line breaks) as one string.
+% pathtext documents for its plain-stringwidth advance. Space (32) and
+% newline (10) are the only recognized separators -- a tab is ordinary
+% word content, not a break point, matching this interpreter's `show`/
+% `stringwidth` giving tab no special treatment either (wrapping on a
+% character neither of those understands would make the glyph run and
+% the wrap logic disagree about where words are, worse than not
+% wrapping on it). Runs of spaces around a wrap point are preserved
+% verbatim into the line that keeps them rather than collapsed. An
+% embedded newline in the source string always forces a line break,
+% whether or not the line so far is anywhere near full -- that's what
+% lets a caller pass multiple paragraphs (or manual line breaks) as one
+% string.
 %
 % tfflow itself (tf-prefixed) and tfblock/tfcols (tb-/tc-prefixed, plus
 % the tf- globals of the tfflow call they make internally) are all

@@ -77,6 +77,25 @@ Same fix as the tiling section's hexgrid+hex gotcha: wrap the inner
 call in its own dict; confirmed this restores the outer call's correct
 leftover.
 
+A second Codex round, on the pushed fixes, found a fifth issue outside
+the library itself: the gallery piece's medallion motto overflowed its
+`tfflow` region at the bounds/leading/font it was set with, and the
+`pop` after the call silently discarded the non-empty leftover — the
+committed render ended mid-sentence ("...A LINE FINDS", dropping "THE
+ROOM A CALLERS OWN RULE ALLOWS IT"). Fixed by shortening the motto to
+one that fits (confirmed empty leftover), not by enlarging the
+medallion or shrinking the font, which would have changed the piece's
+proportions. A third Codex round, on that fix, flagged that `tab`
+isn't recognized as a wrap separator — correct as read, but not a
+defect: this interpreter's own `show`/`stringwidth` give tab no
+special treatment either, so treating it as ordinary word content
+(not a break point) keeps the wrap logic agreeing with what actually
+renders, rather than disagreeing with it by inventing meaning for a
+character nothing else here understands. Dispositioned as intentional
+scope, not implemented; the section header now says explicitly that
+space and newline are the only recognized separators rather than
+leaving "whitespace" ambiguous.
+
 **Deliberate scope cuts** (documented in the section header, same
 posture as `pathtext`'s plain-stringwidth advance): no hyphenation — an
 oversized single word gets its own line rather than being split; greedy
