@@ -43,7 +43,15 @@
 % disjoint, so a template calling a helper never clobbers its own
 % in-flight state the way grid+ngon or hexgrid+hex can when a caller
 % and callee share a prefix (documented in lib/artkit.ps's tfflow
-% comment block).
+% comment block). pgz- and pgf- are themselves two more prefixes
+% sharing no template's own state, but they *do* sit in adjacent
+% three-letter territory with each other -- safe only because
+% pgzfitmax and pgframe never call one another, the same flat,
+% sequential (not nested) reuse artkit's tk- prefix relies on across
+% ngon/rrect/star/chance and everything else in that file: a shared
+% scratch prefix is only a hazard between a caller and something it
+% actually invokes mid-use, not between unrelated procs that just
+% happen to share a stem.
 %
 % None of the five clips to x,y,w,h -- every element's position is
 % computed from fractions of w/h, so nothing strays outside by
