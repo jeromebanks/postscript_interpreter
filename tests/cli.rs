@@ -132,6 +132,31 @@ fn lint_flags_a_blank_page_when_an_output_format_is_requested() {
 }
 
 #[test]
+fn lint_is_clean_on_real_example_and_gallery_pieces() {
+    // Toy programs can't catch what a real, library-loading piece
+    // does — confirmed the hard way: the first version of this feature
+    // passed every unit test while --lint against these exact files
+    // found two real, previously undetected bugs (a `search` "not
+    // found" leak in artkit's tfdrawline /justify, and a missing `and`
+    // in etching.ps's et-hatch bounds check) — both fixed alongside
+    // this test. Regression coverage for "the lint pass itself doesn't
+    // cry wolf on ordinary library usage."
+    for path in [
+        "examples/paragraph_layout.ps",
+        "examples/etching_demo.ps",
+        "gallery/compositors_proof.ps",
+    ] {
+        let png = tmp(&format!("lint-corpus-{}.png", path.replace('/', "_")));
+        let (ok, _out, stderr) = run(&["--png", png.to_str().unwrap(), "--lint", path], "");
+        assert!(ok, "{path} stderr: {stderr}");
+        assert!(
+            stderr.contains("pscat: lint: clean"),
+            "{path} should lint clean, stderr: {stderr}"
+        );
+    }
+}
+
+#[test]
 fn error_report_includes_a_line_number() {
     let (ok, _out, stderr) = run(&["--headless", "-"], "1 0 div\n");
     assert!(!ok);
