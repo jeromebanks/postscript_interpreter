@@ -1,0 +1,26 @@
+%!PS-Adobe-3.0
+%%Title: A Card, from lib/pagekit.ps
+%%BoundingBox: 0 0 612 792
+%%EndComments
+
+% pgcard specimen (issue #18): a greeting-card front panel filled from
+% nothing but a content dict -- rounded tinted panel, centered title,
+% flowed message, signoff tucked into the corner. Run from the repo
+% root:
+%
+%   pscat --page 612x792 examples/template_card.ps
+
+(lib/artkit.ps) run
+(lib/pagekit.ps) run
+
+1 1 1 setrgbcolor clippath fill
+
+40 40 532 500
+<<
+  /Title (Happy Birthday)
+  /Body (Wishing you a wonderful year ahead, full of good code and better coffee.)
+  /Signoff (- J.)
+>>
+pgcard pop
+
+showpage

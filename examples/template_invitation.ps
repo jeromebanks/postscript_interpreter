@@ -1,0 +1,27 @@
+%!PS-Adobe-3.0
+%%Title: An Invitation, from lib/pagekit.ps
+%%BoundingBox: 0 0 612 792
+%%EndComments
+
+% pginvitation specimen (issue #18): a tinted, bordered panel with a
+% large event title, a centered when/where/host block, and flowed
+% RSVP-style body copy. Run from the repo root:
+%
+%   pscat --page 612x792 examples/template_invitation.ps
+
+(lib/artkit.ps) run
+(lib/pagekit.ps) run
+
+1 1 1 setrgbcolor clippath fill
+
+40 40 532 500
+<<
+  /Title (You're Invited)
+  /When (Saturday, September 12th, 7:00 PM)
+  /Where (The Old Foundry, 88 Harbor St.)
+  /Host (Hosted by Jerome & Friends)
+  /Body (Come celebrate the release with us. Drinks and snacks provided -- just bring good stories. RSVP by September 5th.)
+>>
+pginvitation pop
+
+showpage

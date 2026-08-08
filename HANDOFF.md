@@ -130,7 +130,19 @@ traps `advisor` caught before any code existed, and two real,
 previously undetected operand-stack leaks — in `lib/artkit.ps`'s
 `tfdrawline` `/justify` and `lib/etching.ps`'s `et-hatch` — that
 running `--lint` over `examples/`/`gallery/` found and this issue
-fixed alongside the feature).
+fixed alongside the feature). Also done: issue #18, parameterized page
+templates -- a fourth sibling library, `lib/pagekit.ps` (depends on
+`artkit.ps`, unlike `graph.ps`/`dataviz.ps`/`etching.ps`): `pgcard`/
+`pgletter`/`pgcertificate`/`pginvitation`/`pgposter`, each
+`x y w h dict pgNAME` filling a region from a content dict of optional
+keys and returning `tfblock`'s leftover-text contract.
+`examples/template_*.ps` is one specimen per template (NOTES.md's
+entry has the full story, including two real bugs `advisor`'s plan
+review caught before any template code existed -- artkit's `fitfont`
+enlarging as well as shrinking, and two of artkit's mood palettes not
+actually being ordered dark-to-light despite looking like they were --
+and one real implementation bug `--lint` caught on the first rendered
+example, a copy-paste-misaligned `tfblock` call in `pgletter`).
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;

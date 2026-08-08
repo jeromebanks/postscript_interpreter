@@ -1,0 +1,26 @@
+%!PS-Adobe-3.0
+%%Title: A Poster, from lib/pagekit.ps
+%%BoundingBox: 0 0 612 792
+%%EndComments
+
+% pgposter specimen (issue #18): full-bleed tint, a headline sized to
+% fit the page width, an italic tagline, a large flowed body, and a
+% small footer line. Run from the repo root:
+%
+%   pscat --page 612x792 examples/template_poster.ps
+
+(lib/artkit.ps) run
+(lib/pagekit.ps) run
+
+1 1 1 setrgbcolor clippath fill
+
+40 40 532 700
+<<
+  /Title (PSCAT LIVE)
+  /Tagline (a PostScript interpreter, on stage)
+  /Body (Watch generative art render frame by frame, live, straight from PostScript source -- no compiler, no black box, just the machine drawing what it reads.)
+  /Footer (Doors open 7pm -- free admission)
+>>
+pgposter pop
+
+showpage
