@@ -968,6 +968,13 @@ impl Gfx {
         self.saved.push(self.state.clone());
     }
 
+    /// How many `gsave`s haven't been matched by a `grestore` yet
+    /// (issue #17's lint mode: a nonzero count at program end usually
+    /// means a forgotten `grestore`).
+    pub(crate) fn gsave_depth(&self) -> usize {
+        self.saved.len()
+    }
+
     pub fn grestore(&mut self) {
         // grestore below the bottom of the stack is a no-op, per the PLRM.
         if let Some(s) = self.saved.pop() {

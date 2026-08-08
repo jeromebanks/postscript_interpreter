@@ -37,9 +37,22 @@ pub enum Token {
 pub struct Lexer {
     file: FileHandle,
     is_file: bool,
+    /// Set only for the top-level program source (`main_program`), not
+    /// for `run`-loaded files, eexec streams, or executable strings —
+    /// `line()` uses this to avoid attributing an error to the wrong
+    /// source (issue #17: a `(lib/artkit.ps) run` file has its own line
+    /// 1, and reporting it as a line of the submitted program would be
+    /// actively misleading).
+    is_main: bool,
     /// eexec pushed systemdict for this source's duration; pop it when
     /// the source is exhausted or closed.
     pub(crate) pop_systemdict: bool,
+    /// The line the token most recently returned by `next_token`
+    /// started on, captured *before* consuming its first byte (a token
+    /// terminated by whitespace consumes that delimiter as part of the
+    /// same call — see `eat_token_delimiter` — so reading the file's
+    /// live line position afterward would often be off by one).
+    token_start_line: Option<usize>,
 }
 
 const fn is_whitespace(b: u8) -> bool {
@@ -67,25 +80,32 @@ impl Lexer {
         Lexer {
             file: PsFile::from_bytes(src),
             is_file: false,
+            is_main: false,
             pop_systemdict: false,
+            token_start_line: None,
         }
     }
 
-    /// Scan program source as a file (the main program, `run`).
+    /// Scan the top-level program source (what `begin_source` runs).
     pub fn main_program(src: Vec<u8>) -> Self {
         Lexer {
             file: PsFile::from_bytes(src),
             is_file: true,
+            is_main: true,
             pop_systemdict: false,
+            token_start_line: None,
         }
     }
 
-    /// Scan an existing file object in place (`exec` on a file, eexec).
+    /// Scan an existing file object in place (`run`, `exec` on a file,
+    /// eexec) — never the main program, even though it's a file.
     pub(crate) fn from_file(file: FileHandle) -> Self {
         Lexer {
             file,
             is_file: true,
+            is_main: false,
             pop_systemdict: false,
+            token_start_line: None,
         }
     }
 
@@ -99,6 +119,14 @@ impl Lexer {
         self.file.borrow().pos()
     }
 
+    /// The line the last-returned token started on, if this scanner is
+    /// the main program — `None` otherwise (library files, eexec
+    /// streams, executable strings), so callers don't misattribute an
+    /// error to the wrong source.
+    pub(crate) fn line(&self) -> Option<usize> {
+        self.is_main.then_some(self.token_start_line).flatten()
+    }
+
     fn peek(&mut self) -> Result<Option<u8>, PsError> {
         self.file.borrow_mut().peek_byte()
     }
@@ -108,65 +136,86 @@ impl Lexer {
     }
 
     pub fn next_token(&mut self) -> Result<Option<Token>, PsError> {
+        self.skip_insignificant()?;
+        // Captured before dispatch, whether or not dispatch errors, so a
+        // syntax error gets the line it actually happened on rather than
+        // the previous good token's line.
+        self.token_start_line = Some(self.file.borrow().line());
+        self.dispatch_token()
+    }
+
+    /// Consume whitespace and `%` comments up to the next significant
+    /// byte (or EOF). Split out from `next_token` so the token's start
+    /// line can be captured exactly once, right after this returns.
+    fn skip_insignificant(&mut self) -> Result<(), PsError> {
         loop {
-            let Some(b) = self.peek()? else {
-                return Ok(None);
-            };
-            if is_whitespace(b) {
-                self.bump()?;
-                continue;
+            match self.peek()? {
+                Some(b) if is_whitespace(b) => {
+                    self.bump()?;
+                }
+                Some(b'%') => {
+                    self.bump()?;
+                    self.skip_comment()?;
+                }
+                _ => return Ok(()),
             }
-            if is_regular(b) {
-                // Number-or-name words dispatch on their whole run; the
-                // first byte must not be consumed before reading it.
-                let word = self.read_regular_run()?;
-                self.eat_token_delimiter()?;
-                return Ok(Some(classify_word(&word)));
-            }
-            self.bump()?;
-            match b {
-                b'%' => self.skip_comment()?,
-                b'(' => return Ok(Some(Token::String(self.read_string()?))),
-                b')' => return Err(syntax("')' with no matching '('")),
-                b'<' => match self.peek()? {
-                    Some(b'<') => {
-                        self.bump()?;
-                        return Ok(Some(Token::Name("<<".to_string())));
-                    }
-                    Some(b'~') => {
-                        self.bump()?;
-                        return Ok(Some(Token::String(self.read_ascii85_string()?)));
-                    }
-                    _ => return Ok(Some(Token::String(self.read_hex_string()?))),
-                },
-                b'>' => match self.peek()? {
-                    Some(b'>') => {
-                        self.bump()?;
-                        return Ok(Some(Token::Name(">>".to_string())));
-                    }
-                    _ => return Err(syntax("'>' outside a hex string")),
-                },
-                b'[' | b']' => return Ok(Some(Token::Name((b as char).to_string()))),
-                b'{' => return Ok(Some(Token::LBrace)),
-                b'}' => return Ok(Some(Token::RBrace)),
-                b'/' => {
-                    if self.peek()? == Some(b'/') {
-                        self.bump()?;
-                        let word = self.read_regular_run()?;
-                        self.eat_token_delimiter()?;
-                        return Ok(Some(Token::ImmediateName(
-                            String::from_utf8_lossy(&word).into_owned(),
-                        )));
-                    }
+        }
+    }
+
+    fn dispatch_token(&mut self) -> Result<Option<Token>, PsError> {
+        let Some(b) = self.peek()? else {
+            return Ok(None);
+        };
+        if is_regular(b) {
+            // Number-or-name words dispatch on their whole run; the
+            // first byte must not be consumed before reading it.
+            let word = self.read_regular_run()?;
+            self.eat_token_delimiter()?;
+            return Ok(Some(classify_word(&word)));
+        }
+        self.bump()?;
+        match b {
+            b'(' => Ok(Some(Token::String(self.read_string()?))),
+            b')' => Err(syntax("')' with no matching '('")),
+            b'<' => match self.peek()? {
+                Some(b'<') => {
+                    self.bump()?;
+                    Ok(Some(Token::Name("<<".to_string())))
+                }
+                Some(b'~') => {
+                    self.bump()?;
+                    Ok(Some(Token::String(self.read_ascii85_string()?)))
+                }
+                _ => Ok(Some(Token::String(self.read_hex_string()?))),
+            },
+            b'>' => match self.peek()? {
+                Some(b'>') => {
+                    self.bump()?;
+                    Ok(Some(Token::Name(">>".to_string())))
+                }
+                _ => Err(syntax("'>' outside a hex string")),
+            },
+            b'[' | b']' => Ok(Some(Token::Name((b as char).to_string()))),
+            b'{' => Ok(Some(Token::LBrace)),
+            b'}' => Ok(Some(Token::RBrace)),
+            b'/' => {
+                if self.peek()? == Some(b'/') {
+                    self.bump()?;
                     let word = self.read_regular_run()?;
                     self.eat_token_delimiter()?;
-                    return Ok(Some(Token::LiteralName(
+                    Ok(Some(Token::ImmediateName(
                         String::from_utf8_lossy(&word).into_owned(),
-                    )));
+                    )))
+                } else {
+                    let word = self.read_regular_run()?;
+                    self.eat_token_delimiter()?;
+                    Ok(Some(Token::LiteralName(
+                        String::from_utf8_lossy(&word).into_owned(),
+                    )))
                 }
-                // is_regular handled above; whitespace at the top.
-                _ => unreachable!("delimiter byte {b} not dispatched"),
             }
+            // is_regular handled above; whitespace/comments skipped above.
+            _ => unreachable!("delimiter byte {b} not dispatched"),
         }
     }
 

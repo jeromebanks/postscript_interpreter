@@ -184,6 +184,15 @@ pub struct Interp {
     /// The most recently executed name (interned id — resolving to
     /// text only happens at error time), for `OffendingCommand`.
     last_name: Option<u32>,
+    /// The line most recently scanned directly from the main program
+    /// source (issue #17) — `None` when no line is known, or the most
+    /// recent scanning happened in a `run`-loaded file, eexec stream, or
+    /// executable string (see `Lexer::line`). Sticky across procedure
+    /// calls: an error deep inside a previously-defined procedure is
+    /// attributed to the line that most recently touched real source
+    /// text, not the procedure's original definition site — this
+    /// interpreter doesn't tag objects with a source position.
+    last_line: Option<usize>,
     /// State for `rand`/`srand`/`rrand`. Deterministic by default —
     /// reproducible art is a feature here, not a bug.
     pub(crate) rand_state: i64,
@@ -258,6 +267,7 @@ impl Interp {
             save_stack: Vec::new(),
             quit_requested: false,
             last_name: None,
+            last_line: None,
             rand_state: 1,
             packing: false,
             clock: crate::clock::Clock::start(),
@@ -281,6 +291,7 @@ impl Interp {
     pub fn begin_source(&mut self, src: &[u8]) {
         self.quit_requested = false;
         self.last_name = None;
+        self.last_line = None;
         self.estack
             .push(Frame::Scanner(Lexer::main_program(src.to_vec())));
     }
@@ -371,7 +382,10 @@ impl Interp {
     }
 
     /// LaserWriter-style error report, e.g.
-    /// `%%[ Error: undefined; OffendingCommand: frobnicate ]%%`.
+    /// `%%[ Error: undefined; OffendingCommand: frobnicate ]%%`. Appends
+    /// `; Line: N` (issue #17) when the most recent token scanned
+    /// directly from the submitted program source is known — see
+    /// `last_line`'s doc comment for what "known" excludes.
     pub fn error_report(&self, err: &PsError) -> String {
         let kind = match err {
             PsError::Syntax(detail) => format!("syntaxerror ({detail})"),
@@ -383,7 +397,12 @@ impl Interp {
                 .last_executed_name()
                 .unwrap_or_else(|| "--none--".to_string()),
         };
-        format!("%%[ Error: {kind}; OffendingCommand: {command} ]%%")
+        match self.last_line {
+            Some(line) => {
+                format!("%%[ Error: {kind}; OffendingCommand: {command}; Line: {line} ]%%")
+            }
+            None => format!("%%[ Error: {kind}; OffendingCommand: {command} ]%%"),
+        }
     }
 
     /// Pull the next object to execute off the execution stack, popping
@@ -565,7 +584,18 @@ impl Interp {
                 }
             };
             match action {
-                Action::Yield(o) => return Ok(Some(o)),
+                Action::Yield(o) => {
+                    // `Proc` frames yield too (a previously-parsed
+                    // procedure has no source line of its own), so only
+                    // update when the object actually came straight off
+                    // a scanner — `last_line` stays sticky otherwise.
+                    if let Some(Frame::Scanner(lexer)) = self.estack.last()
+                        && let Some(line) = lexer.line()
+                    {
+                        self.last_line = Some(line);
+                    }
+                    return Ok(Some(o));
+                }
                 Action::PopThenYield(o) => {
                     self.estack.pop();
                     return Ok(Some(o));
@@ -1065,6 +1095,13 @@ impl Interp {
         &self.ostack
     }
 
+    /// Self-check/lint mode (issue #17): heuristic checks for common
+    /// silent-failure mistakes — see `crate::lint` for what's checked
+    /// and why `render_checks` exists.
+    pub fn lint(&self, render_checks: bool) -> Vec<crate::lint::LintFinding> {
+        crate::lint::check(self, render_checks)
+    }
+
     pub fn quit_requested(&self) -> bool {
         self.quit_requested
     }
@@ -1206,5 +1243,38 @@ mod tests {
         let mut it = Interp::new();
         it.run_str("/foo").expect("literal name");
         assert_eq!(it.pop().expect("name").repr(), "/foo");
+    }
+
+    #[test]
+    fn error_report_names_the_line_the_error_happened_on() {
+        let mut it = Interp::new();
+        // A trailing newline is the case that catches an off-by-one: the
+        // token `div` finishes and consumes that newline as its
+        // delimiter (see lexer.rs's `eat_token_delimiter`) before `div`
+        // actually runs and fails, so a naive "read the file's current
+        // line" would report line 2 for an error that happened on line 1.
+        let err = it.run_str("1 0 div\n").unwrap_err();
+        let report = it.error_report(&err);
+        assert!(report.contains("Line: 1"), "report: {report}");
+    }
+
+    #[test]
+    fn error_report_line_advances_across_newlines() {
+        let mut it = Interp::new();
+        let err = it.run_str("1 1 add pop\n1 0 div\n").unwrap_err();
+        let report = it.error_report(&err);
+        assert!(report.contains("Line: 2"), "report: {report}");
+    }
+
+    #[test]
+    fn error_report_line_stays_with_the_main_program_across_a_string() {
+        let mut it = Interp::new();
+        // "exec" is the last token scanned directly from the main
+        // program (line 2); the executable string's own "div" isn't
+        // main-program source and must not overwrite that with a
+        // spurious line of its own (it would always be line 1).
+        let err = it.run_str("42 pop\n(1 0 div) cvx exec").unwrap_err();
+        let report = it.error_report(&err);
+        assert!(report.contains("Line: 2"), "report: {report}");
     }
 }

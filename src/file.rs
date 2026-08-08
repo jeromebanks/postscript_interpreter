@@ -29,6 +29,10 @@ pub struct PsFile {
     /// Bytes handed to consumers — the `token` operator's remainder
     /// arithmetic and diagnostics.
     consumed: usize,
+    /// 1-indexed line of the next byte to be read, counting `\n` bytes
+    /// already consumed (`\r\n` counts once, on the `\n`). Source-line
+    /// attribution for error reports (issue #17).
+    line: usize,
 }
 
 enum Kind {
@@ -50,6 +54,7 @@ impl PsFile {
             kind: Kind::Bytes { data, pos: 0 },
             closed: false,
             consumed: 0,
+            line: 1,
         }))
     }
 
@@ -71,6 +76,7 @@ impl PsFile {
             },
             closed: false,
             consumed: 0,
+            line: 1,
         }))
     }
 
@@ -96,8 +102,11 @@ impl PsFile {
                 out.pop_front()
             }
         };
-        if b.is_some() {
+        if let Some(byte) = b {
             self.consumed += 1;
+            if byte == b'\n' {
+                self.line += 1;
+            }
         }
         Ok(b)
     }
@@ -153,6 +162,11 @@ impl PsFile {
 
     pub fn pos(&self) -> usize {
         self.consumed
+    }
+
+    /// 1-indexed line of the next unread byte.
+    pub fn line(&self) -> usize {
+        self.line
     }
 
     /// Whether this file is a decode filter (as opposed to raw bytes).

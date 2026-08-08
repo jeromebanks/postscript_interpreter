@@ -29,6 +29,9 @@ struct Options {
     /// The windowed REPL: type PostScript, watch it draw (Stage 8's
     /// last sliver).
     interactive: bool,
+    /// Self-check/lint mode (issue #17): print diagnostics for common
+    /// silent-failure mistakes after a headless run.
+    lint: bool,
 }
 
 fn main() -> ExitCode {
@@ -49,6 +52,7 @@ fn main() -> ExitCode {
             || options.png.is_some()
             || options.svg.is_some()
             || options.pdf.is_some()
+            || options.lint
         {
             eprintln!("pscat: --spool runs alone (no file argument or other mode flags)");
             return ExitCode::FAILURE;
@@ -102,6 +106,7 @@ fn main() -> ExitCode {
             || options.png.is_some()
             || options.svg.is_some()
             || options.pdf.is_some()
+            || options.lint
         {
             eprintln!("pscat: --interactive needs a window (drop the headless/output flags)");
             return ExitCode::FAILURE;
@@ -167,7 +172,12 @@ fn main() -> ExitCode {
         interp.gfx_mut().set_pdf_info(title, author);
     }
 
-    if options.headless || options.png.is_some() || options.svg.is_some() || options.pdf.is_some() {
+    if options.headless
+        || options.png.is_some()
+        || options.svg.is_some()
+        || options.pdf.is_some()
+        || options.lint
+    {
         return finish_headless(
             run_headless(&mut interp, &source, &options),
             &interp,
@@ -219,6 +229,9 @@ fn print_pstack(interp: &Interp) {
 /// One page writes the exact path given; multi-page documents write
 /// out-001.png, out-002.png, ...
 fn finish_headless(ok: bool, interp: &Interp, options: &Options) -> ExitCode {
+    if options.lint {
+        report_lint(interp, options);
+    }
     if let Some(path) = &options.png {
         let gfx = interp.gfx();
         let mut pages: Vec<&tiny_skia::Pixmap> = gfx.pages().iter().collect();
@@ -295,6 +308,24 @@ fn finish_headless(ok: bool, interp: &Interp, options: &Options) -> ExitCode {
     }
 }
 
+/// `--lint`: print findings to stderr, one per line, prefixed
+/// `pscat: lint:` so a caller can grep for them (or, for `pscat-mcp`,
+/// parse them back out of the child's stderr). Runs regardless of `ok`
+/// — a blank page after a crash is exactly the kind of thing lint
+/// should still surface — and doesn't affect the exit code, since a
+/// finding is advisory, not fatal.
+fn report_lint(interp: &Interp, options: &Options) {
+    let render_checks = options.png.is_some() || options.svg.is_some() || options.pdf.is_some();
+    let findings = interp.lint(render_checks);
+    if findings.is_empty() {
+        eprintln!("pscat: lint: clean");
+        return;
+    }
+    for f in &findings {
+        eprintln!("pscat: lint: [{}] {}", f.check, f.message);
+    }
+}
+
 /// out.png → out-001.png (suffix before the extension).
 fn numbered_path(path: &str, n: usize) -> String {
     match path.rsplit_once('.') {
@@ -318,6 +349,7 @@ fn parse_args() -> Result<Options, String> {
         spool: None,
         halftone: false,
         interactive: false,
+        lint: false,
     };
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -359,6 +391,7 @@ fn parse_args() -> Result<Options, String> {
             }
             "--halftone" => options.halftone = true,
             "-i" | "--interactive" => options.interactive = true,
+            "--lint" => options.lint = true,
             "--speed" => {
                 let n = args.next().ok_or("missing value after --speed")?;
                 options.steps_per_frame = n
@@ -414,6 +447,10 @@ fn print_usage() {
     println!("      --spool DIR     watch DIR and render each .ps/.eps that lands there");
     println!("      --halftone      screen the raster like a mono laser printer (window/PNG)");
     println!("      --pstack-on-error  print the operand stack after an error");
+    println!("      --lint          check the finished run for common mistakes (implies");
+    println!("                      --headless); a blank page, an unbalanced gsave, stuff");
+    println!("                      left on the stack — printed to stderr, doesn't affect");
+    println!("                      the exit code");
     println!("      --fonts         list every findfont-reachable face and alias, then exit");
 }
 

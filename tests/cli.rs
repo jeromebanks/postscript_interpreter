@@ -72,3 +72,68 @@ fn stdin_with_interactive_is_rejected() {
     assert!(!ok);
     assert!(stderr.contains("stdin"), "explains the conflict: {stderr}");
 }
+
+#[test]
+fn lint_flags_an_unbalanced_gsave() {
+    let (ok, _out, stderr) = run(&["--lint", "-"], "gsave");
+    assert!(ok, "a lint finding isn't a program failure: {stderr}");
+    assert!(
+        stderr.contains("pscat: lint: [gsave-imbalance]"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn lint_is_clean_when_nothing_is_wrong() {
+    let png = tmp("lint-clean.png");
+    let (ok, _out, stderr) = run(
+        &[
+            "--page",
+            "40x40",
+            "--png",
+            png.to_str().unwrap(),
+            "--lint",
+            "-",
+        ],
+        "0 0 40 40 rectfill",
+    );
+    assert!(ok, "stderr: {stderr}");
+    assert!(stderr.contains("pscat: lint: clean"), "stderr: {stderr}");
+}
+
+#[test]
+fn lint_skips_the_blank_page_check_without_an_output_format() {
+    // No --png/--svg/--pdf: nothing was meant to be rendered, so an
+    // untouched canvas isn't a mistake worth flagging.
+    let (ok, _out, stderr) = run(&["--lint", "-e", "3 4 add pop"], "");
+    assert!(ok, "stderr: {stderr}");
+    assert!(!stderr.contains("blank-page"), "stderr: {stderr}");
+}
+
+#[test]
+fn lint_flags_a_blank_page_when_an_output_format_is_requested() {
+    let png = tmp("lint-blank.png");
+    let (ok, _out, stderr) = run(
+        &[
+            "--page",
+            "40x40",
+            "--png",
+            png.to_str().unwrap(),
+            "--lint",
+            "-",
+        ],
+        "showpage",
+    );
+    assert!(ok, "stderr: {stderr}");
+    assert!(
+        stderr.contains("pscat: lint: [blank-page]"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn error_report_includes_a_line_number() {
+    let (ok, _out, stderr) = run(&["--headless", "-"], "1 0 div\n");
+    assert!(!ok);
+    assert!(stderr.contains("Line: 1"), "stderr: {stderr}");
+}

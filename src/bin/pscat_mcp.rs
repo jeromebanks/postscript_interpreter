@@ -188,14 +188,21 @@ fn render_postscript(args: &Value) -> Result<Value, String> {
         "pdf" => "--pdf",
         other => return Err(format!("unknown format: {other}")),
     });
-    cmd.arg(&out).arg("-");
+    cmd.arg(&out).arg("-").arg("--lint");
     let run = pipe_through(&mut cmd, source.as_bytes())?;
+    let (lint_findings, other_stderr) = split_lint_findings(&run.stderr);
 
     // Artifacts are written even after a PostScript error (partial
     // canvas); pass the error text along rather than hiding the render.
     let mut content = Vec::new();
     if !run.success {
-        content.push(text_content(&format!("PostScript error:\n{}", run.stderr)));
+        content.push(text_content(&format!("PostScript error:\n{other_stderr}")));
+    }
+    // Silent when clean (every render would otherwise carry a "nothing's
+    // wrong" line) — only speak up when the lint pass actually found
+    // something (issue #17).
+    if !lint_findings.is_empty() {
+        content.push(text_content(&format!("Lint:\n{lint_findings}")));
     }
     let pages = collect_pages(&out);
     if pages.is_empty() {
@@ -297,6 +304,27 @@ fn eval_postscript(args: &Value) -> Result<Value, String> {
     } else {
         Err(report)
     }
+}
+
+/// Split `--lint`'s `pscat: lint: ...` lines out of a child's stderr:
+/// `(finding lines joined with '\n', the rest of stderr joined back)`.
+/// The `pscat: lint: clean` line (no findings) is dropped from both —
+/// callers should stay silent when there's nothing to report.
+fn split_lint_findings(stderr: &str) -> (String, String) {
+    const PREFIX: &str = "pscat: lint: ";
+    const CLEAN: &str = "pscat: lint: clean";
+    let mut findings = Vec::new();
+    let mut rest = Vec::new();
+    for line in stderr.lines() {
+        if line == CLEAN {
+            continue;
+        } else if line.starts_with(PREFIX) {
+            findings.push(line);
+        } else {
+            rest.push(line);
+        }
+    }
+    (findings.join("\n"), rest.join("\n"))
 }
 
 // --- plumbing -------------------------------------------------------
