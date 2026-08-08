@@ -29,11 +29,11 @@ compatibility pass.
 
 **Two bugs `advisor` caught in plan review, before any template code
 existed, that would have made every fitted title/name wrong.** First:
-artkit's `fitfont` scales *unconditionally* -- exch a two-letter
-awardee name against a certificate's targeted `pgzfitmax` width and
-`fitfont` would blow it up to fill the whole page, exactly backwards
-for a name/headline whose length varies with content. Fixed by adding
-`pgzfitmax`, a shrink-only variant that clamps the scale ratio at 1.0.
+artkit's `fitfont` scales *unconditionally* -- give it a two-letter
+awardee name and a certificate-width target and it would blow the name
+up to fill the whole page, exactly backwards for a name/headline whose
+length varies with content. Fixed by adding `pgzfitmax`, a shrink-only
+variant that clamps the scale ratio at 1.0.
 Second: the plan's first draft picked `/parchment` and `/carnival` as
 role-indexed (0=ink..4=background) defaults for the certificate and
 invitation, on the assumption that artkit's eight mood palettes run

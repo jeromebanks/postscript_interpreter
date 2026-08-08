@@ -21,12 +21,20 @@ fn load(it: &mut Interp) {
     }
 }
 
+// Luminance, not a per-channel threshold: pagekit's background tints are
+// deliberately light overall but can still dip a single channel low (e.g.
+// /ember's tint has a blue channel under 128 despite reading as pale
+// yellow), which a per-channel OR check misclassifies as "ink" -- found
+// by this exact test failing against pgposter before the switch.
 fn ink_count(it: &Interp) -> usize {
     it.gfx()
         .pixmap
         .pixels()
         .iter()
-        .filter(|p| p.red() < 245 || p.green() < 245 || p.blue() < 245)
+        .filter(|p| {
+            let lum = 0.3 * p.red() as f32 + 0.59 * p.green() as f32 + 0.11 * p.blue() as f32;
+            lum < 180.0
+        })
         .count()
 }
 
@@ -76,12 +84,31 @@ fn loads_clean_and_registers_palettes() {
 }
 
 #[test]
-fn every_template_leaves_ink() {
+fn every_template_draws_its_content() {
+    // A light background tint alone can clear a loose ink threshold, so
+    // this compares each template's filled-content render against the
+    // same template on an empty dict -- proving text/labels actually
+    // land, not just that a background got painted.
     for (name, call) in TEMPLATES {
-        let mut it = fresh(200, 200);
-        it.run_str(&format!("{call} pop"))
-            .unwrap_or_else(|e| panic!("{name} failed: {}", it.error_report(&e)));
-        assert!(ink_count(&it) > 200, "{name} left no ink");
+        let mut it_empty = fresh(200, 200);
+        it_empty
+            .run_str(&format!("10 10 180 180 << >> {name} pop"))
+            .unwrap_or_else(|e| {
+                panic!("{name} on empty dict failed: {}", it_empty.error_report(&e))
+            });
+        let empty_ink = ink_count(&it_empty);
+
+        let mut it_filled = fresh(200, 200);
+        it_filled
+            .run_str(&format!("{call} pop"))
+            .unwrap_or_else(|e| panic!("{name} failed: {}", it_filled.error_report(&e)));
+        let filled_ink = ink_count(&it_filled);
+
+        assert!(
+            filled_ink > empty_ink,
+            "{name}: filled content ({filled_ink} dark px) should paint more ink than an \
+             empty dict ({empty_ink} dark px) -- otherwise text/labels aren't landing"
+        );
     }
 }
 

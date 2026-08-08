@@ -44,6 +44,18 @@
 % in-flight state the way grid+ngon or hexgrid+hex can when a caller
 % and callee share a prefix (documented in lib/artkit.ps's tfflow
 % comment block).
+%
+% None of the five clips to x,y,w,h -- every element's position is
+% computed from fractions of w/h, so nothing strays outside by
+% construction, with the one pre-existing exception tfflow's own docs
+% already carry: a single word wider than its line prints unbroken
+% rather than splitting (no hyphenation), same latitude pathtext takes
+% with an overlong run. A caller compositing a template onto a larger
+% shared sheet and wanting a hard boundary can wrap the call in its
+% own `x y w h rectclip` -- pagekit doesn't do it by default because a
+% clip sitting exactly on the border also eats half of any rule/stroke
+% drawn on that same boundary (confirmed while building pgcertificate:
+% its double rule's outer edge lost half its width to its own clip).
 
 Palettes /vellum   [[0.20 0.14 0.08] [0.35 0.26 0.16] [0.55 0.44 0.30]
                     [0.78 0.68 0.52] [0.96 0.93 0.85]] put
@@ -104,7 +116,6 @@ Palettes /marigold [[0.18 0.08 0.20] [0.38 0.14 0.30] [0.62 0.30 0.28]
     /peDate peDict /Date () pggetdef def
 
     gsave
-    newpath peX peY peW peH rectclip
 
     % background
     pePal 4 get aload pop setrgbcolor
