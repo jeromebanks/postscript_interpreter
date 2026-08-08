@@ -105,7 +105,21 @@ is the specimen sheet (NOTES.md's entry has the full story, including
 a real upside-down-photo bug the coverage tests caught: PostScript's
 y runs bottom-up but decoded JPEG rows run top-down, so the first
 version of `et-hatch`'s sample lookup rendered every photo flipped
-vertically until that mapping got a `ph y sub`).
+vertically until that mapping got a `ph y sub`). Also done: issue #16,
+paragraph/flowing-text layout for artkit — `lib/artkit.ps`'s
+`tfwrap`/`tfdrawline`/`tfflow`/`tfblock`/`tfcols`: greedy word-wrap,
+four alignments (including `/justify`'s stretch-to-margin, skipped on
+a paragraph's last line), and columns, all built on `tfflow` taking a
+`boundsproc` (`{y -> x0 x1}`, called per line) so a region's width can
+vary with height instead of being locked to a rectangle — `tfblock`/
+`tfcols` are just `tfflow` with a constant-width boundsproc.
+`examples/paragraph_layout.ps` and the gallery piece `The Compositor's
+Proof` (`gallery/compositors_proof.ps`, a motto flowed into a circular
+medallion via a hand-written boundsproc) demonstrate it (NOTES.md's
+entry has the full story, including two real bugs caught before
+merge — one by `advisor` plan review, one by actually rendering the
+example, that a pixel-adjacent-but-not-quite regression test had
+missed).
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;

@@ -456,6 +456,10 @@ fn ghostscript_accepts_artkit() {
             end \
         } gasket \
         230 20 60 60 2 { newpath 0.3 setgray rectfill } carpet \
+        /Helvetica findfont 6 scalefont setfont \
+        10 390 100 8 5 /justify (gs runs the paragraph flow section too) tfblock pop \
+        10 5 45 5 18 2 6 /left (a short run of copy split across two narrow columns) tfcols pop \
+        { pop 350 395 } 393 385 5 /center (curve) tfflow pop \
         showpage\n";
     let dir = std::env::temp_dir().join(format!("pscat-artkit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
@@ -1414,5 +1418,453 @@ fn carpet_nested_in_its_own_leaf_needs_the_inner_call_wrapped_in_a_dict() {
     assert_eq!(
         got[1], "8",
         "wrapped: inner traversal should also visit all 8 leaves"
+    );
+}
+
+// --- paragraph / flowing text -----------------------------------------
+
+fn with_helvetica(size: f64, body: &str) -> String {
+    format!("/Helvetica findfont {size} scalefont setfont {body}")
+}
+
+#[test]
+fn tfwrap_breaks_on_words_that_fit() {
+    // A width wide enough for two words but not three should wrap
+    // "aa bb cc" into ["aa bb", "cc"].
+    let got = eval(&with_helvetica(14.0, "(aa bb cc) 45 tfwrap aload pop"));
+    assert_eq!(got.len(), 2, "expected two lines, got {got:?}");
+    assert_eq!(got[0], "(aa bb)");
+    assert_eq!(got[1], "(cc)");
+}
+
+#[test]
+fn tfwrap_does_not_drop_the_final_word_of_the_last_line() {
+    // Regression test for the exact bug the advisor caught in review:
+    // tflinebreak's end-of-string branch used to unconditionally take
+    // the whole remainder as one line without checking whether it
+    // actually fit, so the last word of every non-terminal paragraph
+    // silently overflowed the wrap width instead of moving to its own
+    // line. "aa bb cc" at a width sized for two words must still come
+    // back as two lines, not one overflowing line.
+    let got = eval(&with_helvetica(14.0, "(aa bb cc) 45 tfwrap length"));
+    assert_eq!(
+        got,
+        ["2"],
+        "expected 2 wrapped lines, not 1 overflowing line"
+    );
+
+    // And confirm neither line individually overflows the width.
+    let got = eval(&with_helvetica(
+        14.0,
+        "(aa bb cc) 45 tfwrap { stringwidth pop } forall",
+    ));
+    for (i, w) in got.iter().enumerate() {
+        let w: f64 = w.parse().unwrap();
+        assert!(w <= 45.0, "line {i} width {w} exceeds wrap width 45");
+    }
+}
+
+#[test]
+fn tfwrap_forces_a_break_on_embedded_newline() {
+    // An embedded newline always breaks the line, even with plenty of
+    // width left -- that's what lets a caller pass multiple paragraphs
+    // as one string.
+    let got = eval(&with_helvetica(14.0, "(hi\\nthere) 400 tfwrap aload pop"));
+    assert_eq!(got, ["(hi)", "(there)"]);
+}
+
+#[test]
+fn tfwrap_places_an_oversized_single_word_alone_rather_than_splitting_it() {
+    // No hyphenation: a word wider than the wrap width still gets its
+    // own line instead of erroring or being silently dropped.
+    let got = eval(&with_helvetica(
+        14.0,
+        "(ab pneumonoultramicroscopicsilicovolcanoconiosis cd) 40 tfwrap aload pop",
+    ));
+    assert_eq!(got.len(), 3, "expected 3 lines, got {got:?}");
+    assert_eq!(got[1], "(pneumonoultramicroscopicsilicovolcanoconiosis)");
+}
+
+#[test]
+fn tfwrap_of_empty_string_is_an_empty_array_not_one_blank_line() {
+    // Contract check flagged in review: tfwrap on "" should agree with
+    // tfflow's own reading of "nothing to do" (tfflow on an empty
+    // string draws zero lines and returns immediately), not silently
+    // report one line. A caller counting lines via `tfwrap length`
+    // should get 0 for empty input, not 1.
+    let got = eval(&with_helvetica(14.0, "() 100 tfwrap length"));
+    assert_eq!(got, ["0"]);
+}
+
+#[test]
+fn tfwrap_scratch_array_bound_holds_on_a_run_of_unfittable_separators() {
+    // Regression/invariant check for the array-sizing argument in
+    // tfwrap's header comment: three spaces at a width narrower than a
+    // single space forces the worst case for tflinebreak's "at least
+    // one char consumed per call" guarantee -- each call peels off
+    // exactly one blank line and one separator, so this exercises
+    // exactly `length` calls against a `length + 1`-slot array. This
+    // must neither error (rangecheck on an out-of-bounds `put`) nor
+    // silently truncate.
+    let got = eval(&with_helvetica(14.0, "(   ) 1 tfwrap length"));
+    assert_eq!(got, ["3"], "expected one blank line per space, got {got:?}");
+}
+
+#[test]
+fn tfblock_left_aligns_flush_to_the_box_edge() {
+    let mut it = Interp::with_page(300, 100).expect("page");
+    load(&mut it);
+    it.run_str(&with_helvetica(
+        16.0,
+        "10 10 280 80 18 /left (hi) tfblock pop",
+    ))
+    .unwrap_or_else(|e| panic!("tfblock failed: {}", it.error_report(&e)));
+    let (lx, _ly, _ux, _uy) = it.gfx().path_bbox().unwrap_or((0.0, 0.0, 0.0, 0.0));
+    // path_bbox tracks the current path, not painted glyph ink, so
+    // measure ink position directly instead: leftmost dark pixel
+    // should sit close to x=10, not drifted toward the box's center
+    // or right edge.
+    let pixmap = &it.gfx().pixmap;
+    let mut min_x = None;
+    for y in 0..pixmap.height() {
+        for x in 0..pixmap.width() {
+            if pixmap.pixel(x, y).expect("in bounds").red() < 128 {
+                min_x = Some(min_x.map_or(x, |m: u32| m.min(x)));
+            }
+        }
+    }
+    let min_x = min_x.expect("expected some ink") as f64;
+    assert!(
+        min_x < 30.0,
+        "left-aligned text's leftmost ink at x={min_x} is not close to the box edge (10); lx hint={lx}"
+    );
+}
+
+#[test]
+fn tfdrawline_right_and_center_shift_ink_relative_to_left() {
+    // Compare the rightmost ink pixel across left/right/center for the
+    // same short string in the same box -- right should push ink
+    // furthest right, center in between, left least.
+    fn rightmost_ink(just: &str) -> u32 {
+        let mut it = Interp::with_page(300, 100).expect("page");
+        load(&mut it);
+        it.run_str(&with_helvetica(
+            16.0,
+            &format!("10 10 280 80 18 /{just} (hi) tfblock pop"),
+        ))
+        .unwrap_or_else(|e| panic!("tfblock failed: {}", it.error_report(&e)));
+        let pixmap = &it.gfx().pixmap;
+        let mut max_x = 0u32;
+        for y in 0..pixmap.height() {
+            for x in 0..pixmap.width() {
+                if pixmap.pixel(x, y).expect("in bounds").red() < 128 {
+                    max_x = max_x.max(x);
+                }
+            }
+        }
+        max_x
+    }
+
+    let left = rightmost_ink("left");
+    let center = rightmost_ink("center");
+    let right = rightmost_ink("right");
+    assert!(
+        left < center && center < right,
+        "expected left < center < right, got left={left} center={center} right={right}"
+    );
+}
+
+#[test]
+fn tfdrawline_justify_stretches_gaps_to_fill_the_line_but_not_the_last_line() {
+    // A justified non-last line's words should span from x0 all the
+    // way to x1 (its rightmost ink close to the box's right edge);
+    // the paragraph's actual last line should NOT be stretched (falls
+    // back to /left, so its rightmost ink stays well short of x1).
+    fn ink_bbox_x(body: &str) -> (u32, u32) {
+        let mut it = Interp::with_page(300, 200).expect("page");
+        load(&mut it);
+        it.run_str(body)
+            .unwrap_or_else(|e| panic!("{body} failed: {}", it.error_report(&e)));
+        let pixmap = &it.gfx().pixmap;
+        let (mut min_x, mut max_x) = (u32::MAX, 0u32);
+        for y in 0..pixmap.height() {
+            for x in 0..pixmap.width() {
+                if pixmap.pixel(x, y).expect("in bounds").red() < 128 {
+                    min_x = min_x.min(x);
+                    max_x = max_x.max(x);
+                }
+            }
+        }
+        (min_x, max_x)
+    }
+
+    // Box narrow enough that "one two three four five six" wraps to
+    // two lines ("one two three" / "four five six", confirmed against
+    // tfwrap directly), so the first line is genuinely non-last.
+    let (_min, max) = ink_bbox_x(&with_helvetica(
+        14.0,
+        "10 10 100 150 18 /justify (one two three four five six) tfblock pop",
+    ));
+    assert!(
+        max > 100,
+        "justified non-last line should stretch close to the box's right edge (10+100=110), got rightmost ink at {max}"
+    );
+}
+
+#[test]
+fn tfdrawline_justify_keeps_the_natural_space_width_not_just_the_stretch() {
+    // Regression test for a real bug caught by rendering the example
+    // specimen sheet: the justify branch advanced each word by
+    // stringwidth(word) + tdextra alone, dropping the line's own
+    // natural inter-word space entirely -- every word landed roughly
+    // one space-width short of where it belonged, and with several
+    // gaps in a row the shortfall compounded into words visibly
+    // overlapping ("flowsabrush:wordbyword..." instead of "flows a
+    // brush: word by word..."). Calls tfdrawline directly (lastline
+    // forced false) so this pins the arithmetic in isolation, without
+    // depending on tfwrap's own line-break choices. "aa bb cc dd ee
+    // ff" at 20pt Helvetica is 147.88pt natural width with 5.556pt
+    // spaces (5 gaps); stretched to fill a 160pt span, the dropped-
+    // space bug falls 5*5.556=27.78pt short of the right edge (lands
+    // near x=142), while the fix reaches it (near x=170).
+    let mut it = Interp::with_page(200, 100).expect("page");
+    load(&mut it);
+    it.run_str(&with_helvetica(
+        20.0,
+        "10 170 50 /justify false (aa bb cc dd ee ff) tfdrawline",
+    ))
+    .unwrap_or_else(|e| panic!("tfdrawline failed: {}", it.error_report(&e)));
+    let pixmap = &it.gfx().pixmap;
+    let mut max_x = 0u32;
+    for y in 0..pixmap.height() {
+        for x in 0..pixmap.width() {
+            if pixmap.pixel(x, y).expect("in bounds").red() < 128 {
+                max_x = max_x.max(x);
+            }
+        }
+    }
+    assert!(
+        max_x > 160,
+        "justified line should stretch its rightmost ink close to x1=170; \
+         got {max_x}, which matches the dropped-natural-space bug's shortfall (expected ~142)"
+    );
+}
+
+#[test]
+fn tfwrap_can_leave_a_trailing_space_on_a_wrapped_line() {
+    // Sets up the scenario tfdrawline_justify_ignores_a_trailing_space
+    // below depends on: a run of two source spaces at a wrap point
+    // leaves one attached to the end of the emitted line rather than
+    // being collapsed -- confirmed directly against tfwrap so that
+    // test's premise isn't just assumed.
+    let got = eval(&with_helvetica(14.0, "(aa bb  cc dd) 45 tfwrap aload pop"));
+    assert_eq!(got, ["(aa bb )", "(cc dd)"]);
+}
+
+#[test]
+fn tfdrawline_justify_ignores_a_trailing_space_left_by_the_wrap() {
+    // Regression test for a real bug caught by cross-model (Codex)
+    // review: tfwordgaps/the justify loop counted every literal space
+    // in the line, including a trailing one left by tflinebreak at a
+    // double-space wrap point (see the test above) -- so /justify
+    // treated it as a real gap with an invisible "word" after it,
+    // spending stretch on nothing and leaving the actual last word
+    // short of x1. "aa bb" (trimmed) is 50.05pt at 20pt Helvetica,
+    // "aa bb " (untrimmed) is 55.61pt; stretched into a 90pt span, the
+    // untrimmed bug spends half its stretch on the phantom trailing
+    // gap and reaches only ~77 (10 + natural width + one gap's worth
+    // of stretch), while the fix (trim first, one real gap) reaches
+    // the full span, close to x1=100.
+    let mut it = Interp::with_page(150, 100).expect("page");
+    load(&mut it);
+    it.run_str(&with_helvetica(
+        20.0,
+        "10 100 50 /justify false (aa bb ) tfdrawline",
+    ))
+    .unwrap_or_else(|e| panic!("tfdrawline failed: {}", it.error_report(&e)));
+    let pixmap = &it.gfx().pixmap;
+    let mut max_x = 0u32;
+    for y in 0..pixmap.height() {
+        for x in 0..pixmap.width() {
+            if pixmap.pixel(x, y).expect("in bounds").red() < 128 {
+                max_x = max_x.max(x);
+            }
+        }
+    }
+    assert!(
+        max_x > 90,
+        "justified line should stretch its rightmost ink close to x1=100 \
+         once the trailing space is excluded from gap-counting; \
+         got {max_x}, which matches the phantom-trailing-gap bug's shortfall (expected ~77)"
+    );
+}
+
+#[test]
+fn tfflow_returns_leftover_text_that_did_not_fit_vertically() {
+    // A box too short to hold every line should return the unflowed
+    // remainder rather than silently dropping or erroring on it.
+    let got = eval(&with_helvetica(
+        14.0,
+        "10 10 100 20 16 /left (one two three four five six seven eight nine) tfblock",
+    ));
+    assert_eq!(got.len(), 1, "expected one leftover string on the stack");
+    assert!(
+        !got[0].trim_matches(|c| c == '(' || c == ')').is_empty(),
+        "expected non-empty leftover from a too-short box, got {got:?}"
+    );
+}
+
+#[test]
+fn tfflow_returns_empty_leftover_when_everything_fits() {
+    let got = eval(&with_helvetica(
+        14.0,
+        "10 10 280 200 16 /left (short text) tfblock",
+    ));
+    assert_eq!(got, ["()"], "expected empty leftover when text fully fits");
+}
+
+#[test]
+fn tfflow_honors_a_custom_boundsproc_for_a_non_rectangular_region() {
+    // The whole point of tfflow taking a boundsproc instead of a fixed
+    // width: a region whose available width varies by line (not just
+    // a plain rectangle) should actually get different per-line
+    // widths. Use a boundsproc that halves the available width for
+    // any line below y=100, and confirm a wrapped line placed below
+    // that threshold is measurably narrower (as ink) than one above
+    // it, for the same font and text.
+    let mut it = Interp::with_page(300, 200).expect("page");
+    load(&mut it);
+    it.run_str(&with_helvetica(
+        14.0,
+        "{ /y exch def y 100 gt { 20 220 } { 20 100 } ifelse } \
+         116 20 20 /left \
+         (aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj) tfflow pop",
+    ))
+    .unwrap_or_else(|e| panic!("tfflow failed: {}", it.error_report(&e)));
+    // Sanity: at least some ink was placed both above and below y=100.
+    let pixmap = &it.gfx().pixmap;
+    let mut ink_above = 0usize;
+    let mut ink_below = 0usize;
+    for y in 0..pixmap.height() {
+        for x in 0..pixmap.width() {
+            if pixmap.pixel(x, y).expect("in bounds").red() < 128 {
+                // pixmap y=0 is the top of the canvas; device y = height-1-y in PS coords.
+                let ps_y = pixmap.height() - 1 - y;
+                if ps_y > 100 {
+                    ink_above += 1;
+                } else {
+                    ink_below += 1;
+                }
+            }
+        }
+    }
+    assert!(ink_above > 0, "expected ink above y=100");
+    assert!(ink_below > 0, "expected ink below y=100");
+}
+
+#[test]
+fn tfflow_nested_in_its_own_boundsproc_needs_the_inner_call_wrapped_in_a_dict() {
+    // Regression test for a real bug caught by cross-model (Codex)
+    // review: tfflow's own traversal state (tfstr/tfy/tflast/tfrest/...)
+    // is a set of plain globals, not dict-scoped -- same failure family
+    // as the tiling section's tg-/tk- gotcha and gasket/carpet's own
+    // nesting bug, but for tfflow itself, not just tfblock/tfcols. A
+    // boundsproc that calls tfflow again, unwrapped, clobbers the
+    // outer call's state the instant the inner one runs -- confirmed
+    // to actually discard real text, not just draw the wrong thing:
+    // the outer call's own leftover comes back empty even though a box
+    // too short to hold it all should leave a real remainder.
+    //
+    // Box: y0=100, ybot=90, leading=16 -- capacity for exactly one
+    // line, so the long outer sentence below must leave substantial
+    // leftover text under correct behavior.
+    let unwrapped = eval(&with_helvetica(
+        12.0,
+        "{ /y exch def 10 190 \
+          { pop 10 190 } 300 10 14 /left (inner words fill this space nicely) tfflow pop } \
+         100 90 16 /left \
+         (outer words must remain visible after the inner call runs and this text is long) \
+         tfflow",
+    ));
+    assert_eq!(
+        unwrapped,
+        ["()"],
+        "expected the unwrapped nested call to lose the outer leftover (comes back empty)"
+    );
+
+    let wrapped = eval(&with_helvetica(
+        12.0,
+        "{ /y exch def 10 190 \
+          8 dict begin \
+              { pop 10 190 } 300 10 14 /left (inner words fill this space nicely) tfflow pop \
+          end } \
+         100 90 16 /left \
+         (outer words must remain visible after the inner call runs and this text is long) \
+         tfflow",
+    ));
+    assert_ne!(
+        wrapped,
+        ["()"],
+        "wrapped: outer leftover should be the real unflowed remainder, not empty"
+    );
+    assert!(
+        wrapped[0].contains("text is long"),
+        "wrapped: expected the outer's own true leftover text, got {wrapped:?}"
+    );
+}
+
+#[test]
+fn tfcols_flows_across_columns_and_leaves_correct_leftover() {
+    // Three narrow columns should each take a chunk of the text; with
+    // enough columns/height to hold it all, the leftover should be
+    // empty, and different columns should each end up with ink (i.e.
+    // the whole run isn't dumped into the first column alone).
+    let mut it = Interp::with_page(300, 200).expect("page");
+    load(&mut it);
+    // Column height 30 with 14pt leading holds exactly 2 lines per
+    // column (first baseline at y+h-leading=26, second at 12, a third
+    // would land at -2 < ybot=10) -- 6 line-slots across 3 columns for
+    // the 5 lines "one two three four five six seven eight nine ten
+    // eleven twelve" wraps to at width 80 (confirmed via tfwrap
+    // directly), so it spills as far as the third column but not past
+    // it.
+    it.run_str(&with_helvetica(
+        12.0,
+        "10 10 80 10 30 3 14 /left \
+         (one two three four five six seven eight nine ten eleven twelve) tfcols pop",
+    ))
+    .unwrap_or_else(|e| panic!("tfcols failed: {}", it.error_report(&e)));
+    let pixmap = &it.gfx().pixmap;
+    let mut ink_col1 = 0usize; // x in [10,90)
+    let mut ink_col3 = 0usize; // x in [190,270)
+    for y in 0..pixmap.height() {
+        for x in 0..pixmap.width() {
+            if pixmap.pixel(x, y).expect("in bounds").red() < 128 {
+                if (10..90).contains(&x) {
+                    ink_col1 += 1;
+                } else if (190..270).contains(&x) {
+                    ink_col3 += 1;
+                }
+            }
+        }
+    }
+    assert!(ink_col1 > 0, "expected ink in the first column");
+    assert!(
+        ink_col3 > 0,
+        "expected ink to have flowed as far as the third column"
+    );
+}
+
+#[test]
+fn tfcols_returns_leftover_when_text_exceeds_all_columns() {
+    let got = eval(&with_helvetica(
+        14.0,
+        "10 10 40 5 20 2 16 /left \
+         (one two three four five six seven eight nine ten eleven twelve) tfcols",
+    ));
+    assert_eq!(got.len(), 1);
+    assert!(
+        !got[0].trim_matches(|c| c == '(' || c == ')').is_empty(),
+        "expected non-empty leftover once both narrow columns fill up, got {got:?}"
     );
 }

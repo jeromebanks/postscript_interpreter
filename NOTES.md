@@ -3,6 +3,124 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Paragraph/flowing-text layout for artkit (issue #16, 2026-08-07)
+
+Closes issue #16. The issue asked for reusable paragraph/flowing-text
+layout procedures in `lib/artkit.ps` — wrapping, justification,
+columns, margins/leading, and setting a block of copy into an
+arbitrary region, not just a straight or curved baseline — with wrap
+algorithm, justification method, and the shape/column API explicitly
+left to the implementer.
+
+**Five procedures, one shared primitive.** `tflinebreak` (internal)
+peels one greedy-wrapped line off a string under the current font,
+forcing a break on an embedded newline and reporting whether this is a
+paragraph's last line (so callers know not to stretch-justify it).
+`tfwrap` builds on it for the fixed-width, no-drawing case
+(measurement/line-counting). The real design decision was `tfflow`:
+rather than take a fixed box, it takes a `boundsproc` — `{y -> x0 x1}`,
+called once per line — so a region's available width can vary with
+height instead of being locked to a rectangle. `tfblock` (a plain box)
+and `tfcols` (columns, feeding one call's leftover into the next) are
+both just `tfflow` with a constant-width boundsproc built from their
+own args; a caller who needs a trapezoid, an arch, or a circle (the
+gallery piece below) writes their own boundsproc and calls `tfflow`
+directly. `tfdrawline` does the per-line alignment (`/left /right
+/center /justify`, unknown names falling back to `/left` — this file's
+usual latitude-not-error posture); `/justify` skips stretching
+whenever the caller says this is the paragraph's last line, or the
+line is a single word with nothing to stretch between.
+
+**Four real bugs, caught across three different passes, none of them
+by the first draft of tests.** (1) `advisor` review of the plan caught,
+on inspection alone, that `tflinebreak`'s end-of-string branch
+unconditionally took the whole remainder as one line without checking
+whether it actually fit the width — so the last word of every
+non-terminal paragraph silently overflowed instead of wrapping to its
+own line. Fixed by measuring the remainder before taking it, falling
+back to the last known-good break otherwise. (2) Rendering
+`examples/paragraph_layout.ps` (not a targeted test — just looking at
+the output) turned up a second, worse bug: `/justify`'s word-advance
+added `stringwidth(word) + tdextra` but never added the line's own
+*natural* space width, so every inter-word gap was short by a full
+space — with several gaps on one line the shortfall compounded into
+visibly overlapping words ("flowsabrush:wordbyword..."). The original
+ink-bbox regression test for justify didn't catch this, because
+crushed-together text still reaches close to the right margin, same as
+properly-spaced text — a new test was added that calls `tfdrawline`
+directly with `lastline` forced false and asserts the *specific*
+x-position the arithmetic predicts, confirmed to fail against the
+pre-fix code (rightmost ink at 141 instead of ~170) before being
+folded into the suite.
+
+A follow-up cross-model (Codex) review of the implementation, run per
+`SDLC.md`'s independent-review step, found two more, both genuine and
+both fixed before merge: (3) `tfwordgaps` counted *every* literal space
+in a line, including a trailing one `tflinebreak` can leave behind at a
+double-space wrap point (confirmed directly: `(aa bb  cc dd)` at width
+45 wraps to `["aa bb ", "cc dd"]`, trailing space intact) — so
+`/justify` spent stretch on that invisible trailing gap instead of the
+real ones, leaving the actual last word short of the margin. Fixed by
+trimming trailing spaces off the line at the top of `tfdrawline`,
+before either the width measurement or any alignment branch runs (this
+also quietly fixes the same trailing-space nudging `/right` and
+`/center` slightly off their true position, not just `/justify`). (4)
+The nesting gotcha documented for `tfblock`/`tfcols` below turned out
+to be incomplete: `tfflow` itself is just as vulnerable, since it's
+built from the same kind of plain globals, and a boundsproc that calls
+`tfflow` again unwrapped doesn't just draw the wrong thing — it
+silently discards real, unflowed text from the *outer* call (confirmed
+directly: an outer call with too little room to fit its whole
+paragraph reports an empty leftover instead of the real remainder, the
+instant the inner call's own state overwrites the outer's mid-loop).
+Same fix as the tiling section's hexgrid+hex gotcha: wrap the inner
+call in its own dict; confirmed this restores the outer call's correct
+leftover.
+
+A second Codex round, on the pushed fixes, found a fifth issue outside
+the library itself: the gallery piece's medallion motto overflowed its
+`tfflow` region at the bounds/leading/font it was set with, and the
+`pop` after the call silently discarded the non-empty leftover — the
+committed render ended mid-sentence ("...A LINE FINDS", dropping "THE
+ROOM A CALLERS OWN RULE ALLOWS IT"). Fixed by shortening the motto to
+one that fits (confirmed empty leftover), not by enlarging the
+medallion or shrinking the font, which would have changed the piece's
+proportions. A third Codex round, on that fix, flagged that `tab`
+isn't recognized as a wrap separator — correct as read, but not a
+defect: this interpreter's own `show`/`stringwidth` give tab no
+special treatment either, so treating it as ordinary word content
+(not a break point) keeps the wrap logic agreeing with what actually
+renders, rather than disagreeing with it by inventing meaning for a
+character nothing else here understands. Dispositioned as intentional
+scope, not implemented; the section header now says explicitly that
+space and newline are the only recognized separators rather than
+leaving "whitespace" ambiguous.
+
+**Deliberate scope cuts** (documented in the section header, same
+posture as `pathtext`'s plain-stringwidth advance): no hyphenation — an
+oversized single word gets its own line rather than being split; greedy
+wrap, not Knuth-Plass optimal-fit; whitespace runs around a wrap point
+(other than a trailing space at the very end of an emitted line, fixed
+above) are preserved verbatim rather than collapsed; vertical fit is
+judged by baseline, not glyph box, so a block's last line's descenders
+can fall a little past its bottom edge; `tfflow`/`tfblock`/`tfcols`
+share plain globals with any boundsproc they're handed (same
+convention as the tiling section's `tk-`/`tg-` prefixes), so a
+boundsproc must not itself call `tfflow`, `tfblock`, or `tfcols`
+without wrapping that inner call in its own dict — documented and
+tested (mirroring gasket/carpet's own nesting regression tests) rather
+than solved by redesigning `tfflow` off plain globals, consistent with
+how every other driver in this file handles its own analogous gotcha.
+
+`examples/paragraph_layout.ps` is a four-quadrant specimen sheet
+(`tfblock` left vs. `/justify`, `tfcols`, and `tfflow` with a circular
+boundsproc). The gallery piece, **The Compositor's Proof**
+(`gallery/compositors_proof.ps`), sets a motto inside a round medallion
+via `tfflow` and a hand-written circle boundsproc, a justified body
+paragraph via `tfblock`, and a two-column colophon via `tfcols` sized
+so the copy genuinely spills from the first column into the second
+(not just technically able to).
+
 ## A photo-to-line-etching/sketch utility (issue #15, 2026-08-07)
 
 Closes issue #15. The issue asked for "a utility to take a photo and

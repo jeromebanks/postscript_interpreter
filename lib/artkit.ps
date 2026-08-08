@@ -363,6 +363,261 @@ end
     tkcur 0.001 gt { currentfont tkw tkcur div scalefont setfont } if
 } def
 
+% --- paragraph / flowing text -----------------------------------------
+% Greedy word-wrap (not Knuth-Plass optimal-fit) under the current font,
+% built up from one primitive (tflinebreak, peels off one wrapped line)
+% through wrapping (tfwrap), alignment (tfdrawline), the general flow
+% engine (tfflow), and two conveniences over it (tfblock for a plain
+% rectangle, tfcols for columns). No hyphenation -- a word wider than
+% its line is placed alone rather than split, the same scope cut
+% pathtext documents for its plain-stringwidth advance. Space (32) and
+% newline (10) are the only recognized separators -- a tab is ordinary
+% word content, not a break point, matching this interpreter's `show`/
+% `stringwidth` giving tab no special treatment either (wrapping on a
+% character neither of those understands would make the glyph run and
+% the wrap logic disagree about where words are, worse than not
+% wrapping on it). Runs of spaces around a wrap point are preserved
+% verbatim into the line that keeps them rather than collapsed. An
+% embedded newline in the source string always forces a line break,
+% whether or not the line so far is anywhere near full -- that's what
+% lets a caller pass multiple paragraphs (or manual line breaks) as one
+% string.
+%
+% tfflow itself (tf-prefixed) and tfblock/tfcols (tb-/tc-prefixed, plus
+% the tf- globals of the tfflow call they make internally) are all
+% plain globals, the same no-dict-frame convention as every other
+% driver in this file (tk-/tg-/ap- above). That means, like the
+% documented hexgrid+hex/grid+ngon gotcha, a boundsproc that calls
+% tfflow, tfblock, or tfcols again -- flowing sub-text of its own into
+% a nested region -- clobbers the outer call's own tfstr/tfy/tflast/...
+% out from under it the instant the inner one runs, and confirmed to
+% actually happen (not just a theoretical risk): the outer call's own
+% leftover silently comes back empty, discarding real unflowed text,
+% not merely drawing the wrong thing. Same fix as hexgrid+hex: wrap
+% just the inner call in its own dict (`8 dict begin ... end`) so its
+% defs shadow there instead of landing on the outer's own bindings --
+% confirmed to restore the outer call's correct leftover once wrapped.
+%
+% Vertical fit is judged by baseline, not glyph box: tfflow stops once
+% the *next* baseline would fall below its ybot bound, so the last
+% line drawn has its baseline at or above ybot -- that line's own
+% descenders can still fall a little below it, same latitude grid/
+% rrect leave a caller to manage with margin.
+
+% (str) width tflinebreak  (line) (rest) lastline -
+% Peels the next wrapped line off str: greedily keeps whitespace-
+% separated words while they fit within width (stringwidth), stopping
+% at the first word that would overflow, or immediately at an embedded
+% newline. lastline is true when this line ends the whole string or an
+% explicit newline (so a caller doing justify knows not to stretch it),
+% false when it's a mid-paragraph wrap (more of the same paragraph
+% follows in rest). Internal primitive -- tfwrap and tfflow are the
+% public entry points built on it.
+/tflinebreak {
+    /tlw exch def /tlstr exch def
+    /tlen tlstr length def
+    /tli 0 def /tlbreak -1 def /tlnl false def /tlatend false def
+    {
+        tli tlen ge {
+            % End of string: only take the whole remainder as one line
+            % if it actually fits, or there was no earlier break to
+            % fall back on (a single word wider than the line) --
+            % otherwise keep the last break found so the final word(s)
+            % still wrap instead of overflowing.
+            tlstr 0 tlen getinterval stringwidth pop tlw le tlbreak 0 lt or {
+                /tlbreak tlen def /tlatend true def
+            } if
+            exit
+        } if
+        /tlc tlstr tli get def
+        tlc 32 eq tlc 10 eq or {
+            tlstr 0 tli getinterval stringwidth pop tlw le {
+                /tlbreak tli def /tlnl tlc 10 eq def
+                tlnl { exit } if
+            } {
+                tlbreak 0 ge { exit } if
+                /tlbreak tli def /tlnl tlc 10 eq def
+                exit
+            } ifelse
+        } if
+        /tli tli 1 add def
+    } loop
+    /tlline tlstr 0 tlbreak getinterval def
+    tlatend
+        { /tlrest () def }
+        { /tlrest tlstr tlbreak 1 add tlen tlbreak 1 add sub getinterval def }
+    ifelse
+    tlline tlrest tlatend tlnl or
+} def
+
+% (str) tfwordgaps  n -
+% Counts space-separated gaps in str (word count minus one), used to
+% divide justify's stretch. Internal.
+/tfwordgaps {
+    /twgrem exch def /twgn 0 def
+    {
+        twgrem ( ) search
+            { pop pop /twgrem exch def /twgn twgn 1 add def }
+            { pop exit }
+        ifelse
+    } loop
+    twgn
+} def
+
+% (str) width tfwrap  ARRAY -
+% Wraps str into an array of lines, none wider than width under the
+% current font. A standalone convenience for measuring/line-counting
+% without drawing; tfflow re-wraps per line itself so a region's width
+% can vary line to line, rather than calling this. An empty str yields
+% an empty array (zero lines), the same "nothing to do" reading tfflow
+% gives it -- not a one-element array holding a blank line.
+% Bound on the preallocated scratch array: tflinebreak either finishes
+% the string outright (one call) or peels off a break that strictly
+% shortens what's left by at least one character (tlbreak+1 >= 1
+% whenever it doesn't finish the string -- see tflinebreak), so at most
+% `length` calls run before rest is empty; `length + 1` slots is always
+% enough and this is checked directly by a regression test below.
+/tfwrap {
+    /twwidth exch def /twstr exch def
+    twstr length 0 eq {
+        []
+    } {
+        /twlines twstr length 1 add array def
+        /twn 0 def
+        {
+            twstr twwidth tflinebreak
+            /twlast exch def /twrest exch def /twline exch def
+            twlines twn twline put /twn twn 1 add def
+            /twstr twrest def
+            twrest length 0 eq { exit } if
+        } loop
+        twlines 0 twn getinterval
+    } ifelse
+} def
+
+% x0 x1 y just lastline (line) tfdrawline -
+% Draws one already-wrapped line at baseline y within [x0,x1] under
+% the current font, per just: /left /right /center /justify (any other
+% name falls back to /left, this file's usual latitude-not-error
+% posture). /justify stretches inter-word gaps to fill [x0,x1] exactly;
+% it's skipped -- falling back to /left -- whenever lastline is true or
+% the line has no internal gap (a single word), the standard
+% typographic reason a paragraph's last line and lone words don't get
+% stretched into ugly gaps.
+% Trailing spaces are trimmed off the line first (a run of two or more
+% source spaces at a wrap point leaves one on the end of the emitted
+% line -- tflinebreak's own documented "whitespace preserved verbatim"
+% behavior, mid-line only; see its header). Untrimmed, that invisible
+% trailing space both widens tdw (nudging /right and /center off by its
+% width) and, worse, counts as its own /justify gap with nothing after
+% it to stretch toward -- stealing stretch from the real gaps so the
+% last visible word falls short of x1. Caught by cross-model review.
+/tfdrawline {
+    /tdline exch def /tdlast exch def /tdjust exch def
+    /tdy exch def /tdx1 exch def /tdx0 exch def
+    {
+        tdline length 0 eq { exit } if
+        tdline tdline length 1 sub get 32 ne { exit } if
+        /tdline tdline 0 tdline length 1 sub getinterval def
+    } loop
+    /tdw tdline stringwidth pop def
+    tdjust /right eq {
+        tdx1 tdw sub tdy moveto tdline show
+    } {
+    tdjust /center eq {
+        tdx0 tdx1 tdx0 sub tdw sub 2 div add tdy moveto tdline show
+    } {
+    tdjust /justify eq tdlast not and {
+        tdline tfwordgaps /tdgaps exch def
+        tdgaps 0 gt {
+            % tdw already includes the line's own natural space widths,
+            % so the per-gap advance is that natural space plus an even
+            % share of whatever's left to reach tdx1 -- not tdextra
+            % alone (that would drop the natural space and mash every
+            % word together, the real bug an example piece caught).
+            /tdspace ( ) stringwidth pop def
+            /tdextra tdx1 tdx0 sub tdw sub tdgaps div def
+            /tdx tdx0 def /tdrem tdline def
+            {
+                tdrem ( ) search {
+                    /tdpre exch def /tdmatch exch def /tdpost exch def
+                    tdx tdy moveto tdpre show
+                    /tdx tdx tdpre stringwidth pop add tdspace add tdextra add def
+                    /tdrem tdpost def
+                } {
+                    tdx tdy moveto tdrem show
+                    exit
+                } ifelse
+            } loop
+        } {
+            tdx0 tdy moveto tdline show
+        } ifelse
+    } {
+        tdx0 tdy moveto tdline show
+    } ifelse } ifelse } ifelse
+} def
+
+% boundsproc y0 ybot leading just (str) tfflow  (leftover) -
+% The general paragraph-flow engine: boundsproc is {y -> x0 x1}, called
+% once per line before it's wrapped, so a region's available width can
+% vary with height -- a trapezoid, a shape hugging a curve, anything,
+% not just a fixed rectangle. Starting at baseline y0 and stepping down
+% by leading each line, wraps and draws against boundsproc's width
+% until str is exhausted or the next baseline would pass ybot, then
+% returns whatever text didn't fit as leftover ("" if all of it flowed)
+% -- what makes columns and multi-region flows composable: feed one
+% call's leftover into the next region's tfflow/tfblock/tfcols call.
+/tfflow {
+    /tfstr exch def /tfjust exch def /tfleading exch def
+    /tfybot exch def /tfy exch def /tfbp exch def
+    {
+        tfstr length 0 eq { exit } if
+        tfy tfybot lt { exit } if
+        tfy tfbp
+        /tfx1 exch def /tfx0 exch def
+        tfstr tfx1 tfx0 sub tflinebreak
+        /tflast exch def /tfrest exch def /tfline exch def
+        tfx0 tfx1 tfy tfjust tflast tfline tfdrawline
+        /tfy tfy tfleading sub def
+        /tfstr tfrest def
+    } loop
+    tfstr
+} def
+
+% x y w h leading just (str) tfblock  (leftover) -
+% tfflow's common case: flow str into the rectangle x,y,w,h (bottom-
+% left + size, the same convention as rrect/grid), top-down starting
+% one leading below the box's top edge. Returns leftover text that
+% didn't fit vertically, same contract as tfflow.
+/tfblock {
+    /tbstr exch def /tbjust exch def /tblead exch def
+    /tbh exch def /tbw exch def /tby exch def /tbx exch def
+    { pop tbx tbx tbw add }
+    tby tbh add tblead sub
+    tby tblead tbjust tbstr
+    tfflow
+} def
+
+% x0 y0 colw gap h ncols leading just (str) tfcols  (leftover) -
+% Flows str across ncols equal-width columns (colw wide, gap between
+% them, all h tall, left edges at x0 + i*(colw+gap)), feeding each
+% column's tfblock leftover into the next and stopping early once the
+% text runs out. Returns whatever didn't fit after the last column,
+% same contract as tfflow.
+/tfcols {
+    /tcstr exch def /tcjust exch def /tclead exch def
+    /tcn exch def /tch exch def /tcgap exch def
+    /tcw exch def /tcy exch def /tcx exch def
+    0 1 tcn 1 sub {
+        /tci exch def
+        tcstr length 0 eq { exit } if
+        tcx tci tcw tcgap add mul add
+        tcy tcw tch tclead tcjust tcstr tfblock
+        /tcstr exch def
+    } for
+    tcstr
+} def
+
 % --- layout ----------------------------------------------------------
 
 /grid {                                          % x y w h cols rows proc -
