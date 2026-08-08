@@ -264,14 +264,14 @@ the source of truth:
   capabilities land, per AGENTS.md — not as an afterthought.
 - If the feature has something a human could actually look at (a new
   art capability, template, chart type, font, etc.), give it a demo
-  somewhere it's actually seen -- a `gallery/` piece (`gallery/
-  show.sh`, `gallery/README.md`), or the published site, whose three
-  lists (`scripts/build_site.sh`'s render loop, a card in `site/
-  gallery.html`, an entry in `site/playground.html`'s example picker)
-  are each hand-maintained and none generates another -- copy an
-  existing similar entry's pattern rather than updating just one. An
-  `examples/*.ps` file alone is a regression fixture, not a demo; it's
-  fine as the *only* artifact when the feature genuinely has no
+  somewhere it's actually seen — a `gallery/` piece (`gallery/show.sh`,
+  `gallery/README.md`), or the published site, whose three lists
+  (`scripts/build_site.sh`'s render loop, a card in
+  `site/gallery.html`, an entry in `site/playground.html`'s example
+  picker) are each hand-maintained and none generates another — copy
+  an existing similar entry's pattern rather than updating just one.
+  An `examples/*.ps` file alone is a regression fixture, not a demo;
+  it's fine as the *only* artifact when the feature genuinely has no
   visible surface (an internal fix, a lint check, a Rust-only
   refactor), but don't let that be the default reason to skip this.
 
