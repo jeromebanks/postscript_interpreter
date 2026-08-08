@@ -327,6 +327,10 @@ impl Interp {
                 Ok(None) => return Ok(false),
                 Ok(Some(o)) => o,
                 Err(e) => {
+                    // A scan/syntax error short-circuits out of
+                    // next_item before any Action ran, so the failing
+                    // Scanner frame is still on top with its line set.
+                    self.sync_scan_line();
                     self.recover(e)?;
                     continue;
                 }
@@ -378,6 +382,21 @@ impl Interp {
                     Object::exec(Value::Name(crate::name::intern_rc(c))),
                 );
             }
+        }
+    }
+
+    /// Refresh `last_line` from the innermost frame if it's a
+    /// main-program `Scanner` — a no-op (line stays sticky) otherwise.
+    /// Called both when a token is successfully yielded *and* when
+    /// scanning it failed (`next_token` sets its line before dispatch
+    /// succeeds or fails, so the frame reflects the failing token's
+    /// line either way — it just hasn't been popped yet, since the
+    /// error propagated before any `Action` was applied).
+    fn sync_scan_line(&mut self) {
+        if let Some(Frame::Scanner(lexer)) = self.estack.last()
+            && let Some(line) = lexer.line()
+        {
+            self.last_line = Some(line);
         }
     }
 
@@ -585,15 +604,7 @@ impl Interp {
             };
             match action {
                 Action::Yield(o) => {
-                    // `Proc` frames yield too (a previously-parsed
-                    // procedure has no source line of its own), so only
-                    // update when the object actually came straight off
-                    // a scanner — `last_line` stays sticky otherwise.
-                    if let Some(Frame::Scanner(lexer)) = self.estack.last()
-                        && let Some(line) = lexer.line()
-                    {
-                        self.last_line = Some(line);
-                    }
+                    self.sync_scan_line();
                     return Ok(Some(o));
                 }
                 Action::PopThenYield(o) => {
@@ -1276,5 +1287,49 @@ mod tests {
         let err = it.run_str("42 pop\n(1 0 div) cvx exec").unwrap_err();
         let report = it.error_report(&err);
         assert!(report.contains("Line: 2"), "report: {report}");
+    }
+
+    #[test]
+    fn error_report_lines_a_syntax_error_correctly() {
+        // Regression test (Codex review, PR #59): a scan/syntax error
+        // propagates out of next_item via `?` before any Action ever
+        // runs, so the old Yield-only line sync never saw it — the
+        // report kept whatever line the previous good token was on.
+        // "1 pop" is line 1; the stray ')' that has no matching '(' is
+        // on line 2.
+        let mut it = Interp::new();
+        let err = it.run_str("1 pop\n)").unwrap_err();
+        let report = it.error_report(&err);
+        assert!(report.contains("Line: 2"), "report: {report}");
+    }
+
+    #[test]
+    fn error_report_counts_lone_cr_as_a_line_ending() {
+        // Regression test (Codex review, PR #59): the file-level line
+        // counter only advanced on '\n', missing old-Mac-style
+        // lone-CR line endings (PostScript accepts CR, LF, and CRLF).
+        let mut it = Interp::new();
+        let err = it.run_str("1 pop\r1 0 div\r").unwrap_err();
+        let report = it.error_report(&err);
+        assert!(report.contains("Line: 2"), "report: {report}");
+    }
+
+    #[test]
+    fn error_report_counts_a_crlf_pair_as_one_line_ending() {
+        let mut it = Interp::new();
+        let err = it.run_str("1 pop\r\n1 0 div\r\n").unwrap_err();
+        let report = it.error_report(&err);
+        assert!(report.contains("Line: 2"), "report: {report}");
+    }
+
+    #[test]
+    fn error_report_lines_a_malformed_first_token() {
+        // Same gap, worst case: the very first token is malformed, so
+        // there's no earlier successfully-scanned token to fall back
+        // on at all.
+        let mut it = Interp::new();
+        let err = it.run_str(")").unwrap_err();
+        let report = it.error_report(&err);
+        assert!(report.contains("Line: 1"), "report: {report}");
     }
 }
