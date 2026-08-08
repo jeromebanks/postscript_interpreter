@@ -126,6 +126,34 @@ fn lint_flags_a_blank_page_on_a_plain_file_run_with_no_output_format() {
 }
 
 #[test]
+fn lint_flags_a_blank_page_for_eval_style_usage_when_an_output_format_is_also_requested() {
+    // Regression test (Codex review round 7, PR #59): render_checks
+    // gated purely on `eval.is_none()`, so `-e` paired with an
+    // explicit --png/--svg/--pdf -- a real render request, not just a
+    // "leave a result on the stack" calculator snippet -- silently
+    // skipped blank-page/stack-leak too. An output format flag means
+    // rendering was actually asked for, regardless of the source.
+    let png = tmp("lint-eval-blank.png");
+    let (ok, _out, stderr) = run(
+        &[
+            "--page",
+            "40x40",
+            "--png",
+            png.to_str().unwrap(),
+            "--lint",
+            "-e",
+            "showpage",
+        ],
+        "",
+    );
+    assert!(ok, "stderr: {stderr}");
+    assert!(
+        stderr.contains("pscat: lint: [blank-page]"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
 fn lint_flags_a_blank_page_when_an_output_format_is_requested() {
     let png = tmp("lint-blank.png");
     let (ok, _out, stderr) = run(

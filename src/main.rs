@@ -322,8 +322,16 @@ fn report_lint(interp: &Interp, options: &Options) {
     // "leave a result on the stack, don't necessarily draw anything"
     // exception (Codex review, PR #59: gating on the output-format
     // flags instead meant `pscat --lint file.ps` silently skipped both
-    // checks whenever `--png`/`--svg`/`--pdf` weren't also given).
-    let render_checks = options.eval.is_none();
+    // checks whenever `--png`/`--svg`/`--pdf` weren't also given) --
+    // *unless* `-e` is paired with an explicit output flag, which is a
+    // real render request regardless of the source being a snippet
+    // (round 7: `pscat --lint --png out.png -e 'showpage'` reported
+    // clean on a blank artifact because `eval.is_none()` alone gated
+    // this, ignoring that an output format was explicitly asked for).
+    let render_checks = options.eval.is_none()
+        || options.png.is_some()
+        || options.svg.is_some()
+        || options.pdf.is_some();
     let findings = interp.lint(render_checks);
     if findings.is_empty() {
         eprintln!("pscat: lint: clean");

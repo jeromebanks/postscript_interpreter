@@ -35,7 +35,17 @@ on every single call (`3 4 add` "leaking" its own result). Caught by
 `render_checks: bool` through `lint::check` (on for `--png`/`--svg`/
 `--pdf`, off otherwise) and, at the MCP layer, simply not wiring
 `--lint` into `eval_postscript` at all in v1 — its checks don't fit
-that tool's normal usage pattern.
+that tool's normal usage pattern. `render_checks`'s exact gate moved
+twice more under review: round 2 caught it keying off the output-format
+flags instead of `-e`, which meant a plain `pscat --lint file.ps` (no
+`--png`) silently skipped both checks; round 7 caught the opposite gap
+in the fix for that — gating purely on `eval.is_none()` meant `-e`
+*paired with* an explicit `--png`/`--svg`/`--pdf` (a real render
+request, e.g. `pscat --lint --png out.png -e 'showpage'`) also skipped
+them and reported a blank artifact as clean. The gate is now `eval.is_
+none() || png.is_some() || svg.is_some() || pdf.is_some()`: skip only
+when it's a bare calculator-style `-e` snippet with no output asked
+for at all.
 
 **Source-line attribution (`error_report`'s new `; Line: N`) is scoped
 to the top-level program only**, not `run`-loaded library files, eexec
