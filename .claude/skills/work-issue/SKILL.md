@@ -267,7 +267,11 @@ the source of truth:
   somewhere it's actually seen — and match the surface's real
   requirements, not just its most visible file:
   - A generative-art piece: add it to `gallery/show.sh`'s `PIECES`
-    array and `gallery/README.md`, *and* render + commit
+    array *and* the parallel `PAGES`/`SPEEDS` arrays at the same
+    index — all three are indexed together under `set -u`, so a
+    `PIECES`-only addition leaves `--live` mode aborting on an unbound
+    variable the moment it reaches the new entry. Also update
+    `gallery/README.md`, *and* render + commit
     `gallery/renders/<name>.png` — `show.sh`'s default (non-`--live`)
     mode silently skips any piece missing that PNG, which defeats the
     whole point.
