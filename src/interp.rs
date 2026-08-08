@@ -307,26 +307,40 @@ impl Interp {
         result
     }
 
-    /// Abort the program: drop every frame, sealing any Type 3 glyph
-    /// contexts left open (their graphics-state snapshot and paint
-    /// suppression must not leak past the show that created them).
-    /// Also pops the dict-stack push a live `eexec` scanner carries
-    /// (`pop_systemdict`) — normal completion does this via
-    /// `Action::PopScannerAndDict`, but an error or `quit` mid-stream
-    /// used to abort straight past it, leaving systemdict pushed a
-    /// second time with nothing left on the execution stack to signal
-    /// why (issue #17's lint mode surfaced this as a false `dict-leak`
-    /// finding on any program that errors inside an embedded Type 1
-    /// font's encrypted section — see NOTES.md's issue #17 entry).
+    /// Per-frame teardown shared by every unwind path — `unwind_all`
+    /// (abort: an unhandled error or `quit`) and `do_stop` (recoverable:
+    /// `stop`, or an error caught by an enclosing `stopped`). Any frame
+    /// kind that holds state needing explicit cleanup when it's dropped
+    /// mid-flight belongs here, not duplicated in both callers — missing
+    /// one path is exactly how the eexec case (below) went unnoticed
+    /// until issue #17's lint mode made it visible (round 5 of that
+    /// PR's cross-model review: the first fix only covered
+    /// `unwind_all`, missing that `stopped` catching an error/`stop`
+    /// inside an eexec stream goes through `do_stop` instead — worse
+    /// than the abort case, since execution *continues* afterward with
+    /// a phantom systemdict on top of the dict stack, so a subsequent
+    /// `def` lands in the wrong dictionary).
+    fn cleanup_unwound_frame(&mut self, frame: Frame) {
+        match frame {
+            // Type 3 glyph contexts' graphics-state snapshot and paint
+            // suppression must not leak past the show that created them.
+            Frame::Show(mut ctx) => ctx.cleanup(&mut self.gfx),
+            // `begin_eexec` pushes systemdict for the encrypted stream's
+            // duration, popped on normal completion via
+            // `Action::PopScannerAndDict`; a scanner dropped mid-flight
+            // needs the same pop or systemdict ends up pushed twice.
+            Frame::Scanner(lexer) if lexer.pop_systemdict && self.dstack.len() > 2 => {
+                self.dstack.pop();
+            }
+            _ => {}
+        }
+    }
+
+    /// Abort the program: drop every frame (see `cleanup_unwound_frame`
+    /// for what each kind needs).
     fn unwind_all(&mut self) {
         while let Some(frame) = self.estack.pop() {
-            match frame {
-                Frame::Show(mut ctx) => ctx.cleanup(&mut self.gfx),
-                Frame::Scanner(lexer) if lexer.pop_systemdict && self.dstack.len() > 2 => {
-                    self.dstack.pop();
-                }
-                _ => {}
-            }
+            self.cleanup_unwound_frame(frame);
         }
     }
 
@@ -895,13 +909,10 @@ impl Interp {
     /// what the PLRM's outermost job-server `stopped` would do.
     pub(crate) fn do_stop(&mut self) -> bool {
         while let Some(frame) = self.estack.pop() {
-            match frame {
-                Frame::StopMark => return true,
-                // Unwinding across an in-flight show must seal its glyph
-                // context (see unwind_all).
-                Frame::Show(mut ctx) => ctx.cleanup(&mut self.gfx),
-                _ => {}
+            if matches!(frame, Frame::StopMark) {
+                return true;
             }
+            self.cleanup_unwound_frame(frame);
         }
         false
     }
@@ -1386,6 +1397,55 @@ mod tests {
             it.dict_stack_len(),
             2,
             "systemdict/userdict only -- eexec's push must not survive an aborted run"
+        );
+    }
+
+    #[test]
+    fn a_caught_stop_inside_eexec_does_not_leave_a_phantom_dict_stack_entry() {
+        // Regression test (Codex review round 5, PR #59): round 4 only
+        // fixed unwind_all (the abort path); `stop` inside an eexec
+        // stream -- or an error caught by an *enclosing* `stopped` --
+        // unwinds via do_stop instead, which had the identical gap.
+        // Worse than the abort case: execution continues afterward, so
+        // a leftover systemdict push doesn't just mislead a diagnostic,
+        // it silently redirects the next `def`.
+        let mut it = Interp::new();
+        // Two things this can't be built from: a `{...}` procedure
+        // literal (parsed as an ordinary token stream up front, before
+        // `eexec` ever runs, so the raw encrypted bytes would be
+        // (mis)scanned as literal source) or an executable *string*
+        // (`currentfile` explicitly skips non-file scanners per the
+        // PLRM, so it would resolve to whatever real file happens to be
+        // running further down the stack instead of this one). A `Value
+        // ::File` pushed and executed directly — what `run` builds
+        // internally — is a real file frame, so `currentfile` inside it
+        // resolves to itself, same as a `run`-loaded program would see.
+        //
+        // A trailing "\n" in the plaintext, not just "stop": the scanner
+        // peeks one byte past a token to consume its delimiter
+        // (`eat_token_delimiter`) *before* the token is even returned
+        // for execution, so without real plaintext there to satisfy
+        // that peek it decodes whatever raw byte follows next using the
+        // ongoing cipher stream — garbage, not this test's concern.
+        // Real Type 1 fonts avoid this the same way, via trailing zero
+        // padding after the encrypted section.
+        let encrypted = eexec_encrypt(b"stop\n");
+        let mut inner = b"currentfile eexec ".to_vec();
+        inner.extend(encrypted);
+        it.push(Object::exec(Value::File(crate::file::PsFile::from_bytes(
+            inner,
+        ))));
+        it.run_str("stopped pop /probe 1 def")
+            .expect("stopped catches it; overall run succeeds");
+        assert_eq!(
+            it.dict_stack_len(),
+            2,
+            "systemdict/userdict only -- eexec's push must not survive a caught stop"
+        );
+        assert_eq!(
+            it.load("probe").expect("defined").repr(),
+            "1",
+            "def after the stopped block must land in userdict, not a phantom systemdict"
         );
     }
 }
