@@ -329,8 +329,21 @@ impl Interp {
             // duration, popped on normal completion via
             // `Action::PopScannerAndDict`; a scanner dropped mid-flight
             // needs the same pop or systemdict ends up pushed twice.
+            // Only when the *exact* dict `begin_eexec` pushed (by
+            // identity, not merely "whatever's on top") is still there,
+            // though: PostScript running inside the encrypted stream is
+            // free to manage the dict stack itself (a Type 1 font's own
+            // `currentdict end ... Private begin` is exactly this) —
+            // `end`-ing the injected copy and `begin`-ning a
+            // program-owned dict of its own before stopping/erroring
+            // must not have that dict popped out from under it here
+            // (round 6 of PR #59's review: an unconditional pop did).
             Frame::Scanner(lexer) if lexer.pop_systemdict && self.dstack.len() > 2 => {
-                self.dstack.pop();
+                if let Some(top) = self.dstack.last()
+                    && Rc::ptr_eq(top, &self.dstack[0])
+                {
+                    self.dstack.pop();
+                }
             }
             _ => {}
         }
@@ -1446,6 +1459,36 @@ mod tests {
             it.load("probe").expect("defined").repr(),
             "1",
             "def after the stopped block must land in userdict, not a phantom systemdict"
+        );
+    }
+
+    #[test]
+    fn a_program_owned_dict_left_open_by_eexec_survives_the_cleanup() {
+        // Regression test (Codex review round 6, PR #59): round 5's fix
+        // popped whatever was on top of the dict stack unconditionally,
+        // assuming it must be eexec's injected systemdict copy — but
+        // PostScript inside the encrypted stream can `end` that copy
+        // itself and `begin` a dict of its own (a real Type 1 font's
+        // `currentdict end ... Private begin` does exactly this) before
+        // stopping. That program-owned dict must not be popped out from
+        // under it just because *a* pop_systemdict scanner unwound —
+        // only the exact dict `begin_eexec` pushed, by identity, should
+        // ever be removed here.
+        let mut it = Interp::new();
+        let encrypted = eexec_encrypt(b"end 10 dict begin stop\n");
+        let mut inner = b"currentfile eexec ".to_vec();
+        inner.extend(encrypted);
+        it.push(Object::exec(Value::File(crate::file::PsFile::from_bytes(
+            inner,
+        ))));
+        it.run_str("stopped pop")
+            .expect("stopped catches it; overall run succeeds");
+        assert_eq!(
+            it.dict_stack_len(),
+            3,
+            "systemdict/userdict + the program's own still-open dict, per the PLRM's \
+             stopped-doesn't-restore-the-dict-stack rule -- not eexec's copy, which the \
+             program's own `end` already removed, and not popped again by cleanup"
         );
     }
 }
