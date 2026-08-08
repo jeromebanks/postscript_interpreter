@@ -58,6 +58,32 @@ defined procedure is attributed to the call site that most recently
 touched real source text, not the procedure's original definition
 site. Documented as a deliberate deviation in `HANDOFF.md`.
 
+**Found two real, previously undetected bugs on its first real-world
+run — the strongest evidence the feature works.** Unit tests only
+exercise 1–3 token toy programs; running `--lint` over every file in
+`examples/` and `gallery/` (a corpus scan `advisor` asked for before
+calling this done, since that's the population `render_postscript`
+will actually see) found two genuine operand-stack leaks in shipped
+libraries, neither ever caught by eyeballing rendered output because
+neither affects a single pixel: (1) `lib/artkit.ps`'s `tfdrawline`
+`/justify` branch calls `search` to find each word's trailing space;
+`search`'s "not found" return is `string false` — the searched string
+comes back unchanged, still sitting under the bool `ifelse` just
+consumed — and the last-word branch fell through without popping it,
+leaking one string per justified line (found via
+`examples/paragraph_layout.ps`, 3 leaked words; also present in
+`gallery/compositors_proof.ps`, 7). (2) `lib/etching.ps`'s `et-hatch`
+computed an x-in-range and a y-in-range boolean, each already reduced
+with its own `and`, but never combined the two results with a further
+`and` before the `if` that used only the top one — stranding the
+x-in-range boolean on the stack every sample point, 71,556 of them
+over `examples/etching_demo.ps`'s hatch pass. Both fixes are one line
+(a missing `pop`, a missing `and`); regression tests assert
+`operand_stack().is_empty()` after the exact call that leaked, and
+`tests/cli.rs`'s `lint_is_clean_on_real_example_and_gallery_pieces`
+runs `--lint` against all three affected files so the corpus check
+that found them isn't a one-off scan lost after this session.
+
 **Deferred**: "ink drawn outside `%%BoundingBox`" from the issue's
 suggestion list — the interpreter has no DSC-bbox-vs-page-size
 infrastructure today (confirmed: no `%%BoundingBox` parsing anywhere

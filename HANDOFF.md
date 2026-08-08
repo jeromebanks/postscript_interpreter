@@ -126,7 +126,11 @@ unbalanced `gsave`, and operand-/dict-stack leaks; `error_report`
 gained a `Line: N` source-line attribution, scoped to the top-level
 program only (see the "Deliberate deviations" list below for why)
 (NOTES.md's entry has the full story, including two false-positive
-traps `advisor` caught before any code existed).
+traps `advisor` caught before any code existed, and two real,
+previously undetected operand-stack leaks — in `lib/artkit.ps`'s
+`tfdrawline` `/justify` and `lib/etching.ps`'s `et-hatch` — that
+running `--lint` over `examples/`/`gallery/` found and this issue
+fixed alongside the feature).
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
