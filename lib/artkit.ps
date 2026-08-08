@@ -545,6 +545,13 @@ end
                     /tdx tdx tdpre stringwidth pop add tdspace add tdextra add def
                     /tdrem tdpost def
                 } {
+                    % search's "not found" return is `string false` -- the
+                    % unchanged tdrem it was searching, still sitting under
+                    % the bool ifelse just consumed. tdrem (the global) is
+                    % the same text, so this branch draws from that instead
+                    % of the copy search handed back, and pops the copy
+                    % rather than leaving it stranded on the operand stack.
+                    pop
                     tdx tdy moveto tdrem show
                     exit
                 } ifelse

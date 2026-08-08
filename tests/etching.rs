@@ -111,6 +111,26 @@ fn darker_regions_get_denser_hatching() {
 }
 
 #[test]
+fn et_draw_does_not_leak_the_operand_stack() {
+    // Regression test for a real bug found by issue #17's lint mode
+    // against a real example (examples/etching_demo.ps): et-hatch's
+    // in-bounds check computes an x-in-range and a y-in-range boolean
+    // but only combined them with one `and` where it needed two,
+    // leaking one stray boolean per sample point -- tens of thousands
+    // over a real hatch pass.
+    let mut it = with_lib(200, 150);
+    it.run_str(
+        "<< /Photo (tests/data/sphere.jpg) /PageWidth 200 /PageHeight 150 >> et-draw showpage",
+    )
+    .unwrap_or_else(|e| panic!("et-draw failed: {}", it.error_report(&e)));
+    assert!(
+        it.operand_stack().is_empty(),
+        "{} item(s) leaked on the operand stack",
+        it.operand_stack().len()
+    );
+}
+
+#[test]
 fn a_bright_highlight_stays_mostly_paper() {
     // The sphere's specular highlight (built into the generator around
     // its lit side) should be too bright to hatch at all — the

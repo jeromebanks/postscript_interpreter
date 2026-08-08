@@ -3,6 +3,153 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Self-check/lint mode for agent-driven rendering (issue #17, 2026-08-07)
+
+Closes issue #17. The issue asked for a diagnostic/lint pass that
+catches common agent-driven-rendering mistakes an agent could easily
+miss just by eyeballing the PNG — a blank page, an unbalanced
+`gsave`/`grestore`, stack or dict leaks — plus better source-line
+attribution on errors, with which checks, how they're surfaced, and
+how strict they are all left to the implementer.
+
+**Four checks, all built on state the interpreter already tracks.**
+`src/lint.rs` is a new, small module: `blank-page` (every completed
+page, plus the trailing canvas if nothing emitted it yet, checked
+against the untouched-white background — not "uniform color," so a
+deliberate solid fill isn't a false positive), `gsave-imbalance`
+(`Gfx`'s save-stack depth nonzero at program end), `stack-leak`
+(operand stack nonempty, showing up to five items), and `dict-leak`
+(dict stack deeper than the systemdict/userdict baseline). Findings
+are advisory text, never fatal — `--lint` doesn't touch the exit code,
+and `pscat-mcp`'s `render_postscript` only appends a `Lint:` block when
+there's something to say, staying silent on a clean render rather than
+adding a "nothing's wrong" line to every single call.
+
+**`blank-page`/`stack-leak` are gated behind whether a render was
+actually requested.** First draft ran every check unconditionally,
+which meant `pscat-mcp`'s `eval_postscript` — the calculator/debug
+tool, whose entire idiom is "leave the answer on the stack and print
+it" — would have reported a false-positive blank page and stack leak
+on every single call (`3 4 add` "leaking" its own result). Caught by
+`advisor` review before implementation started. Fixed by threading a
+`render_checks: bool` through `lint::check` (on for `--png`/`--svg`/
+`--pdf`, off otherwise) and, at the MCP layer, simply not wiring
+`--lint` into `eval_postscript` at all in v1 — its checks don't fit
+that tool's normal usage pattern. `render_checks`'s exact gate moved
+twice more under review: round 2 caught it keying off the output-format
+flags instead of `-e`, which meant a plain `pscat --lint file.ps` (no
+`--png`) silently skipped both checks; round 7 caught the opposite gap
+in the fix for that — gating purely on `eval.is_none()` meant `-e`
+*paired with* an explicit `--png`/`--svg`/`--pdf` (a real render
+request, e.g. `pscat --lint --png out.png -e 'showpage'`) also skipped
+them and reported a blank artifact as clean. The gate is now `eval.is_
+none() || png.is_some() || svg.is_some() || pdf.is_some()`: skip only
+when it's a bare calculator-style `-e` snippet with no output asked
+for at all.
+
+**Source-line attribution (`error_report`'s new `; Line: N`) is scoped
+to the top-level program only**, not `run`-loaded library files, eexec
+streams, or executable strings (`Lexer` gained an `is_main` flag, true
+only for `Lexer::main_program`) — an artkit script does `(lib/
+artkit.ps) run`, and reporting one of *its* line numbers as if it were
+a line of the submitted program would be actively misleading, not
+just imprecise. Also caught by `advisor`: the first draft read the
+scanner's live position at error time, which is off by one for the
+common case of a token immediately followed by a newline (a token
+terminated by whitespace consumes that delimiter as part of scanning
+it — see `lexer.rs`'s `eat_token_delimiter`) — fixed by capturing the
+line at the *start* of each token (`Lexer::next_token` now does a
+`skip_insignificant` pass first, then records `token_start_line`
+before dispatching). Line attribution is best-effort even within
+scope: it's the line of the last token scanned directly from real
+program source, sticky across procedure calls, since objects aren't
+tagged with a source position — an error deep inside a previously
+defined procedure is attributed to the call site that most recently
+touched real source text, not the procedure's original definition
+site. Documented as a deliberate deviation in `HANDOFF.md`.
+
+**Found two real, previously undetected bugs on its first real-world
+run — the strongest evidence the feature works.** Unit tests only
+exercise 1–3 token toy programs; running `--lint` over every file in
+`examples/` and `gallery/` (a corpus scan `advisor` asked for before
+calling this done, since that's the population `render_postscript`
+will actually see) found two genuine operand-stack leaks in shipped
+libraries, neither ever caught by eyeballing rendered output because
+neither affects a single pixel: (1) `lib/artkit.ps`'s `tfdrawline`
+`/justify` branch calls `search` to find each word's trailing space;
+`search`'s "not found" return is `string false` — the searched string
+comes back unchanged, still sitting under the bool `ifelse` just
+consumed — and the last-word branch fell through without popping it,
+leaking one string per justified line (found via
+`examples/paragraph_layout.ps`, 3 leaked words; also present in
+`gallery/compositors_proof.ps`, 7). (2) `lib/etching.ps`'s `et-hatch`
+computed an x-in-range and a y-in-range boolean, each already reduced
+with its own `and`, but never combined the two results with a further
+`and` before the `if` that used only the top one — stranding the
+x-in-range boolean on the stack every sample point, 71,556 of them
+over `examples/etching_demo.ps`'s hatch pass. Both fixes are one line
+(a missing `pop`, a missing `and`); regression tests assert
+`operand_stack().is_empty()` after the exact call that leaked, and
+`tests/cli.rs`'s `lint_is_clean_on_real_example_and_gallery_pieces`
+runs `--lint` against all three affected files so the corpus check
+that found them isn't a one-off scan lost after this session.
+
+**Cross-model review (Codex) found a real pre-existing bug in the
+execution machine, not the lint feature itself — `dict-leak`'s
+`dict_stack_len()` was just the first thing to ever look.**
+`begin_eexec` pushes `systemdict` onto the dict stack for the
+duration of the encrypted stream (Type 1 fonts run their decrypted
+body with `systemdict` implicitly current), popped again once the
+stream is spent. Three separate places drop that scanner frame —
+`unwind_all` (an unhandled error or `quit`), `do_stop` (`stop`, or an
+error caught by an enclosing `stopped`), and `Action::PopScannerAndDict`
+(the stream simply running out of bytes, by far the most common case)
+— and all three had grown their own copy of "pop whatever's on top of
+the dict stack," assuming it must be eexec's injected copy. It isn't,
+in general: PostScript running inside the encrypted stream is free to
+manage the dict stack itself, and a real Type 1 font's `currentdict
+end ... Private begin` does exactly that. Round 4 fixed `unwind_all`;
+round 5 found `do_stop` had the identical gap (worse there, since
+execution continues afterward — a leftover phantom `systemdict` push
+silently redirects the next `def`); round 6 found that even the
+`unwind_all`/`do_stop` fix was wrong in one case, an unconditional pop
+that would remove a program's *own* dict if it had already `end`-ed
+eexec's copy itself before stopping. The eventual fix: one shared
+`cleanup_unwound_frame` used by all three sites, popping the injected
+dict only when the dict stack's top is, by pointer identity
+(`Rc::ptr_eq`), the *exact* object `begin_eexec` pushed — never by
+position. `Action::PopScannerAndDict` (the normal-completion path) was
+the last of the three to still have its own positional pop, caught in
+review after round 6's PR comment before merge, not by Codex — same
+fix, made to delegate to the shared helper rather than duplicate it a
+fourth time. Regression tests cover all three unwind paths plus the
+program-owned-dict-survives case: `an_error_inside_eexec_does_not_
+leave_a_phantom_dict_stack_entry`, `a_caught_stop_inside_eexec_does_
+not_leave_a_phantom_dict_stack_entry`, `a_program_owned_dict_left_
+open_by_eexec_survives_the_cleanup`, `eexec_completing_normally_pops_
+its_injected_dict_by_identity_not_position` (all in `src/interp.rs`).
+`HANDOFF.md`'s deviations list had a line describing this exact gap
+removed once it was actually closed.
+
+**Known remaining limitation, intentionally not chased further**: a
+program that `end`s eexec's injected `systemdict` copy and then
+*re-enters* it (rather than leaving a dict of its own on top) before
+the stream unwinds would confuse the identity check the same way the
+old positional pop did — the check only distinguishes "eexec's exact
+copy" from "something else," not "eexec's copy, buried under
+further pushes." No known real Type 1 font does this, and chasing
+further edge cases in this one code path stopped being productive
+after three review rounds of diminishing-severity findings in the
+same spot.
+
+**Deferred**: "ink drawn outside `%%BoundingBox`" from the issue's
+suggestion list — the interpreter has no DSC-bbox-vs-page-size
+infrastructure today (confirmed: no `%%BoundingBox` parsing anywhere
+in the tree), and the page canvas already clips all ink to itself, so
+this would only ever matter for an EPS-style declared bounding box
+smaller than the canvas — a distinct, larger feature, not a quick
+addition to this one.
+
 ## Paragraph/flowing-text layout for artkit (issue #16, 2026-08-07)
 
 Closes issue #16. The issue asked for reusable paragraph/flowing-text

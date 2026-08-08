@@ -184,6 +184,15 @@ pub struct Interp {
     /// The most recently executed name (interned id — resolving to
     /// text only happens at error time), for `OffendingCommand`.
     last_name: Option<u32>,
+    /// The line most recently scanned directly from the main program
+    /// source (issue #17) — `None` when no line is known, or the most
+    /// recent scanning happened in a `run`-loaded file, eexec stream, or
+    /// executable string (see `Lexer::line`). Sticky across procedure
+    /// calls: an error deep inside a previously-defined procedure is
+    /// attributed to the line that most recently touched real source
+    /// text, not the procedure's original definition site — this
+    /// interpreter doesn't tag objects with a source position.
+    last_line: Option<usize>,
     /// State for `rand`/`srand`/`rrand`. Deterministic by default —
     /// reproducible art is a feature here, not a bug.
     pub(crate) rand_state: i64,
@@ -258,6 +267,7 @@ impl Interp {
             save_stack: Vec::new(),
             quit_requested: false,
             last_name: None,
+            last_line: None,
             rand_state: 1,
             packing: false,
             clock: crate::clock::Clock::start(),
@@ -281,6 +291,7 @@ impl Interp {
     pub fn begin_source(&mut self, src: &[u8]) {
         self.quit_requested = false;
         self.last_name = None;
+        self.last_line = None;
         self.estack
             .push(Frame::Scanner(Lexer::main_program(src.to_vec())));
     }
@@ -296,14 +307,53 @@ impl Interp {
         result
     }
 
-    /// Abort the program: drop every frame, sealing any Type 3 glyph
-    /// contexts left open (their graphics-state snapshot and paint
-    /// suppression must not leak past the show that created them).
+    /// Per-frame teardown shared by every unwind path — `unwind_all`
+    /// (abort: an unhandled error or `quit`) and `do_stop` (recoverable:
+    /// `stop`, or an error caught by an enclosing `stopped`). Any frame
+    /// kind that holds state needing explicit cleanup when it's dropped
+    /// mid-flight belongs here, not duplicated in both callers — missing
+    /// one path is exactly how the eexec case (below) went unnoticed
+    /// until issue #17's lint mode made it visible (round 5 of that
+    /// PR's cross-model review: the first fix only covered
+    /// `unwind_all`, missing that `stopped` catching an error/`stop`
+    /// inside an eexec stream goes through `do_stop` instead — worse
+    /// than the abort case, since execution *continues* afterward with
+    /// a phantom systemdict on top of the dict stack, so a subsequent
+    /// `def` lands in the wrong dictionary).
+    fn cleanup_unwound_frame(&mut self, frame: Frame) {
+        match frame {
+            // Type 3 glyph contexts' graphics-state snapshot and paint
+            // suppression must not leak past the show that created them.
+            Frame::Show(mut ctx) => ctx.cleanup(&mut self.gfx),
+            // `begin_eexec` pushes systemdict for the encrypted stream's
+            // duration, popped on normal completion via
+            // `Action::PopScannerAndDict`; a scanner dropped mid-flight
+            // needs the same pop or systemdict ends up pushed twice.
+            // Only when the *exact* dict `begin_eexec` pushed (by
+            // identity, not merely "whatever's on top") is still there,
+            // though: PostScript running inside the encrypted stream is
+            // free to manage the dict stack itself (a Type 1 font's own
+            // `currentdict end ... Private begin` is exactly this) —
+            // `end`-ing the injected copy and `begin`-ning a
+            // program-owned dict of its own before stopping/erroring
+            // must not have that dict popped out from under it here
+            // (round 6 of PR #59's review: an unconditional pop did).
+            Frame::Scanner(lexer) if lexer.pop_systemdict && self.dstack.len() > 2 => {
+                if let Some(top) = self.dstack.last()
+                    && Rc::ptr_eq(top, &self.dstack[0])
+                {
+                    self.dstack.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Abort the program: drop every frame (see `cleanup_unwound_frame`
+    /// for what each kind needs).
     fn unwind_all(&mut self) {
         while let Some(frame) = self.estack.pop() {
-            if let Frame::Show(mut ctx) = frame {
-                ctx.cleanup(&mut self.gfx);
-            }
+            self.cleanup_unwound_frame(frame);
         }
     }
 
@@ -316,6 +366,10 @@ impl Interp {
                 Ok(None) => return Ok(false),
                 Ok(Some(o)) => o,
                 Err(e) => {
+                    // A scan/syntax error short-circuits out of
+                    // next_item before any Action ran, so the failing
+                    // Scanner frame is still on top with its line set.
+                    self.sync_scan_line();
                     self.recover(e)?;
                     continue;
                 }
@@ -370,8 +424,26 @@ impl Interp {
         }
     }
 
+    /// Refresh `last_line` from the innermost frame if it's a
+    /// main-program `Scanner` — a no-op (line stays sticky) otherwise.
+    /// Called both when a token is successfully yielded *and* when
+    /// scanning it failed (`next_token` sets its line before dispatch
+    /// succeeds or fails, so the frame reflects the failing token's
+    /// line either way — it just hasn't been popped yet, since the
+    /// error propagated before any `Action` was applied).
+    fn sync_scan_line(&mut self) {
+        if let Some(Frame::Scanner(lexer)) = self.estack.last()
+            && let Some(line) = lexer.line()
+        {
+            self.last_line = Some(line);
+        }
+    }
+
     /// LaserWriter-style error report, e.g.
-    /// `%%[ Error: undefined; OffendingCommand: frobnicate ]%%`.
+    /// `%%[ Error: undefined; OffendingCommand: frobnicate ]%%`. Appends
+    /// `; Line: N` (issue #17) when the most recent token scanned
+    /// directly from the submitted program source is known — see
+    /// `last_line`'s doc comment for what "known" excludes.
     pub fn error_report(&self, err: &PsError) -> String {
         let kind = match err {
             PsError::Syntax(detail) => format!("syntaxerror ({detail})"),
@@ -383,7 +455,12 @@ impl Interp {
                 .last_executed_name()
                 .unwrap_or_else(|| "--none--".to_string()),
         };
-        format!("%%[ Error: {kind}; OffendingCommand: {command} ]%%")
+        match self.last_line {
+            Some(line) => {
+                format!("%%[ Error: {kind}; OffendingCommand: {command}; Line: {line} ]%%")
+            }
+            None => format!("%%[ Error: {kind}; OffendingCommand: {command} ]%%"),
+        }
     }
 
     /// Pull the next object to execute off the execution stack, popping
@@ -565,7 +642,10 @@ impl Interp {
                 }
             };
             match action {
-                Action::Yield(o) => return Ok(Some(o)),
+                Action::Yield(o) => {
+                    self.sync_scan_line();
+                    return Ok(Some(o));
+                }
                 Action::PopThenYield(o) => {
                     self.estack.pop();
                     return Ok(Some(o));
@@ -600,9 +680,8 @@ impl Interp {
                 }
                 Action::Nothing => {}
                 Action::PopScannerAndDict => {
-                    self.estack.pop();
-                    if self.dstack.len() > 2 {
-                        self.dstack.pop();
+                    if let Some(frame) = self.estack.pop() {
+                        self.cleanup_unwound_frame(frame);
                     }
                 }
             }
@@ -842,13 +921,10 @@ impl Interp {
     /// what the PLRM's outermost job-server `stopped` would do.
     pub(crate) fn do_stop(&mut self) -> bool {
         while let Some(frame) = self.estack.pop() {
-            match frame {
-                Frame::StopMark => return true,
-                // Unwinding across an in-flight show must seal its glyph
-                // context (see unwind_all).
-                Frame::Show(mut ctx) => ctx.cleanup(&mut self.gfx),
-                _ => {}
+            if matches!(frame, Frame::StopMark) {
+                return true;
             }
+            self.cleanup_unwound_frame(frame);
         }
         false
     }
@@ -1065,6 +1141,13 @@ impl Interp {
         &self.ostack
     }
 
+    /// Self-check/lint mode (issue #17): heuristic checks for common
+    /// silent-failure mistakes — see `crate::lint` for what's checked
+    /// and why `render_checks` exists.
+    pub fn lint(&self, render_checks: bool) -> Vec<crate::lint::LintFinding> {
+        crate::lint::check(self, render_checks)
+    }
+
     pub fn quit_requested(&self) -> bool {
         self.quit_requested
     }
@@ -1206,5 +1289,232 @@ mod tests {
         let mut it = Interp::new();
         it.run_str("/foo").expect("literal name");
         assert_eq!(it.pop().expect("name").repr(), "/foo");
+    }
+
+    #[test]
+    fn error_report_names_the_line_the_error_happened_on() {
+        let mut it = Interp::new();
+        // A trailing newline is the case that catches an off-by-one: the
+        // token `div` finishes and consumes that newline as its
+        // delimiter (see lexer.rs's `eat_token_delimiter`) before `div`
+        // actually runs and fails, so a naive "read the file's current
+        // line" would report line 2 for an error that happened on line 1.
+        let err = it.run_str("1 0 div\n").unwrap_err();
+        let report = it.error_report(&err);
+        assert!(report.contains("Line: 1"), "report: {report}");
+    }
+
+    #[test]
+    fn error_report_line_advances_across_newlines() {
+        let mut it = Interp::new();
+        let err = it.run_str("1 1 add pop\n1 0 div\n").unwrap_err();
+        let report = it.error_report(&err);
+        assert!(report.contains("Line: 2"), "report: {report}");
+    }
+
+    #[test]
+    fn error_report_line_stays_with_the_main_program_across_a_string() {
+        let mut it = Interp::new();
+        // "exec" is the last token scanned directly from the main
+        // program (line 2); the executable string's own "div" isn't
+        // main-program source and must not overwrite that with a
+        // spurious line of its own (it would always be line 1).
+        let err = it.run_str("42 pop\n(1 0 div) cvx exec").unwrap_err();
+        let report = it.error_report(&err);
+        assert!(report.contains("Line: 2"), "report: {report}");
+    }
+
+    #[test]
+    fn error_report_lines_a_syntax_error_correctly() {
+        // Regression test (Codex review, PR #59): a scan/syntax error
+        // propagates out of next_item via `?` before any Action ever
+        // runs, so the old Yield-only line sync never saw it — the
+        // report kept whatever line the previous good token was on.
+        // "1 pop" is line 1; the stray ')' that has no matching '(' is
+        // on line 2.
+        let mut it = Interp::new();
+        let err = it.run_str("1 pop\n)").unwrap_err();
+        let report = it.error_report(&err);
+        assert!(report.contains("Line: 2"), "report: {report}");
+    }
+
+    #[test]
+    fn error_report_counts_lone_cr_as_a_line_ending() {
+        // Regression test (Codex review, PR #59): the file-level line
+        // counter only advanced on '\n', missing old-Mac-style
+        // lone-CR line endings (PostScript accepts CR, LF, and CRLF).
+        let mut it = Interp::new();
+        let err = it.run_str("1 pop\r1 0 div\r").unwrap_err();
+        let report = it.error_report(&err);
+        assert!(report.contains("Line: 2"), "report: {report}");
+    }
+
+    #[test]
+    fn error_report_counts_a_crlf_pair_as_one_line_ending() {
+        let mut it = Interp::new();
+        let err = it.run_str("1 pop\r\n1 0 div\r\n").unwrap_err();
+        let report = it.error_report(&err);
+        assert!(report.contains("Line: 2"), "report: {report}");
+    }
+
+    #[test]
+    fn error_report_lines_a_malformed_first_token() {
+        // Same gap, worst case: the very first token is malformed, so
+        // there's no earlier successfully-scanned token to fall back
+        // on at all.
+        let mut it = Interp::new();
+        let err = it.run_str(")").unwrap_err();
+        let report = it.error_report(&err);
+        assert!(report.contains("Line: 1"), "report: {report}");
+    }
+
+    /// The eexec cipher (Type 1 spec, C1) — the inverse of
+    /// `crate::file`'s decoder, duplicated here (as `tests/type1.rs`
+    /// already does) rather than shared, since it's ten lines and this
+    /// is the only other place that needs to construct an encrypted
+    /// stream rather than decode one.
+    fn eexec_encrypt(plain: &[u8]) -> Vec<u8> {
+        let mut r: u16 = 55665;
+        b"XXXX"
+            .iter()
+            .chain(plain)
+            .map(|&p| {
+                let c = p ^ (r >> 8) as u8;
+                r = (u16::from(c).wrapping_add(r))
+                    .wrapping_mul(52845)
+                    .wrapping_add(22719);
+                c
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_error_inside_eexec_does_not_leave_a_phantom_dict_stack_entry() {
+        // Regression test (Codex review round 4, PR #59): begin_eexec
+        // pushes systemdict for the encrypted stream's duration,
+        // popped when the scanner exhausts normally
+        // (Action::PopScannerAndDict) -- but unwind_all (what runs on
+        // an unhandled error or quit) used to drop the scanner frame
+        // without the matching dict-stack pop, leaving systemdict
+        // pushed a second time. Nothing about that is visible from
+        // outside the crate except dict_stack_len(), which issue #17's
+        // lint mode is now the first real consumer of -- it used to
+        // misreport this as a "missing end" dict-leak.
+        let mut it = Interp::new();
+        let encrypted = eexec_encrypt(b"1 0 div");
+        let mut src = b"currentfile eexec ".to_vec();
+        src.extend(encrypted);
+        it.run_source(&src).expect_err("1 0 div still errors");
+        assert_eq!(
+            it.dict_stack_len(),
+            2,
+            "systemdict/userdict only -- eexec's push must not survive an aborted run"
+        );
+    }
+
+    #[test]
+    fn a_caught_stop_inside_eexec_does_not_leave_a_phantom_dict_stack_entry() {
+        // Regression test (Codex review round 5, PR #59): round 4 only
+        // fixed unwind_all (the abort path); `stop` inside an eexec
+        // stream -- or an error caught by an *enclosing* `stopped` --
+        // unwinds via do_stop instead, which had the identical gap.
+        // Worse than the abort case: execution continues afterward, so
+        // a leftover systemdict push doesn't just mislead a diagnostic,
+        // it silently redirects the next `def`.
+        let mut it = Interp::new();
+        // Two things this can't be built from: a `{...}` procedure
+        // literal (parsed as an ordinary token stream up front, before
+        // `eexec` ever runs, so the raw encrypted bytes would be
+        // (mis)scanned as literal source) or an executable *string*
+        // (`currentfile` explicitly skips non-file scanners per the
+        // PLRM, so it would resolve to whatever real file happens to be
+        // running further down the stack instead of this one). A `Value
+        // ::File` pushed and executed directly — what `run` builds
+        // internally — is a real file frame, so `currentfile` inside it
+        // resolves to itself, same as a `run`-loaded program would see.
+        //
+        // A trailing "\n" in the plaintext, not just "stop": the scanner
+        // peeks one byte past a token to consume its delimiter
+        // (`eat_token_delimiter`) *before* the token is even returned
+        // for execution, so without real plaintext there to satisfy
+        // that peek it decodes whatever raw byte follows next using the
+        // ongoing cipher stream — garbage, not this test's concern.
+        // Real Type 1 fonts avoid this the same way, via trailing zero
+        // padding after the encrypted section.
+        let encrypted = eexec_encrypt(b"stop\n");
+        let mut inner = b"currentfile eexec ".to_vec();
+        inner.extend(encrypted);
+        it.push(Object::exec(Value::File(crate::file::PsFile::from_bytes(
+            inner,
+        ))));
+        it.run_str("stopped pop /probe 1 def")
+            .expect("stopped catches it; overall run succeeds");
+        assert_eq!(
+            it.dict_stack_len(),
+            2,
+            "systemdict/userdict only -- eexec's push must not survive a caught stop"
+        );
+        assert_eq!(
+            it.load("probe").expect("defined").repr(),
+            "1",
+            "def after the stopped block must land in userdict, not a phantom systemdict"
+        );
+    }
+
+    #[test]
+    fn a_program_owned_dict_left_open_by_eexec_survives_the_cleanup() {
+        // Regression test (Codex review round 6, PR #59): round 5's fix
+        // popped whatever was on top of the dict stack unconditionally,
+        // assuming it must be eexec's injected systemdict copy — but
+        // PostScript inside the encrypted stream can `end` that copy
+        // itself and `begin` a dict of its own (a real Type 1 font's
+        // `currentdict end ... Private begin` does exactly this) before
+        // stopping. That program-owned dict must not be popped out from
+        // under it just because *a* pop_systemdict scanner unwound —
+        // only the exact dict `begin_eexec` pushed, by identity, should
+        // ever be removed here.
+        let mut it = Interp::new();
+        let encrypted = eexec_encrypt(b"end 10 dict begin stop\n");
+        let mut inner = b"currentfile eexec ".to_vec();
+        inner.extend(encrypted);
+        it.push(Object::exec(Value::File(crate::file::PsFile::from_bytes(
+            inner,
+        ))));
+        it.run_str("stopped pop")
+            .expect("stopped catches it; overall run succeeds");
+        assert_eq!(
+            it.dict_stack_len(),
+            3,
+            "systemdict/userdict + the program's own still-open dict, per the PLRM's \
+             stopped-doesn't-restore-the-dict-stack rule -- not eexec's copy, which the \
+             program's own `end` already removed, and not popped again by cleanup"
+        );
+    }
+
+    #[test]
+    fn eexec_completing_normally_pops_its_injected_dict_by_identity_not_position() {
+        // Follow-up to round 6: that fix only landed in
+        // cleanup_unwound_frame, the abort/stop path. The far more
+        // common path -- an eexec stream simply running out of bytes
+        // and completing normally -- goes through
+        // Action::PopScannerAndDict instead, which still had the
+        // original unconditional "pop whatever's on top" logic. A real
+        // Type 1 font's `currentdict end ... Private begin` before
+        // falling off the end of its encrypted section would lose its
+        // own dict on the single most common eexec path of all.
+        // Action::PopScannerAndDict now delegates to
+        // cleanup_unwound_frame so both paths share one identity check.
+        let mut it = Interp::new();
+        let encrypted = eexec_encrypt(b"end 10 dict begin\n");
+        let mut src = b"currentfile eexec ".to_vec();
+        src.extend(encrypted);
+        it.run_source(&src)
+            .expect("plain completion, nothing errors");
+        assert_eq!(
+            it.dict_stack_len(),
+            3,
+            "systemdict/userdict + the program's own dict left open across eexec's natural \
+             end -- not eexec's injected copy, which the program's own `end` already removed"
+        );
     }
 }

@@ -208,7 +208,7 @@ EtchLayout begin
         /ethx ethcx ethnx ethk mul add ethdx etht mul add def
         /ethy ethcy ethny ethk mul add ethdy etht mul add def
         /ethb 0 def
-        ethx 0 ge ethx pw le and ethy 0 ge ethy ph le and {
+        ethx 0 ge ethx pw le and ethy 0 ge ethy ph le and and {
           /ethsx ethx width mul pw div cvi def
           % PostScript's y runs bottom-up; the decoded sample buffer's
           % rows run top-down (row 0 first out of the JPEG), so this

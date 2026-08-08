@@ -29,6 +29,12 @@ pub struct PsFile {
     /// Bytes handed to consumers — the `token` operator's remainder
     /// arithmetic and diagnostics.
     consumed: usize,
+    /// 1-indexed line of the next byte to be read. Source-line
+    /// attribution for error reports (issue #17). Counts CR, LF, and
+    /// CRLF as one line ending each (PostScript accepts all three) —
+    /// `last_was_cr` is what keeps a CRLF pair from counting twice.
+    line: usize,
+    last_was_cr: bool,
 }
 
 enum Kind {
@@ -50,6 +56,8 @@ impl PsFile {
             kind: Kind::Bytes { data, pos: 0 },
             closed: false,
             consumed: 0,
+            line: 1,
+            last_was_cr: false,
         }))
     }
 
@@ -71,6 +79,8 @@ impl PsFile {
             },
             closed: false,
             consumed: 0,
+            line: 1,
+            last_was_cr: false,
         }))
     }
 
@@ -96,8 +106,23 @@ impl PsFile {
                 out.pop_front()
             }
         };
-        if b.is_some() {
+        if let Some(byte) = b {
             self.consumed += 1;
+            match byte {
+                b'\r' => {
+                    self.line += 1;
+                    self.last_was_cr = true;
+                }
+                b'\n' => {
+                    // A lone LF ends a line; the LF half of a CRLF pair
+                    // doesn't (the CR just before it already counted).
+                    if !self.last_was_cr {
+                        self.line += 1;
+                    }
+                    self.last_was_cr = false;
+                }
+                _ => self.last_was_cr = false,
+            }
         }
         Ok(b)
     }
@@ -153,6 +178,11 @@ impl PsFile {
 
     pub fn pos(&self) -> usize {
         self.consumed
+    }
+
+    /// 1-indexed line of the next unread byte.
+    pub fn line(&self) -> usize {
+        self.line
     }
 
     /// Whether this file is a decode filter (as opposed to raw bytes).

@@ -396,6 +396,14 @@ pub struct Gfx {
     pub page_shown: bool,
     /// Pages completed by showpage/copypage, in order.
     completed: Vec<Pixmap>,
+    /// Parallel to `completed`: whether anything was painted since the
+    /// *previous* page boundary before this one was snapshotted.
+    /// showpage's lazy erase (below) means two showpages with no paint
+    /// between them snapshot the identical non-blank pixmap twice — a
+    /// logically blank second page that `completed`'s pixel content
+    /// alone can't distinguish from a deliberate repeat (issue #17's
+    /// lint mode needs this to catch that case).
+    completed_had_ink: Vec<bool>,
     /// showpage erases *lazily*: the finished page stays on the canvas
     /// until the program paints again — watching is the point, and
     /// single-page programs keep their final image. Multi-page
@@ -451,6 +459,7 @@ impl Gfx {
             dirty: false,
             page_shown: false,
             completed: Vec::new(),
+            completed_had_ink: Vec::new(),
             pending_erase: false,
             painted_since_page: false,
             svg: None,
@@ -839,6 +848,7 @@ impl Gfx {
     /// the operator's job.
     pub fn showpage(&mut self) {
         self.completed.push(self.pixmap.clone());
+        self.completed_had_ink.push(self.painted_since_page);
         if let Some(svg) = &mut self.svg {
             svg.end_page();
         }
@@ -853,6 +863,7 @@ impl Gfx {
     /// `copypage` (Level 1): emit the page but keep canvas and state.
     pub fn copypage(&mut self) {
         self.completed.push(self.pixmap.clone());
+        self.completed_had_ink.push(self.painted_since_page);
         if let Some(svg) = &mut self.svg {
             svg.end_page();
         }
@@ -865,6 +876,15 @@ impl Gfx {
     /// Completed page snapshots, oldest first.
     pub fn pages(&self) -> &[Pixmap] {
         &self.completed
+    }
+
+    /// Parallel to [`pages`](Self::pages): whether each page actually
+    /// got new ink since the page before it, rather than being an
+    /// unchanged repeat of the previous snapshot (showpage's lazy
+    /// erase means two showpages with nothing painted between them
+    /// snapshot the same non-blank pixmap twice).
+    pub(crate) fn pages_had_ink(&self) -> &[bool] {
+        &self.completed_had_ink
     }
 
     /// Whether the live canvas holds art not yet emitted by showpage —
@@ -966,6 +986,13 @@ impl Gfx {
 
     pub fn gsave(&mut self) {
         self.saved.push(self.state.clone());
+    }
+
+    /// How many `gsave`s haven't been matched by a `grestore` yet
+    /// (issue #17's lint mode: a nonzero count at program end usually
+    /// means a forgotten `grestore`).
+    pub(crate) fn gsave_depth(&self) -> usize {
+        self.saved.len()
     }
 
     pub fn grestore(&mut self) {

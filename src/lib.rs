@@ -13,6 +13,7 @@ pub mod halftone;
 pub(crate) mod image;
 pub mod interp;
 pub mod lexer;
+pub mod lint;
 pub mod name;
 pub mod object;
 pub mod ops;

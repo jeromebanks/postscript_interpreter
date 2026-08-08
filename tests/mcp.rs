@@ -140,6 +140,44 @@ fn handwrite_returns_a_note() {
 }
 
 #[test]
+fn render_stays_silent_about_lint_when_the_page_is_clean() {
+    let mut s = Server::start();
+    initialized(&mut s);
+    let resp = s.call(json!({
+        "jsonrpc": "2.0", "id": 8, "method": "tools/call",
+        "params": { "name": "render_postscript",
+                    "arguments": { "source": "0 0 40 40 rectfill showpage",
+                                   "width": 40, "height": 40 } }
+    }));
+    assert_eq!(resp["result"]["isError"], false);
+    let content = resp["result"]["content"].as_array().expect("content array");
+    assert!(
+        content
+            .iter()
+            .all(|c| !c["text"].as_str().unwrap_or_default().starts_with("Lint:")),
+        "no Lint block on a clean render: {content:?}"
+    );
+}
+
+#[test]
+fn render_surfaces_lint_findings_for_a_blank_page() {
+    let mut s = Server::start();
+    initialized(&mut s);
+    let resp = s.call(json!({
+        "jsonrpc": "2.0", "id": 9, "method": "tools/call",
+        "params": { "name": "render_postscript",
+                    "arguments": { "source": "showpage", "width": 40, "height": 40 } }
+    }));
+    assert_eq!(resp["result"]["isError"], false);
+    let content = resp["result"]["content"].as_array().expect("content array");
+    let lint = content
+        .iter()
+        .find_map(|c| c["text"].as_str().filter(|t| t.starts_with("Lint:")))
+        .expect("a Lint block for a blank page");
+    assert!(lint.contains("blank-page"), "lint block: {lint}");
+}
+
+#[test]
 fn unknown_method_is_a_jsonrpc_error() {
     let mut s = Server::start();
     initialized(&mut s);

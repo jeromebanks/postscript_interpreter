@@ -1612,6 +1612,31 @@ fn tfdrawline_justify_stretches_gaps_to_fill_the_line_but_not_the_last_line() {
 }
 
 #[test]
+fn tfdrawline_justify_does_not_leak_the_operand_stack() {
+    // Regression test for a real bug found by issue #17's lint mode
+    // against a real example file (examples/paragraph_layout.ps):
+    // `search`'s "not found" return is `string false` -- the searched
+    // string comes back unchanged, still under the bool `ifelse` just
+    // consumed -- and the justify loop's last-word branch fell through
+    // without popping it, leaking one stray string per justified line.
+    let mut it = Interp::with_page(300, 200).expect("page");
+    load(&mut it);
+    it.run_str(&with_helvetica(
+        14.0,
+        "10 10 100 150 18 /justify (one two three four five six) tfblock pop",
+    ))
+    .unwrap_or_else(|e| panic!("tfblock failed: {}", it.error_report(&e)));
+    assert!(
+        it.operand_stack().is_empty(),
+        "leftover on operand stack: {:?}",
+        it.operand_stack()
+            .iter()
+            .map(|o| o.repr())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn tfdrawline_justify_keeps_the_natural_space_width_not_just_the_stretch() {
     // Regression test for a real bug caught by rendering the example
     // specimen sheet: the justify branch advanced each word by
