@@ -3,6 +3,69 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Self-check/lint mode for agent-driven rendering (issue #17, 2026-08-07)
+
+Closes issue #17. The issue asked for a diagnostic/lint pass that
+catches common agent-driven-rendering mistakes an agent could easily
+miss just by eyeballing the PNG — a blank page, an unbalanced
+`gsave`/`grestore`, stack or dict leaks — plus better source-line
+attribution on errors, with which checks, how they're surfaced, and
+how strict they are all left to the implementer.
+
+**Four checks, all built on state the interpreter already tracks.**
+`src/lint.rs` is a new, small module: `blank-page` (every completed
+page, plus the trailing canvas if nothing emitted it yet, checked
+against the untouched-white background — not "uniform color," so a
+deliberate solid fill isn't a false positive), `gsave-imbalance`
+(`Gfx`'s save-stack depth nonzero at program end), `stack-leak`
+(operand stack nonempty, showing up to five items), and `dict-leak`
+(dict stack deeper than the systemdict/userdict baseline). Findings
+are advisory text, never fatal — `--lint` doesn't touch the exit code,
+and `pscat-mcp`'s `render_postscript` only appends a `Lint:` block when
+there's something to say, staying silent on a clean render rather than
+adding a "nothing's wrong" line to every single call.
+
+**`blank-page`/`stack-leak` are gated behind whether a render was
+actually requested.** First draft ran every check unconditionally,
+which meant `pscat-mcp`'s `eval_postscript` — the calculator/debug
+tool, whose entire idiom is "leave the answer on the stack and print
+it" — would have reported a false-positive blank page and stack leak
+on every single call (`3 4 add` "leaking" its own result). Caught by
+`advisor` review before implementation started. Fixed by threading a
+`render_checks: bool` through `lint::check` (on for `--png`/`--svg`/
+`--pdf`, off otherwise) and, at the MCP layer, simply not wiring
+`--lint` into `eval_postscript` at all in v1 — its checks don't fit
+that tool's normal usage pattern.
+
+**Source-line attribution (`error_report`'s new `; Line: N`) is scoped
+to the top-level program only**, not `run`-loaded library files, eexec
+streams, or executable strings (`Lexer` gained an `is_main` flag, true
+only for `Lexer::main_program`) — an artkit script does `(lib/
+artkit.ps) run`, and reporting one of *its* line numbers as if it were
+a line of the submitted program would be actively misleading, not
+just imprecise. Also caught by `advisor`: the first draft read the
+scanner's live position at error time, which is off by one for the
+common case of a token immediately followed by a newline (a token
+terminated by whitespace consumes that delimiter as part of scanning
+it — see `lexer.rs`'s `eat_token_delimiter`) — fixed by capturing the
+line at the *start* of each token (`Lexer::next_token` now does a
+`skip_insignificant` pass first, then records `token_start_line`
+before dispatching). Line attribution is best-effort even within
+scope: it's the line of the last token scanned directly from real
+program source, sticky across procedure calls, since objects aren't
+tagged with a source position — an error deep inside a previously
+defined procedure is attributed to the call site that most recently
+touched real source text, not the procedure's original definition
+site. Documented as a deliberate deviation in `HANDOFF.md`.
+
+**Deferred**: "ink drawn outside `%%BoundingBox`" from the issue's
+suggestion list — the interpreter has no DSC-bbox-vs-page-size
+infrastructure today (confirmed: no `%%BoundingBox` parsing anywhere
+in the tree), and the page canvas already clips all ink to itself, so
+this would only ever matter for an EPS-style declared bounding box
+smaller than the canvas — a distinct, larger feature, not a quick
+addition to this one.
+
 ## Paragraph/flowing-text layout for artkit (issue #16, 2026-08-07)
 
 Closes issue #16. The issue asked for reusable paragraph/flowing-text

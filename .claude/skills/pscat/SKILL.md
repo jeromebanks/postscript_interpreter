@@ -31,12 +31,25 @@ Multi-page documents number their pages: `out.png` → `out-001.png`,
 pscat --headless file.ps               # run without rendering; errors → stderr
 pscat --headless --pstack-on-error f.ps  # + gs-style operand stack post-mortem
 pscat -e '3 4 add ='                   # evaluate a snippet
+pscat --lint --png out.png file.ps     # self-check the render (see below)
 ```
 
 Exit code 0 = clean run; nonzero = a PostScript error, named on
-stderr with the standard error names (`undefined`, `typecheck`, …).
-`--png` still writes the partial canvas after an error — useful to
-see how far a program got.
+stderr with the standard error names (`undefined`, `typecheck`, …),
+now with an `; Line: N` when the error happened in the top-level
+program (not inside a `run`-loaded library file). `--png` still
+writes the partial canvas after an error — useful to see how far a
+program got.
+
+**`--lint`** catches mistakes a render can have without *erroring* —
+the kind that only show up by eyeballing the PNG otherwise: a blank
+page (nothing painted), an unbalanced `gsave`/`grestore`, or stuff
+left on the operand/dict stack. Findings print to stderr as
+`pscat: lint: [check] message` (or `pscat: lint: clean`); it doesn't
+change the exit code — read the findings, don't just grep for
+failure. `pscat-mcp`'s `render_postscript` runs this automatically
+and appends a `Lint:` block to its response when there's something to
+report (silent when clean).
 
 ## Handwritten notes (string → PNG)
 

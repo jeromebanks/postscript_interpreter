@@ -119,7 +119,14 @@ medallion via a hand-written boundsproc) demonstrate it (NOTES.md's
 entry has the full story, including two real bugs caught before
 merge — one by `advisor` plan review, one by actually rendering the
 example, that a pixel-adjacent-but-not-quite regression test had
-missed).
+missed). Also done: issue #17, a self-check/lint mode for
+agent-driven rendering — `src/lint.rs` (`--lint` on the CLI, wired
+into `pscat-mcp`'s `render_postscript`) flags a blank page, an
+unbalanced `gsave`, and operand-/dict-stack leaks; `error_report`
+gained a `Line: N` source-line attribution, scoped to the top-level
+program only (see the "Deliberate deviations" list below for why)
+(NOTES.md's entry has the full story, including two false-positive
+traps `advisor` caught before any code existed).
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
@@ -210,6 +217,15 @@ renders eight examples in both and compares block-downsampled output).
   doesn't erase; ints are i64; `flattenpath` uses a fixed
   quarter-pixel tolerance (`setflat` not modeled — chord counts
   differ from gs, shapes agree).
+- `error_report`'s `Line: N` (issue #17) is best-effort, not exact
+  source attribution: no `Object` carries a source position, so it
+  reports the line of the most recent token scanned directly from the
+  *top-level* program (`Lexer`'s `is_main` flag) — never a
+  `run`-loaded library file, an eexec stream, or an executable
+  string, which would misattribute to the wrong source entirely — and
+  stays sticky across procedure calls, so an error deep inside a
+  previously defined procedure gets the call site's line, not the
+  procedure's definition site.
 
 ## Working conventions that matter (beyond AGENTS.md)
 

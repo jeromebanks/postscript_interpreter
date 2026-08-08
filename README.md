@@ -128,6 +128,8 @@ cargo run -- --spool jobs/                # act like a lab printer: render
                                           # each .ps/.eps dropped into jobs/
 cargo run -- --halftone file.ps           # classic 45° halftone dots, like a
                                           # mono laser printer (window/PNG)
+cargo run -- --lint --png out.png file.ps # self-check: blank page? unbalanced
+                                          # gsave? stuff left on the stack?
 cargo run                                 # terminal REPL (headless canvas)
 cargo run -- -i                           # REPL + live window: watch what you type draw
 cargo run -- -i lib/handscript.ps         # ...with a library preloaded
@@ -445,7 +447,11 @@ MCP server over stdio exposing three tools:
 
 - `render_postscript` — source in; PNG image(s) back inline (or SVG
   text, or a PDF written to `out_path`), with page size, `dpi`, and
-  `halftone` options. Errors still return the partial render.
+  `halftone` options. Errors still return the partial render. Also
+  runs the self-check/lint pass (issue #17, `--lint` on the CLI) and
+  appends a `Lint:` block when it finds something — a blank page, an
+  unbalanced `gsave`, stuff left on the stack — so a whole class of
+  silent failure shows up without eyeballing the PNG.
 - `handwrite` — text in, handwritten-note PNG back (the
   `scripts/handwrite.sh` options: size, paper, ink, jitter, seed).
 - `eval_postscript` — run headlessly, get back what the program
