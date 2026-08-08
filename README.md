@@ -384,6 +384,31 @@ specimen sheet.
 << /Photo (photo.jpg) /PageWidth 320 /PageHeight 240 >> et-draw showpage
 ```
 
+A fourth sibling, `lib/pagekit.ps` (issue #18) -- but, like the style
+packs, it *does* depend on `artkit.ps`, leaning on `tfblock` for
+paragraph flow, `showctr`/`rrect` for layout, and `Palettes`/`pal` for
+color. Five parameterized document templates --
+`pgcard`/`pgletter`/`pgcertificate`/`pginvitation`/`pgposter` -- each
+take `x y w h dict pgNAME` (the usual bottom-left-plus-size
+convention) and a content dict of optional keys (title, body copy,
+signature, and a few template-specific fields), so an agent fills in a
+message without making layout decisions itself; every template
+returns whatever body text didn't fit, the same leftover contract
+`tfblock` already establishes. Two new palettes, `/vellum` and
+`/marigold`, join artkit's eight -- registered the same way a style
+pack registers its own, since (checked directly, not assumed) not
+every one of artkit's mood palettes actually runs dark to light.
+`examples/template_*.ps` is one specimen per template.
+
+```postscript
+(lib/artkit.ps) run
+(lib/pagekit.ps) run
+40 40 532 500
+<< /Awardee (Ada Lovelace) /Body (For contributions to computing.)
+   /Presenter (C. Babbage) /Date (1843-10-12) >>
+pgcertificate pop showpage
+```
+
 ## The website
 
 **[jeromebanks.github.io/postscript_interpreter](https://jeromebanks.github.io/postscript_interpreter/)**

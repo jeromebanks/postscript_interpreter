@@ -1,0 +1,385 @@
+%!PS-Adobe-3.0
+%%Title: pagekit.ps — parameterized page templates for artkit
+%%Creator: pscat — issue #18, page templates
+%%EndComments
+
+% A fourth sibling to graph.ps/dataviz.ps/etching.ps, but (like the
+% style packs) it depends on lib/artkit.ps -- it leans on tfblock/
+% tfflow (paragraph flow), showctr, rrect, and Palettes/pal. Load
+% artkit first:
+%
+%   (lib/artkit.ps) run  (lib/pagekit.ps) run
+%
+% What's inside: five templates, each `x y w h dict pgNAME  leftover -`
+% (bottom-left + size, artkit's usual rect convention). Every content
+% key is optional -- a sparse or empty dict still renders a complete,
+% structurally sound template, just with blank text fields -- and every
+% template returns whatever body text didn't fit (tfblock's leftover
+% contract, empty () when everything fit). Fonts are drawn only from
+% the standard 14, so a template renders identically with or without
+% the font catalog installed.
+%
+%   pgcard         x y w h <</Title /Body /Signoff /Palette>> pgcard
+%   pgletter       x y w h <</Date /Salutation /Body /Signoff /Palette>> pgletter
+%   pgcertificate  x y w h <</Title /Awardee /Body /Presenter /Date /Palette>> pgcertificate
+%   pginvitation   x y w h <</Title /When /Where /Host /Body /Palette>> pginvitation
+%   pgposter       x y w h <</Title /Tagline /Body /Footer /Palette>> pgposter
+%
+% Two new palettes (registered into artkit's Palettes dict, same as a
+% style pack does): /vellum and /marigold. Every one of artkit's eight
+% mood palettes is documented only as "five colors," not as ordered by
+% lightness -- checking the actual values, dusk/ember/tide/stone happen
+% to run dark to light and are used as defaults below, but parchment
+% runs light to dark and carnival is a hue wheel with no lightness
+% order at all, so neither is safe to index by role. /vellum and
+% /marigold exist because no shipped palette covers a formal-cream and
+% a festive-warm mood that are *also* safely dark-to-light; each is
+% ordered 0 ink / 1 body-dark / 2 body / 3 trim / 4 background tint,
+% the same convention lib/styles/steampunk.ps documents.
+%
+% Scratch prefixes: pgg- (pggetdef), pgz- (pgzfitmax), pgf- (pgframe)
+% for the three shared helpers; pc-/pl-/pe-/pi-/pp- for pgcard/
+% pgletter/pgcertificate/pginvitation/pgposter respectively -- all six
+% disjoint, so a template calling a helper never clobbers its own
+% in-flight state the way grid+ngon or hexgrid+hex can when a caller
+% and callee share a prefix (documented in lib/artkit.ps's tfflow
+% comment block). pgz- and pgf- are themselves two more prefixes
+% sharing no template's own state, but they *do* sit in adjacent
+% three-letter territory with each other -- safe only because
+% pgzfitmax and pgframe never call one another, the same flat,
+% sequential (not nested) reuse artkit's tk- prefix relies on across
+% ngon/rrect/star/chance and everything else in that file: a shared
+% scratch prefix is only a hazard between a caller and something it
+% actually invokes mid-use, not between unrelated procs that just
+% happen to share a stem.
+%
+% None of the five clips to x,y,w,h -- every element's position is
+% computed from fractions of w/h, and every field whose length varies
+% with agent-supplied content (titles, names, dates, salutations,
+% signoffs, when/where/host, footers) is pgzfitmax'd to a target width
+% sized to where it sits, so it shrinks instead of running past the
+% template's own rectangle. Only two things are deliberately left
+% unfitted: a handful of short fixed captions ("Presenter", "Date",
+% "This certifies that") that never vary in length, so they're not a
+% genuine instance of the same risk; and tfflow's own pre-existing
+% latitude, carried by every flowed body -- a single word wider than
+% its line prints unbroken rather than splitting (no hyphenation),
+% same allowance pathtext takes with an overlong run. A caller
+% compositing a template onto a larger shared sheet and wanting a hard
+% boundary regardless can still wrap the call in its own
+% `x y w h rectclip` -- pagekit doesn't do it by default because a
+% clip sitting exactly on the border also eats half of any rule/stroke
+% drawn on that same boundary (confirmed while building pgcertificate:
+% its double rule's outer edge lost half its width to its own clip).
+
+Palettes /vellum   [[0.20 0.14 0.08] [0.35 0.26 0.16] [0.55 0.44 0.30]
+                    [0.78 0.68 0.52] [0.96 0.93 0.85]] put
+Palettes /marigold [[0.18 0.08 0.20] [0.38 0.14 0.30] [0.62 0.30 0.28]
+                    [0.85 0.55 0.25] [0.98 0.85 0.55]] put
+
+% --- shared helpers ----------------------------------------------------
+
+% dict key default pggetdef  value -
+% Sparse-dict read: every template's content dict has only optional
+% keys, so this is how each one reads a field without erroring when
+% it's absent.
+/pggetdef {
+    /pggdef exch def /pggkey exch def /pggdict exch def
+    pggdict pggkey known { pggdict pggkey get } { pggdef } ifelse
+} def
+
+% (s) targetwidth pgzfitmax -   (consumes (s), same as artkit's fitfont)
+% Shrinks currentfont so (s) fits targetwidth, but -- unlike artkit's
+% fitfont, which scales unconditionally -- never enlarges: the ratio is
+% clamped at 1.0. fitfont blowing a two-letter awardee name up to fill
+% a certificate's whole width is exactly the failure this avoids;
+% titles/names here vary in length with content, and only the ones
+% that overflow should shrink.
+/pgzfitmax {
+    /pgzw exch def
+    stringwidth pop /pgzcur exch def
+    pgzcur pgzw gt { currentfont pgzw pgzcur div scalefont setfont } if
+} def
+
+% x y w h inset pgframe -   (strokes two nested rectangles: the outer
+% edge and a second rule `inset` in from it; set color/linewidth before
+% calling, same convention as rrect/rectstroke)
+/pgframe {
+    /pgfin exch def /pgfh exch def /pgfw exch def
+    /pgfy exch def /pgfx exch def
+    newpath pgfx pgfy pgfw pgfh rectstroke
+    newpath pgfx pgfin add pgfy pgfin add
+        pgfw pgfin 2 mul sub pgfh pgfin 2 mul sub rectstroke
+} def
+
+% --- pgcertificate -------------------------------------------------------
+% Formal award: cream background inside a double rule, title, "this
+% certifies that" caption, a large fitted awardee name, a flowed
+% citation, and a two-column presenter/date signature line pair fixed
+% at the bottom (independent of how much of the citation the body flow
+% consumed -- signature placement should not drift with copy length).
+
+/pgcertificate {
+    /peDict exch def
+    /peH exch def /peW exch def /peY exch def /peX exch def
+    /pePal peDict /Palette /vellum pggetdef pal def
+
+    /peTitle peDict /Title (Certificate of Achievement) pggetdef def
+    /peAwardee peDict /Awardee () pggetdef def
+    /peBody peDict /Body () pggetdef def
+    /pePresenter peDict /Presenter () pggetdef def
+    /peDate peDict /Date () pggetdef def
+
+    gsave
+
+    % background
+    pePal 4 get aload pop setrgbcolor
+    newpath peX peY peW peH rectfill
+
+    % border: double rule, inset proportional to the shorter side
+    /peInset peW peH min 0.05 mul def
+    pePal 0 get aload pop setrgbcolor
+    peH 0.004 mul setlinewidth
+    peX peY peW peH peInset pgframe
+
+    % title
+    pePal 0 get aload pop setrgbcolor
+    /Times-Bold findfont peH 0.06 mul scalefont setfont
+    /peCX peX peW 2 div add def
+    /peTitleY peY peH add peInset sub peH 0.06 mul sub def
+    peTitle dup peW 0.72 mul pgzfitmax peCX peTitleY showctr
+
+    % caption
+    /Times-Italic findfont peH 0.024 mul scalefont setfont
+    /peCapY peTitleY peH 0.05 mul sub def
+    (This certifies that) peCX peCapY showctr
+
+    % awardee
+    pePal 1 get aload pop setrgbcolor
+    /Times-BoldItalic findfont peH 0.09 mul scalefont setfont
+    /peAwardeeY peCapY peH 0.11 mul sub def
+    peAwardee dup peW 0.68 mul pgzfitmax peCX peAwardeeY showctr
+
+    % citation body, flowed in the band above the signature area
+    pePal 0 get aload pop setrgbcolor
+    /Times-Roman findfont peH 0.026 mul scalefont setfont
+    /peBandBottom peY peInset add peH 0.16 mul add def
+    /peBodyTop peAwardeeY peH 0.09 mul sub def
+    peX peW 0.12 mul add peBandBottom peW 0.76 mul peBodyTop peBandBottom sub
+    peH 0.045 mul /center peBody tfblock
+    /peLeftover exch def
+
+    % signature lines: presenter (left third), date (right third).
+    % Presenter/Date are agent-supplied and could be arbitrarily long,
+    % so each is fitmax'd to its own column width before it's shown --
+    % same discipline as Title/Awardee above, just for a narrower
+    % target. The two fixed captions never vary in length, so they're
+    % not a genuine instance of the same risk and are left unfitted.
+    pePal 0 get aload pop setrgbcolor
+    peH 0.0025 mul setlinewidth
+    /peSigY peY peInset add peH 0.09 mul add def
+    /Times-Roman findfont peH 0.02 mul scalefont setfont
+    peX peW 0.12 mul add peSigY moveto
+    peX peW 0.40 mul add peSigY lineto stroke
+    peX peW 0.60 mul add peSigY moveto
+    peX peW 0.88 mul add peSigY lineto stroke
+
+    /Times-Roman findfont peH 0.02 mul scalefont setfont
+    pePresenter peW 0.26 mul pgzfitmax
+    pePresenter peX peW 0.12 mul add peSigY peH 0.03 mul add moveto show
+
+    /Times-Roman findfont peH 0.02 mul scalefont setfont
+    peDate peW 0.26 mul pgzfitmax
+    peDate peX peW 0.60 mul add peSigY peH 0.03 mul add moveto show
+
+    /Times-Roman findfont peH 0.02 mul scalefont setfont
+    (Presenter) peX peW 0.26 mul add peSigY peH 0.015 mul sub showctr
+    (Date) peX peW 0.74 mul add peSigY peH 0.015 mul sub showctr
+
+    grestore
+    peLeftover
+} def
+
+% --- pgcard --------------------------------------------------------------
+% Greeting card front panel: rounded tinted panel, centered title,
+% flowed message, signoff tucked bottom-right.
+
+/pgcard {
+    /pcDict exch def
+    /pcH exch def /pcW exch def /pcY exch def /pcX exch def
+    /pcPal pcDict /Palette /dusk pggetdef pal def
+
+    /pcTitle pcDict /Title () pggetdef def
+    /pcBody pcDict /Body () pggetdef def
+    /pcSignoff pcDict /Signoff () pggetdef def
+
+    gsave
+    /pcR pcW pcH min 0.06 mul def
+    newpath pcX pcY pcW pcH pcR rrect
+    pcPal 4 get aload pop setrgbcolor fill
+    newpath pcX pcY pcW pcH pcR rrect
+    pcPal 0 get aload pop setrgbcolor
+    pcH 0.005 mul setlinewidth stroke
+
+    pcPal 0 get aload pop setrgbcolor
+    /Times-Italic findfont pcH 0.075 mul scalefont setfont
+    /pcCX pcX pcW 2 div add def
+    /pcTitleY pcY pcH add pcH 0.14 mul sub def
+    pcTitle dup pcW 0.75 mul pgzfitmax pcCX pcTitleY showctr
+
+    pcPal 1 get aload pop setrgbcolor
+    /Helvetica findfont pcH 0.032 mul scalefont setfont
+    /pcBodyTop pcTitleY pcH 0.10 mul sub def
+    /pcBodyBottom pcY pcH 0.16 mul add def
+    pcX pcW 0.12 mul add pcBodyBottom pcW 0.76 mul pcBodyTop pcBodyBottom sub
+    pcH 0.05 mul /center pcBody tfblock
+    /pcLeftover exch def
+
+    /Times-Italic findfont pcH 0.032 mul scalefont setfont
+    pcSignoff pcW 0.5 mul pgzfitmax
+    pcSignoff dup stringwidth pop
+    pcX pcW add pcW 0.06 mul sub exch sub pcY pcH 0.07 mul add moveto show
+
+    grestore
+    pcLeftover
+} def
+
+% --- pgletter --------------------------------------------------------------
+% Plain business/personal letter: thin header rule, date top-right,
+% salutation top-left, flowed body, reserved space at the bottom for a
+% signature.
+
+/pgletter {
+    /plDict exch def
+    /plH exch def /plW exch def /plY exch def /plX exch def
+    /plPal plDict /Palette /stone pggetdef pal def
+
+    /plDate plDict /Date () pggetdef def
+    /plSalutation plDict /Salutation () pggetdef def
+    /plBody plDict /Body () pggetdef def
+    /plSignoff plDict /Signoff () pggetdef def
+
+    gsave
+    plPal 2 get aload pop setrgbcolor
+    plH 0.002 mul setlinewidth
+    newpath plX plY plH 0.90 mul add moveto
+        plX plW add plY plH 0.90 mul add lineto stroke
+
+    0 0 0 setrgbcolor
+    /Helvetica findfont plH 0.018 mul scalefont setfont
+    plDate plW 0.45 mul pgzfitmax
+    plDate dup stringwidth pop
+    plX plW add exch sub plY plH 0.93 mul add moveto show
+
+    /Times-Roman findfont plH 0.022 mul scalefont setfont
+    plSalutation plW 0.85 mul pgzfitmax
+    plX plY plH 0.82 mul add moveto plSalutation show
+
+    /plBodyTop plY plH 0.78 mul add def
+    /plBodyBottom plY plH 0.16 mul add def
+    plX plBodyBottom plW plBodyTop plBodyBottom sub
+    plH 0.032 mul /left plBody tfblock
+    /plLeftover exch def
+
+    /Times-Roman findfont plH 0.022 mul scalefont setfont
+    plSignoff plW 0.6 mul pgzfitmax
+    plX plY plH 0.08 mul add moveto plSignoff show
+
+    grestore
+    plLeftover
+} def
+
+% --- pginvitation ------------------------------------------------------
+% Event invitation: tinted panel with a border, a large event title,
+% a centered when/where/host block, and flowed RSVP-style body copy.
+
+/pginvitation {
+    /piDict exch def
+    /piH exch def /piW exch def /piY exch def /piX exch def
+    /piPal piDict /Palette /marigold pggetdef pal def
+
+    /piTitle piDict /Title () pggetdef def
+    /piWhen piDict /When () pggetdef def
+    /piWhere piDict /Where () pggetdef def
+    /piHost piDict /Host () pggetdef def
+    /piBody piDict /Body () pggetdef def
+
+    gsave
+    piPal 4 get aload pop setrgbcolor
+    newpath piX piY piW piH rectfill
+    piPal 0 get aload pop setrgbcolor
+    piH 0.004 mul setlinewidth
+    piX piY piW piH piW piH min 0.05 mul pgframe
+
+    /piCX piX piW 2 div add def
+    piPal 0 get aload pop setrgbcolor
+    /Helvetica-Bold findfont piH 0.07 mul scalefont setfont
+    /piTitleY piY piH add piH 0.16 mul sub def
+    piTitle dup piW 0.78 mul pgzfitmax piCX piTitleY showctr
+
+    piPal 1 get aload pop setrgbcolor
+    /piY1 piTitleY piH 0.09 mul sub def
+    /Helvetica findfont piH 0.028 mul scalefont setfont
+    piWhen dup piW 0.85 mul pgzfitmax piCX piY1 showctr
+    /Helvetica findfont piH 0.028 mul scalefont setfont
+    piWhere dup piW 0.85 mul pgzfitmax piCX piY1 piH 0.045 mul sub showctr
+    /Helvetica findfont piH 0.028 mul scalefont setfont
+    piHost dup piW 0.85 mul pgzfitmax piCX piY1 piH 0.09 mul sub showctr
+
+    piPal 0 get aload pop setrgbcolor
+    /Times-Italic findfont piH 0.026 mul scalefont setfont
+    /piBodyTop piY1 piH 0.15 mul sub def
+    /piBodyBottom piY piH 0.10 mul add def
+    piX piW 0.10 mul add piBodyBottom piW 0.80 mul piBodyTop piBodyBottom sub
+    piH 0.04 mul /center piBody tfblock
+    /piLeftover exch def
+
+    grestore
+    piLeftover
+} def
+
+% --- pgposter ------------------------------------------------------------
+% Bold single-sheet poster: full-bleed tint, a headline sized to fit
+% the width, an italic tagline, a large flowed body, and a small
+% footer line.
+
+/pgposter {
+    /ppDict exch def
+    /ppH exch def /ppW exch def /ppY exch def /ppX exch def
+    /ppPal ppDict /Palette /ember pggetdef pal def
+
+    /ppTitle ppDict /Title () pggetdef def
+    /ppTagline ppDict /Tagline () pggetdef def
+    /ppBody ppDict /Body () pggetdef def
+    /ppFooter ppDict /Footer () pggetdef def
+
+    gsave
+    ppPal 4 get aload pop setrgbcolor
+    newpath ppX ppY ppW ppH rectfill
+
+    /ppCX ppX ppW 2 div add def
+    ppPal 0 get aload pop setrgbcolor
+    /Helvetica-Bold findfont ppH 0.11 mul scalefont setfont
+    /ppTitleY ppY ppH add ppH 0.14 mul sub def
+    ppTitle dup ppW 0.90 mul pgzfitmax ppCX ppTitleY showctr
+
+    ppPal 1 get aload pop setrgbcolor
+    /Helvetica-Oblique findfont ppH 0.035 mul scalefont setfont
+    /ppTaglineY ppTitleY ppH 0.09 mul sub def
+    ppTagline dup ppW 0.85 mul pgzfitmax ppCX ppTaglineY showctr
+
+    ppPal 0 get aload pop setrgbcolor
+    /Helvetica findfont ppH 0.03 mul scalefont setfont
+    /ppBodyTop ppTaglineY ppH 0.08 mul sub def
+    /ppBodyBottom ppY ppH 0.10 mul add def
+    ppX ppW 0.10 mul add ppBodyBottom ppW 0.80 mul ppBodyTop ppBodyBottom sub
+    ppH 0.045 mul /center ppBody tfblock
+    /ppLeftover exch def
+
+    ppPal 1 get aload pop setrgbcolor
+    /Helvetica-Oblique findfont ppH 0.02 mul scalefont setfont
+    ppFooter dup ppW 0.85 mul pgzfitmax ppCX ppY ppH 0.05 mul add showctr
+
+    grestore
+    ppLeftover
+} def

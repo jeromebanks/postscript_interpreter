@@ -3,6 +3,69 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Parameterized page templates for artkit (issue #18, 2026-08-08)
+
+Closes issue #18. The issue asked for reusable page/document templates
+(card, letter, certificate, poster, and similar) that an agent can
+fill with a title/body/signature without making layout decisions from
+scratch, pairing with the paragraph-flow work (issue #16) and PDF
+document output (issue #8) already shipped.
+
+**A fourth sibling library, `lib/pagekit.ps`** -- but unlike
+`graph.ps`/`dataviz.ps`/`etching.ps`, which are deliberately
+independent of `artkit.ps`, this one depends on it (the same
+relationship `lib/styles/*.ps` has), leaning on `tfblock` (paragraph
+flow), `showctr`, `rrect`, and `Palettes`/`pal`. Five templates --
+`pgcard`, `pgletter`, `pgcertificate`, `pginvitation`, `pgposter` --
+each `x y w h dict pgNAME  leftover -`: bottom-left-plus-size like the
+rest of artkit's layout procs, a content dict of optional keys (a
+sparse or empty dict still renders a complete, structurally sound
+template), and returning `tfblock`'s leftover-text contract so a
+caller learns if its copy overflowed the space. `examples/template_
+{card,letter,certificate,invitation,poster}.ps` is one specimen per
+template; `tests/pagekit.rs` covers load-cleanliness, ink coverage,
+the empty-dict case, the leftover contract, and a Ghostscript
+compatibility pass.
+
+**Two bugs `advisor` caught in plan review, before any template code
+existed, that would have made every fitted title/name wrong.** First:
+artkit's `fitfont` scales *unconditionally* -- give it a two-letter
+awardee name and a certificate-width target and it would blow the name
+up to fill the whole page, exactly backwards for a name/headline whose
+length varies with content. Fixed by adding `pgzfitmax`, a shrink-only
+variant that clamps the scale ratio at 1.0.
+Second: the plan's first draft picked `/parchment` and `/carnival` as
+role-indexed (0=ink..4=background) defaults for the certificate and
+invitation, on the assumption that artkit's eight mood palettes run
+dark to light like the plan's other two defaults (`/dusk`, `/stone`)
+happen to. Checking the actual values: `/parchment` runs *light* to
+dark (backwards), and `/carnival` is a hue wheel with no lightness
+order at all -- artkit's doc comment promises only "five colors," not
+an ordering. `lib/styles/*.ps` gets away with role-by-index because
+each pack defines its own palettes to that convention; pagekit follows
+the same pattern instead of relying on artkit's incidental ordering --
+two new palettes, `/vellum` (formal cream) and `/marigold` (festive
+warm), each built and regression-tested (luminance strictly increasing
+index 0 to 4) to actually satisfy it.
+
+**One real implementation bug the render-and-look step caught, that a
+passing test suite didn't.** `pgletter`'s body-flow call carried a
+stray leftover operand copy-pasted from `pgcertificate`'s version
+(which legitimately needs an extra x-inset term `pgletter` doesn't),
+misaligning `tfblock`'s x/y/w/h arguments by one slot. `--lint`'s
+`stack-leak` check caught it immediately on the first rendered
+example -- confirming issue #17's lint mode earning its keep exactly
+as intended, and the reason every example here gets rendered and
+lint-checked, not just loaded.
+
+**Deliberately not doing:** no new Rust (pure PostScript, same
+precedent as `etching.ps`); no hyphenation or optimal line-breaking
+(inherits `tfflow`'s documented greedy wrap as-is); no image/logo
+embedding (text-only, matching the issue's title/body/signature
+framing); no automatic multi-page pagination -- overflow surfaces via
+the leftover return, and a caller re-invokes on a fresh page itself,
+same contract `tfblock`/`tfcols` already establish.
+
 ## Self-check/lint mode for agent-driven rendering (issue #17, 2026-08-07)
 
 Closes issue #17. The issue asked for a diagnostic/lint pass that

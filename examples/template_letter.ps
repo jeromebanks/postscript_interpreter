@@ -1,0 +1,26 @@
+%!PS-Adobe-3.0
+%%Title: A Letter, from lib/pagekit.ps
+%%BoundingBox: 0 0 612 792
+%%EndComments
+
+% pgletter specimen (issue #18): a plain page -- thin header rule,
+% date, salutation, a flowed body, and reserved space at the bottom
+% for a signature. Run from the repo root:
+%
+%   pscat --page 612x792 examples/template_letter.ps
+
+(lib/artkit.ps) run
+(lib/pagekit.ps) run
+
+1 1 1 setrgbcolor clippath fill
+
+40 40 532 700
+<<
+  /Date (August 8, 2026)
+  /Salutation (Dear Sam,)
+  /Body (Thank you for the thoughtful review last week. I have folded in the changes and wanted to give you an update before the next release cuts. Let me know if anything still looks off once you have a moment to look it over.)
+  /Signoff (Best, Jerome)
+>>
+pgletter pop
+
+showpage

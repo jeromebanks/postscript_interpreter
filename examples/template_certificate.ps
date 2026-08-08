@@ -1,0 +1,30 @@
+%!PS-Adobe-3.0
+%%Title: A Certificate, from lib/pagekit.ps
+%%BoundingBox: 0 0 612 792
+%%EndComments
+
+% pgcertificate specimen (issue #18): cream background inside a double
+% rule, a title, a fitted awardee name (long or short -- pgzfitmax only
+% shrinks, never enlarges, so a two-letter name doesn't fill the page),
+% a flowed citation, and a two-column presenter/date signature line
+% pair fixed at the bottom regardless of citation length. Run from the
+% repo root:
+%
+%   pscat --page 612x792 examples/template_certificate.ps
+
+(lib/artkit.ps) run
+(lib/pagekit.ps) run
+
+1 1 1 setrgbcolor clippath fill
+
+40 40 532 500
+<<
+  /Title (Certificate of Achievement)
+  /Awardee (Ada Lovelace)
+  /Body (In recognition of outstanding contributions to the analytical engine and the founding of computer programming as a discipline.)
+  /Presenter (C. Babbage)
+  /Date (1843-10-12)
+>>
+pgcertificate pop
+
+showpage
