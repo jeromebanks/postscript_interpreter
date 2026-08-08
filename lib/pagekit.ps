@@ -54,13 +54,20 @@
 % happen to share a stem.
 %
 % None of the five clips to x,y,w,h -- every element's position is
-% computed from fractions of w/h, so nothing strays outside by
-% construction, with the one pre-existing exception tfflow's own docs
-% already carry: a single word wider than its line prints unbroken
-% rather than splitting (no hyphenation), same latitude pathtext takes
-% with an overlong run. A caller compositing a template onto a larger
-% shared sheet and wanting a hard boundary can wrap the call in its
-% own `x y w h rectclip` -- pagekit doesn't do it by default because a
+% computed from fractions of w/h, and every field whose length varies
+% with agent-supplied content (titles, names, dates, salutations,
+% signoffs, when/where/host, footers) is pgzfitmax'd to a target width
+% sized to where it sits, so it shrinks instead of running past the
+% template's own rectangle. Only two things are deliberately left
+% unfitted: a handful of short fixed captions ("Presenter", "Date",
+% "This certifies that") that never vary in length, so they're not a
+% genuine instance of the same risk; and tfflow's own pre-existing
+% latitude, carried by every flowed body -- a single word wider than
+% its line prints unbroken rather than splitting (no hyphenation),
+% same allowance pathtext takes with an overlong run. A caller
+% compositing a template onto a larger shared sheet and wanting a hard
+% boundary regardless can still wrap the call in its own
+% `x y w h rectclip` -- pagekit doesn't do it by default because a
 % clip sitting exactly on the border also eats half of any rule/stroke
 % drawn on that same boundary (confirmed while building pgcertificate:
 % its double rule's outer edge lost half its width to its own clip).
@@ -162,19 +169,31 @@ Palettes /marigold [[0.18 0.08 0.20] [0.38 0.14 0.30] [0.62 0.30 0.28]
     peH 0.045 mul /center peBody tfblock
     /peLeftover exch def
 
-    % signature lines: presenter (left third), date (right third)
+    % signature lines: presenter (left third), date (right third).
+    % Presenter/Date are agent-supplied and could be arbitrarily long,
+    % so each is fitmax'd to its own column width before it's shown --
+    % same discipline as Title/Awardee above, just for a narrower
+    % target. The two fixed captions never vary in length, so they're
+    % not a genuine instance of the same risk and are left unfitted.
     pePal 0 get aload pop setrgbcolor
     peH 0.0025 mul setlinewidth
     /peSigY peY peInset add peH 0.09 mul add def
     /Times-Roman findfont peH 0.02 mul scalefont setfont
     peX peW 0.12 mul add peSigY moveto
     peX peW 0.40 mul add peSigY lineto stroke
-    pePresenter peX peW 0.12 mul add peSigY peH 0.03 mul add moveto show
-    (Presenter) peX peW 0.26 mul add peSigY peH 0.015 mul sub showctr
-
     peX peW 0.60 mul add peSigY moveto
     peX peW 0.88 mul add peSigY lineto stroke
+
+    /Times-Roman findfont peH 0.02 mul scalefont setfont
+    pePresenter peW 0.26 mul pgzfitmax
+    pePresenter peX peW 0.12 mul add peSigY peH 0.03 mul add moveto show
+
+    /Times-Roman findfont peH 0.02 mul scalefont setfont
+    peDate peW 0.26 mul pgzfitmax
     peDate peX peW 0.60 mul add peSigY peH 0.03 mul add moveto show
+
+    /Times-Roman findfont peH 0.02 mul scalefont setfont
+    (Presenter) peX peW 0.26 mul add peSigY peH 0.015 mul sub showctr
     (Date) peX peW 0.74 mul add peSigY peH 0.015 mul sub showctr
 
     grestore
@@ -217,6 +236,7 @@ Palettes /marigold [[0.18 0.08 0.20] [0.38 0.14 0.30] [0.62 0.30 0.28]
     /pcLeftover exch def
 
     /Times-Italic findfont pcH 0.032 mul scalefont setfont
+    pcSignoff pcW 0.5 mul pgzfitmax
     pcSignoff dup stringwidth pop
     pcX pcW add pcW 0.06 mul sub exch sub pcY pcH 0.07 mul add moveto show
 
@@ -247,10 +267,12 @@ Palettes /marigold [[0.18 0.08 0.20] [0.38 0.14 0.30] [0.62 0.30 0.28]
 
     0 0 0 setrgbcolor
     /Helvetica findfont plH 0.018 mul scalefont setfont
+    plDate plW 0.45 mul pgzfitmax
     plDate dup stringwidth pop
     plX plW add exch sub plY plH 0.93 mul add moveto show
 
     /Times-Roman findfont plH 0.022 mul scalefont setfont
+    plSalutation plW 0.85 mul pgzfitmax
     plX plY plH 0.82 mul add moveto plSalutation show
 
     /plBodyTop plY plH 0.78 mul add def
@@ -260,6 +282,7 @@ Palettes /marigold [[0.18 0.08 0.20] [0.38 0.14 0.30] [0.62 0.30 0.28]
     /plLeftover exch def
 
     /Times-Roman findfont plH 0.022 mul scalefont setfont
+    plSignoff plW 0.6 mul pgzfitmax
     plX plY plH 0.08 mul add moveto plSignoff show
 
     grestore
@@ -295,11 +318,13 @@ Palettes /marigold [[0.18 0.08 0.20] [0.38 0.14 0.30] [0.62 0.30 0.28]
     piTitle dup piW 0.78 mul pgzfitmax piCX piTitleY showctr
 
     piPal 1 get aload pop setrgbcolor
-    /Helvetica findfont piH 0.028 mul scalefont setfont
     /piY1 piTitleY piH 0.09 mul sub def
-    piWhen piCX piY1 showctr
-    piWhere piCX piY1 piH 0.045 mul sub showctr
-    piHost piCX piY1 piH 0.09 mul sub showctr
+    /Helvetica findfont piH 0.028 mul scalefont setfont
+    piWhen dup piW 0.85 mul pgzfitmax piCX piY1 showctr
+    /Helvetica findfont piH 0.028 mul scalefont setfont
+    piWhere dup piW 0.85 mul pgzfitmax piCX piY1 piH 0.045 mul sub showctr
+    /Helvetica findfont piH 0.028 mul scalefont setfont
+    piHost dup piW 0.85 mul pgzfitmax piCX piY1 piH 0.09 mul sub showctr
 
     piPal 0 get aload pop setrgbcolor
     /Times-Italic findfont piH 0.026 mul scalefont setfont
@@ -353,7 +378,7 @@ Palettes /marigold [[0.18 0.08 0.20] [0.38 0.14 0.30] [0.62 0.30 0.28]
 
     ppPal 1 get aload pop setrgbcolor
     /Helvetica-Oblique findfont ppH 0.02 mul scalefont setfont
-    ppFooter ppCX ppY ppH 0.05 mul add showctr
+    ppFooter dup ppW 0.85 mul pgzfitmax ppCX ppY ppH 0.05 mul add showctr
 
     grestore
     ppLeftover
