@@ -1651,6 +1651,55 @@ fn tfdrawline_justify_keeps_the_natural_space_width_not_just_the_stretch() {
 }
 
 #[test]
+fn tfwrap_can_leave_a_trailing_space_on_a_wrapped_line() {
+    // Sets up the scenario tfdrawline_justify_ignores_a_trailing_space
+    // below depends on: a run of two source spaces at a wrap point
+    // leaves one attached to the end of the emitted line rather than
+    // being collapsed -- confirmed directly against tfwrap so that
+    // test's premise isn't just assumed.
+    let got = eval(&with_helvetica(14.0, "(aa bb  cc dd) 45 tfwrap aload pop"));
+    assert_eq!(got, ["(aa bb )", "(cc dd)"]);
+}
+
+#[test]
+fn tfdrawline_justify_ignores_a_trailing_space_left_by_the_wrap() {
+    // Regression test for a real bug caught by cross-model (Codex)
+    // review: tfwordgaps/the justify loop counted every literal space
+    // in the line, including a trailing one left by tflinebreak at a
+    // double-space wrap point (see the test above) -- so /justify
+    // treated it as a real gap with an invisible "word" after it,
+    // spending stretch on nothing and leaving the actual last word
+    // short of x1. "aa bb" (trimmed) is 50.05pt at 20pt Helvetica,
+    // "aa bb " (untrimmed) is 55.61pt; stretched into a 90pt span, the
+    // untrimmed bug spends half its stretch on the phantom trailing
+    // gap and reaches only ~77 (10 + natural width + one gap's worth
+    // of stretch), while the fix (trim first, one real gap) reaches
+    // the full span, close to x1=100.
+    let mut it = Interp::with_page(150, 100).expect("page");
+    load(&mut it);
+    it.run_str(&with_helvetica(
+        20.0,
+        "10 100 50 /justify false (aa bb ) tfdrawline",
+    ))
+    .unwrap_or_else(|e| panic!("tfdrawline failed: {}", it.error_report(&e)));
+    let pixmap = &it.gfx().pixmap;
+    let mut max_x = 0u32;
+    for y in 0..pixmap.height() {
+        for x in 0..pixmap.width() {
+            if pixmap.pixel(x, y).expect("in bounds").red() < 128 {
+                max_x = max_x.max(x);
+            }
+        }
+    }
+    assert!(
+        max_x > 90,
+        "justified line should stretch its rightmost ink close to x1=100 \
+         once the trailing space is excluded from gap-counting; \
+         got {max_x}, which matches the phantom-trailing-gap bug's shortfall (expected ~77)"
+    );
+}
+
+#[test]
 fn tfflow_returns_leftover_text_that_did_not_fit_vertically() {
     // A box too short to hold every line should return the unflowed
     // remainder rather than silently dropping or erroring on it.
@@ -1711,6 +1760,57 @@ fn tfflow_honors_a_custom_boundsproc_for_a_non_rectangular_region() {
     }
     assert!(ink_above > 0, "expected ink above y=100");
     assert!(ink_below > 0, "expected ink below y=100");
+}
+
+#[test]
+fn tfflow_nested_in_its_own_boundsproc_needs_the_inner_call_wrapped_in_a_dict() {
+    // Regression test for a real bug caught by cross-model (Codex)
+    // review: tfflow's own traversal state (tfstr/tfy/tflast/tfrest/...)
+    // is a set of plain globals, not dict-scoped -- same failure family
+    // as the tiling section's tg-/tk- gotcha and gasket/carpet's own
+    // nesting bug, but for tfflow itself, not just tfblock/tfcols. A
+    // boundsproc that calls tfflow again, unwrapped, clobbers the
+    // outer call's state the instant the inner one runs -- confirmed
+    // to actually discard real text, not just draw the wrong thing:
+    // the outer call's own leftover comes back empty even though a box
+    // too short to hold it all should leave a real remainder.
+    //
+    // Box: y0=100, ybot=90, leading=16 -- capacity for exactly one
+    // line, so the long outer sentence below must leave substantial
+    // leftover text under correct behavior.
+    let unwrapped = eval(&with_helvetica(
+        12.0,
+        "{ /y exch def 10 190 \
+          { pop 10 190 } 300 10 14 /left (inner words fill this space nicely) tfflow pop } \
+         100 90 16 /left \
+         (outer words must remain visible after the inner call runs and this text is long) \
+         tfflow",
+    ));
+    assert_eq!(
+        unwrapped,
+        ["()"],
+        "expected the unwrapped nested call to lose the outer leftover (comes back empty)"
+    );
+
+    let wrapped = eval(&with_helvetica(
+        12.0,
+        "{ /y exch def 10 190 \
+          8 dict begin \
+              { pop 10 190 } 300 10 14 /left (inner words fill this space nicely) tfflow pop \
+          end } \
+         100 90 16 /left \
+         (outer words must remain visible after the inner call runs and this text is long) \
+         tfflow",
+    ));
+    assert_ne!(
+        wrapped,
+        ["()"],
+        "wrapped: outer leftover should be the real unflowed remainder, not empty"
+    );
+    assert!(
+        wrapped[0].contains("text is long"),
+        "wrapped: expected the outer's own true leftover text, got {wrapped:?}"
+    );
 }
 
 #[test]

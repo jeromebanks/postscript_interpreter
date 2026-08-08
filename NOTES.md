@@ -31,39 +31,67 @@ usual latitude-not-error posture); `/justify` skips stretching
 whenever the caller says this is the paragraph's last line, or the
 line is a single word with nothing to stretch between.
 
-**Two real bugs, both caught before merge, neither by the first draft
-of tests.** (1) `advisor` review of the plan caught, on inspection
-alone, that `tflinebreak`'s end-of-string branch unconditionally took
-the whole remainder as one line without checking whether it actually
-fit the width — so the last word of every non-terminal paragraph
-silently overflowed instead of wrapping to its own line. Fixed by
-measuring the remainder before taking it, falling back to the last
-known-good break otherwise. (2) Rendering `examples/paragraph_layout.ps`
-(not a targeted test — just looking at the output) turned up a second,
-worse bug: `/justify`'s word-advance added `stringwidth(word) +
-tdextra` but never added the line's own *natural* space width, so
-every inter-word gap was short by a full space — with several gaps on
-one line the shortfall compounded into visibly overlapping words
-("flowsabrush:wordbyword..."). The original ink-bbox regression test
-for justify didn't catch this, because crushed-together text still
-reaches close to the right margin, same as properly-spaced text — a
-new test was added that calls `tfdrawline` directly with `lastline`
-forced false and asserts the *specific* x-position match the arithmetic
-predicts, confirmed to fail against the pre-fix code (rightmost ink at
-141 instead of ~170) before being folded into the suite.
+**Four real bugs, caught across three different passes, none of them
+by the first draft of tests.** (1) `advisor` review of the plan caught,
+on inspection alone, that `tflinebreak`'s end-of-string branch
+unconditionally took the whole remainder as one line without checking
+whether it actually fit the width — so the last word of every
+non-terminal paragraph silently overflowed instead of wrapping to its
+own line. Fixed by measuring the remainder before taking it, falling
+back to the last known-good break otherwise. (2) Rendering
+`examples/paragraph_layout.ps` (not a targeted test — just looking at
+the output) turned up a second, worse bug: `/justify`'s word-advance
+added `stringwidth(word) + tdextra` but never added the line's own
+*natural* space width, so every inter-word gap was short by a full
+space — with several gaps on one line the shortfall compounded into
+visibly overlapping words ("flowsabrush:wordbyword..."). The original
+ink-bbox regression test for justify didn't catch this, because
+crushed-together text still reaches close to the right margin, same as
+properly-spaced text — a new test was added that calls `tfdrawline`
+directly with `lastline` forced false and asserts the *specific*
+x-position the arithmetic predicts, confirmed to fail against the
+pre-fix code (rightmost ink at 141 instead of ~170) before being
+folded into the suite.
+
+A follow-up cross-model (Codex) review of the implementation, run per
+`SDLC.md`'s independent-review step, found two more, both genuine and
+both fixed before merge: (3) `tfwordgaps` counted *every* literal space
+in a line, including a trailing one `tflinebreak` can leave behind at a
+double-space wrap point (confirmed directly: `(aa bb  cc dd)` at width
+45 wraps to `["aa bb ", "cc dd"]`, trailing space intact) — so
+`/justify` spent stretch on that invisible trailing gap instead of the
+real ones, leaving the actual last word short of the margin. Fixed by
+trimming trailing spaces off the line at the top of `tfdrawline`,
+before either the width measurement or any alignment branch runs (this
+also quietly fixes the same trailing-space nudging `/right` and
+`/center` slightly off their true position, not just `/justify`). (4)
+The nesting gotcha documented for `tfblock`/`tfcols` below turned out
+to be incomplete: `tfflow` itself is just as vulnerable, since it's
+built from the same kind of plain globals, and a boundsproc that calls
+`tfflow` again unwrapped doesn't just draw the wrong thing — it
+silently discards real, unflowed text from the *outer* call (confirmed
+directly: an outer call with too little room to fit its whole
+paragraph reports an empty leftover instead of the real remainder, the
+instant the inner call's own state overwrites the outer's mid-loop).
+Same fix as the tiling section's hexgrid+hex gotcha: wrap the inner
+call in its own dict; confirmed this restores the outer call's correct
+leftover.
 
 **Deliberate scope cuts** (documented in the section header, same
 posture as `pathtext`'s plain-stringwidth advance): no hyphenation — an
 oversized single word gets its own line rather than being split; greedy
 wrap, not Knuth-Plass optimal-fit; whitespace runs around a wrap point
-are preserved verbatim rather than collapsed; vertical fit is judged by
-baseline, not glyph box, so a block's last line's descenders can fall a
-little past its bottom edge; `tfblock`/`tfcols` share plain globals with
-the boundsproc they hand to `tfflow` (same convention as the tiling
-section's `tk-`/`tg-` prefixes), so a boundsproc passed straight to
-`tfflow` must not itself call `tfblock`/`tfcols` — documented rather
-than solved with closures, consistent with how the tiling section
-handles its own analogous gotcha.
+(other than a trailing space at the very end of an emitted line, fixed
+above) are preserved verbatim rather than collapsed; vertical fit is
+judged by baseline, not glyph box, so a block's last line's descenders
+can fall a little past its bottom edge; `tfflow`/`tfblock`/`tfcols`
+share plain globals with any boundsproc they're handed (same
+convention as the tiling section's `tk-`/`tg-` prefixes), so a
+boundsproc must not itself call `tfflow`, `tfblock`, or `tfcols`
+without wrapping that inner call in its own dict — documented and
+tested (mirroring gasket/carpet's own nesting regression tests) rather
+than solved by redesigning `tfflow` off plain globals, consistent with
+how every other driver in this file handles its own analogous gotcha.
 
 `examples/paragraph_layout.ps` is a four-quadrant specimen sheet
 (`tfblock` left vs. `/justify`, `tfcols`, and `tfflow` with a circular

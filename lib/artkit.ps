@@ -377,15 +377,20 @@ end
 % line so far is anywhere near full -- that's what lets a caller pass
 % multiple paragraphs (or manual line breaks) as one string.
 %
-% tfblock/tfcols share tb-/tc-prefixed globals with the boundsproc
-% they hand to tfflow, the same no-dict-frame convention as every
-% other driver in this file (tk-/tg-/ap- above). That means, like the
-% documented hexgrid+hex/grid+ngon gotcha, a boundsproc passed
-% straight to tfflow must not itself call tfblock or tfcols -- doing
-% so clobbers tbx/tbw (or tcx/tcy/...) out from under the outer call
-% the instant the inner one runs. Call tfflow directly with your own
-% boundsproc if a region needs to flow sub-text of its own; tfblock/
-% tfcols are leaf conveniences, not meant to nest.
+% tfflow itself (tf-prefixed) and tfblock/tfcols (tb-/tc-prefixed, plus
+% the tf- globals of the tfflow call they make internally) are all
+% plain globals, the same no-dict-frame convention as every other
+% driver in this file (tk-/tg-/ap- above). That means, like the
+% documented hexgrid+hex/grid+ngon gotcha, a boundsproc that calls
+% tfflow, tfblock, or tfcols again -- flowing sub-text of its own into
+% a nested region -- clobbers the outer call's own tfstr/tfy/tflast/...
+% out from under it the instant the inner one runs, and confirmed to
+% actually happen (not just a theoretical risk): the outer call's own
+% leftover silently comes back empty, discarding real unflowed text,
+% not merely drawing the wrong thing. Same fix as hexgrid+hex: wrap
+% just the inner call in its own dict (`8 dict begin ... end`) so its
+% defs shadow there instead of landing on the outer's own bindings --
+% confirmed to restore the outer call's correct leftover once wrapped.
 %
 % Vertical fit is judged by baseline, not glyph box: tfflow stops once
 % the *next* baseline would fall below its ybot bound, so the last
@@ -493,9 +498,22 @@ end
 % the line has no internal gap (a single word), the standard
 % typographic reason a paragraph's last line and lone words don't get
 % stretched into ugly gaps.
+% Trailing spaces are trimmed off the line first (a run of two or more
+% source spaces at a wrap point leaves one on the end of the emitted
+% line -- tflinebreak's own documented "whitespace preserved verbatim"
+% behavior, mid-line only; see its header). Untrimmed, that invisible
+% trailing space both widens tdw (nudging /right and /center off by its
+% width) and, worse, counts as its own /justify gap with nothing after
+% it to stretch toward -- stealing stretch from the real gaps so the
+% last visible word falls short of x1. Caught by cross-model review.
 /tfdrawline {
     /tdline exch def /tdlast exch def /tdjust exch def
     /tdy exch def /tdx1 exch def /tdx0 exch def
+    {
+        tdline length 0 eq { exit } if
+        tdline tdline length 1 sub get 32 ne { exit } if
+        /tdline tdline 0 tdline length 1 sub getinterval def
+    } loop
     /tdw tdline stringwidth pop def
     tdjust /right eq {
         tdx1 tdw sub tdy moveto tdline show
