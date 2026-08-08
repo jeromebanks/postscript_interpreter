@@ -84,6 +84,54 @@ over `examples/etching_demo.ps`'s hatch pass. Both fixes are one line
 runs `--lint` against all three affected files so the corpus check
 that found them isn't a one-off scan lost after this session.
 
+**Cross-model review (Codex) found a real pre-existing bug in the
+execution machine, not the lint feature itself — `dict-leak`'s
+`dict_stack_len()` was just the first thing to ever look.**
+`begin_eexec` pushes `systemdict` onto the dict stack for the
+duration of the encrypted stream (Type 1 fonts run their decrypted
+body with `systemdict` implicitly current), popped again once the
+stream is spent. Three separate places drop that scanner frame —
+`unwind_all` (an unhandled error or `quit`), `do_stop` (`stop`, or an
+error caught by an enclosing `stopped`), and `Action::PopScannerAndDict`
+(the stream simply running out of bytes, by far the most common case)
+— and all three had grown their own copy of "pop whatever's on top of
+the dict stack," assuming it must be eexec's injected copy. It isn't,
+in general: PostScript running inside the encrypted stream is free to
+manage the dict stack itself, and a real Type 1 font's `currentdict
+end ... Private begin` does exactly that. Round 4 fixed `unwind_all`;
+round 5 found `do_stop` had the identical gap (worse there, since
+execution continues afterward — a leftover phantom `systemdict` push
+silently redirects the next `def`); round 6 found that even the
+`unwind_all`/`do_stop` fix was wrong in one case, an unconditional pop
+that would remove a program's *own* dict if it had already `end`-ed
+eexec's copy itself before stopping. The eventual fix: one shared
+`cleanup_unwound_frame` used by all three sites, popping the injected
+dict only when the dict stack's top is, by pointer identity
+(`Rc::ptr_eq`), the *exact* object `begin_eexec` pushed — never by
+position. `Action::PopScannerAndDict` (the normal-completion path) was
+the last of the three to still have its own positional pop, caught in
+review after round 6's PR comment before merge, not by Codex — same
+fix, made to delegate to the shared helper rather than duplicate it a
+fourth time. Regression tests cover all three unwind paths plus the
+program-owned-dict-survives case: `an_error_inside_eexec_does_not_
+leave_a_phantom_dict_stack_entry`, `a_caught_stop_inside_eexec_does_
+not_leave_a_phantom_dict_stack_entry`, `a_program_owned_dict_left_
+open_by_eexec_survives_the_cleanup`, `eexec_completing_normally_pops_
+its_injected_dict_by_identity_not_position` (all in `src/interp.rs`).
+`HANDOFF.md`'s deviations list had a line describing this exact gap
+removed once it was actually closed.
+
+**Known remaining limitation, intentionally not chased further**: a
+program that `end`s eexec's injected `systemdict` copy and then
+*re-enters* it (rather than leaving a dict of its own on top) before
+the stream unwinds would confuse the identity check the same way the
+old positional pop did — the check only distinguishes "eexec's exact
+copy" from "something else," not "eexec's copy, buried under
+further pushes." No known real Type 1 font does this, and chasing
+further edge cases in this one code path stopped being productive
+after three review rounds of diminishing-severity findings in the
+same spot.
+
 **Deferred**: "ink drawn outside `%%BoundingBox`" from the issue's
 suggestion list — the interpreter has no DSC-bbox-vs-page-size
 infrastructure today (confirmed: no `%%BoundingBox` parsing anywhere

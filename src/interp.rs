@@ -680,9 +680,8 @@ impl Interp {
                 }
                 Action::Nothing => {}
                 Action::PopScannerAndDict => {
-                    self.estack.pop();
-                    if self.dstack.len() > 2 {
-                        self.dstack.pop();
+                    if let Some(frame) = self.estack.pop() {
+                        self.cleanup_unwound_frame(frame);
                     }
                 }
             }
@@ -1489,6 +1488,33 @@ mod tests {
             "systemdict/userdict + the program's own still-open dict, per the PLRM's \
              stopped-doesn't-restore-the-dict-stack rule -- not eexec's copy, which the \
              program's own `end` already removed, and not popped again by cleanup"
+        );
+    }
+
+    #[test]
+    fn eexec_completing_normally_pops_its_injected_dict_by_identity_not_position() {
+        // Follow-up to round 6: that fix only landed in
+        // cleanup_unwound_frame, the abort/stop path. The far more
+        // common path -- an eexec stream simply running out of bytes
+        // and completing normally -- goes through
+        // Action::PopScannerAndDict instead, which still had the
+        // original unconditional "pop whatever's on top" logic. A real
+        // Type 1 font's `currentdict end ... Private begin` before
+        // falling off the end of its encrypted section would lose its
+        // own dict on the single most common eexec path of all.
+        // Action::PopScannerAndDict now delegates to
+        // cleanup_unwound_frame so both paths share one identity check.
+        let mut it = Interp::new();
+        let encrypted = eexec_encrypt(b"end 10 dict begin\n");
+        let mut src = b"currentfile eexec ".to_vec();
+        src.extend(encrypted);
+        it.run_source(&src)
+            .expect("plain completion, nothing errors");
+        assert_eq!(
+            it.dict_stack_len(),
+            3,
+            "systemdict/userdict + the program's own dict left open across eexec's natural \
+             end -- not eexec's injected copy, which the program's own `end` already removed"
         );
     }
 }
