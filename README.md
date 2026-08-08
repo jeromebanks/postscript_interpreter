@@ -361,6 +361,27 @@ newpath [3 7 2 9 5] 0.25 { pop dvcolor } barchart
 newpath 5 4 6 dvaxes stroke                     % border + ticks
 ```
 
+A third sibling, `lib/etching.ps` (issue #15), turns a photograph into
+a line engraving — the reproduction technique old newspapers and books
+actually used before halftone screens, not edge detection. `et-dims`
+reads a JPEG's own SOF marker (segment-skipping, not byte-scanning) to
+get its width/height/component count without decoding it; `et-draw`
+opens the same file through `/DCTDecode` — a general filter in this
+interpreter, so a PS program can `readstring` decoded samples directly
+without going through the `image` operator — and hatches it: parallel
+lines whose stroke width tracks local darkness, plus a perpendicular
+crosshatch pass in the deep shadows. No new Rust code; the interpreter
+already had every building block this needed. Draws with ordinary
+`moveto`/`lineto`/`stroke`, so it renders to `--png`/`--svg`/`--pdf`
+alike. `scripts/photo_etch.sh` wraps it end to end (photo path in, PNG/
+SVG/PDF out — no PostScript required); `examples/etching_demo.ps` is a
+specimen sheet.
+
+```postscript
+(lib/etching.ps) run
+<< /Photo (photo.jpg) /PageWidth 320 /PageHeight 240 >> et-draw showpage
+```
+
 ## The website
 
 **[jeromebanks.github.io/postscript_interpreter](https://jeromebanks.github.io/postscript_interpreter/)**

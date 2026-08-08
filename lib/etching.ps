@@ -1,0 +1,340 @@
+%!PS-Adobe-3.0
+%%Title: etching.ps — photo-to-line-etching library
+%%Creator: pscat — issue #15
+%%EndComments
+
+% Turns a photograph into a line-engraving: the reproduction technique
+% old newspapers and books actually used before halftone screens —
+% parallel hatch lines whose spacing/width track local tone, plus a
+% crosshatch pass in the deep shadows. No edge detection; tone-driven
+% hatching alone is the real technique and needs no contour tracing.
+%
+% Draws with ordinary moveto/lineto/stroke, so it composes with the
+% rest of a PostScript page and renders to --png/--svg/--pdf alike
+% (unlike halftone.rs's --halftone screen, which is raster-only).
+%
+%   << /Photo (path.jpg) >> et-dims
+%     -> width height ncomp, read from the file's own SOF marker
+%        without decoding it — cheap enough to run as a measure
+%        pre-pass (see scripts/photo_etch.sh) the way
+%        lib/handscript.ps's hs-linecount measures before hs-write.
+%
+%   << /Photo (path.jpg)
+%      /PageWidth pw /PageHeight ph   % required: output canvas, points
+%      /Spacing 3                     % device units between hatch lines
+%      /Angle -15                     % primary hatch angle, degrees
+%      /Threshold2 0.55               % darkness above which crosshatch kicks in
+%      /Ink [0.08 0.07 0.05]          % stroke color
+%      /Paper [0.96 0.94 0.88]        % background fill
+%   >> et-draw
+%     -> draws the engraving to fill [0,pw]x[0,ph]; caller does
+%        showpage. Reads /Photo's own dimensions itself (via the same
+%        scan et-dims uses), so the caller only needs to already know
+%        them for sizing PageWidth/PageHeight — not for correctness.
+%
+% Scope: JPEG input only — this interpreter has no PNG decode path in
+% PostScript, same as real PostScript (DCTDecode is the only raster
+% filter here). Grayscale or RGB (1 or 3 components); CMYK/YCCK JPEGs
+% are out of scope (documented, not silently misread — et-draw raises
+% rather than guessing at a channel layout it doesn't understand).
+% Progressive JPEGs decode fine (the underlying DCTDecode filter
+% doesn't care), but their SOF marker is a different code than
+% baseline's — et-dims/et-draw recognize any SOFn marker, not just
+% baseline's C0, for exactly that reason.
+%
+% Not handled: EXIF orientation (the APP1 tag many phone cameras set
+% instead of physically rotating the pixel data). et-dims/et-draw
+% always use the raw SOF width/height/samples — a portrait photo shot
+% with the phone rotated will size and render sideways or mirrored,
+% same as feeding that file's raw samples to `image` would. Tracked
+% as a follow-up rather than fixed here: real EXIF/TIFF IFD parsing
+% (not just a marker length-skip) is a meaningfully sized addition on
+% its own, and it doesn't hang or crash — it degrades a subset of
+% inputs, not all of them.
+
+/EtchLayout 64 dict def
+EtchLayout begin
+
+  /defaults <<
+    /Spacing 3
+    /Angle -15
+    /Threshold2 0.55
+    /Ink [0.08 0.07 0.05]
+    /Paper [0.96 0.94 0.88]
+  >> def
+
+  % /key getopt -> value from the caller's Opts, else the default
+  /getopt {
+    Opts 1 index known { Opts exch get } { defaults exch get } ifelse
+  } def
+
+  % ---------------------------------------------------- JPEG header scan
+  % Dimensions come straight from the file's own SOF marker — the same
+  % information real PostScript RIPs need supplied externally, since
+  % neither this interpreter nor the PLRM parses image headers for the
+  % `image` operator. Segment-skipping (not naive byte scanning) is
+  % required here: JPEG payload bytes can coincidentally look like a
+  % marker, so only a segment's own length field is safe to trust.
+
+  % file -> byte (raises if the file is exhausted)
+  /et-byte { read { } { et-jpeg-truncated } ifelse } def
+
+  % file -> uint16, big-endian
+  /et-u16 {
+    2 string readstring pop
+    dup 0 get 8 bitshift exch 1 get add
+  } def
+
+  % file n -> (discards n bytes)
+  /et-skip { string readstring pop pop } def
+
+  % v lo hi -> bool (v in [lo, hi])
+  /et-between {
+    /hi exch def /lo exch def /v exch def
+    v lo ge v hi le and
+  } def
+
+  % file -> markercode (0xFF and any 0xFF fill bytes already consumed)
+  /et-nextmarker {
+    dup et-byte 16#FF ne { pop et-jpeg-bad-marker } if
+    {
+      dup et-byte
+      dup 16#FF ne { exit } if
+      pop
+    } loop
+    exch pop
+  } def
+
+  % file -> width height ncomp. Leaves the file open past the SOF
+  % segment (mid-headers, nowhere near entropy data); callers that
+  % want decoded samples reopen the path through DCTDecode instead of
+  % reusing this handle.
+  /et-scan {
+    /f exch def
+    f et-byte 16#FF ne { et-jpeg-not-a-jpeg } if
+    f et-byte 16#D8 ne { et-jpeg-not-a-jpeg } if
+    {
+      f et-nextmarker /marker exch def
+      marker 16#D9 eq marker 16#DA eq or { et-jpeg-no-sof-marker } if
+      % Markers with no length field: RSTn (D0-D7) and TEM (01). Every
+      % other marker (including the SOFn family and APPn/COM/DQT/DHT
+      % we don't care about) carries a 2-byte length right after it.
+      marker 16#D0 16#D7 et-between marker 16#01 eq or not
+      {
+        f et-u16 /len exch def
+        % SOFn is C0-CF minus C4 (DHT), C8 (JPG, reserved), CC (DAC) —
+        % those three share the numeric range but aren't frame headers.
+        marker 16#C0 16#CF et-between
+        marker 16#C4 ne and marker 16#C8 ne and marker 16#CC ne and
+        {
+          f et-byte pop                    % precision, unused
+          f et-u16 /height exch def
+          f et-u16 /width exch def
+          f et-byte /ncomp exch def
+          exit
+        } {
+          f len 2 sub et-skip
+        } ifelse
+      } if
+    } loop
+    width height ncomp
+  } def
+
+  % ---------------------------------------------------------- engraving
+
+  % x y -> darkness in [0,1], nearest-neighbor from buf/width/height/ncomp.
+  % buf is an array of per-row strings (see et-draw), not one
+  % width*height*ncomp string — a single string that size overflows
+  % this interpreter's 16MB string limit on an ordinary phone photo
+  % (e.g. 4032x3024 RGB is ~36.6MB), where a single row never does.
+  % ett- prefixed scratch — leaf helper, but prefixed anyway per
+  % dataviz.ps's discipline: cheap insurance against whatever calls it
+  % next sharing a name by accident.
+  /et-tone {
+    /ettsy exch def /ettsx exch def
+    ettsx 0 lt { /ettsx 0 def } if
+    ettsx width ge { /ettsx width 1 sub def } if
+    ettsy 0 lt { /ettsy 0 def } if
+    ettsy height ge { /ettsy height 1 sub def } if
+    /ettrow buf ettsy get def
+    /ettidx ettsx ncomp mul def
+    ncomp 1 eq {
+      /ettlum ettrow ettidx get def
+    } {
+      /ettlum
+        ettrow ettidx get 0.2126 mul
+        ettrow ettidx 1 add get 0.7152 mul add
+        ettrow ettidx 2 add get 0.0722 mul add
+      def
+    } ifelse
+    1 ettlum 255 div sub
+  } def
+
+  % angleDeg minDarkness -> draws one hatch direction across the page.
+  % Marches sample points along each hatch line and quantizes darkness
+  % into a few stroke-width buckets, emitting one stroke per run of
+  % constant bucket (not one stroke per sample) — the stroke count is
+  % what a naive per-sample version would pay for, and it dominates
+  % render time far more than the sampling itself. eth- prefixed
+  % scratch throughout (dataviz.ps's discipline again) — et-draw's own
+  % /Angle-derived /ang would otherwise collide with this proc's own
+  % angle parameter, correct today only by evaluation-order luck.
+  /et-hatch {
+    /ethmind exch def
+    /ethang exch def
+    /ethdx ethang cos def
+    /ethdy ethang sin def
+    /ethnx ethang 90 add cos def
+    /ethny ethang 90 add sin def
+    /ethdiag pw dup mul ph dup mul add sqrt def
+    /ethhalf ethdiag 2 div def
+    /ethwidths [0.5 1.0 1.6 2.4] def
+    /ethnbuck ethwidths length def
+    /ethsstep spacing 0.5 mul def
+    ethsstep 0.25 lt { /ethsstep 0.25 def } if
+    % Guards a /Threshold2 of exactly 1: without this, a pure-black
+    % sample (darkness 1) would compute nd as 0 1 sub 1 1 sub div,
+    % i.e. 0 0 div -- undefinedresult, not a bucket-1 stroke.
+    /ethdenom 1 ethmind sub def
+    ethdenom 0.0001 lt { /ethdenom 0.0001 def } if
+    /ethcx pw 2 div def
+    /ethcy ph 2 div def
+    ethhalf neg spacing ethhalf {
+      /ethk exch def
+      /ethrunb 0 def
+      /ethrunt0 ethhalf neg def
+      ethhalf neg ethsstep ethhalf {
+        /etht exch def
+        /ethx ethcx ethnx ethk mul add ethdx etht mul add def
+        /ethy ethcy ethny ethk mul add ethdy etht mul add def
+        /ethb 0 def
+        ethx 0 ge ethx pw le and ethy 0 ge ethy ph le and {
+          /ethsx ethx width mul pw div cvi def
+          % PostScript's y runs bottom-up; the decoded sample buffer's
+          % rows run top-down (row 0 first out of the JPEG), so this
+          % flips or the photo prints upside down (caught by
+          % tests/etching.rs's orientation check).
+          /ethsy ph ethy sub height mul ph div cvi def
+          ethsx ethsy et-tone /ethdk exch def
+          ethdk ethmind ge {
+            /ethnd ethdk ethmind sub ethdenom div def
+            ethnd 1 gt { /ethnd 1 def } if
+            /ethb ethnd ethnbuck 1 sub mul cvi 1 add def
+          } if
+        } if
+        ethb ethrunb ne {
+          ethrunb 0 gt {
+            ethwidths ethrunb 1 sub get setlinewidth
+            newpath
+            ethcx ethnx ethk mul add ethdx ethrunt0 mul add
+            ethcy ethny ethk mul add ethdy ethrunt0 mul add
+            moveto
+            ethcx ethnx ethk mul add ethdx etht mul add
+            ethcy ethny ethk mul add ethdy etht mul add
+            lineto
+            stroke
+          } if
+          /ethrunt0 etht def
+          /ethrunb ethb def
+        } if
+      } for
+      ethrunb 0 gt {
+        ethwidths ethrunb 1 sub get setlinewidth
+        newpath
+        ethcx ethnx ethk mul add ethdx ethrunt0 mul add
+        ethcy ethny ethk mul add ethdy ethrunt0 mul add
+        moveto
+        ethcx ethnx ethk mul add ethdx ethhalf mul add
+        ethcy ethny ethk mul add ethdy ethhalf mul add
+        lineto
+        stroke
+      } if
+    } for
+  } def
+
+end
+
+% ------------------------------------------------------------- the API
+
+% opts et-dims -> width height ncomp
+/et-dims {
+  EtchLayout begin
+    /Opts exch def
+    /Photo getopt (r) file et-scan
+    /ncomp exch def /height exch def /width exch def
+    % et-scan's `f` (opened via a plain `file`, so it holds the
+    % photo's full raw bytes) is left open on purpose for callers that
+    % go on to read decoded samples — et-dims isn't one of those, and
+    % EtchLayout is a persistent dict, so without this a long-lived
+    % interpreter calling et-dims repeatedly (scripts/photo_etch.sh's
+    % own pre-pass, or an interactive session) would keep the last
+    % photo's raw bytes reachable indefinitely.
+    f closefile
+    /f null def
+    width height ncomp
+  end
+} def
+
+% opts et-draw -  (draws the engraving; caller does showpage)
+/et-draw {
+  EtchLayout begin
+    /Opts exch def
+    /Photo getopt /photopath exch def
+    photopath (r) file et-scan
+    /ncomp exch def /height exch def /width exch def
+    ncomp 1 eq ncomp 3 eq or not { et-unsupported-ncomp } if
+    photopath (r) file /DCTDecode filter /jf exch def
+    % One string per row, not one width*height*ncomp string for the
+    % whole image — that single allocation overflows this
+    % interpreter's 16MB string limit well within ordinary photo
+    % sizes (see et-tone's comment), where a single row never does.
+    /buf height array def
+    0 1 height 1 sub {
+      /etdi exch def
+      /etdrow width ncomp mul string def
+      jf etdrow readstring pop pop
+      buf etdi etdrow put
+    } for
+    jf closefile
+
+    /pw /PageWidth getopt def
+    /ph /PageHeight getopt def
+    /spacing /Spacing getopt def
+    spacing 0 le { et-spacing-must-be-positive } if
+    /thresh2 /Threshold2 getopt def
+    /ang /Angle getopt def
+    /ink /Ink getopt def
+    /paper /Paper getopt def
+
+    gsave
+    newpath 0 0 moveto pw 0 lineto pw ph lineto 0 ph lineto closepath
+    paper aload pop setrgbcolor fill
+
+    % Round line caps (below) can carry a hatch stroke's end a little
+    % past its last in-bounds sample, and a stroke landing exactly on
+    % the boundary can too — clip to the page rect so composing
+    % et-draw into a larger page (examples/etching_demo.ps does
+    % exactly this) can't mark whatever's drawn around it.
+    newpath 0 0 moveto pw 0 lineto pw ph lineto 0 ph lineto closepath
+    clip
+    newpath
+
+    ink aload pop setrgbcolor
+    1 setlinecap 1 setlinejoin
+
+    ang 0.06 et-hatch
+    ang 90 add thresh2 et-hatch
+    grestore
+
+    % buf (the decoded photo, one string per row) and jf (its
+    % DCTDecode file handle, which keeps its own full-image byte
+    % buffer alive internally even after closefile) can be tens of MB
+    % for an ordinary phone photo; EtchLayout is a persistent dict, so
+    % without this they'd stay reachable — and unreclaimable — for the
+    % rest of the interpreter session.
+    /buf null def
+    /jf null def
+    /f null def
+  end
+} def
+%%EOF

@@ -87,7 +87,25 @@ chart on one shared category axis with a species-mix donut (NOTES.md's
 entry has the full story, including two bug classes deliberately
 tested for — a donut filled solid to the center, and a pie wedge
 sweeping the wrong direction — both invisible to a plain ink-count
-check).
+check). Also done: issue #15, a photo-to-line-etching utility — a
+third sibling library, `lib/etching.ps` (no dependency on artkit,
+graph.ps, or dataviz.ps): `et-dims` walks a JPEG's own marker segments
+to read width/height/component count without decoding it; `et-draw`
+opens the same file through `/DCTDecode` (a general filter here, so a
+PS program can `readstring` decoded samples directly, bypassing the
+`image` operator entirely — confirmed empirically before writing any
+of this, which is what kept the whole feature to a PS library with
+zero new Rust) and hatches it into a line engraving: parallel strokes
+whose width tracks local darkness, plus a perpendicular crosshatch
+pass in the shadows — quantized into a few width buckets with one
+stroke per constant-bucket run, not one stroke per sample, since
+stroke count (not sample count) is what actually costs render time.
+`scripts/photo_etch.sh` wraps it end to end; `examples/etching_demo.ps`
+is the specimen sheet (NOTES.md's entry has the full story, including
+a real upside-down-photo bug the coverage tests caught: PostScript's
+y runs bottom-up but decoded JPEG rows run top-down, so the first
+version of `et-hatch`'s sample lookup rendered every photo flipped
+vertically until that mapping got a `ph y sub`).
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
