@@ -27,6 +27,7 @@ overridden per line through the font's scratch dict.
 | Recursive Peaks | `recursive_peaks.ps` | A night mountain range built entirely from artkit's fractals section: `gasket`-subdivided low-poly peaks shaded by altitude, a `carpet`-driven sparse starfield, and `edgepoly` koch/quadkoch snowflakes floating overhead |
 | Ripple Range | `ripple_range.ps` | (issue #13) Two decaying ripple sources summed into a height field and swept row by row under `graph.ps`'s `project3` camera — each row an occluding filled ridge, back-to-front painter's algorithm |
 | Field Notes | `field_notes.ps` | (issue #14) A marsh census styled as a naturalist's field journal: `dataviz.ps`'s `barchart` and `linechart` sharing one category axis (weekly sightings against a temperature trend), a species-mix donut with a hand-drawn legend, all lettered in the Stage 12 /HandScript font |
+| The Compositor's Proof | `compositors_proof.ps` | (issue #16) A printer's proof sheet for artkit's paragraph-flow section: a motto set inside a round medallion via `tfflow` and a hand-written circle boundsproc, a justified body paragraph via `tfblock`, and a two-column colophon via `tfcols` that genuinely spills from the first column into the second |
 
 ## Viewing the gallery
 

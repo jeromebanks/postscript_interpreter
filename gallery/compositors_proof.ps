@@ -1,0 +1,81 @@
+%!PS-Adobe-3.0
+%%Title: The Compositor's Proof (issue #16, artkit paragraph flow)
+%%BoundingBox: 0 0 620 760
+%%EndComments
+
+% A printer's proof sheet for artkit's new paragraph-flow section
+% (lib/artkit.ps): a motto set inside a round medallion via tfflow and
+% a hand-written boundsproc (available width computed straight off the
+% circle's own equation -- the "arbitrary region" capability tfblock/
+% tfcols are just convenience wrappers over), a justified body
+% paragraph under tfblock, and a two-column colophon under tfcols,
+% carrying one run of copy from the first column into the second. Run
+% from the repo root:
+%
+%   pscat --page 620x760 gallery/compositors_proof.ps
+
+(lib/artkit.ps) run
+0 srand
+
+% --- parchment page -----------------------------------------------------
+0.97 0.95 0.90 setrgbcolor clippath fill
+0.45 0.35 0.22 setrgbcolor 1.5 setlinewidth
+newpath 20 20 moveto 600 20 lineto 600 740 lineto 20 740 lineto closepath stroke
+newpath 26 26 moveto 594 26 lineto 594 734 lineto 26 734 lineto closepath stroke
+
+0.18 0.13 0.08 setrgbcolor
+
+% corner ornaments -- a small star at each inside corner
+0.55 0.40 0.20 setrgbcolor
+newpath 36 36 8 4 5 star fill
+newpath 36 724 8 4 5 star fill
+newpath 584 36 8 4 5 star fill
+newpath 584 724 8 4 5 star fill
+0.18 0.13 0.08 setrgbcolor
+
+% --- medallion: motto set inside a circle (tfflow, arbitrary region) ----
+/MEDX 310 def /MEDY 640 def /MEDR 78 def
+0.45 0.35 0.22 setrgbcolor 1.2 setlinewidth
+newpath MEDX MEDY MEDR 0 360 arc stroke
+newpath MEDX MEDY MEDR 6 sub 0 360 arc stroke
+
+/Palatino-Bold findfont 15 scalefont setfont
+0.18 0.13 0.08 setrgbcolor
+{
+    /medy exch def
+    /meddy medy MEDY sub def
+    meddy dup mul MEDR 16 sub dup mul ge
+        { MEDX MEDX }
+        { /medhw MEDR 16 sub dup mul meddy meddy mul sub sqrt def
+          MEDX medhw sub MEDX medhw add }
+    ifelse
+}
+MEDY 20 add MEDY 55 sub 17 /center
+(SET NOT IN A BOX BUT IN A SHAPE OF ITS OWN A LINE FINDS THE ROOM A CALLERS OWN RULE ALLOWS IT)
+tfflow pop
+
+% --- headline -------------------------------------------------------------
+/Palatino-Bold findfont 30 scalefont setfont
+(The Compositor's Proof) 310 500 showctr
+/Palatino-Italic findfont 13 scalefont setfont
+(on the flowing of copy into shape and column) 310 478 showctr
+0.45 0.35 0.20 setrgbcolor 0.8 setlinewidth
+newpath 90 462 moveto 530 462 lineto stroke
+
+% --- body: one justified block (tfblock) ---------------------------------
+/Palatino findfont 12.5 scalefont setfont
+0.18 0.13 0.08 setrgbcolor
+/BODY (Herein is proved the flowing of a paragraph: word measured against word, a line built up until the next word would run past the margin, and there broken. Ranged flush at the left it keeps an honest ragged edge; ranged full it is stretched, gap by gap, until the last letter of the line falls exactly upon the margin, saving always the final line of a passage, which keeps its natural spacing rather than being pulled thin across an empty page.) def
+newpath 90 300 350 150 rectstroke
+90 300 350 150 17 /justify BODY tfblock pop
+
+% --- colophon: two columns, one run of copy (tfcols) ----------------------
+/Palatino-Italic findfont 11.5 scalefont setfont
+(Colophon) 310 270 showctr
+/Palatino findfont 10.5 scalefont setfont
+newpath 90 60 165 190 rectstroke
+newpath 275 60 165 190 rectstroke
+/COLOPHON (Set with artkit's tfwrap, tfdrawline, tfflow, tfblock, and tfcols -- greedy word-wrap under the current font, four alignments, a boundsproc for any region a caller can describe, and columns that carry one run of copy from the first into the next until the whole passage has found its place upon the page. The medallion above and the body below are the same engine, called two different ways -- tfflow direct for the round shape, tfblock for the plain rectangle.) def
+90 60 165 20 190 2 15 /left COLOPHON tfcols pop
+
+showpage

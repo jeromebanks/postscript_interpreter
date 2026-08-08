@@ -1,0 +1,64 @@
+%!PS-Adobe-3.0
+%%Title: Flowing Type — a specimen sheet for artkit's paragraph layout
+%%BoundingBox: 0 0 600 600
+%%EndComments
+
+% Specimen sheet for artkit's paragraph/flowing-text section (issue
+% #16, lib/artkit.ps): four quadrants, one capability each. Top-left is
+% tfblock left-aligned in a plain box; top-right is the same box under
+% /justify, showing every non-last line stretched flush to both
+% margins while the paragraph's true last line falls back to /left;
+% bottom-left is tfcols carrying one run of copy across two columns,
+% the second column picking up exactly where the first's leftover
+% stopped; bottom-right calls tfflow directly with a custom boundsproc
+% -- available width computed from a circle's own equation -- to flow
+% text into a round medallion instead of a rectangle, the "arbitrary
+% region" capability tfblock/tfcols are just convenience wrappers over.
+% Run from the repo root:
+%
+%   pscat --page 600x600 examples/paragraph_layout.ps
+
+(lib/artkit.ps) run
+
+1 1 1 setrgbcolor clippath fill
+
+/Palatino-Bold findfont 22 scalefont setfont
+0.1 0.1 0.12 setrgbcolor
+(Flowing Type) 300 566 showctr
+/Palatino-Italic findfont 12 scalefont setfont
+(tfblock left + justify, tfcols, tfflow with a custom region) 300 548 showctr
+
+/COPY (Artkit now flows a paragraph the way alongpath flows a brush: word by word, measured by its own width, breaking where the line runs out of room and starting fresh on the next.) def
+
+% --- top-left: tfblock, /left -------------------------------------------
+0.1 0.1 0.12 setrgbcolor
+/Palatino findfont 11 scalefont setfont
+newpath 30 300 250 220 rectstroke
+30 300 250 220 15 /left COPY tfblock pop
+
+% --- top-right: tfblock, /justify ----------------------------------------
+newpath 320 300 250 220 rectstroke
+320 300 250 220 15 /justify COPY tfblock pop
+
+% --- bottom-left: tfcols, two columns sharing one run of copy ------------
+/LONGCOPY (Wrapping, justification, margins and leading, columns, and an arbitrary region are the five things this section adds: pick a box or write your own boundsproc, and the words find their own way to the edge.) def
+newpath 30 30 120 220 rectstroke
+newpath 160 30 120 220 rectstroke
+30 30 120 10 220 2 14 /left LONGCOPY tfcols pop
+
+% --- bottom-right: tfflow, a circular medallion --------------------------
+/MEDX 450 def /MEDY 140 def /MEDR 95 def
+newpath MEDX MEDY MEDR 0 360 arc stroke
+{
+    /medy exch def
+    /meddy medy MEDY sub def
+    meddy dup mul MEDR MEDR mul ge
+        { MEDX MEDX }
+        { /medhw MEDR MEDR mul meddy meddy mul sub sqrt 6 sub dup 0 lt { pop 0 } if def
+          MEDX medhw sub MEDX medhw add }
+    ifelse
+} MEDY MEDR add 10 sub MEDY MEDR sub 10 add 14 /center
+(Set within a circle, not a box -- the region a caller's own boundsproc describes.)
+tfflow pop
+
+showpage

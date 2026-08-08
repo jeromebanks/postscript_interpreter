@@ -3,6 +3,77 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Paragraph/flowing-text layout for artkit (issue #16, 2026-08-07)
+
+Closes issue #16. The issue asked for reusable paragraph/flowing-text
+layout procedures in `lib/artkit.ps` — wrapping, justification,
+columns, margins/leading, and setting a block of copy into an
+arbitrary region, not just a straight or curved baseline — with wrap
+algorithm, justification method, and the shape/column API explicitly
+left to the implementer.
+
+**Five procedures, one shared primitive.** `tflinebreak` (internal)
+peels one greedy-wrapped line off a string under the current font,
+forcing a break on an embedded newline and reporting whether this is a
+paragraph's last line (so callers know not to stretch-justify it).
+`tfwrap` builds on it for the fixed-width, no-drawing case
+(measurement/line-counting). The real design decision was `tfflow`:
+rather than take a fixed box, it takes a `boundsproc` — `{y -> x0 x1}`,
+called once per line — so a region's available width can vary with
+height instead of being locked to a rectangle. `tfblock` (a plain box)
+and `tfcols` (columns, feeding one call's leftover into the next) are
+both just `tfflow` with a constant-width boundsproc built from their
+own args; a caller who needs a trapezoid, an arch, or a circle (the
+gallery piece below) writes their own boundsproc and calls `tfflow`
+directly. `tfdrawline` does the per-line alignment (`/left /right
+/center /justify`, unknown names falling back to `/left` — this file's
+usual latitude-not-error posture); `/justify` skips stretching
+whenever the caller says this is the paragraph's last line, or the
+line is a single word with nothing to stretch between.
+
+**Two real bugs, both caught before merge, neither by the first draft
+of tests.** (1) `advisor` review of the plan caught, on inspection
+alone, that `tflinebreak`'s end-of-string branch unconditionally took
+the whole remainder as one line without checking whether it actually
+fit the width — so the last word of every non-terminal paragraph
+silently overflowed instead of wrapping to its own line. Fixed by
+measuring the remainder before taking it, falling back to the last
+known-good break otherwise. (2) Rendering `examples/paragraph_layout.ps`
+(not a targeted test — just looking at the output) turned up a second,
+worse bug: `/justify`'s word-advance added `stringwidth(word) +
+tdextra` but never added the line's own *natural* space width, so
+every inter-word gap was short by a full space — with several gaps on
+one line the shortfall compounded into visibly overlapping words
+("flowsabrush:wordbyword..."). The original ink-bbox regression test
+for justify didn't catch this, because crushed-together text still
+reaches close to the right margin, same as properly-spaced text — a
+new test was added that calls `tfdrawline` directly with `lastline`
+forced false and asserts the *specific* x-position match the arithmetic
+predicts, confirmed to fail against the pre-fix code (rightmost ink at
+141 instead of ~170) before being folded into the suite.
+
+**Deliberate scope cuts** (documented in the section header, same
+posture as `pathtext`'s plain-stringwidth advance): no hyphenation — an
+oversized single word gets its own line rather than being split; greedy
+wrap, not Knuth-Plass optimal-fit; whitespace runs around a wrap point
+are preserved verbatim rather than collapsed; vertical fit is judged by
+baseline, not glyph box, so a block's last line's descenders can fall a
+little past its bottom edge; `tfblock`/`tfcols` share plain globals with
+the boundsproc they hand to `tfflow` (same convention as the tiling
+section's `tk-`/`tg-` prefixes), so a boundsproc passed straight to
+`tfflow` must not itself call `tfblock`/`tfcols` — documented rather
+than solved with closures, consistent with how the tiling section
+handles its own analogous gotcha.
+
+`examples/paragraph_layout.ps` is a four-quadrant specimen sheet
+(`tfblock` left vs. `/justify`, `tfcols`, and `tfflow` with a circular
+boundsproc). The gallery piece, **The Compositor's Proof**
+(`gallery/compositors_proof.ps`), sets a motto inside a round medallion
+via `tfflow` and a hand-written circle boundsproc, a justified body
+paragraph via `tfblock`, and a two-column colophon via `tfcols` sized
+so the copy genuinely spills from the first column into the second
+(not just technically able to).
+
 ## A photo-to-line-etching/sketch utility (issue #15, 2026-08-07)
 
 Closes issue #15. The issue asked for "a utility to take a photo and
