@@ -261,6 +261,17 @@ end
   EtchLayout begin
     /Opts exch def
     /Photo getopt (r) file et-scan
+    /ncomp exch def /height exch def /width exch def
+    % et-scan's `f` (opened via a plain `file`, so it holds the
+    % photo's full raw bytes) is left open on purpose for callers that
+    % go on to read decoded samples — et-dims isn't one of those, and
+    % EtchLayout is a persistent dict, so without this a long-lived
+    % interpreter calling et-dims repeatedly (scripts/photo_etch.sh's
+    % own pre-pass, or an interactive session) would keep the last
+    % photo's raw bytes reachable indefinitely.
+    f closefile
+    /f null def
+    width height ncomp
   end
 } def
 

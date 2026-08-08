@@ -106,10 +106,12 @@ read -r W H N <<< "$("$BIN" --headless "$TMP/dims.ps" | tr '\n' ' ')"
 
 if (( W >= H )); then
   PAGE_W=$MAXDIM
-  PAGE_H=$(awk -v w="$W" -v h="$H" -v m="$MAXDIM" 'BEGIN { printf "%d", (m * h / w) + 0.5 }')
+  # max(1, ...): an extreme aspect ratio (e.g. a 1000x1 photo) can
+  # round the short side to 0, which --page then rejects outright.
+  PAGE_H=$(awk -v w="$W" -v h="$H" -v m="$MAXDIM" 'BEGIN { v = int(m * h / w + 0.5); printf "%d", (v < 1) ? 1 : v }')
 else
   PAGE_H=$MAXDIM
-  PAGE_W=$(awk -v w="$W" -v h="$H" -v m="$MAXDIM" 'BEGIN { printf "%d", (m * w / h) + 0.5 }')
+  PAGE_W=$(awk -v w="$W" -v h="$H" -v m="$MAXDIM" 'BEGIN { v = int(m * w / h + 0.5); printf "%d", (v < 1) ? 1 : v }')
 fi
 
 {
