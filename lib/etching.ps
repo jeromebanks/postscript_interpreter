@@ -41,6 +41,16 @@
 % doesn't care), but their SOF marker is a different code than
 % baseline's — et-dims/et-draw recognize any SOFn marker, not just
 % baseline's C0, for exactly that reason.
+%
+% Not handled: EXIF orientation (the APP1 tag many phone cameras set
+% instead of physically rotating the pixel data). et-dims/et-draw
+% always use the raw SOF width/height/samples — a portrait photo shot
+% with the phone rotated will size and render sideways or mirrored,
+% same as feeding that file's raw samples to `image` would. Tracked
+% as a follow-up rather than fixed here: real EXIF/TIFF IFD parsing
+% (not just a marker length-skip) is a meaningfully sized addition on
+% its own, and it doesn't hang or crash — it degrades a subset of
+% inputs, not all of them.
 
 /EtchLayout 64 dict def
 EtchLayout begin
@@ -289,12 +299,31 @@ end
     newpath 0 0 moveto pw 0 lineto pw ph lineto 0 ph lineto closepath
     paper aload pop setrgbcolor fill
 
+    % Round line caps (below) can carry a hatch stroke's end a little
+    % past its last in-bounds sample, and a stroke landing exactly on
+    % the boundary can too — clip to the page rect so composing
+    % et-draw into a larger page (examples/etching_demo.ps does
+    % exactly this) can't mark whatever's drawn around it.
+    newpath 0 0 moveto pw 0 lineto pw ph lineto 0 ph lineto closepath
+    clip
+    newpath
+
     ink aload pop setrgbcolor
     1 setlinecap 1 setlinejoin
 
     ang 0.06 et-hatch
     ang 90 add thresh2 et-hatch
     grestore
+
+    % buf (the decoded photo, one string per row) and jf (its
+    % DCTDecode file handle, which keeps its own full-image byte
+    % buffer alive internally even after closefile) can be tens of MB
+    % for an ordinary phone photo; EtchLayout is a persistent dict, so
+    % without this they'd stay reachable — and unreclaimable — for the
+    % rest of the interpreter session.
+    /buf null def
+    /jf null def
+    /f null def
   end
 } def
 %%EOF
