@@ -432,7 +432,7 @@ pub(crate) fn format_real(r: f64) -> String {
     format!("{r:?}")
 }
 
-fn escape_string(bytes: &[u8]) -> String {
+pub(crate) fn escape_string(bytes: &[u8]) -> String {
     let mut out = String::new();
     for &b in bytes {
         match b {

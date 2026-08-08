@@ -11,7 +11,8 @@
 
 use tiny_skia::Pixmap;
 
-use crate::{Interp, Object};
+use crate::object::PsString;
+use crate::{Interp, Object, Value};
 
 pub struct LintFinding {
     /// A short, stable slug identifying the check — for filtering/
@@ -96,25 +97,41 @@ fn check_gsave_balance(interp: &Interp, findings: &mut Vec<LintFinding>) {
     }
 }
 
-/// A `repr()` can be enormous (a leaked multi-megabyte string is
-/// exactly the kind of thing worth a leak warning about) — truncate so
-/// one finding can't balloon the diagnostic output past what it's
-/// reporting on. `pscat-mcp`'s `render_postscript` forwards this text
-/// verbatim into its response, so an unbounded repr becomes an
-/// unbounded MCP payload.
+/// A leaked multi-megabyte string is exactly the kind of thing worth a
+/// leak warning about, so the preview can't just skip large operands —
+/// but it must stay cheap regardless of how large they are.
+/// `pscat-mcp`'s `render_postscript` runs this on every render, so an
+/// unbounded preview becomes unbounded MCP latency/memory, not just an
+/// unbounded message (Codex review, PR #59, round 2: truncating
+/// `repr()`'s *output* still built the whole thing first — a 10M-byte
+/// string produced a ~40MB intermediate before being cut to 80 chars).
+/// Strings are previewed by slicing the bytes *before* escaping, never
+/// escaping more than the limit; arrays/procedures report only their
+/// length, never recursing into elements, since a short array of huge
+/// strings would defeat a length-only bound on the array itself.
+/// Everything else (numbers, names, dicts, ...) already has an
+/// inherently bounded `repr()`.
 const OPERAND_PREVIEW_LIMIT: usize = 80;
 
 fn preview(obj: &Object) -> String {
-    let r = obj.repr();
-    // Byte-slicing a raw index risks landing mid-character on a
-    // non-ASCII name; counting/collecting chars instead is always
-    // boundary-safe, at the cost of "chars" not quite meaning "bytes"
-    // for the truncation point — an acceptable tradeoff for a preview.
-    if r.chars().count() <= OPERAND_PREVIEW_LIMIT {
-        r
+    match &obj.value {
+        Value::String(s) => string_preview(s),
+        Value::Array(a) => {
+            let kind = if obj.executable { "procedure" } else { "array" };
+            format!("<{kind} of {} element(s)>", a.len())
+        }
+        _ => obj.repr(),
+    }
+}
+
+fn string_preview(s: &PsString) -> String {
+    let len = s.len();
+    let take = OPERAND_PREVIEW_LIMIT.min(len);
+    let escaped = crate::object::escape_string(&s.borrow_bytes()[..take]);
+    if take < len {
+        format!("({escaped}...<{len} bytes total>)")
     } else {
-        let truncated: String = r.chars().take(OPERAND_PREVIEW_LIMIT).collect();
-        format!("{truncated}...<{} bytes total>", r.len())
+        format!("({escaped})")
     }
 }
 
@@ -294,6 +311,53 @@ mod tests {
         assert!(
             leak.message.contains("bytes total"),
             "should note it was truncated: {}",
+            leak.message
+        );
+    }
+
+    #[test]
+    fn a_huge_leaked_string_is_bounded_without_building_the_whole_repr() {
+        // Regression test (Codex review round 2, PR #59): the original
+        // fix truncated repr()'s *output*, which still built the whole
+        // escaped string first -- a 10M-byte string produced a ~40MB
+        // intermediate. This should stay fast and the message small
+        // regardless of the leaked string's size.
+        let it = run("10000000 string");
+        let findings = check(&it, true);
+        let leak = findings
+            .iter()
+            .find(|f| f.check == "stack-leak")
+            .expect("stack-leak finding");
+        assert!(
+            leak.message.len() < 1000,
+            "message should be bounded, got {} bytes",
+            leak.message.len()
+        );
+        assert!(
+            leak.message.contains("10000000 bytes total") || leak.message.contains("10000002"),
+            "should report the real size: {}",
+            leak.message
+        );
+    }
+
+    #[test]
+    fn a_leaked_array_reports_length_without_recursing_into_elements() {
+        // A short array of one huge string must not defeat the bound
+        // by recursing into repr() for each element.
+        let it = run("[10000000 string]");
+        let findings = check(&it, true);
+        let leak = findings
+            .iter()
+            .find(|f| f.check == "stack-leak")
+            .expect("stack-leak finding");
+        assert!(
+            leak.message.len() < 1000,
+            "message should be bounded, got {} bytes",
+            leak.message.len()
+        );
+        assert!(
+            leak.message.contains("array of 1 element"),
+            "should describe the array by length, not its contents: {}",
             leak.message
         );
     }

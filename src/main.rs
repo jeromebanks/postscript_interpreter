@@ -315,7 +315,15 @@ fn finish_headless(ok: bool, interp: &Interp, options: &Options) -> ExitCode {
 /// should still surface — and doesn't affect the exit code, since a
 /// finding is advisory, not fatal.
 fn report_lint(interp: &Interp, options: &Options) {
-    let render_checks = options.png.is_some() || options.svg.is_some() || options.pdf.is_some();
+    // The blank-page/stack-leak checks assume the run was meant to
+    // produce a page — true for any file or stdin run, whether or not
+    // an output format flag was also given (`--lint file.ps` with no
+    // `--png` still runs a real program). Only `-e`'s snippets are the
+    // "leave a result on the stack, don't necessarily draw anything"
+    // exception (Codex review, PR #59: gating on the output-format
+    // flags instead meant `pscat --lint file.ps` silently skipped both
+    // checks whenever `--png`/`--svg`/`--pdf` weren't also given).
+    let render_checks = options.eval.is_none();
     let findings = interp.lint(render_checks);
     if findings.is_empty() {
         eprintln!("pscat: lint: clean");

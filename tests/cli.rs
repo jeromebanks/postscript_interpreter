@@ -102,12 +102,27 @@ fn lint_is_clean_when_nothing_is_wrong() {
 }
 
 #[test]
-fn lint_skips_the_blank_page_check_without_an_output_format() {
-    // No --png/--svg/--pdf: nothing was meant to be rendered, so an
-    // untouched canvas isn't a mistake worth flagging.
+fn lint_skips_the_blank_page_check_for_eval_style_usage() {
+    // -e is the "leave a result on the stack, don't necessarily draw
+    // anything" exception -- an untouched canvas isn't a mistake there.
     let (ok, _out, stderr) = run(&["--lint", "-e", "3 4 add pop"], "");
     assert!(ok, "stderr: {stderr}");
     assert!(!stderr.contains("blank-page"), "stderr: {stderr}");
+}
+
+#[test]
+fn lint_flags_a_blank_page_on_a_plain_file_run_with_no_output_format() {
+    // Regression test (Codex review round 2, PR #59): render_checks
+    // used to key off whether --png/--svg/--pdf was given, so a plain
+    // `pscat --lint file.ps` (a real program run, just not asked to
+    // save an artifact) silently skipped blank-page/stack-leak. Only
+    // -e should skip them.
+    let (ok, _out, stderr) = run(&["--lint", "-"], "showpage");
+    assert!(ok, "stderr: {stderr}");
+    assert!(
+        stderr.contains("pscat: lint: [blank-page]"),
+        "stderr: {stderr}"
+    );
 }
 
 #[test]
