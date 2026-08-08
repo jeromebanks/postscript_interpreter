@@ -457,19 +457,31 @@ end
 % Wraps str into an array of lines, none wider than width under the
 % current font. A standalone convenience for measuring/line-counting
 % without drawing; tfflow re-wraps per line itself so a region's width
-% can vary line to line, rather than calling this.
+% can vary line to line, rather than calling this. An empty str yields
+% an empty array (zero lines), the same "nothing to do" reading tfflow
+% gives it -- not a one-element array holding a blank line.
+% Bound on the preallocated scratch array: tflinebreak either finishes
+% the string outright (one call) or peels off a break that strictly
+% shortens what's left by at least one character (tlbreak+1 >= 1
+% whenever it doesn't finish the string -- see tflinebreak), so at most
+% `length` calls run before rest is empty; `length + 1` slots is always
+% enough and this is checked directly by a regression test below.
 /tfwrap {
     /twwidth exch def /twstr exch def
-    /twlines twstr length 1 add array def
-    /twn 0 def
-    {
-        twstr twwidth tflinebreak
-        /twlast exch def /twrest exch def /twline exch def
-        twlines twn twline put /twn twn 1 add def
-        /twstr twrest def
-        twrest length 0 eq { exit } if
-    } loop
-    twlines 0 twn getinterval
+    twstr length 0 eq {
+        []
+    } {
+        /twlines twstr length 1 add array def
+        /twn 0 def
+        {
+            twstr twwidth tflinebreak
+            /twlast exch def /twrest exch def /twline exch def
+            twlines twn twline put /twn twn 1 add def
+            /twstr twrest def
+            twrest length 0 eq { exit } if
+        } loop
+        twlines 0 twn getinterval
+    } ifelse
 } def
 
 % x0 x1 y just lastline (line) tfdrawline -

@@ -456,6 +456,10 @@ fn ghostscript_accepts_artkit() {
             end \
         } gasket \
         230 20 60 60 2 { newpath 0.3 setgray rectfill } carpet \
+        /Helvetica findfont 6 scalefont setfont \
+        10 390 100 8 5 /justify (gs runs the paragraph flow section too) tfblock pop \
+        10 5 45 5 18 2 6 /left (a short run of copy split across two narrow columns) tfcols pop \
+        { pop 350 395 } 393 385 5 /center (curve) tfflow pop \
         showpage\n";
     let dir = std::env::temp_dir().join(format!("pscat-artkit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
@@ -1479,6 +1483,31 @@ fn tfwrap_places_an_oversized_single_word_alone_rather_than_splitting_it() {
     ));
     assert_eq!(got.len(), 3, "expected 3 lines, got {got:?}");
     assert_eq!(got[1], "(pneumonoultramicroscopicsilicovolcanoconiosis)");
+}
+
+#[test]
+fn tfwrap_of_empty_string_is_an_empty_array_not_one_blank_line() {
+    // Contract check flagged in review: tfwrap on "" should agree with
+    // tfflow's own reading of "nothing to do" (tfflow on an empty
+    // string draws zero lines and returns immediately), not silently
+    // report one line. A caller counting lines via `tfwrap length`
+    // should get 0 for empty input, not 1.
+    let got = eval(&with_helvetica(14.0, "() 100 tfwrap length"));
+    assert_eq!(got, ["0"]);
+}
+
+#[test]
+fn tfwrap_scratch_array_bound_holds_on_a_run_of_unfittable_separators() {
+    // Regression/invariant check for the array-sizing argument in
+    // tfwrap's header comment: three spaces at a width narrower than a
+    // single space forces the worst case for tflinebreak's "at least
+    // one char consumed per call" guarantee -- each call peels off
+    // exactly one blank line and one separator, so this exercises
+    // exactly `length` calls against a `length + 1`-slot array. This
+    // must neither error (rangecheck on an out-of-bounds `put`) nor
+    // silently truncate.
+    let got = eval(&with_helvetica(14.0, "(   ) 1 tfwrap length"));
+    assert_eq!(got, ["3"], "expected one blank line per space, got {got:?}");
 }
 
 #[test]
