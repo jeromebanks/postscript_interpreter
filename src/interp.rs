@@ -310,10 +310,22 @@ impl Interp {
     /// Abort the program: drop every frame, sealing any Type 3 glyph
     /// contexts left open (their graphics-state snapshot and paint
     /// suppression must not leak past the show that created them).
+    /// Also pops the dict-stack push a live `eexec` scanner carries
+    /// (`pop_systemdict`) — normal completion does this via
+    /// `Action::PopScannerAndDict`, but an error or `quit` mid-stream
+    /// used to abort straight past it, leaving systemdict pushed a
+    /// second time with nothing left on the execution stack to signal
+    /// why (issue #17's lint mode surfaced this as a false `dict-leak`
+    /// finding on any program that errors inside an embedded Type 1
+    /// font's encrypted section — see NOTES.md's issue #17 entry).
     fn unwind_all(&mut self) {
         while let Some(frame) = self.estack.pop() {
-            if let Frame::Show(mut ctx) = frame {
-                ctx.cleanup(&mut self.gfx);
+            match frame {
+                Frame::Show(mut ctx) => ctx.cleanup(&mut self.gfx),
+                Frame::Scanner(lexer) if lexer.pop_systemdict && self.dstack.len() > 2 => {
+                    self.dstack.pop();
+                }
+                _ => {}
             }
         }
     }
@@ -1331,5 +1343,49 @@ mod tests {
         let err = it.run_str(")").unwrap_err();
         let report = it.error_report(&err);
         assert!(report.contains("Line: 1"), "report: {report}");
+    }
+
+    /// The eexec cipher (Type 1 spec, C1) — the inverse of
+    /// `crate::file`'s decoder, duplicated here (as `tests/type1.rs`
+    /// already does) rather than shared, since it's ten lines and this
+    /// is the only other place that needs to construct an encrypted
+    /// stream rather than decode one.
+    fn eexec_encrypt(plain: &[u8]) -> Vec<u8> {
+        let mut r: u16 = 55665;
+        b"XXXX"
+            .iter()
+            .chain(plain)
+            .map(|&p| {
+                let c = p ^ (r >> 8) as u8;
+                r = (u16::from(c).wrapping_add(r))
+                    .wrapping_mul(52845)
+                    .wrapping_add(22719);
+                c
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_error_inside_eexec_does_not_leave_a_phantom_dict_stack_entry() {
+        // Regression test (Codex review round 4, PR #59): begin_eexec
+        // pushes systemdict for the encrypted stream's duration,
+        // popped when the scanner exhausts normally
+        // (Action::PopScannerAndDict) -- but unwind_all (what runs on
+        // an unhandled error or quit) used to drop the scanner frame
+        // without the matching dict-stack pop, leaving systemdict
+        // pushed a second time. Nothing about that is visible from
+        // outside the crate except dict_stack_len(), which issue #17's
+        // lint mode is now the first real consumer of -- it used to
+        // misreport this as a "missing end" dict-leak.
+        let mut it = Interp::new();
+        let encrypted = eexec_encrypt(b"1 0 div");
+        let mut src = b"currentfile eexec ".to_vec();
+        src.extend(encrypted);
+        it.run_source(&src).expect_err("1 0 div still errors");
+        assert_eq!(
+            it.dict_stack_len(),
+            2,
+            "systemdict/userdict only -- eexec's push must not survive an aborted run"
+        );
     }
 }
