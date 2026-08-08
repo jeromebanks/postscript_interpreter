@@ -108,9 +108,12 @@ fn check_gsave_balance(interp: &Interp, findings: &mut Vec<LintFinding>) {
 /// Strings are previewed by slicing the bytes *before* escaping, never
 /// escaping more than the limit; arrays/procedures report only their
 /// length, never recursing into elements, since a short array of huge
-/// strings would defeat a length-only bound on the array itself.
-/// Everything else (numbers, names, dicts, ...) already has an
-/// inherently bounded `repr()`.
+/// strings would defeat a length-only bound on the array itself; names
+/// are previewed by taking a bounded prefix of chars (round 3: a name
+/// has no length limit here — `read_regular_run` just keeps consuming
+/// non-delimiter bytes — and `n.to_string()`/`format!("/{n}")` would
+/// otherwise copy the whole thing). Everything else (numbers, dicts,
+/// ...) already has an inherently bounded `repr()`.
 const OPERAND_PREVIEW_LIMIT: usize = 80;
 
 fn preview(obj: &Object) -> String {
@@ -119,6 +122,16 @@ fn preview(obj: &Object) -> String {
         Value::Array(a) => {
             let kind = if obj.executable { "procedure" } else { "array" };
             format!("<{kind} of {} element(s)>", a.len())
+        }
+        Value::Name(n) => {
+            let total = n.len();
+            let prefix: String = n.chars().take(OPERAND_PREVIEW_LIMIT).collect();
+            if prefix.len() == total {
+                obj.repr()
+            } else {
+                let sigil = if obj.executable { "" } else { "/" };
+                format!("{sigil}{prefix}...<{total} bytes total>")
+            }
         }
         _ => obj.repr(),
     }
@@ -358,6 +371,31 @@ mod tests {
         assert!(
             leak.message.contains("array of 1 element"),
             "should describe the array by length, not its contents: {}",
+            leak.message
+        );
+    }
+
+    #[test]
+    fn a_huge_leaked_name_is_bounded() {
+        // Regression test (Codex review round 3, PR #59): a literal
+        // name has no length limit here (`read_regular_run` just keeps
+        // consuming non-delimiter bytes), so the fallback-to-repr()
+        // path missed the same unbounded-preview problem as strings.
+        let src = format!("/{}", "a".repeat(1_000_000));
+        let it = run(&src);
+        let findings = check(&it, true);
+        let leak = findings
+            .iter()
+            .find(|f| f.check == "stack-leak")
+            .expect("stack-leak finding");
+        assert!(
+            leak.message.len() < 1000,
+            "message should be bounded, got {} bytes",
+            leak.message.len()
+        );
+        assert!(
+            leak.message.contains("bytes total"),
+            "should note it was truncated: {}",
             leak.message
         );
     }
