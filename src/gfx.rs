@@ -814,11 +814,20 @@ impl Gfx {
                 ctm,
             ),
         };
-        // Degenerate geometry (coincident axial points, equal-radius
-        // coincident-center radial) — tiny-skia returns None; treat as
-        // a no-op rather than an error, consistent with how other
-        // geometric degeneracies in this file (e.g. a singular CTM at
-        // device_to_user) fail soft rather than raising.
+        // Degenerate geometry that genuinely has no shader (e.g. both
+        // radii ~0) — tiny-skia returns None; treat as a no-op rather
+        // than an error, consistent with how other geometric
+        // degeneracies in this file (e.g. a singular CTM at
+        // device_to_user) fail soft rather than raising. A coincident-
+        // center, equal-*positive*-radius radial does *not* fall here
+        // — tiny-skia's own degenerate fallback for that (a solid disk
+        // of the start color, Pad-extended with nothing beyond it)
+        // already matches gs, verified directly by rendering
+        // `/Coords [50 50 20 50 50 20] /Extend [true true]` against
+        // both (a Codex review raised this as a suspected gap from
+        // reading this comment's own earlier, overbroad wording — not
+        // from an actual repro — so the fix here is the comment, not
+        // the behavior).
         // Unlike `fill`/`stroke`, `shfill` never touches the current
         // path — it paints the clip region, per the PLRM — so both the
         // degenerate no-op below and the normal case leave it alone.

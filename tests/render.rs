@@ -632,3 +632,54 @@ fn shfill_bbox_restricts_svg_export_too() {
         "expected a path starting at a BBox corner: {svg}"
     );
 }
+
+#[test]
+fn shfill_coincident_center_equal_radius_radial_matches_gs() {
+    // Confirmed directly against gs 10.07.1: /Coords [50 50 20 50 50
+    // 20] /Extend [true true] paints a solid disk of C0 for r<=20 and
+    // leaves everything outside untouched (not C1-extended, despite
+    // Extend true) -- tiny-skia's own degenerate fallback for this
+    // exact shape (coincident centers, equal *positive* radii) already
+    // produces this, so this pins the current-correct behavior rather
+    // than fixing anything (a round-5 Codex review raised this as a
+    // suspected gap from an overbroad code comment, not an actual
+    // repro; verified by direct rendering against gs before touching
+    // any code, and the comment was the only thing that needed
+    // fixing).
+    let it = render(
+        "1 1 1 setrgbcolor 0 0 100 100 rectfill \
+         << /ShadingType 3 /ColorSpace /DeviceGray /Coords [50 50 20 50 50 20] \
+         /Extend [true true] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >> shfill",
+    );
+    assert_eq!(pixel(&it, 50, 50), BLACK, "center: inside the disk");
+    assert_eq!(pixel(&it, 50, 45), BLACK, "well inside the disk");
+    assert_eq!(pixel(&it, 50, 15), WHITE, "outside the disk: untouched");
+}
+
+#[test]
+fn shfill_stitching_bound_at_a_domain_edge_stays_a_hard_edge() {
+    // Confirmed against gs: /Domain [0 1] /Bounds [1] (a bound
+    // coinciding with the function's own Domain edge, giving the last
+    // leg zero width) renders solid red across virtually the whole
+    // axis, not a smooth red-to-blue gradient -- interior_bound_
+    // positions' filter used to require the bound strictly *inside*
+    // (lo, hi), which an edge-coincident bound never satisfies, so it
+    // got none of the discontinuity-preserving straddle treatment the
+    // interior case already had.
+    let it = render(
+        "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] \
+         /Function << /FunctionType 3 /Domain [0 1] /Bounds [1] /Encode [0 1 0 1] \
+         /Functions [ \
+           << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [1 0 0] /N 1 >> \
+           << /FunctionType 2 /Domain [0 1] /C0 [0 0 1] /C1 [0 0 1] /N 1 >> \
+         ] >> >> shfill",
+    );
+    assert_eq!(pixel(&it, 10, 50), (255, 0, 0));
+    assert_eq!(pixel(&it, 50, 50), (255, 0, 0));
+    assert_eq!(
+        pixel(&it, 99, 50),
+        (255, 0, 0),
+        "must stay red right to the edge"
+    );
+}

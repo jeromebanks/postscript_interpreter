@@ -144,20 +144,33 @@ impl PsFunction {
 
     /// This function's own top-level stitching bounds, mapped from
     /// t-space into gradient-position space and kept only when they
-    /// fall strictly inside `shading_domain`. Each bound contributes
-    /// *two* positions straddling it by a small t-space epsilon
-    /// (`b - eps`, `b + eps`) rather than one exactly on it: a
-    /// stitching function may be genuinely discontinuous at a bound
-    /// (e.g. a constant-red leg followed by a constant-blue leg) —
-    /// `stitch_index`'s `x < b` test always resolves a sample taken
-    /// exactly at `b` to the *right* leg, so a single stop there would
-    /// smear the entire *left* leg's segment into a false gradient
-    /// instead of the hard edge the dict actually specifies (caught by
-    /// a Codex review — every hand-tested example here happens to have
-    /// continuous legs, since `gradfn` always builds them that way, so
-    /// nothing exercised the discontinuous case before). `eps` is
-    /// small enough that a *continuous* bound (gradfn's own output)
-    /// still reads as one exact stop for practical purposes.
+    /// fall within `shading_domain` (inclusive of its edges — see
+    /// below for why that matters). Each bound contributes *two*
+    /// positions straddling it by a small t-space epsilon (`b - eps`,
+    /// `b + eps`) rather than one exactly on it: a stitching function
+    /// may be genuinely discontinuous at a bound (e.g. a constant-red
+    /// leg followed by a constant-blue leg) — `stitch_index`'s `x < b`
+    /// test always resolves a sample taken exactly at `b` to the
+    /// *right* leg, so a single stop there would smear the entire
+    /// *left* leg's segment into a false gradient instead of the hard
+    /// edge the dict actually specifies (caught by a Codex review —
+    /// every hand-tested example here happens to have continuous legs,
+    /// since `gradfn` always builds them that way, so nothing
+    /// exercised the discontinuous case before). `eps` is small enough
+    /// that a *continuous* bound (`gradfn`'s own output) still reads
+    /// as one exact stop for practical purposes.
+    ///
+    /// Inclusive bounds matter for a bound that coincides with the
+    /// function's own Domain edge (e.g. `/Domain [0 1] /Bounds [1]` —
+    /// accepted by gs, and a real way to give the *last* leg zero
+    /// width) — a second Codex review pass caught this file's own
+    /// strict `>`/`<` silently smearing that case into a full-width
+    /// gradient too, the same failure shape as the un-straddled bound
+    /// this fix's first pass already covered. The `b + eps` half is
+    /// redundant there (`eval`'s own domain clamp collapses it right
+    /// back to `b`, duplicating a base 0.0/1.0 sample harmlessly), but
+    /// `b - eps` isn't: it's what still gets the leg *before* the edge
+    /// its true, uncollapsed value.
     fn interior_bound_positions(&self, shading_domain: (f64, f64)) -> Vec<f64> {
         let PsFunction::Stitching { bounds, .. } = self else {
             return Vec::new();
@@ -172,7 +185,7 @@ impl PsFunction {
         let (lo, hi) = (d0.min(d1), d0.max(d1));
         let mut out = Vec::new();
         for &b in bounds {
-            if b > lo && b < hi {
+            if b >= lo && b <= hi {
                 out.push((((b - eps_t) - d0) / span).clamp(0.0, 1.0));
                 out.push((((b + eps_t) - d0) / span).clamp(0.0, 1.0));
             }

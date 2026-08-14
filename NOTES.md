@@ -311,6 +311,40 @@ A *fourth* Codex review, on the round-three fix, found four more:
   `image` operator's PNG-embedding machinery could do it, but that's a
   bigger lift than this pass warranted).
 
+A *fifth* Codex review, on the round-four fix, found one real bug and
+raised one suspected gap that turned out, on direct testing against
+gs, not to be one:
+
+- **Real:** a stitching `Bounds` entry coinciding with the function's
+  own `/Domain` edge (`/Domain [0 1] /Bounds [1]`, giving the *last*
+  leg zero width — accepted by gs) rendered as a full-width smooth
+  gradient instead of the near-solid color gs actually shows (a bound
+  exactly at the domain's *own* start is a no-op by construction —
+  `eval` always resolves it to the leg *after* the zero-width one
+  already — but a bound at the domain's *end* needs the same
+  discontinuity-preserving straddle treatment the interior case
+  already had, and `interior_bound_positions`' strict `>`/`<` filter
+  excluded exactly this edge case). Relaxed to `>=`/`<=`; verified
+  directly against gs before and after (solid red across the whole
+  visible axis both times, matching within a hairline).
+- **Not a bug, on inspection:** the review flagged coincident-center,
+  equal-*positive*-radius radials (`/Coords [50 50 20 50 50 20]`) as
+  another case where tiny-skia returns `None` and nothing paints. That
+  claim traced back to this file's own comment, which still said so
+  after the axial-specific version of the same claim was corrected two
+  rounds ago — the radial mention was never re-checked. Rendering the
+  exact case directly (both against gs and against this branch's own
+  build) shows it already matches gs pixel-for-pixel: tiny-skia's
+  degenerate fallback for a coincident-center, positive-equal-radius
+  pair returns `Some` (a solid disk of the start color, nothing
+  painted beyond it), not `None` — the same fallback shape already
+  confirmed for the *shrinking-but-distinct* case two rounds back, just
+  not re-verified for this exact-equal-radius variant until now. Fixed
+  the comment; left the (already-correct) behavior alone. Worth
+  recording precisely because it's a case where taking a Codex finding
+  at face value, without reproducing it first, would have meant
+  "fixing" code that wasn't broken.
+
 ## Noise and flow-field procedures for artkit (issue #19, 2026-08-14)
 
 Closes issue #19. Added a "noise / flow fields" section to
