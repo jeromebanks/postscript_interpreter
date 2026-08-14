@@ -17,14 +17,26 @@
 //! `ColorSpace`.
 //!
 //! A shading's color ramp is pre-sampled into a fixed list of stops
-//! (`Shading::stops`) rather than evaluated per-pixel: `Gfx::sh`
-//! hands them straight to a tiny-skia gradient shader, which already
-//! does its own linear interpolation between stops — exact for the
-//! common N=1 (linear) case, a close approximation for other `N` or
-//! for stitched multi-leg functions. Sampling walks each stitching
-//! leg's own subdomain separately (`sample_positions`) so a hard
-//! color-stop boundary between two legs lands exactly on a stop
-//! instead of smearing across a sample interval.
+//! (`Shading::stops`) rather than evaluated per-pixel: `Gfx::sh` hands
+//! them straight to a tiny-skia gradient shader, which already does
+//! its own linear interpolation between stops. `sample_positions`
+//! samples in *gradient-position* space (0..1 along the shading's own
+//! Coords/radii), mapping each position into the function's input `t`
+//! via the *shading's* own `/Domain` (`t = t0 + pos*(t1-t0)`) — not
+//! the function's `/Domain`, which only clips `t` once it gets there;
+//! those are different axes and conflating them was a real bug caught
+//! by an `advisor` review of this file (NOTES.md's entry has the
+//! story). When every leg is exactly linear (`N == 1` — what
+//! `gradfn` in `lib/artkit.ps` always emits), tiny-skia's own
+//! stop-to-stop interpolation is enough to render the whole ramp
+//! *exactly* from just the leg boundaries (`interior_bound_positions`)
+//! and the points where the shading's swept `t`-range crosses the
+//! function's own Domain edge (`clamp_corner_positions` — `eval`
+//! clamps there, so the color goes flat beyond it, and both sides of
+//! that corner land on the same color) — no dense sampling needed.
+//! Anything else (`N != 1` somewhere, or genuinely non-piecewise-
+//! linear) falls back to `SAMPLE_COUNT` uniform samples plus those
+//! same exact positions folded in.
 
 use crate::error::PsError;
 use crate::object::{Dict, Value};
@@ -130,11 +142,43 @@ impl PsFunction {
             .collect()
     }
 
+    fn own_domain(&self) -> (f64, f64) {
+        match self {
+            PsFunction::Exponential { domain, .. } | PsFunction::Stitching { domain, .. } => {
+                *domain
+            }
+        }
+    }
+
+    /// Positions where the swept t-range crosses this function's own
+    /// Domain edge — `eval` clamps `t` there, so the true color-vs-
+    /// position curve has a corner (and goes flat beyond it) whenever
+    /// the shading's own `/Domain` sweeps past the function's own. Both
+    /// sides of a corner clamp to the *same* color (`eval` at the
+    /// function's domain edge), so folding the corner itself in as a
+    /// stop is enough to render the flat region exactly with no
+    /// further samples — not just an approximation of it.
+    fn clamp_corner_positions(&self, shading_domain: (f64, f64)) -> Vec<f64> {
+        let (d0, d1) = shading_domain;
+        let span = d1 - d0;
+        if span.abs() <= 1e-12 {
+            return Vec::new();
+        }
+        let (fd0, fd1) = self.own_domain();
+        let (lo, hi) = (d0.min(d1), d0.max(d1));
+        [fd0, fd1]
+            .into_iter()
+            .filter(|&fd| fd > lo && fd < hi)
+            .map(|fd| ((fd - d0) / span).clamp(0.0, 1.0))
+            .collect()
+    }
+
     /// Gradient positions (0..1, geometric — 0 at the shading's first
     /// Coords point/circle, 1 at its second) worth sampling when this
     /// function is swept across `shading_domain`. Exact leg boundaries
-    /// for a piecewise-linear function; a uniform grid plus those same
-    /// boundaries otherwise.
+    /// (plus the function's own domain-clamp corners, if the shading
+    /// sweeps past them) for a piecewise-linear function; a uniform
+    /// grid plus those same positions otherwise.
     fn sample_positions(&self, shading_domain: (f64, f64)) -> Vec<f64> {
         let mut out = if self.is_piecewise_linear() {
             vec![0.0, 1.0]
@@ -142,7 +186,12 @@ impl PsFunction {
             linspace(0.0, 1.0, SAMPLE_COUNT)
         };
         out.extend(self.interior_bound_positions(shading_domain));
-        out.sort_by(|a, b| a.partial_cmp(b).expect("finite positions"));
+        out.extend(self.clamp_corner_positions(shading_domain));
+        // total_cmp rather than partial_cmp: parse_shading_dict/
+        // parse_function already reject non-finite Domain/Bounds
+        // values, but a comparator that can't panic keeps that
+        // invariant from being load-bearing here too.
+        out.sort_by(f64::total_cmp);
         out.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
         out
     }
@@ -234,10 +283,24 @@ fn get(d: &Dict, key: &str) -> Result<crate::object::Object, PsError> {
     d.get(key).ok_or(PsError::Rangecheck)
 }
 
+/// Non-finite (`inf`/`NaN`, reachable from a real literal like `1e400`
+/// — the lexer's `str::parse::<f64>` doesn't reject those) would carry
+/// through into the domain-mapping arithmetic (`d0 + pos * span`) and
+/// the sort in `sample_positions`, so every numeric read here rejects
+/// it up front rather than trusting a `.is_finite()`-free arithmetic
+/// chain downstream to stay well-behaved.
+fn finite(n: f64) -> Result<f64, PsError> {
+    if n.is_finite() {
+        Ok(n)
+    } else {
+        Err(PsError::Rangecheck)
+    }
+}
+
 fn get_num(d: &Dict, key: &str) -> Result<f64, PsError> {
     match get(d, key)?.value {
         Value::Integer(n) => Ok(n as f64),
-        Value::Real(r) => Ok(r),
+        Value::Real(r) => finite(r),
         _ => Err(PsError::Typecheck),
     }
 }
@@ -256,7 +319,7 @@ fn get_farray(d: &Dict, key: &str) -> Result<Vec<f64>, PsError> {
     (0..a.len())
         .map(|i| match a.get(i).map(|o| o.value) {
             Some(Value::Integer(n)) => Ok(n as f64),
-            Some(Value::Real(r)) => Ok(r),
+            Some(Value::Real(r)) => finite(r),
             _ => Err(PsError::Typecheck),
         })
         .collect()
@@ -581,5 +644,72 @@ mod tests {
         assert_eq!(CsKind::Rgb.to_rgb(&[1.0, 0.5, 0.0]), (1.0, 0.5, 0.0));
         let (r, g, b) = CsKind::Cmyk.to_rgb(&[0.0, 0.0, 0.0, 1.0]);
         assert_eq!((r, g, b), (0.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn clamp_corner_lands_where_the_shading_domain_crosses_the_functions_own() {
+        // Function's own domain is [0,1]; the shading sweeps t across
+        // [-1,3] (twice as wide, off-center) -- the function's domain
+        // edges (t=0, t=1) should land at gradient positions 0.25 and
+        // 0.5 respectively.
+        let f = PsFunction::Exponential {
+            domain: (0.0, 1.0),
+            c0: vec![0.0],
+            c1: vec![1.0],
+            n: 1.0,
+        };
+        let corners = f.clamp_corner_positions((-1.0, 3.0));
+        assert_eq!(corners.len(), 2, "{corners:?}");
+        assert!((corners[0] - 0.25).abs() < 1e-9, "{corners:?}");
+        assert!((corners[1] - 0.5).abs() < 1e-9, "{corners:?}");
+    }
+
+    #[test]
+    fn clamp_corner_makes_the_piecewise_linear_fast_path_exact_past_the_domain_edge() {
+        // Same setup, end to end through sample_positions/eval: the
+        // segment from the t=1 corner (position 0.5) out to position 1
+        // must be *flat* (eval clamps to the same color at both ends),
+        // which only holds if the corner itself is an exact stop.
+        let f = PsFunction::Exponential {
+            domain: (0.0, 1.0),
+            c0: vec![0.0],
+            c1: vec![1.0],
+            n: 1.0,
+        };
+        assert!(f.is_piecewise_linear());
+        let positions = f.sample_positions((-1.0, 3.0));
+        assert!(
+            positions.iter().any(|p| (p - 0.5).abs() < 1e-9),
+            "{positions:?}"
+        );
+        // t at position 0.5 is exactly 1.0 (the function's own domain
+        // edge); t at position 1.0 is 3.0, clamped to the same 1.0 by
+        // eval -- so both ends of that segment must eval identically.
+        assert_eq!(f.eval(-1.0 + 0.5 * 4.0), f.eval(-1.0 + 1.0 * 4.0));
+    }
+
+    #[test]
+    fn non_finite_domain_values_are_rejected_not_left_to_panic() {
+        let mut dict = Dict::new();
+        dict.put("FunctionType".into(), crate::object::Object::int(2));
+        dict.put(
+            "Domain".into(),
+            crate::object::Object::array(vec![
+                crate::object::Object::real(f64::INFINITY),
+                crate::object::Object::real(1.0),
+            ]),
+        );
+        dict.put(
+            "C0".into(),
+            crate::object::Object::array(vec![crate::object::Object::real(0.0)]),
+        );
+        dict.put(
+            "C1".into(),
+            crate::object::Object::array(vec![crate::object::Object::real(1.0)]),
+        );
+        let result = parse_function(&crate::object::Object::lit(Value::Dict(std::rc::Rc::new(
+            std::cell::RefCell::new(dict),
+        ))));
+        assert!(matches!(result, Err(PsError::Rangecheck)));
     }
 }

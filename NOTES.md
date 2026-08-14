@@ -64,18 +64,45 @@ with stop alpha alone without a discontinuity exactly at the true
 boundary).
 
 A shading's color ramp is pre-sampled into a fixed stop list rather
-than evaluated per-pixel — exact for the common N=1 (linear) case
-since tiny-skia already linearly interpolates between stops, close for
-other `N` or stitched multi-leg functions. Sampling walks each
-stitching leg's own subdomain separately (`PsFunction::
-sample_positions`) so a hard color-stop boundary between two legs
-lands exactly on a stop instead of smearing across a sample interval —
-raised by `advisor`'s plan review, along with two panic risks in the
-original sketch (`stitch_index` reachable with an empty `Functions`/
-`Bounds` array on malformed input, and non-finite color components
-from `N ≤ 0` or non-monotonic `Bounds` silently painting black via an
-`unwrap_or`) that got fixed with upfront shape/finiteness validation
-in `parse_function`/`build_stops` before any of that reached tiny-skia.
+than evaluated per-pixel, handed straight to tiny-skia's own
+stop-to-stop linear interpolation. Two rounds of `advisor` review
+shaped this:
+
+The plan review raised two panic risks in the original sketch
+(`stitch_index` reachable with an empty `Functions`/`Bounds` array on
+malformed input, and non-finite color components from `N ≤ 0` or
+non-monotonic `Bounds` silently painting black via an `unwrap_or`),
+fixed with upfront shape/finiteness validation in
+`parse_function`/`build_stops` before any of that reached tiny-skia.
+
+The implementation review (after the code was written and all tests
+were green) caught a real, silent-wrong-render bug the plan review
+couldn't have: `build_stops` was evaluating the function at t-values
+sampled from the *function's* own `/Domain`, while normalizing those
+same samples' gradient position against the *shading's* `/Domain` —
+correct only when the two domains happen to coincide, which every
+existing test used (the default `[0 1]`) without exercising the
+general case. A shading's `/Domain` maps geometric position onto the
+function's input; the function's own `/Domain` only clips that input
+once it arrives — different axes, silently conflated. Fixed by
+sampling gradient *positions* directly and mapping them into t-space
+via the shading's domain (`PsFunction::sample_positions`), with each
+interior stitching-leg boundary (`interior_bound_positions`) and each
+point where the shading's swept t-range crosses the function's own
+domain edge (`clamp_corner_positions` — `eval` clamps there, so the
+color goes flat beyond it, and folding in the corner itself is enough
+to render that flat region exactly) folded in as exact stops. That
+same review pointed out the corollary: since tiny-skia/SVG both
+interpolate linearly, a function that's exactly piecewise-linear
+(every leg's `N == 1`, which is what `gradfn` always emits) needs
+*only* those exact-boundary stops to render correctly — no dense
+sampling at all — cutting a four-stop `axialsh` gradient's SVG output
+from dozens of `<stop>` elements to four. A third, smaller pass closed
+a panic risk the fix itself introduced (non-finite `Domain`/`Bounds`
+values, reachable from a real literal like `1e400` since the lexer's
+`f64` parse doesn't reject those, reaching an `.expect()` in the sort
+comparator) with finiteness validation at the same parse boundary as
+everything else, plus a total-order comparator as defense in depth.
 
 Export: SVG gets real `<linearGradient>`/`<radialGradient>` support
 (`SvgRecorder::sh`), using the same `gradientUnits="userSpaceOnUse"` +

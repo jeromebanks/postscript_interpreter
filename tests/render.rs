@@ -284,6 +284,22 @@ fn sh_rejects_malformed_shading_dicts() {
         Err(PsError::Rangecheck),
         "function outputs 1 component, DeviceRGB needs 3"
     );
+
+    // The lexer rejects non-finite real *literals* outright (falls
+    // back to a name token), but ordinary arithmetic overflow
+    // (1e300*1e300) still produces a real inf at runtime -- must be
+    // rejected here, not reach the domain-mapping arithmetic
+    // downstream.
+    let mut it = Interp::with_page(100, 100).expect("test page");
+    assert_eq!(
+        it.run_str(
+            "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 1 0] \
+             /Domain [1e300 1e300 mul 1] \
+             /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] >> >> sh"
+        ),
+        Err(PsError::Rangecheck),
+        "non-finite Domain value"
+    );
 }
 
 #[test]
