@@ -8,11 +8,11 @@
 % builds on the last. Left is noise2 itself, visualized as a tinted
 % grid -- the raw coherent-noise field everything else in this section
 % is built from. Middle is curl2: that same noise2 field turned into a
-% divergence-free flow by taking its perpendicular gradient, drawn as a
-% grid of short direction arrows. Right is advect: fifty particles
-% released into that same flow field and traced for a few dozen steps
-% each -- the payoff the other two primitives exist for. Run from the
-% repo root:
+% flow by taking its perpendicular gradient and normalizing to a unit
+% vector, drawn as a grid of short direction arrows. Right is advect:
+% fifty particles released into that same flow field and traced for a
+% few dozen steps each -- the payoff the other two primitives exist
+% for. Run from the repo root:
 %
 %   pscat --page 650x380 examples/noise.ps
 

@@ -1584,11 +1584,11 @@ end
 
 % --- noise / flow fields ----------------------------------------------
 % Coherent (Perlin-style) gradient noise for organic texture, curl noise
-% for divergence-free flow fields, and particle advection to draw along
-% one. Build the permutation table once per srand with `noiseinit`
-% (consumes rand -- call it after `N srand`, before any noise2 sampling,
-% same "seed once, draw many" contract as everything else in this file);
-% `noise2` then samples deterministically off that table.
+% for flow fields, and particle advection to draw along one. Build the
+% permutation table once per srand with `noiseinit` (consumes rand --
+% call it after `N srand`, before any noise2 sampling, same "seed once,
+% draw many" contract as everything else in this file); `noise2` then
+% samples deterministically off that table.
 %
 %   noiseinit                              -   (once per srand)
 %   x y noise2 -> n                        (~[-0.66,0.66], empirically;
@@ -1600,18 +1600,47 @@ end
 %                                            steps of stepsize*(dx,dy);
 %                                            stops early on a 0 0 field)
 %
+% `curl2`'s direction comes from a genuinely divergence-free
+% construction -- the perpendicular gradient of a scalar potential is
+% divergence-free exactly, a vector-calculus identity -- but the value
+% it *returns* is that vector normalized to unit length, and
+% normalizing (dividing by a position-dependent magnitude) does not
+% preserve the identity: a cross-model review measured divergence
+% around -0.27 at one test point for a field with a strongly varying
+% gradient magnitude (`x*y`), confirmed by direct finite-difference
+% probing of curl2's own output, not just the underlying math. This is
+% the standard tradeoff curl-noise particle systems make -- a raw,
+% unnormalized curl vector would be exactly divergence-free but its
+% magnitude swings with the field's own steepness (huge near sharp
+% features, ~0 in flat regions), which is unusable for `advect`'s
+% fixed-stepsize walk. Normalizing trades a small amount of exactness
+% for a particle speed that stays uniform regardless of local field
+% steepness; treat "particles don't pool or source" as approximately
+% true for smoothly-varying fields (`noise2` itself, or `noise2` plus a
+% gently-varying bias term, like Lodestone's), not as an exact
+% guarantee for an arbitrary field proc.
+%
 % `noise2` takes no caller proc, so it can never re-enter itself
 % mid-computation -- domain warping (perturbing x/y with another
 % noise2 call before sampling) is safe with its plain global scratch
 % names, no dict-wrap needed, which matters since a flow-field piece
-% samples it on the order of 10^5 times. `curl2` and `advect` *do* take
-% a caller-supplied proc (the field), so each wraps its own body in a
-% private dict: the gasket/carpet/hexgrid gotcha this file has hit
-% before (see gasket's header) is a caller proc that itself calls back
-% into curl2/advect -- composing two flow fields, or a particle
-% spawning a child trail -- corrupting the outer call's own in-flight
-% scratch. Affordable here since both run orders of magnitude less
-% often than noise2 itself.
+% samples it on the order of 10^5 times. `curl2` and `advect` also use
+% plain global scratch (c2*/ad*), not a private dict, for the same
+% reason gasket/carpet do (see gasket's header): a field proc is
+% ordinary caller code, and it's entitled to hold its own mutable state
+% across calls the same way every other artkit callback can (a plain
+% `/seen seen 1 add def` counter, say) -- wrapping curl2/advect's own
+% scratch in a dict on every call would silently swallow exactly that
+% kind of caller state the instant it runs while the wrapper dict is
+% current, breaking ordinary (non-nesting) field procs to protect
+% against the rarer nesting case. The cost is the flip side of gasket's
+% own tradeoff: a field proc that itself calls curl2/advect again
+% (composing two flow fields, or a particle spawning a child trail)
+% clobbers the *outer* call's own in-flight c2*/ad* scratch the instant
+% the inner call starts, since both bind the same global names -- same
+% shape, same fix, as every other proc-driven section in this file:
+% wrap just the inner call in its own `N dict begin ... end` so its
+% `def`s shadow there instead of landing on the outer's own bindings.
 %
 % `curl2`'s `eps` is in whatever units the field proc's x/y expect --
 % typically raw caller-space if the proc does its own frequency scaling
@@ -1699,27 +1728,27 @@ end
 
 % x y eps {x y -> n} curl2 -> dx dy
 % Curl noise: the field's perpendicular gradient (dPsi/dy, -dPsi/dx),
-% central-differenced at +-eps and normalized -- divergence-free by
-% construction, so particles advected along it neither pool nor
-% source, they only circulate (the "iron filings" look). 0 0 if the
-% sampled gradient is (numerically) exactly flat, so `advect` can treat
-% that as a stopping condition without a special case of its own.
+% central-differenced at +-eps and normalized to a unit vector (see the
+% section header for why normalizing costs curl2 exact divergence-
+% freedom). 0 0 if the sampled gradient is (numerically) exactly flat,
+% so `advect` can treat that as a stopping condition without a special
+% case of its own. Plain global scratch (c2*), not dict-scoped -- see
+% the section header for why, and for the nested-call wrap this trades
+% for.
 /curl2 {
-    9 dict begin
-        /c2p exch def /c2e exch def /c2y exch def /c2x exch def
-        c2x c2y c2e add c2p exec
-        c2x c2y c2e sub c2p exec
-        sub /c2dy exch def
-        c2x c2e add c2y c2p exec
-        c2x c2e sub c2y c2p exec
-        sub /c2dx exch def
-        /c2vx c2dy def
-        /c2vy c2dx neg def
-        /c2len c2vx dup mul c2vy dup mul add sqrt def
-        c2len 1e-9 gt {
-            c2vx c2len div c2vy c2len div
-        } { 0 0 } ifelse
-    end
+    /c2p exch def /c2e exch def /c2y exch def /c2x exch def
+    c2x c2y c2e add c2p exec
+    c2x c2y c2e sub c2p exec
+    sub /c2dy exch def
+    c2x c2e add c2y c2p exec
+    c2x c2e sub c2y c2p exec
+    sub /c2dx exch def
+    /c2vx c2dy def
+    /c2vy c2dx neg def
+    /c2len c2vx dup mul c2vy dup mul add sqrt def
+    c2len 1e-9 gt {
+        c2vx c2len div c2vy c2len div
+    } { 0 0 } ifelse
 } def
 
 % x y n stepsize {x y -> dx dy} advect -
@@ -1729,20 +1758,19 @@ end
 % normalize the field's return value itself; it trusts whatever
 % magnitude the proc hands back (curl2's is always a unit vector, but a
 % hand-written field need not be -- advect just scales by stepsize and
-% steps).
+% steps). Plain global scratch (ad*), not dict-scoped -- see the
+% section header for why, and for the nested-call wrap this trades for.
 /advect {
-    7 dict begin
-        /adf exch def /adstep exch def /adn exch def
-        /ady exch def /adx exch def
-        adx ady moveto
-        adn {
-            adx ady adf exec
-            /adfy exch def /adfx exch def
-            adfx 0 eq adfy 0 eq and { exit } if
-            /adx adx adfx adstep mul add def
-            /ady ady adfy adstep mul add def
-            adx ady lineto
-        } repeat
-    end
+    /adf exch def /adstep exch def /adn exch def
+    /ady exch def /adx exch def
+    adx ady moveto
+    adn {
+        adx ady adf exec
+        /adfy exch def /adfx exch def
+        adfx 0 eq adfy 0 eq and { exit } if
+        /adx adx adfx adstep mul add def
+        /ady ady adfy adstep mul add def
+        adx ady lineto
+    } repeat
 } def
 %%EOF

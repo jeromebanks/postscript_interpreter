@@ -10,31 +10,62 @@ Closes issue #19. Added a "noise / flow fields" section to
 noise — a 256-entry Fisher-Yates-shuffled permutation table, 8 fixed
 unit/diagonal gradient directions selected by `hash & 7`, quintic
 fade, bilinear interpolation), `curl2` (turns *any* `{x y -> n}`
-scalar-field proc into a divergence-free flow by central-differencing
-its perpendicular gradient), and `advect` (traces one particle through
-a `{x y -> dx dy}` field proc as a sequence of `lineto`s). Three
-composable primitives, not a `noise2`-specific convenience wrapper —
-matches the file's existing pattern (`grid`/`hexgrid`/`gasket` all
-take caller procs rather than hardcoding what they paint).
+scalar-field proc into a flow by central-differencing its
+perpendicular gradient and normalizing to a unit vector), and `advect`
+(traces one particle through a `{x y -> dx dy}` field proc as a
+sequence of `lineto`s). Three composable primitives, not a
+`noise2`-specific convenience wrapper — matches the file's existing
+pattern (`grid`/`hexgrid`/`gasket` all take caller procs rather than
+hardcoding what they paint).
 
-Scoping followed a real tradeoff, not a default: `noise2` uses plain
-global scratch (`n2*` names) since it takes no caller proc — it can
-never re-enter itself mid-computation, so domain warping is safe
-without a dict wrapper, and it matters because a flow-field piece
-samples it ~10^5 times. `curl2` and `advect` *do* take a caller-
-supplied field proc, so each wraps its own body in a private
-`N dict begin ... end` — the gasket/carpet/hexgrid gotcha this file
-has hit three times before (a caller proc that re-enters the same
-library proc corrupts the outer call's in-flight scratch), but fixed
-inside the library this time rather than left as a documented caller
-caveat, since both run orders of magnitude less often than `noise2`.
-Confirmed by two regression tests
-(`curl2_survives_a_field_proc_that_calls_curl2_again`,
-`advect_survives_a_field_proc_that_calls_advect_again`) that a field
-proc composing two flow fields, or a particle spawning a child trail,
-doesn't corrupt the outer call.
+Scoping went through a real revision, not just a first-draft
+adjustment: `curl2`/`advect` originally wrapped their own bodies in a
+private `N dict begin ... end` on every call, reasoning that they take
+a caller-supplied field proc (so the gasket/carpet/hexgrid nested-
+composition gotcha applies) and run orders of magnitude less often
+than `noise2` (~10^5 samples/piece), so the dict-alloc cost seemed
+cheap insurance. A cross-model (Codex) review at the PR stage found
+the real cost of that convenience: the private dict is current for
+every field-proc call, not just nested ones, so an entirely ordinary
+(non-nesting) field proc that tries to hold plain `def`-based state
+across calls — the same thing every other artkit callback can do —
+gets silently discarded the moment the dict closes; confirmed
+empirically (a `/calls calls 1 add def` counter read back as `0` after
+3 `advect` calls). Switched `curl2`/`advect` to plain global scratch
+(`c2*`/`ad*`), matching `gasket`/`carpet`'s own precedent exactly: the
+library doesn't protect itself from a caller who nests, the caller
+wraps *their own* inner call in a private dict if they need to nest
+(documented in the section header, same wording gasket's header
+already uses). Four regression tests now cover both directions per
+primitive: `curl2_uses_plain_globals_so_an_ordinary_field_proc_can_
+hold_state` / `advect_uses_plain_globals_so_an_ordinary_field_proc_
+can_hold_state` pin the common case that motivated the change, and
+`curl2_nested_in_its_own_field_proc_needs_the_inner_call_wrapped_in_a_
+dict` / `advect_nested_in_its_own_field_proc_needs_the_inner_call_
+wrapped_in_a_dict` pin both halves of the nesting caveat (unwrapped
+measurably corrupts the outer call's result; wrapped restores it
+exactly), mirroring `gasket_nested_in_its_own_leaf_needs_the_inner_
+call_wrapped_in_a_dict`'s own two-part structure. Rendered output
+(`examples/noise.ps`, `gallery/lodestone.ps`) is byte-identical before
+and after the change, confirming it's purely a scoping fix, not a
+math change.
 
-Two real bugs caught during development, both empirically, before
+The same review also caught an overclaim in `curl2`'s original
+docstring: "divergence-free by construction, so particles neither pool
+nor source" is true of the *unnormalized* perpendicular gradient (an
+exact vector-calculus identity) but not of the *unit vector* `curl2`
+actually returns — normalizing by a position-dependent magnitude does
+not preserve the identity in general, measured directly (not just
+argued) at around -0.27 divergence for a field with a strongly varying
+gradient (`x*y`) at one test point. Normalizing anyway is the standard
+curl-noise tradeoff (a raw curl vector's magnitude swings with local
+field steepness, unusable for `advect`'s fixed-stepsize walk); the
+docstring and a new pinned test
+(`curl2_output_is_not_exactly_divergence_free_after_normalization`)
+now say so accurately instead of overclaiming an exact guarantee the
+returned value doesn't have.
+
+Two more real bugs caught during development, both empirically, before
 either reached a permanent test:
 
 - **`-1 255 and` vs. `mod` for negative lattice coordinates.**
@@ -55,8 +86,8 @@ either reached a permanent test:
   was invisible when only checking `currentpoint` afterward (a
   graphics-state query, unaffected by operand-stack garbage), and
   only surfaced once the test asserted the exact stack length. Now
-  `advect_survives_a_field_proc_that_calls_advect_again` asserts
-  `got.len() == 2` explicitly, and `--lint` (issue #17) was run over
+  `advect_nested_in_its_own_field_proc_needs_the_inner_call_wrapped_in_a_dict`
+  asserts `got.len() == 2` explicitly, and `--lint` (issue #17) was run over
   every touched `examples/`/`gallery/` file — it caught the same
   class of bug directly in `examples/noise.ps`'s first draft, where
   the demo's `advect` panel was accidentally passed the scalar

@@ -2056,6 +2056,44 @@ fn curl2_is_unit_length_and_orthogonal_to_the_gradient_at_the_gallery_eps() {
 }
 
 #[test]
+fn curl2_output_is_not_exactly_divergence_free_after_normalization() {
+    // A cross-model (Codex) review found the original docstring
+    // overclaimed "divergence-free by construction, so particles
+    // neither pool nor source": that's true of the *unnormalized*
+    // perpendicular gradient (an exact vector-calculus identity), but
+    // curl2 returns a *unit* vector, and normalizing by a position-
+    // dependent magnitude does not preserve the identity in general.
+    // Pinned here for `psi(x,y) = x*y` (a field whose gradient
+    // magnitude genuinely varies) at (2,1): estimate div(curl2's
+    // output) by central-differencing curl2's own dx and dy components
+    // directly (not the underlying math) -- matches the review's
+    // measurement of about -0.27, confirming this is real, measured
+    // behavior of the shipped code, not a theoretical footnote. See
+    // the section header for why curl2 normalizes anyway (advect needs
+    // a uniform step size) and why this is an accepted, standard
+    // curl-noise tradeoff rather than a bug to fix.
+    let got = eval(
+        "/psixy { /py exch def /px exch def px py mul } def
+         /h 0.01 def
+         2 h add 1 0.3 /psixy load curl2 pop
+         2 h sub 1 0.3 /psixy load curl2 pop
+         sub h 2 mul div
+         2 1 h add 0.3 /psixy load curl2 exch pop
+         2 1 h sub 0.3 /psixy load curl2 exch pop
+         sub h 2 mul div",
+    );
+    let dvx_dx: f64 = got[0].parse().unwrap();
+    let dvy_dy: f64 = got[1].parse().unwrap();
+    let divergence = dvx_dx + dvy_dy;
+    assert!(
+        (divergence - (-0.268)).abs() < 0.01,
+        "expected divergence around -0.268 at (2,1) for psi=x*y (matching the review's \
+         measurement), got {divergence} -- if this is now ~0, curl2's normalization or \
+         the field it's tested against changed and the docstring needs re-checking"
+    );
+}
+
+#[test]
 fn curl2_returns_zero_vector_for_a_perfectly_flat_field() {
     let got = eval("100 100 0.5 { pop pop 42 } curl2");
     let dx: f64 = got[0].parse().unwrap();
@@ -2064,25 +2102,89 @@ fn curl2_returns_zero_vector_for_a_perfectly_flat_field() {
 }
 
 #[test]
-fn curl2_survives_a_field_proc_that_calls_curl2_again() {
-    // Regression for the gasket/carpet/hexgrid gotcha this file has
-    // hit before (see gasket's header): a caller proc that re-enters
-    // curl2 (composing two flow fields) must not corrupt the outer
-    // call's own in-flight c2* scratch. curl2's private `9 dict begin
-    // ... end` is the fix; this pins that it actually works, not just
-    // that curl2 runs without erroring.
+fn curl2_uses_plain_globals_so_an_ordinary_field_proc_can_hold_state() {
+    // The whole point of curl2 *not* wrapping its own body in a
+    // private dict (see the section header, and the cross-model
+    // review that caught the original dict-wrapped draft breaking
+    // this): a field proc is ordinary caller code and should be able
+    // to hold plain `def`-based mutable state across calls, same as
+    // any other artkit callback (grid/hexgrid/gasket's own stamp
+    // procs all can). A dict-wrapped curl2 would silently swallow
+    // this counter's updates at its own `end`, leaving it at 0.
     let got = eval(
-        "9 srand noiseinit
-         /basefield { 0.02 mul exch 0.02 mul exch noise2 } def
-         /innerfield { 0.5 /basefield load curl2 pop } def
-         100 100 0.5 /innerfield load curl2",
+        "/calls 0 def
+         /countingfield { /calls calls 1 add def pop pop 5 } def
+         100 100 0.5 /countingfield load curl2 pop pop
+         calls",
     );
-    let dx: f64 = got[0].parse().unwrap();
-    let dy: f64 = got[1].parse().unwrap();
-    let len = (dx * dx + dy * dy).sqrt();
+    assert_eq!(
+        got[0], "4",
+        "expected the counter to see all 4 of curl2's field evaluations, got {got:?}"
+    );
+}
+
+#[test]
+fn curl2_nested_in_its_own_field_proc_needs_the_inner_call_wrapped_in_a_dict() {
+    // Regression for the flip side of the fix above: c2* being plain
+    // globals (not dict-scoped) means a field proc that itself calls
+    // curl2 again (composing two flow fields) clobbers the *outer*
+    // call's own in-flight c2x/c2y/c2e/c2p the instant the inner call
+    // starts, since both bind the same names -- same shape, same fix,
+    // as gasket/carpet/hexgrid's own nested-composition gotcha: wrap
+    // just the inner call in its own dict so its `def`s shadow there
+    // instead. This pins both halves with a field, `ox+oy`, whose
+    // curl is analytically known (constant gradient (1,1), so the
+    // correct unit output is (1/sqrt(2), -1/sqrt(2)) everywhere):
+    // outerfield corrupts c2p on its very first call, so if
+    // unwrapped, the outer's *remaining* three field evaluations
+    // silently invoke the inner call's own proc (`{ pop pop 7 }`,
+    // constant) instead of outerfield -- collapsing c2dx to exactly 0
+    // and leaving the result (1, 0) instead of the true diagonal, a
+    // corruption caught by *value*, not just "it still runs".
+    let unwrapped = eval(
+        "/cx 50.0 def /cy 60.0 def /ceps 2.0 def
+         /triggered false def
+         /outerfield {
+             /oy exch def /ox exch def
+             triggered not {
+                 /triggered true def
+                 999 999 5.0 { pop pop 7 } curl2 pop pop
+             } if
+             ox oy add
+         } def
+         cx cy ceps /outerfield load curl2",
+    );
+    let ux: f64 = unwrapped[0].parse().unwrap();
+    let uy: f64 = unwrapped[1].parse().unwrap();
     assert!(
-        (len - 1.0).abs() < 1e-6 || len < 1e-9,
-        "nested curl2 produced a non-unit, non-zero vector (len {len}) -- scratch corruption"
+        (ux - 1.0).abs() < 1e-9 && uy.abs() < 1e-9,
+        "expected the unwrapped nested call to collapse the outer's result to exactly \
+         (1, 0) (c2dx zeroed out by the hijacked proc), got ({ux}, {uy})"
+    );
+
+    let wrapped = eval(
+        "/cx 50.0 def /cy 60.0 def /ceps 2.0 def
+         /triggered false def
+         /outerfield {
+             /oy exch def /ox exch def
+             triggered not {
+                 /triggered true def
+                 2 dict begin
+                     999 999 5.0 { pop pop 7 } curl2 pop pop
+                 end
+             } if
+             ox oy add
+         } def
+         cx cy ceps /outerfield load curl2",
+    );
+    let wx: f64 = wrapped[0].parse().unwrap();
+    let wy: f64 = wrapped[1].parse().unwrap();
+    let sqrt_half = std::f64::consts::FRAC_1_SQRT_2;
+    assert!(
+        (wx - sqrt_half).abs() < 1e-9 && (wy + sqrt_half).abs() < 1e-9,
+        "wrapped: expected the true curl of ox+oy, (1/sqrt2, -1/sqrt2) = \
+         ({sqrt_half}, {}), got ({wx}, {wy})",
+        -sqrt_half
     );
 }
 
@@ -2120,15 +2222,40 @@ fn advect_stops_early_and_leaves_no_linetos_on_a_zero_field() {
 }
 
 #[test]
-fn advect_survives_a_field_proc_that_calls_advect_again() {
-    // Same regression shape as curl2's nesting test, for advect's own
-    // private `7 dict begin ... end`: a field proc that spawns a child
-    // trail (a nested advect call) must not corrupt the outer
-    // particle's own in-flight ad* scratch (its position, remaining
-    // step count). The child draws on its own isolated subpath
-    // (gsave/newpath/...grestore) so this isolates scratch-corruption
-    // from ordinary shared-current-path interaction.
+fn advect_uses_plain_globals_so_an_ordinary_field_proc_can_hold_state() {
+    // Same rationale as curl2's equivalent test: advect not wrapping
+    // its own body in a private dict is what lets an ordinary field
+    // proc keep plain `def`-based state across calls, matching every
+    // other artkit callback convention. A dict-wrapped advect would
+    // silently swallow this counter's updates at its own `end`.
     let got = eval(
+        "/calls 0 def
+         /countingfield { /calls calls 1 add def pop pop 1 0 } def
+         newpath 100 100 5 1 /countingfield load advect
+         calls",
+    );
+    assert_eq!(
+        got[0], "5",
+        "expected the counter to see all 5 of advect's field evaluations, got {got:?}"
+    );
+}
+
+#[test]
+fn advect_nested_in_its_own_field_proc_needs_the_inner_call_wrapped_in_a_dict() {
+    // Regression for the flip side of the fix above: ad* being plain
+    // globals means a field proc that spawns a child trail (a nested
+    // advect call) clobbers the *outer* particle's own in-flight
+    // position and stepsize the instant the inner call starts. Same
+    // fix as curl2's equivalent test and gasket/carpet's own
+    // precedent: wrap just the inner call in its own dict. The child
+    // draws on its own isolated subpath (gsave/newpath/...grestore) so
+    // this isolates scratch-corruption from ordinary shared-current-
+    // path interaction. Values pinned by direct execution: an outer
+    // particle walking 12 steps of (1,0)*1 from the origin should end
+    // at exactly (12, 0); confirmed the unwrapped draft instead lands
+    // at (3.3, 0) -- the child's stepsize (0.3) and final x-position
+    // leak into the outer's own subsequent steps.
+    let unwrapped = eval(
         "/childcount 0 def
          /spawnfield {
              pop pop
@@ -2140,15 +2267,37 @@ fn advect_survives_a_field_proc_that_calls_advect_again() {
          } def
          newpath 0 0 12 1.0 /spawnfield load advect currentpoint",
     );
-    assert_eq!(
-        got.len(),
-        2,
-        "field proc should leave exactly 2 values (dx,dy) per call, not leak -- got {got:?}"
-    );
-    let x: f64 = got[0].parse().unwrap();
-    let y: f64 = got[1].parse().unwrap();
+    let ux: f64 = unwrapped[0].parse().unwrap();
+    let uy: f64 = unwrapped[1].parse().unwrap();
     assert!(
-        (x - 12.0).abs() < 1e-9 && y.abs() < 1e-9,
-        "outer particle (12 steps of (1,0)) should end at (12, 0), got ({x}, {y}) -- scratch corruption from the nested advect call"
+        (ux - 12.0).abs() > 1.0 && uy.abs() < 1e-6,
+        "expected the unwrapped nested call to corrupt the outer's stepsize/position \
+         (drifting well short of x=12), got ({ux}, {uy})"
+    );
+
+    let wrapped = eval(
+        "/childcount2 0 def
+         /spawnfield {
+             pop pop
+             /childcount2 childcount2 1 add def
+             childcount2 5 mod 0 eq {
+                 2 dict begin
+                     gsave newpath 0 0 3 0.3 { pop pop 1 0 } advect grestore
+                 end
+             } if
+             1 0
+         } def
+         newpath 0 0 12 1.0 /spawnfield load advect currentpoint",
+    );
+    assert_eq!(
+        wrapped.len(),
+        2,
+        "field proc should leave exactly 2 values (dx,dy) per call, not leak -- got {wrapped:?}"
+    );
+    let wx: f64 = wrapped[0].parse().unwrap();
+    let wy: f64 = wrapped[1].parse().unwrap();
+    assert!(
+        (wx - 12.0).abs() < 1e-9 && wy.abs() < 1e-9,
+        "wrapped: outer particle (12 steps of (1,0)) should end at exactly (12, 0), got ({wx}, {wy})"
     );
 }
