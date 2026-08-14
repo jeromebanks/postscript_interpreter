@@ -65,6 +65,21 @@ docstring and a new pinned test
 now say so accurately instead of overclaiming an exact guarantee the
 returned value doesn't have.
 
+A second Codex review round (after pushing the scoping/docstring fixes
+above) found a third real bug: `curl2`'s flatness guard used an
+arbitrary absolute cutoff (`c2len 1e-9 gt`) that didn't actually match
+what its own docstring already promised ("0 0 if the gradient is
+*exactly* flat") -- a field with a real but tiny uniform gradient
+(`(x+y)*1e-10`) finite-differences to a magnitude under `1e-9` and got
+misclassified as flat, so `advect` would stop immediately on a field
+that never actually goes flat. A genuinely flat/constant field's
+finite difference subtracts two identical evaluations to exactly
+`0.0` (not just something small), so the fix is `c2len 0 gt` --
+matches the docstring exactly now instead of approximating it, and
+`curl2_normalizes_a_low_amplitude_but_genuinely_nonzero_gradient` pins
+Codex's own repro case (`2 3 1 { add 1e-10 mul } curl2`) against the
+field's analytically-known curl direction.
+
 Two more real bugs caught during development, both empirically, before
 either reached a permanent test:
 

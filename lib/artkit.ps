@@ -1746,7 +1746,7 @@ end
     /c2vx c2dy def
     /c2vy c2dx neg def
     /c2len c2vx dup mul c2vy dup mul add sqrt def
-    c2len 1e-9 gt {
+    c2len 0 gt {
         c2vx c2len div c2vy c2len div
     } { 0 0 } ifelse
 } def

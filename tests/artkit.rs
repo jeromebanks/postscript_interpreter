@@ -2102,6 +2102,33 @@ fn curl2_returns_zero_vector_for_a_perfectly_flat_field() {
 }
 
 #[test]
+fn curl2_normalizes_a_low_amplitude_but_genuinely_nonzero_gradient() {
+    // Regression for a real bug a cross-model (Codex) review found: the
+    // flatness guard originally used an arbitrary absolute threshold
+    // (`c2len 1e-9 gt`), which doesn't match what curl2's own docstring
+    // already promised ("0 0 if the gradient is *exactly* flat") --
+    // `(x+y)*1e-10` has a real, uniform, nonzero gradient everywhere
+    // (dPsi/dx = dPsi/dy = 1e-10), but its finite-differenced magnitude
+    // at eps=1 falls under 1e-9, so the old threshold misclassified it
+    // as flat and `advect` would stop immediately on a field that
+    // never actually goes flat. Fixed to `c2len 0 gt`, matching a
+    // genuinely flat field's finite difference (identical repeated
+    // evaluations subtract to exactly 0.0, not just something small --
+    // see the test above). The exact curl of `x+y` is analytically
+    // (1/sqrt2, -1/sqrt2) regardless of the field's amplitude, since
+    // normalizing removes any constant scale factor.
+    let got = eval("2 3 1 { add 1e-10 mul } curl2");
+    let dx: f64 = got[0].parse().unwrap();
+    let dy: f64 = got[1].parse().unwrap();
+    let sqrt_half = std::f64::consts::FRAC_1_SQRT_2;
+    assert!(
+        (dx - sqrt_half).abs() < 1e-6 && (dy + sqrt_half).abs() < 1e-6,
+        "expected ({sqrt_half}, {}) for a tiny-but-nonzero uniform gradient, got ({dx}, {dy})",
+        -sqrt_half
+    );
+}
+
+#[test]
 fn curl2_uses_plain_globals_so_an_ordinary_field_proc_can_hold_state() {
     // The whole point of curl2 *not* wrapping its own body in a
     // private dict (see the section header, and the cross-model
