@@ -36,11 +36,11 @@ same comments; also fixed a real pre-existing bug found while building
 its demo example, where `stroke`'s PDF recording was silently
 no-op'd whenever `--pdf` was used without `--svg` (NOTES.md's entry
 has the full story). Also done: issue #20, axial/radial gradient
-(shading) fill support — the `sh` operator (`src/shading.rs`,
-`src/ops/shading.rs`, `Gfx::sh`), `ShadingType` 2/3 with `FunctionType`
-2/3, native SVG `<linearGradient>`/`<radialGradient>` export, a PDF
-average-color-fill approximation, and `lib/artkit.ps`'s "gradients"
-section (`gradfn`/`axialsh`/`radialsh`/`gradfill`) on top of it
+(shading) fill support — the `shfill` operator (`src/shading.rs`,
+`src/ops/shading.rs`, `Gfx::shfill`), `ShadingType` 2/3 with
+`FunctionType` 2/3, native SVG `<linearGradient>`/`<radialGradient>`
+export, a PDF average-color-fill approximation, and `lib/artkit.ps`'s
+"gradients" section (`gradfn`/`axialsh`/`radialsh`/`gradfill`) on top of it
 (NOTES.md's entry has the full story). Also done: issue #9, a tiling/tessellation
 library for artkit — `lattice`/`hex`/`tri`/`hexgrid`/`trigrid`/
 `truchet`, `examples/tiling.ps`, and the gallery piece `Woven
@@ -262,17 +262,20 @@ renders eight examples in both and compares block-downsampled output).
   doesn't erase; ints are i64; `flattenpath` uses a fixed
   quarter-pixel tolerance (`setflat` not modeled — chord counts
   differ from gs, shapes agree).
-- `sh` (issue #20): `FunctionType` restricted to 2 (exponential) and 3
-  (stitching) — 0 (sampled) and 4 (calculator) unsupported, since
-  those would need the same `Frame::PostOp` reentrancy `Separation`'s
-  tint transform uses, which axial/radial gradients don't otherwise
-  need. `ColorSpace` restricted to `/DeviceGray`/`/DeviceRGB`/
-  `/DeviceCMYK` (no Indexed/Separation, no array-of-functions form).
-  `/Extend` is validated but always behaves as `[true true]` — the
-  `gsave <path> clip sh grestore` idiom already bounds the painted
-  region, so `false`'s "transparent beyond the axis" is an edge case
-  that idiom never hits. SVG export gets real `<linearGradient>`/
-  `<radialGradient>`; PDF export approximates a shading as a flat fill
+- `shfill` (issue #20): `FunctionType` restricted to 2 (exponential)
+  and 3 (stitching) — 0 (sampled) and 4 (calculator) unsupported,
+  since those would need the same `Frame::PostOp` reentrancy
+  `Separation`'s tint transform uses, which axial/radial gradients
+  don't otherwise need. `ColorSpace` restricted to `/DeviceGray`/
+  `/DeviceRGB`/`/DeviceCMYK` (no Indexed/Separation, no
+  array-of-functions form). `/Range` is honored only on the top-level
+  Function a shading dict names directly, not recursively per
+  stitching leg. `/Extend` is validated but always behaves as
+  `[true true]` — the `gsave <path> clip shfill grestore` idiom
+  already bounds the painted region, so `false`'s "transparent beyond
+  the axis" is an edge case that idiom never hits. SVG export gets
+  real `<linearGradient>`/`<radialGradient>`; PDF export approximates
+  a shading as a flat fill
   in the ramp's average color (no pattern-colorspace machinery).
 - `error_report`'s `Line: N` (issue #17) is best-effort, not exact
   source attribution: no `Object` carries a source position, so it

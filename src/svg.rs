@@ -30,14 +30,14 @@ pub struct SvgRecorder {
     /// ClipNode identity → def id, per page (defs reset with the page).
     clip_ids: HashMap<usize, usize>,
     next_clip: usize,
-    /// Next `<linearGradient>`/`<radialGradient>` id (issue #20's `sh`).
+    /// Next `<linearGradient>`/`<radialGradient>` id (issue #20's `shfill`).
     next_grad: usize,
     pages: Vec<String>,
 }
 
 pub(crate) type Chain = Option<Rc<ClipNode>>;
 
-/// `sh`'s geometry, mirroring `crate::shading::ShadingKind` without
+/// `shfill`'s geometry, mirroring `crate::shading::ShadingKind` without
 /// pulling that module's PsFunction/parsing machinery in here.
 pub(crate) enum ShKind {
     Axial {
@@ -189,15 +189,15 @@ impl SvgRecorder {
         );
     }
 
-    /// `sh` (issue #20): a native `<linearGradient>`/`<radialGradient>`
+    /// `shfill` (issue #20): a native `<linearGradient>`/`<radialGradient>`
     /// def, painted as a full-page rect (clipped like any other fill).
     /// `gradientUnits="userSpaceOnUse"` plus `gradientTransform` set to
-    /// the CTM mirrors the same trick `Gfx::sh` uses for the raster
+    /// the CTM mirrors the same trick `Gfx::shfill` uses for the raster
     /// path — Coords stay in user space, the CTM does the mapping.
     /// SVG's matrix(a b c d e f) is the same convention as the CTM's
     /// own [a b c d tx ty] (`ops/matrix.rs`), so `ctm` here is passed
     /// through as-is: `[sx, ky, kx, sy, tx, ty]`.
-    pub(crate) fn sh(
+    pub(crate) fn shfill(
         &mut self,
         kind: &ShKind,
         ctm: [f32; 6],
@@ -248,21 +248,22 @@ impl SvgRecorder {
                 // SVG's radialGradient is (cx,cy,r) for the outer/end
                 // circle plus an optional (fx,fy,fr) focal circle for
                 // the start — exactly ShadingType 3's two-circle
-                // model. `fr` only emits when r0 > 0: the common case
-                // (a burst from a point, r0 = 0) is then plain SVG 1.1
-                // markup that renders identically everywhere; only the
-                // rarer two-circle case depends on SVG2's `fr`, which
-                // some older renderers ignore (falling back to fr=0 —
-                // an approximate, not broken, render).
-                let mut extra = String::new();
+                // model. fx/fy (the *point*) are plain SVG 1.1 and
+                // always emitted, even when x0==x1 && y0==y1 (SVG
+                // already defaults them to cx/cy there, so this is a
+                // no-op in that case, not a behavior change) — omitting
+                // them whenever r0 happened to be 0 was wrong whenever
+                // the start point *wasn't* also the end circle's
+                // center, silently recentering the gradient on the
+                // wrong point (caught by a Codex review, not before:
+                // every hand-tested example here used a concentric
+                // burst, which never exposed it). Only `fr` (SVG2, less
+                // consistently supported) stays gated on r0 > 0 — the
+                // common burst-from-a-point case (r0 = 0) then needs
+                // nothing beyond fx/fy to render identically everywhere.
+                let mut extra = format!(" fx=\"{}\" fy=\"{}\"", fmt_f32(x0), fmt_f32(y0));
                 if r0 > 0.0 {
-                    let _ = write!(
-                        extra,
-                        " fx=\"{}\" fy=\"{}\" fr=\"{}\"",
-                        fmt_f32(x0),
-                        fmt_f32(y0),
-                        fmt_f32(r0),
-                    );
+                    let _ = write!(extra, " fr=\"{}\"", fmt_f32(r0));
                 }
                 let _ = write!(
                     self.defs,

@@ -5,15 +5,23 @@ was built, tradeoffs made, what's explicitly deferred.
 
 ## Axial/radial gradient (shading) fill support (issue #20, 2026-08-14)
 
-Closes issue #20. The interpreter had no `shfill`/`sh`/shading
-machinery at all before this (a grep of `src/ops/graphics.rs` turned
-up nothing) — the issue flagged real uncertainty about whether this
-was an artkit-layer or interpreter-layer feature, and it turned out to
-be both: `sh` (the real PostScript/PDF operator name — the issue title
-said "shfill", which doesn't exist as an operator) landed at the
-interpreter level (`src/shading.rs`, `src/ops/shading.rs`, `Gfx::sh`
-in `src/gfx.rs`), with a convenience layer on top in `lib/artkit.ps`'s
-new "gradients" section (`gradfn`/`axialsh`/`radialsh`/`gradfill`).
+Closes issue #20. The interpreter had no `shfill`/shading machinery at
+all before this (a grep of `src/ops/graphics.rs` turned up nothing) —
+the issue flagged real uncertainty about whether this was an
+artkit-layer or interpreter-layer feature, and it turned out to be
+both: `shfill` (PostScript Level 3's real shading-fill operator —
+confirmed against gs 10.07.1, `/shfill where` finds it, `/sh where`
+doesn't) landed at the interpreter level (`src/shading.rs`,
+`src/ops/shading.rs`, `Gfx::shfill` in `src/gfx.rs`), with a
+convenience layer on top in `lib/artkit.ps`'s new "gradients" section
+(`gradfn`/`axialsh`/`radialsh`/`gradfill`). A first draft named the
+operator `sh` instead — that's PDF's content-stream operator of the
+same shape (a shading painted directly, no pattern colorspace needed),
+but it takes a shading *resource name*, not the dictionary directly,
+and doesn't exist as a PostScript-language operator at all. Every
+hand-test during development called it `sh` and nothing caught the
+mistake; a Codex review at the PR stage (checked against gs directly,
+not just asserted) did.
 
 Scoped deliberately, not just to the easy subset: `ShadingType` 2
 (axial) and 3 (radial), `ColorSpace` `/DeviceGray`/`/DeviceRGB`/
@@ -33,10 +41,10 @@ Indexed/Separation as a shading's `ColorSpace` are all documented
 gaps, same style as the codebase's existing Indexed/Separation
 deviations in `ops/color.rs`.
 
-`Gfx::sh` paints via the same masked-full-page-rect mechanism `fill`/
-`clip` already use, so `gsave <path> clip sh grestore` (the standard
-idiom, and what `gradfill` wraps) bounds it exactly like any other
-paint operator. The one design decision that isn't obvious from
+`Gfx::shfill` paints via the same masked-full-page-rect mechanism
+`fill`/`clip` already use, so `gsave <path> clip shfill grestore` (the
+standard idiom, and what `gradfill` wraps) bounds it exactly like any
+other paint operator. The one design decision that isn't obvious from
 reading tiny-skia's docs alone: Coords/radii pass through in *user*
 space, with the current CTM handed to the gradient shader as its own
 `transform` parameter, rather than pre-mapping the two endpoints via
@@ -105,7 +113,7 @@ comparator) with finiteness validation at the same parse boundary as
 everything else, plus a total-order comparator as defense in depth.
 
 Export: SVG gets real `<linearGradient>`/`<radialGradient>` support
-(`SvgRecorder::sh`), using the same `gradientUnits="userSpaceOnUse"` +
+(`SvgRecorder::shfill`), using the same `gradientUnits="userSpaceOnUse"` +
 `gradientTransform` trick as the raster path, and SVG2's `fx`/`fy`/
 `fr` for the two-circle radial case — emitted only when `r0 > 0`, so
 the common burst-from-a-point case (`r0 = 0`) stays plain SVG 1.1
@@ -116,14 +124,66 @@ export approximates a shading as a flat fill in the ramp's average
 color (`PdfRecorder::fill`, reused as-is) — real PDF shading
 dictionaries need pattern-colorspace machinery this exporter doesn't
 have, and building that was out of scope; a `tests/pdf.rs` regression
-test (`sh_appears_as_an_average_color_fill_in_pdf_only_export`, same
+test (`shfill_appears_as_an_average_color_fill_in_pdf_only_export`, same
 pattern as the existing `strokes_appear_in_pdf_only_export` guard from
 issue #8/#23) exists specifically to keep this an intentional
 approximation rather than a silent content-drop.
 
-`examples/gradients.ps` is the specimen sheet (raw `sh` for a two-stop
+`examples/gradients.ps` is the specimen sheet (raw `shfill` for a two-stop
 axial ramp, `axialsh` for a four-stop ramp, `radialsh` for both a
 point-burst and a two-circle gradient) — clean under `--lint`.
+
+The same Codex review that caught the operator name also checked the
+implementation against gs directly rather than just asserting from the
+spec, and found four more real defects, all pinned by fixes and a
+render.rs regression test each:
+
+- A reversed *function* `/Domain` (e.g. `[1 0]`) reaches `eval`'s
+  `x.clamp(domain.0, domain.1)`, and `f64::clamp` panics if `min >
+  max` — reachable with an empty `Bounds` array, which the
+  bounds-monotonicity check alone doesn't rule out. Confirmed against
+  gs that a *function's* own Domain must be non-decreasing (rangecheck
+  otherwise) — but a *shading*'s top-level `/Domain` is different: gs
+  accepts that one reversed, as the documented way to flip a
+  gradient's direction, and this file's own domain-mapping arithmetic
+  already handles it correctly either way. `parse_function` now
+  rejects only the former; `eval`'s Stitching arm also switched to the
+  same min/max-clamped pattern the Exponential arm already used, so
+  the panic can't resurface even if a future caller builds a
+  `PsFunction` some other way.
+- `FunctionType` 2's `C0`/`C1` were required (confirmed against gs
+  they default to `[0.0]`/`[1.0]` when omitted) while `N` silently
+  defaulted to `1.0` (confirmed against gs it's required — omitting it
+  is a rangecheck). Exactly backwards: rejected valid dicts, accepted
+  invalid ones.
+- A genuinely discontinuous stitching function (e.g. a constant-red
+  leg followed by a constant-blue leg — a real, spec-legal shading,
+  just not one `gradfn` ever emits, so nothing exercised it) rendered
+  wrong: `stitch_index`'s `x < b` test means a sample taken exactly at
+  a bound always resolves to the *right* leg, so the single stop
+  `interior_bound_positions` placed there smeared the *entire
+  preceding leg's segment* into a false gradient instead of a hard
+  edge. Fixed by placing two stops straddling each bound by a small
+  t-space epsilon instead of one exactly on it — small enough that a
+  *continuous* bound (`gradfn`'s own output) still reads as one exact
+  stop in practice.
+- The optional `/Range` key (clips each evaluated output component,
+  independent of `/Domain`, which clips the input) wasn't parsed at
+  all. Added, but deliberately only at the top-level Function a
+  shading dict names directly, not recursively per stitching leg —
+  real-world Range usage is overwhelmingly on a simple function used
+  directly, and supporting it per-leg would have meant threading a new
+  field through every `PsFunction` variant (and every test fixture
+  constructing one directly) for a case nothing here actually needs;
+  documented gap, same style as the other scope cuts in this file.
+
+Also SVG-specific: the two-circle radial branch only emitted `fx`/`fy`
+(the *focal point*) when `r0 > 0`, conflating them with `fr` (the
+*focal radius*, the actually-uncommon SVG2 feature) — a burst-from-a-
+point gradient (`r0 = 0`) whose start point wasn't also the outer
+circle's center silently recentered on the wrong point. `fx`/`fy` are
+plain SVG 1.1 and now always emitted (a no-op when they do coincide
+with the center); only `fr` stays gated on `r0 > 0`.
 
 ## Noise and flow-field procedures for artkit (issue #19, 2026-08-14)
 

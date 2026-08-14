@@ -1777,7 +1777,7 @@ end
 } def
 
 % --- gradients (axial and radial shading fills) ------------------------
-% A thin convenience layer over the interpreter's `sh` operator (issue
+% A thin convenience layer over the interpreter's `shfill` operator (issue
 % #20): builds PLRM shading dictionaries from a plain array of [r g b]
 % colors -- the same representation `mix3`/`shade`/`Palettes` already
 % use -- instead of requiring callers to hand-write FunctionType 2/3
@@ -1786,7 +1786,7 @@ end
 %   [[r g b] ...] gradfn -> functiondict
 %   x0 y0 x1 y1 [[r g b] ...] axialsh -> shadingdict
 %   x0 y0 r0 x1 y1 r1 [[r g b] ...] radialsh -> shadingdict
-%   shadingdict gradfill -   (gsave, clip to the current path, sh, grestore)
+%   shadingdict gradfill -   (gsave, clip to the current path, shfill, grestore)
 %
 % Build the region to paint with ordinary path construction first, same
 % as any other fill -- gradfill just clips to whatever path is current:
@@ -1837,5 +1837,5 @@ end
        /Function gdcolors gradfn >>
 } def
 
-/gradfill { gsave clip sh grestore } def          % shadingdict gradfill -
+/gradfill { gsave clip shfill grestore } def          % shadingdict gradfill -
 %%EOF

@@ -106,10 +106,10 @@ fn single_page_program_yields_one_document() {
 }
 
 #[test]
-fn sh_axial_becomes_a_linear_gradient() {
+fn shfill_axial_becomes_a_linear_gradient() {
     let pages = svg_pages(
         "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] \
-         /Function << /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [1 1 1] /N 1 >> >> sh",
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [1 1 1] /N 1 >> >> shfill",
     );
     let svg = &pages[0];
     assert!(
@@ -126,11 +126,11 @@ fn sh_axial_becomes_a_linear_gradient() {
 }
 
 #[test]
-fn sh_radial_burst_omits_fr_but_two_circle_includes_it() {
+fn shfill_radial_burst_omits_fr_but_two_circle_includes_it() {
     // r0 = 0 (the common burst case): plain SVG 1.1 markup, no `fr`.
     let pages = svg_pages(
         "<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [50 50 0 50 50 40] \
-         /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >> sh",
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >> shfill",
     );
     let svg = &pages[0];
     assert!(
@@ -145,7 +145,7 @@ fn sh_radial_burst_omits_fr_but_two_circle_includes_it() {
     // r0 > 0 (a genuine two-circle gradient): SVG2's fx/fy/fr.
     let pages = svg_pages(
         "<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [30 30 10 60 60 40] \
-         /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >> sh",
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >> shfill",
     );
     let svg = &pages[0];
     assert!(

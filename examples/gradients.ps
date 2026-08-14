@@ -3,7 +3,7 @@
 %%BoundingBox: 0 0 650 700
 %%EndComments
 
-% Specimen sheet for issue #20's shading-fill support: the raw `sh`
+% Specimen sheet for issue #20's shading-fill support: the raw `shfill`
 % operator (Level 3's shading-fill operator, ShadingType 2/3, Function
 % Type 2/3) plus artkit's convenience layer built on top of it
 % (lib/artkit.ps's "gradients" section: gradfn/axialsh/radialsh/
@@ -22,9 +22,9 @@
 0.1 0.1 0.12 setrgbcolor
 (Axial & Radial Gradients) 325 660 showctr
 /Palatino-Italic findfont 11 scalefont setfont
-(the sh operator, and artkit's gradfn / axialsh / radialsh / gradfill) 325 642 showctr
+(the shfill operator, and artkit's gradfn / axialsh / radialsh / gradfill) 325 642 showctr
 
-% --- panel 1: axial, two stops, the raw `sh` operator directly -------
+% --- panel 1: axial, two stops, the raw `shfill` operator directly -------
 gsave
   40 360 translate
   newpath 0 0 moveto 260 0 lineto 260 220 lineto 0 220 lineto closepath
@@ -34,12 +34,12 @@ gsave
        /Coords [0 0 260 220]
        /Function << /FunctionType 2 /Domain [0 1]
                      /C0 [0.05 0.05 0.35] /C1 [0.98 0.75 0.25] /N 1 >> >>
-    sh
+    shfill
   grestore
   0 0 0 setrgbcolor 1 setlinewidth
   newpath 0 0 moveto 260 0 lineto 260 220 lineto 0 220 lineto closepath stroke
   /Palatino findfont 11 scalefont setfont
-  (raw sh: two-stop axial) 130 -14 showctr
+  (raw shfill: two-stop axial) 130 -14 showctr
 grestore
 
 % --- panel 2: axial, four-stop ramp via axialsh/gradfill --------------

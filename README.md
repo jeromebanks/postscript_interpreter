@@ -80,8 +80,8 @@ document, not just a picture: `%%Title:`/`%%For:` DSC header comments
 (issue #8) become the PDF's `/Info` metadata, so a multi-page piece
 opens in a reader — Kindle's Send-to-Kindle and virtually any e-reader
 or PDF viewer already take PDF directly, no separate export needed —
-with an actual title instead of a filename. Level 3's `sh` operator
-(issue #20) paints axial and radial gradients — `ShadingType` 2/3 with
+with an actual title instead of a filename. Level 3's `shfill`
+operator (issue #20) paints axial and radial gradients — `ShadingType` 2/3 with
 `FunctionType` 2/3 (exponential and stitching, so multi-stop ramps
 work, not just two-color) — through the same three seams: real
 tiny-skia gradients on the raster/window path, native

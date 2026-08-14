@@ -1,4 +1,4 @@
-//! Shading dictionaries for the `sh` operator (issue #20) — the engine;
+//! Shading dictionaries for the `shfill` operator (issue #20) — the engine;
 //! `ops/shading.rs` is the operand-stack adapter.
 //!
 //! Scoped to `ShadingType` 2 (axial) and 3 (radial), `ColorSpace`
@@ -17,7 +17,7 @@
 //! `ColorSpace`.
 //!
 //! A shading's color ramp is pre-sampled into a fixed list of stops
-//! (`Shading::stops`) rather than evaluated per-pixel: `Gfx::sh` hands
+//! (`Shading::stops`) rather than evaluated per-pixel: `Gfx::shfill` hands
 //! them straight to a tiny-skia gradient shader, which already does
 //! its own linear interpolation between stops. `sample_positions`
 //! samples in *gradient-position* space (0..1 along the shading's own
@@ -88,7 +88,11 @@ impl PsFunction {
                 bounds,
                 encode,
             } => {
-                let x = x.clamp(domain.0, domain.1);
+                // parse_function already rejects a reversed function
+                // Domain, but min/max here (matching the Exponential
+                // arm above) keeps eval() itself panic-safe rather
+                // than leaning on that validation staying correct.
+                let x = x.clamp(domain.0.min(domain.1), domain.0.max(domain.1));
                 let (idx, lo, hi) = stitch_index(x, *domain, bounds);
                 let (e0, e1) = encode[idx];
                 let xe = if hi > lo {
@@ -117,14 +121,21 @@ impl PsFunction {
     }
 
     /// This function's own top-level stitching bounds, mapped from
-    /// t-space into gradient-position space (`(b - d0) / span`) and
-    /// kept only when they fall strictly inside `shading_domain` —
-    /// the positions a hard leg-to-leg transition needs an exact stop
-    /// at, so it lands on a sample instead of being smeared across a
-    /// sample interval. Doesn't recurse into nested stitching (each
-    /// leg's own Bounds, if it has any, live in that leg's Encode-
-    /// remapped space, not the outer shading's t-axis) — a documented
-    /// simplification `gradfn`'s single-level stitching never hits.
+    /// t-space into gradient-position space and kept only when they
+    /// fall strictly inside `shading_domain`. Each bound contributes
+    /// *two* positions straddling it by a small t-space epsilon
+    /// (`b - eps`, `b + eps`) rather than one exactly on it: a
+    /// stitching function may be genuinely discontinuous at a bound
+    /// (e.g. a constant-red leg followed by a constant-blue leg) —
+    /// `stitch_index`'s `x < b` test always resolves a sample taken
+    /// exactly at `b` to the *right* leg, so a single stop there would
+    /// smear the entire *left* leg's segment into a false gradient
+    /// instead of the hard edge the dict actually specifies (caught by
+    /// a Codex review — every hand-tested example here happens to have
+    /// continuous legs, since `gradfn` always builds them that way, so
+    /// nothing exercised the discontinuous case before). `eps` is
+    /// small enough that a *continuous* bound (gradfn's own output)
+    /// still reads as one exact stop for practical purposes.
     fn interior_bound_positions(&self, shading_domain: (f64, f64)) -> Vec<f64> {
         let PsFunction::Stitching { bounds, .. } = self else {
             return Vec::new();
@@ -134,12 +145,17 @@ impl PsFunction {
         if span.abs() <= 1e-12 {
             return Vec::new();
         }
+        let (fd0, fd1) = self.own_domain();
+        let eps_t = (fd1 - fd0).abs().max(1.0) * 1e-7;
         let (lo, hi) = (d0.min(d1), d0.max(d1));
-        bounds
-            .iter()
-            .filter(|&&b| b > lo && b < hi)
-            .map(|&b| ((b - d0) / span).clamp(0.0, 1.0))
-            .collect()
+        let mut out = Vec::new();
+        for &b in bounds {
+            if b > lo && b < hi {
+                out.push((((b - eps_t) - d0) / span).clamp(0.0, 1.0));
+                out.push((((b + eps_t) - d0) / span).clamp(0.0, 1.0));
+            }
+        }
+        out
     }
 
     fn own_domain(&self) -> (f64, f64) {
@@ -192,7 +208,11 @@ impl PsFunction {
         // values, but a comparator that can't panic keeps that
         // invariant from being load-bearing here too.
         out.sort_by(f64::total_cmp);
-        out.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+        // Tight enough to only merge genuinely-identical positions
+        // (e.g. an endpoint that coincides with a clamp corner), not
+        // interior_bound_positions' intentionally-close straddle pairs
+        // — those need to survive as two distinct stops.
+        out.dedup_by(|a, b| (*a - *b).abs() < 1e-13);
         out
     }
 }
@@ -272,8 +292,8 @@ pub(crate) enum ShadingKind {
 
 /// A parsed, ready-to-paint shading: geometry plus a pre-sampled color
 /// ramp (`(position 0..1, r, g, b)`, all already resolved to RGB).
-/// `/Extend` is validated for shape but not otherwise honored — `sh`
-/// always extends both ends (documented in `Gfx::sh`).
+/// `/Extend` is validated for shape but not otherwise honored — `shfill`
+/// always extends both ends (documented in `Gfx::shfill`).
 pub(crate) struct Shading {
     pub(crate) kind: ShadingKind,
     pub(crate) stops: Vec<(f32, f32, f32, f32)>,
@@ -344,18 +364,37 @@ fn parse_function(obj: &crate::object::Object) -> Result<PsFunction, PsError> {
     };
     let d = dr.borrow();
     let domain = get_domain(&d)?;
+    // A *function's* own Domain must be non-decreasing (confirmed
+    // against gs: /Domain [1 0] on a Type 2/3 function dict is a
+    // rangecheck) -- unlike a *shading*'s top-level /Domain, which gs
+    // accepts reversed as the documented way to flip a gradient's
+    // direction, and which this file's own domain-mapping arithmetic
+    // (`t = d0 + pos*span`) already handles correctly either way. Also
+    // closes a panic: `eval`'s Stitching branch clamps with
+    // `x.clamp(domain.0, domain.1)`, which `f64::clamp` panics on if
+    // `domain.0 > domain.1` -- reachable with an empty `Bounds` array,
+    // which the monotonicity check on `bounds` alone doesn't rule out.
+    if domain.0 > domain.1 {
+        return Err(PsError::Rangecheck);
+    }
     match get_int(&d, "FunctionType")? {
         2 => {
-            let c0 = get_farray(&d, "C0")?;
-            let c1 = get_farray(&d, "C1")?;
+            // C0/C1 default to [0.0]/[1.0] per spec (confirmed against
+            // gs: a Type 2 function dict with neither present is
+            // accepted); N has *no* default and is required (confirmed
+            // the opposite way: gs rejects one with N omitted).
+            let c0 = match d.get("C0") {
+                Some(_) => get_farray(&d, "C0")?,
+                None => vec![0.0],
+            };
+            let c1 = match d.get("C1") {
+                Some(_) => get_farray(&d, "C1")?,
+                None => vec![1.0],
+            };
             if c0.is_empty() || c0.len() != c1.len() {
                 return Err(PsError::Rangecheck);
             }
-            let n = d
-                .get("N")
-                .map(|_| get_num(&d, "N"))
-                .transpose()?
-                .unwrap_or(1.0);
+            let n = get_num(&d, "N")?;
             Ok(PsFunction::Exponential { domain, c0, c1, n })
         }
         3 => {
@@ -418,6 +457,7 @@ fn parse_colorspace(obj: &crate::object::Object) -> Result<CsKind, PsError> {
 fn build_stops(
     cs: CsKind,
     function: &PsFunction,
+    range: Option<&[(f64, f64)]>,
     shading_domain: (f64, f64),
 ) -> Result<Vec<(f32, f32, f32, f32)>, PsError> {
     let (d0, d1) = shading_domain;
@@ -433,9 +473,21 @@ fn build_stops(
         } else {
             d0
         };
-        let comps = function.eval(t);
+        let mut comps = function.eval(t);
         if comps.len() != cs.ncomp() {
             return Err(PsError::Rangecheck);
+        }
+        // /Range clips each output component *after* evaluation,
+        // independent of /Domain (which clips the input) — optional,
+        // applied only at the top-level Function object a shading
+        // dict names directly, not recursively per Stitching leg (a
+        // documented simplification: real-world Range usage is
+        // overwhelmingly on a simple function used directly, not
+        // nested inside a stitching function's own /Functions array).
+        if let Some(range) = range {
+            for (c, &(lo, hi)) in comps.iter_mut().zip(range) {
+                *c = c.clamp(lo, hi);
+            }
         }
         let (r, g, b) = cs.to_rgb(&comps);
         if !r.is_finite() || !g.is_finite() || !b.is_finite() {
@@ -451,20 +503,46 @@ fn build_stops(
     Ok(out)
 }
 
+/// The top-level Function's own `/Range`, if present: `[min0 max0
+/// min1 max1 ...]`, one pair per output component. Optional per spec;
+/// clips each evaluated component *after* the fact (`build_stops`),
+/// independent of `/Domain` (which clips the *input*).
+fn parse_function_range(
+    func_obj: &crate::object::Object,
+    ncomp: usize,
+) -> Result<Option<Vec<(f64, f64)>>, PsError> {
+    let Value::Dict(dr) = &func_obj.value else {
+        return Ok(None);
+    };
+    let d = dr.borrow();
+    match d.get("Range") {
+        None => Ok(None),
+        Some(_) => {
+            let flat = get_farray(&d, "Range")?;
+            if flat.len() != ncomp * 2 {
+                return Err(PsError::Rangecheck);
+            }
+            Ok(Some(flat.chunks(2).map(|c| (c[0], c[1])).collect()))
+        }
+    }
+}
+
 pub(crate) fn parse_shading_dict(d: &Dict) -> Result<Shading, PsError> {
     let shading_type = get_int(d, "ShadingType")?;
     let cs = parse_colorspace(&get(d, "ColorSpace")?)?;
     let coords = get_farray(d, "Coords")?;
-    let function = parse_function(&get(d, "Function")?)?;
+    let func_obj = get(d, "Function")?;
+    let function = parse_function(&func_obj)?;
     if function.ncomp() != cs.ncomp() {
         return Err(PsError::Rangecheck);
     }
+    let range = parse_function_range(&func_obj, function.ncomp())?;
     let shading_domain = match d.get("Domain") {
         None => (0.0, 1.0),
         Some(_) => get_domain(d)?,
     };
     // /Extend, if present, must have the PLRM shape — accepted and
-    // validated but not otherwise honored; see Gfx::sh.
+    // validated but not otherwise honored; see Gfx::shfill.
     if let Some(ext) = d.get("Extend") {
         let Value::Array(a) = ext.value else {
             return Err(PsError::Typecheck);
@@ -503,7 +581,7 @@ pub(crate) fn parse_shading_dict(d: &Dict) -> Result<Shading, PsError> {
         },
         _ => return Err(PsError::Rangecheck),
     };
-    let stops = build_stops(cs, &function, shading_domain)?;
+    let stops = build_stops(cs, &function, range.as_deref(), shading_domain)?;
     Ok(Shading { kind, stops })
 }
 
@@ -592,10 +670,16 @@ mod tests {
         };
         assert!(f.is_piecewise_linear());
         let pts = f.sample_positions((0.0, 1.0));
-        assert_eq!(pts.len(), 3, "{pts:?}");
+        // Endpoints, plus two straddling the one interior boundary
+        // (interior_bound_positions' discontinuity-preserving pair) —
+        // not the one-sample-per-boundary a purely continuous
+        // function's exactness would only need.
+        assert_eq!(pts.len(), 4, "{pts:?}");
         assert!((pts[0] - 0.0).abs() < 1e-9);
-        assert!((pts[1] - 0.3).abs() < 1e-9);
-        assert!((pts[2] - 1.0).abs() < 1e-9);
+        assert!((pts[1] - 0.3).abs() < 1e-6, "{pts:?}");
+        assert!((pts[2] - 0.3).abs() < 1e-6, "{pts:?}");
+        assert!(pts[1] < pts[2], "straddle pair must stay ordered: {pts:?}");
+        assert!((pts[3] - 1.0).abs() < 1e-9);
     }
 
     #[test]
@@ -635,7 +719,50 @@ mod tests {
             encode: vec![(0.0, 1.0), (0.0, 1.0)],
         };
         let positions = f.interior_bound_positions((0.0, 2.0));
-        assert_eq!(positions, vec![0.25]);
+        assert_eq!(positions.len(), 2, "{positions:?}");
+        assert!((positions[0] - 0.25).abs() < 1e-6, "{positions:?}");
+        assert!((positions[1] - 0.25).abs() < 1e-6, "{positions:?}");
+        assert!(positions[0] < positions[1], "{positions:?}");
+    }
+
+    #[test]
+    fn discontinuous_stitching_bound_gets_a_hard_edge_not_a_smear() {
+        // A constant-red leg followed by a constant-blue leg: eval at
+        // the bound itself always resolves to the right leg (blue),
+        // per stitch_index's `x < b` test, so a single sample at the
+        // bound would have made build_stops smear red into blue across
+        // the *entire preceding leg's segment* -- the straddle pair in
+        // interior_bound_positions is what keeps that segment solid
+        // red right up to the edge.
+        let f = PsFunction::Stitching {
+            domain: (0.0, 1.0),
+            functions: vec![
+                PsFunction::Exponential {
+                    domain: (0.0, 1.0),
+                    c0: vec![1.0, 0.0, 0.0],
+                    c1: vec![1.0, 0.0, 0.0],
+                    n: 1.0,
+                },
+                PsFunction::Exponential {
+                    domain: (0.0, 1.0),
+                    c0: vec![0.0, 0.0, 1.0],
+                    c1: vec![0.0, 0.0, 1.0],
+                    n: 1.0,
+                },
+            ],
+            bounds: vec![0.5],
+            encode: vec![(0.0, 1.0), (0.0, 1.0)],
+        };
+        let stops = build_stops(CsKind::Rgb, &f, None, (0.0, 1.0)).expect("valid");
+        // Every stop strictly left of the bound must still be pure
+        // red; every stop strictly right must be pure blue.
+        for &(pos, r, g, b) in &stops {
+            if pos < 0.5 - 1e-6 {
+                assert_eq!((r, g, b), (1.0, 0.0, 0.0), "left of bound: {stops:?}");
+            } else if pos > 0.5 + 1e-6 {
+                assert_eq!((r, g, b), (0.0, 0.0, 1.0), "right of bound: {stops:?}");
+            }
+        }
     }
 
     #[test]

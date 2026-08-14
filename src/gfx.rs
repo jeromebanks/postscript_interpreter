@@ -726,11 +726,12 @@ impl Gfx {
         self.newpath();
     }
 
-    /// `sh` (issue #20): paint a shading's gradient within the current
-    /// clip (the whole page, if unclipped) — same masked-full-page-
-    /// rect mechanism `fill`/`clip` already use, so an arbitrary path
-    /// clipped beforehand (`gsave <path> clip sh grestore`, the usual
-    /// idiom) bounds it exactly like any other paint operator.
+    /// `shfill` (issue #20): paint a shading's gradient within the
+    /// current clip (the whole page, if unclipped) — same masked-full-
+    /// page-rect mechanism `fill`/`clip` already use, so an arbitrary
+    /// path clipped beforehand (`gsave <path> clip shfill grestore`,
+    /// the usual idiom) bounds it exactly like any other paint
+    /// operator.
     ///
     /// The shading's Coords/radii are passed through in *user space*,
     /// with the current CTM handed to the gradient shader as its own
@@ -740,14 +741,14 @@ impl Gfx {
     /// `user_to_device` — that gets rotation and anisotropic scale
     /// exactly right, unlike the √|det CTM| approximation `stroke`
     /// needs for width (module doc). Verified empirically (render.rs's
-    /// `sh_axial_gradient_respects_rotation_and_scale`).
+    /// `shfill_axial_gradient_respects_rotation_and_scale`).
     ///
     /// `/Extend` is validated for shape at parse time but always
     /// behaves as `[true true]` here (`SpreadMode::Pad`): the realistic
     /// idiom already bounds the painted region with an explicit clip,
     /// so the only visible effect of implementing `false` would be an
-    /// edge case nobody's `clip sh` triggers. Documented deviation.
-    pub(crate) fn sh(&mut self, shading: crate::shading::Shading) -> Result<(), PsError> {
+    /// edge case nobody's `clip shfill` triggers. Documented deviation.
+    pub(crate) fn shfill(&mut self, shading: crate::shading::Shading) -> Result<(), PsError> {
         if self.suppress_paint > 0 {
             return Ok(());
         }
@@ -789,8 +790,8 @@ impl Gfx {
         // a no-op rather than an error, consistent with how other
         // geometric degeneracies in this file (e.g. a singular CTM at
         // device_to_user) fail soft rather than raising.
-        // Unlike `fill`/`stroke`, `sh` never touches the current path —
-        // it paints the clip region, per the PLRM — so both the
+        // Unlike `fill`/`stroke`, `shfill` never touches the current
+        // path — it paints the clip region, per the PLRM — so both the
         // degenerate no-op below and the normal case leave it alone.
         let Some(shader) = shader else {
             return Ok(());
@@ -840,7 +841,7 @@ impl Gfx {
                 let svg_ctm = [ctm.sx, ctm.ky, ctm.kx, ctm.sy, ctm.tx, ctm.ty];
                 let chain = self.state.clip.as_ref().map(|c| c.node.clone());
                 if let Some(svg) = &mut self.svg {
-                    svg.sh(&svg_kind, svg_ctm, &shading.stops, &chain);
+                    svg.shfill(&svg_kind, svg_ctm, &shading.stops, &chain);
                 }
             }
             if self.pdf.is_some() {
@@ -1342,7 +1343,7 @@ impl Gfx {
     }
 
     /// The whole canvas as a device-space rectangle path — the
-    /// unclipped-`clippath` fallback above, and `sh`'s paint region
+    /// unclipped-`clippath` fallback above, and `shfill`'s paint region
     /// (which the current clip mask then bounds, same as `fill`).
     fn page_rect_path(&self) -> PsPath {
         let (w, h) = (self.pixmap.width() as f32, self.pixmap.height() as f32);
