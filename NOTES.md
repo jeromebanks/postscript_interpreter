@@ -3,6 +3,101 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Axial/radial gradient (shading) fill support (issue #20, 2026-08-14)
+
+Closes issue #20. The interpreter had no `shfill`/`sh`/shading
+machinery at all before this (a grep of `src/ops/graphics.rs` turned
+up nothing) — the issue flagged real uncertainty about whether this
+was an artkit-layer or interpreter-layer feature, and it turned out to
+be both: `sh` (the real PostScript/PDF operator name — the issue title
+said "shfill", which doesn't exist as an operator) landed at the
+interpreter level (`src/shading.rs`, `src/ops/shading.rs`, `Gfx::sh`
+in `src/gfx.rs`), with a convenience layer on top in `lib/artkit.ps`'s
+new "gradients" section (`gradfn`/`axialsh`/`radialsh`/`gradfill`).
+
+Scoped deliberately, not just to the easy subset: `ShadingType` 2
+(axial) and 3 (radial), `ColorSpace` `/DeviceGray`/`/DeviceRGB`/
+`/DeviceCMYK`, and `FunctionType` 2 (exponential interpolation) and 3
+(stitching — what makes multi-stop gradients possible, and what real
+design tools like Illustrator actually emit for anything beyond a
+plain two-color ramp). The 2/3-only cut on functions isn't arbitrary:
+those two types are pure arithmetic over dict contents, so evaluating
+them never needs to run a PostScript procedure through the machine —
+unlike `FunctionType` 0 (sampled) or 4 (PostScript calculator), which
+would need the same `Frame::PostOp` continuation pattern `Separation`
+colorspace uses for its tint transform (`ops/color.rs`). Staying
+inside 2/3 keeps the whole feature synchronous, with no interpreter
+reentrancy questions to answer. `FunctionType` 0/4, an array of
+one-in-one-out functions in place of a single N-out function, and
+Indexed/Separation as a shading's `ColorSpace` are all documented
+gaps, same style as the codebase's existing Indexed/Separation
+deviations in `ops/color.rs`.
+
+`Gfx::sh` paints via the same masked-full-page-rect mechanism `fill`/
+`clip` already use, so `gsave <path> clip sh grestore` (the standard
+idiom, and what `gradfill` wraps) bounds it exactly like any other
+paint operator. The one design decision that isn't obvious from
+reading tiny-skia's docs alone: Coords/radii pass through in *user*
+space, with the current CTM handed to the gradient shader as its own
+`transform` parameter, rather than pre-mapping the two endpoints via
+`user_to_device`. Verified empirically before committing to it (a
+render test under `45 rotate`-equivalent rotation+anisotropic-scale,
+`sh_axial_gradient_respects_rotation_and_anisotropic_scale` in
+`tests/render.rs`) rather than trusting the read of tiny-skia's
+internals alone — an `advisor` review flagged this as the plan's one
+load-bearing assumption worth confirming before building the rest on
+top of it, and it came back correct on the first try. The alternative
+(pre-transform points, scale the radius by `ctm_scale()` like `stroke`
+already does for width) would have gotten the axis direction right but
+the perpendicular banding wrong under anisotropic scale.
+
+`/Extend` is parsed and shape-validated but always behaves as
+`[true true]` (`SpreadMode::Pad`) — documented deviation, same style
+as "filter params accepted and ignored" elsewhere in this codebase.
+The realistic idiom already bounds the painted region with an
+explicit clip, so implementing `false` (transparent beyond the axis)
+would only matter for an edge case that idiom doesn't hit; getting it
+exactly right would need a genuinely separate mechanism (a geometric
+band test, not a spread-mode trick — tiny-skia's stop positions can't
+go negative, so there's no way to fake "transparent beyond bounds"
+with stop alpha alone without a discontinuity exactly at the true
+boundary).
+
+A shading's color ramp is pre-sampled into a fixed stop list rather
+than evaluated per-pixel — exact for the common N=1 (linear) case
+since tiny-skia already linearly interpolates between stops, close for
+other `N` or stitched multi-leg functions. Sampling walks each
+stitching leg's own subdomain separately (`PsFunction::
+sample_positions`) so a hard color-stop boundary between two legs
+lands exactly on a stop instead of smearing across a sample interval —
+raised by `advisor`'s plan review, along with two panic risks in the
+original sketch (`stitch_index` reachable with an empty `Functions`/
+`Bounds` array on malformed input, and non-finite color components
+from `N ≤ 0` or non-monotonic `Bounds` silently painting black via an
+`unwrap_or`) that got fixed with upfront shape/finiteness validation
+in `parse_function`/`build_stops` before any of that reached tiny-skia.
+
+Export: SVG gets real `<linearGradient>`/`<radialGradient>` support
+(`SvgRecorder::sh`), using the same `gradientUnits="userSpaceOnUse"` +
+`gradientTransform` trick as the raster path, and SVG2's `fx`/`fy`/
+`fr` for the two-circle radial case — emitted only when `r0 > 0`, so
+the common burst-from-a-point case (`r0 = 0`) stays plain SVG 1.1
+markup that renders identically everywhere, and only the rarer
+two-circle case depends on `fr` (uneven renderer support, but
+degrades to an approximate, not broken, render when ignored). PDF
+export approximates a shading as a flat fill in the ramp's average
+color (`PdfRecorder::fill`, reused as-is) — real PDF shading
+dictionaries need pattern-colorspace machinery this exporter doesn't
+have, and building that was out of scope; a `tests/pdf.rs` regression
+test (`sh_appears_as_an_average_color_fill_in_pdf_only_export`, same
+pattern as the existing `strokes_appear_in_pdf_only_export` guard from
+issue #8/#23) exists specifically to keep this an intentional
+approximation rather than a silent content-drop.
+
+`examples/gradients.ps` is the specimen sheet (raw `sh` for a two-stop
+axial ramp, `axialsh` for a four-stop ramp, `radialsh` for both a
+point-burst and a two-circle gradient) — clean under `--lint`.
+
 ## Noise and flow-field procedures for artkit (issue #19, 2026-08-14)
 
 Closes issue #19. Added a "noise / flow fields" section to

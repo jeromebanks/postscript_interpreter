@@ -104,3 +104,52 @@ fn single_page_program_yields_one_document() {
     let pages = svg_pages("newpath 10 10 moveto 90 10 lineto 50 90 lineto closepath fill showpage");
     assert_eq!(pages.len(), 1, "trailing blank canvas is not a page");
 }
+
+#[test]
+fn sh_axial_becomes_a_linear_gradient() {
+    let pages = svg_pages(
+        "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [1 1 1] /N 1 >> >> sh",
+    );
+    let svg = &pages[0];
+    assert!(
+        svg.contains(
+            "<linearGradient id=\"g0\" gradientUnits=\"userSpaceOnUse\" \
+                       x1=\"0\" y1=\"0\" x2=\"100\" y2=\"0\""
+        ),
+        "{svg}"
+    );
+    assert!(svg.contains("spreadMethod=\"pad\""), "{svg}");
+    assert!(svg.contains("<stop offset=\"0\""), "{svg}");
+    assert!(svg.contains("<stop offset=\"1\""), "{svg}");
+    assert!(svg.contains("fill=\"url(#g0)\""), "{svg}");
+}
+
+#[test]
+fn sh_radial_burst_omits_fr_but_two_circle_includes_it() {
+    // r0 = 0 (the common burst case): plain SVG 1.1 markup, no `fr`.
+    let pages = svg_pages(
+        "<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [50 50 0 50 50 40] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >> sh",
+    );
+    let svg = &pages[0];
+    assert!(
+        svg.contains(
+            "<radialGradient id=\"g0\" gradientUnits=\"userSpaceOnUse\" \
+                       cx=\"50\" cy=\"50\" r=\"40\""
+        ),
+        "{svg}"
+    );
+    assert!(!svg.contains("fr=\""), "r0=0 should not emit fr: {svg}");
+
+    // r0 > 0 (a genuine two-circle gradient): SVG2's fx/fy/fr.
+    let pages = svg_pages(
+        "<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [30 30 10 60 60 40] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >> sh",
+    );
+    let svg = &pages[0];
+    assert!(
+        svg.contains("cx=\"60\" cy=\"60\" r=\"40\" fx=\"30\" fy=\"30\" fr=\"10\""),
+        "{svg}"
+    );
+}

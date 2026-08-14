@@ -158,6 +158,25 @@ fn strokes_appear_in_pdf_only_export() {
     );
 }
 
+/// Issue #20: real PDF shading dictionaries need pattern-colorspace
+/// machinery this exporter doesn't have, so `sh` approximates as a
+/// flat fill in the ramp's average color -- deliberately, so a
+/// `--pdf`-only export gets *something* rather than the shading
+/// silently vanishing (the same failure class `strokes_appear_in_pdf_
+/// only_export` above guards, which is exactly why this needs its own
+/// regression test rather than trusting the raster/SVG coverage).
+#[test]
+fn sh_appears_as_an_average_color_fill_in_pdf_only_export() {
+    let (pdf, _) = pdf_and_canvas(
+        b"<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0]
+             /Function << /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [1 1 1] /N 1 >> >> sh",
+    );
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains(" f\n") || text.contains(" f\r"), "{text}");
+    // Average of a black-to-white ramp lands at mid-gray.
+    assert!(text.contains("0.5 0.5 0.5 rg"), "{text}");
+}
+
 #[test]
 fn imagemasks_are_stencils() {
     let (pdf, _) = pdf_and_canvas(

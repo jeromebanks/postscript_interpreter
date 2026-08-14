@@ -30,10 +30,31 @@ pub struct SvgRecorder {
     /// ClipNode identity → def id, per page (defs reset with the page).
     clip_ids: HashMap<usize, usize>,
     next_clip: usize,
+    /// Next `<linearGradient>`/`<radialGradient>` id (issue #20's `sh`).
+    next_grad: usize,
     pages: Vec<String>,
 }
 
 pub(crate) type Chain = Option<Rc<ClipNode>>;
+
+/// `sh`'s geometry, mirroring `crate::shading::ShadingKind` without
+/// pulling that module's PsFunction/parsing machinery in here.
+pub(crate) enum ShKind {
+    Axial {
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+    },
+    Radial {
+        x0: f32,
+        y0: f32,
+        r0: f32,
+        x1: f32,
+        y1: f32,
+        r1: f32,
+    },
+}
 
 impl SvgRecorder {
     pub fn new(width: u32, height: u32) -> Self {
@@ -44,6 +65,7 @@ impl SvgRecorder {
             defs: String::new(),
             clip_ids: HashMap::new(),
             next_clip: 0,
+            next_grad: 0,
             pages: Vec::new(),
         }
     }
@@ -164,6 +186,100 @@ impl SvgRecorder {
             fmt_f32(t[4]),
             fmt_f32(t[5]),
             base64(png),
+        );
+    }
+
+    /// `sh` (issue #20): a native `<linearGradient>`/`<radialGradient>`
+    /// def, painted as a full-page rect (clipped like any other fill).
+    /// `gradientUnits="userSpaceOnUse"` plus `gradientTransform` set to
+    /// the CTM mirrors the same trick `Gfx::sh` uses for the raster
+    /// path — Coords stay in user space, the CTM does the mapping.
+    /// SVG's matrix(a b c d e f) is the same convention as the CTM's
+    /// own [a b c d tx ty] (`ops/matrix.rs`), so `ctm` here is passed
+    /// through as-is: `[sx, ky, kx, sy, tx, ty]`.
+    pub(crate) fn sh(
+        &mut self,
+        kind: &ShKind,
+        ctm: [f32; 6],
+        stops: &[(f32, f32, f32, f32)],
+        chain: &Chain,
+    ) {
+        let id = self.next_grad;
+        self.next_grad += 1;
+        let mut stop_tags = String::new();
+        for &(pos, r, g, b) in stops {
+            let _ = write!(
+                stop_tags,
+                "<stop offset=\"{}\" stop-color=\"{}\"/>",
+                fmt_f32(pos),
+                Self::color((r, g, b)),
+            );
+        }
+        let matrix = format!(
+            "matrix({} {} {} {} {} {})",
+            fmt_f32(ctm[0]),
+            fmt_f32(ctm[1]),
+            fmt_f32(ctm[2]),
+            fmt_f32(ctm[3]),
+            fmt_f32(ctm[4]),
+            fmt_f32(ctm[5]),
+        );
+        match *kind {
+            ShKind::Axial { x0, y0, x1, y1 } => {
+                let _ = write!(
+                    self.defs,
+                    "<linearGradient id=\"g{id}\" gradientUnits=\"userSpaceOnUse\" \
+                     x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" spreadMethod=\"pad\" \
+                     gradientTransform=\"{matrix}\">{stop_tags}</linearGradient>",
+                    fmt_f32(x0),
+                    fmt_f32(y0),
+                    fmt_f32(x1),
+                    fmt_f32(y1),
+                );
+            }
+            ShKind::Radial {
+                x0,
+                y0,
+                r0,
+                x1,
+                y1,
+                r1,
+            } => {
+                // SVG's radialGradient is (cx,cy,r) for the outer/end
+                // circle plus an optional (fx,fy,fr) focal circle for
+                // the start — exactly ShadingType 3's two-circle
+                // model. `fr` only emits when r0 > 0: the common case
+                // (a burst from a point, r0 = 0) is then plain SVG 1.1
+                // markup that renders identically everywhere; only the
+                // rarer two-circle case depends on SVG2's `fr`, which
+                // some older renderers ignore (falling back to fr=0 —
+                // an approximate, not broken, render).
+                let mut extra = String::new();
+                if r0 > 0.0 {
+                    let _ = write!(
+                        extra,
+                        " fx=\"{}\" fy=\"{}\" fr=\"{}\"",
+                        fmt_f32(x0),
+                        fmt_f32(y0),
+                        fmt_f32(r0),
+                    );
+                }
+                let _ = write!(
+                    self.defs,
+                    "<radialGradient id=\"g{id}\" gradientUnits=\"userSpaceOnUse\" \
+                     cx=\"{}\" cy=\"{}\" r=\"{}\"{extra} spreadMethod=\"pad\" \
+                     gradientTransform=\"{matrix}\">{stop_tags}</radialGradient>",
+                    fmt_f32(x1),
+                    fmt_f32(y1),
+                    fmt_f32(r1),
+                );
+            }
+        }
+        let (open, close) = self.clip_wrappers(chain);
+        let (w, h) = (self.width, self.height);
+        let _ = write!(
+            self.body,
+            "{open}<rect x=\"0\" y=\"0\" width=\"{w}\" height=\"{h}\" fill=\"url(#g{id})\"/>{close}",
         );
     }
 
