@@ -28,10 +28,11 @@ has hit three times before (a caller proc that re-enters the same
 library proc corrupts the outer call's in-flight scratch), but fixed
 inside the library this time rather than left as a documented caller
 caveat, since both run orders of magnitude less often than `noise2`.
-Confirmed by two regression tests (`curl2_survives_a_field_proc_that_
-calls_curl2_again`, `advect_survives_a_field_proc_that_calls_advect_
-again`) that a field proc composing two flow fields, or a particle
-spawning a child trail, doesn't corrupt the outer call.
+Confirmed by two regression tests
+(`curl2_survives_a_field_proc_that_calls_curl2_again`,
+`advect_survives_a_field_proc_that_calls_advect_again`) that a field
+proc composing two flow fields, or a particle spawning a child trail,
+doesn't corrupt the outer call.
 
 Two real bugs caught during development, both empirically, before
 either reached a permanent test:
@@ -44,10 +45,9 @@ either reached a permanent test:
   complement ints gives the correct floor-mod-256 result — checked
   directly against the interpreter (`-1 255 and` is `255`) before
   committing to the design, then pinned by
-  `noise2_is_exactly_zero_at_every_integer_lattice_point`
-  (checked at negative and mixed-sign lattice points specifically)
-  and `noise2_is_continuous_across_lattice_boundaries_positive_and_
-  negative`.
+  `noise2_is_exactly_zero_at_every_integer_lattice_point` (checked at
+  negative and mixed-sign lattice points specifically) and
+  `noise2_is_continuous_across_lattice_boundaries_positive_and_negative`.
 - **A field proc that doesn't consume its `x y` arguments silently
   leaks stack values instead of erroring.** Building the nesting-
   regression test for `advect`, an early draft's field proc pushed
@@ -88,6 +88,22 @@ baked into the library (`curl2`'s docstring shows the one-line wrapper
 verbatim instead — `/flow { 0.02 mul exch 0.02 mul exch noise2 } def`
 — keeping the library to 3 orthogonal primitives rather than
 multiplying entry points).
+
+Checked against gs directly, not just this interpreter, per HANDOFF's
+"gs is the oracle" convention — both constructs the design leans on
+are gs-accepted: `-1 255 and` (255, matching this interpreter) and
+`1e-9`-style exponent-notation reals (`curl2`'s flatness threshold).
+`ghostscript_accepts_artkit`'s shared driver string (one exercise per
+library section) now also calls `noiseinit`/`noise2`/`curl2`/`advect`,
+matching how every prior section landed in that same test.
+
+Also brought `README.md`'s "Making art" prose and `site/gallery.html`
+up to date with this section/piece — both had already fallen behind
+by one prior gallery piece (issue #16's "The Compositor's Proof" is in
+`gallery/README.md`'s table but not in either of those two), a
+pre-existing gap this issue didn't create and doesn't fix (issue #63
+tracks the same class of gap for issue #18's page templates); flagged
+here rather than silently left for the next person to rediscover.
 
 ## Parameterized page templates for artkit (issue #18, 2026-08-08)
 

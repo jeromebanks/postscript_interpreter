@@ -460,6 +460,10 @@ fn ghostscript_accepts_artkit() {
         10 390 100 8 5 /justify (gs runs the paragraph flow section too) tfblock pop \
         10 5 45 5 18 2 6 /left (a short run of copy split across two narrow columns) tfcols pop \
         { pop 350 395 } 393 385 5 /center (curve) tfflow pop \
+        noiseinit \
+        100 100 noise2 pop \
+        100 100 0.5 { pop pop 42 } curl2 pop pop \
+        newpath 50 50 5 2 { pop pop 1 0 } advect stroke \
         showpage\n";
     let dir = std::env::temp_dir().join(format!("pscat-artkit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
