@@ -20,6 +20,7 @@ pub mod ops;
 pub mod paths;
 pub mod pdf;
 pub mod repl;
+pub(crate) mod shading;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod spool;
 pub mod svg;

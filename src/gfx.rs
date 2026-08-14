@@ -15,7 +15,10 @@
 //! will draw uniform-width strokes where real PostScript draws elliptical
 //! pens. Revisit if it ever matters.
 
-use tiny_skia::{FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{
+    Color, FillRule, GradientStop, LineCap, LineJoin, LinearGradient, Paint, PathBuilder, Pixmap,
+    Point, RadialGradient, SpreadMode, Stroke, Transform,
+};
 
 use crate::error::PsError;
 use crate::font::FontState;
@@ -723,6 +726,147 @@ impl Gfx {
         self.newpath();
     }
 
+    /// `sh` (issue #20): paint a shading's gradient within the current
+    /// clip (the whole page, if unclipped) — same masked-full-page-
+    /// rect mechanism `fill`/`clip` already use, so an arbitrary path
+    /// clipped beforehand (`gsave <path> clip sh grestore`, the usual
+    /// idiom) bounds it exactly like any other paint operator.
+    ///
+    /// The shading's Coords/radii are passed through in *user space*,
+    /// with the current CTM handed to the gradient shader as its own
+    /// transform (mirroring how `tiny_skia`'s `LinearGradient`/
+    /// `RadialGradient` already expect a local-space-to-device
+    /// transform) rather than pre-mapping the two endpoints through
+    /// `user_to_device` — that gets rotation and anisotropic scale
+    /// exactly right, unlike the √|det CTM| approximation `stroke`
+    /// needs for width (module doc). Verified empirically (render.rs's
+    /// `sh_axial_gradient_respects_rotation_and_scale`).
+    ///
+    /// `/Extend` is validated for shape at parse time but always
+    /// behaves as `[true true]` here (`SpreadMode::Pad`): the realistic
+    /// idiom already bounds the painted region with an explicit clip,
+    /// so the only visible effect of implementing `false` would be an
+    /// edge case nobody's `clip sh` triggers. Documented deviation.
+    pub(crate) fn sh(&mut self, shading: crate::shading::Shading) -> Result<(), PsError> {
+        if self.suppress_paint > 0 {
+            return Ok(());
+        }
+        let stops: Vec<GradientStop> = shading
+            .stops
+            .iter()
+            .map(|&(pos, r, g, b)| {
+                GradientStop::new(pos, Color::from_rgba(r, g, b, 1.0).unwrap_or(Color::BLACK))
+            })
+            .collect();
+        let ctm = self.state.ctm;
+        let shader = match shading.kind {
+            crate::shading::ShadingKind::Axial { x0, y0, x1, y1 } => LinearGradient::new(
+                Point::from_xy(x0 as f32, y0 as f32),
+                Point::from_xy(x1 as f32, y1 as f32),
+                stops,
+                SpreadMode::Pad,
+                ctm,
+            ),
+            crate::shading::ShadingKind::Radial {
+                x0,
+                y0,
+                r0,
+                x1,
+                y1,
+                r1,
+            } => RadialGradient::new(
+                Point::from_xy(x0 as f32, y0 as f32),
+                r0 as f32,
+                Point::from_xy(x1 as f32, y1 as f32),
+                r1 as f32,
+                stops,
+                SpreadMode::Pad,
+                ctm,
+            ),
+        };
+        // Degenerate geometry (coincident axial points, equal-radius
+        // coincident-center radial) — tiny-skia returns None; treat as
+        // a no-op rather than an error, consistent with how other
+        // geometric degeneracies in this file (e.g. a singular CTM at
+        // device_to_user) fail soft rather than raising.
+        // Unlike `fill`/`stroke`, `sh` never touches the current path —
+        // it paints the clip region, per the PLRM — so both the
+        // degenerate no-op below and the normal case leave it alone.
+        let Some(shader) = shader else {
+            return Ok(());
+        };
+        self.prepare_paint();
+        let path = self.page_rect_path();
+        if let Some(skia_path) = path.to_skia() {
+            let paint = Paint {
+                shader,
+                anti_alias: true,
+                ..Default::default()
+            };
+            let mask = self.clip_mask();
+            self.pixmap.fill_path(
+                &skia_path,
+                &paint,
+                FillRule::Winding,
+                Transform::identity(),
+                mask.as_deref(),
+            );
+            if self.svg.is_some() {
+                let svg_kind = match shading.kind {
+                    crate::shading::ShadingKind::Axial { x0, y0, x1, y1 } => {
+                        crate::svg::ShKind::Axial {
+                            x0: x0 as f32,
+                            y0: y0 as f32,
+                            x1: x1 as f32,
+                            y1: y1 as f32,
+                        }
+                    }
+                    crate::shading::ShadingKind::Radial {
+                        x0,
+                        y0,
+                        r0,
+                        x1,
+                        y1,
+                        r1,
+                    } => crate::svg::ShKind::Radial {
+                        x0: x0 as f32,
+                        y0: y0 as f32,
+                        r0: r0 as f32,
+                        x1: x1 as f32,
+                        y1: y1 as f32,
+                        r1: r1 as f32,
+                    },
+                };
+                let svg_ctm = [ctm.sx, ctm.ky, ctm.kx, ctm.sy, ctm.tx, ctm.ty];
+                let chain = self.state.clip.as_ref().map(|c| c.node.clone());
+                if let Some(svg) = &mut self.svg {
+                    svg.sh(&svg_kind, svg_ctm, &shading.stops, &chain);
+                }
+            }
+            if self.pdf.is_some() {
+                // PDF export approximates a shading as a flat fill in
+                // the ramp's average color — real PDF shading
+                // dictionaries need pattern-colorspace machinery this
+                // exporter doesn't have; documented gap (HANDOFF.md).
+                let (mut sr, mut sg, mut sb) = (0.0f32, 0.0f32, 0.0f32);
+                for &(_, r, g, b) in &shading.stops {
+                    sr += r;
+                    sg += g;
+                    sb += b;
+                }
+                let n = shading.stops.len().max(1) as f32;
+                let avg = (sr / n, sg / n, sb / n);
+                let chain = self.state.clip.as_ref().map(|c| c.node.clone());
+                let Gfx { pdf, .. } = self;
+                if let Some(pdf) = pdf {
+                    pdf.fill(&path, FillRule::Winding, avg, &chain);
+                }
+            }
+            self.dirty = true;
+        }
+        Ok(())
+    }
+
     pub fn stroke(&mut self) {
         if self.suppress_paint > 0 {
             self.newpath();
@@ -1193,17 +1337,22 @@ impl Gfx {
     pub fn set_path_to_clip(&mut self) {
         match &self.state.clip {
             Some(c) => self.state.path = c.node.path.clone(),
-            None => {
-                let (w, h) = (self.pixmap.width() as f32, self.pixmap.height() as f32);
-                let mut p = PsPath::default();
-                p.move_to(DevPoint { x: 0.0, y: 0.0 });
-                p.line_to(DevPoint { x: w, y: 0.0 });
-                p.line_to(DevPoint { x: w, y: h });
-                p.line_to(DevPoint { x: 0.0, y: h });
-                p.close();
-                self.state.path = p;
-            }
+            None => self.state.path = self.page_rect_path(),
         }
+    }
+
+    /// The whole canvas as a device-space rectangle path — the
+    /// unclipped-`clippath` fallback above, and `sh`'s paint region
+    /// (which the current clip mask then bounds, same as `fill`).
+    fn page_rect_path(&self) -> PsPath {
+        let (w, h) = (self.pixmap.width() as f32, self.pixmap.height() as f32);
+        let mut p = PsPath::default();
+        p.move_to(DevPoint { x: 0.0, y: 0.0 });
+        p.line_to(DevPoint { x: w, y: 0.0 });
+        p.line_to(DevPoint { x: w, y: h });
+        p.line_to(DevPoint { x: 0.0, y: h });
+        p.close();
+        p
     }
 
     /// Bounding box of the current path in user space (control points

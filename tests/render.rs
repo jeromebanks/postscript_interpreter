@@ -145,3 +145,124 @@ fn showpage_marks_page_complete() {
     let it = render("showpage");
     assert!(it.gfx().page_shown);
 }
+
+#[test]
+fn sh_axial_gradient_basic() {
+    let it = render(
+        "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [1 1 1] /N 1 >> >> sh",
+    );
+    let (r, _, _) = pixel(&it, 5, 50);
+    assert!(r < 40, "near t=0 should be dark, got {r}");
+    let (r, _, _) = pixel(&it, 95, 50);
+    assert!(r > 215, "near t=1 should be light, got {r}");
+    let (r, _, _) = pixel(&it, 50, 50);
+    assert!((110..=145).contains(&r), "midpoint ~ mid gray, got {r}");
+}
+
+#[test]
+fn sh_does_not_consume_the_current_path() {
+    // Unlike fill/stroke, sh paints the clip region and leaves the
+    // current path (and currentpoint) alone, per the PLRM.
+    let mut it = Interp::with_page(100, 100).expect("test page");
+    it.run_str(
+        "newpath 10 10 moveto 20 20 lineto \
+         << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [1 1 1] /N 1 >> >> sh \
+         currentpoint",
+    )
+    .expect("sh");
+    let reprs: Vec<String> = it.operand_stack().iter().map(|o| o.repr()).collect();
+    assert_eq!(
+        reprs,
+        ["20.0", "20.0"],
+        "sh must leave the current path alone"
+    );
+}
+
+#[test]
+fn sh_radial_gradient_burst_from_center() {
+    let it = render(
+        "<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [50 50 0 50 50 40] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >> sh",
+    );
+    let (r, g, b) = pixel(&it, 50, 50); // exact center: t=0
+    assert!(
+        r > 245 && g == 0 && b < 10,
+        "center should be near-exact red, got ({r},{g},{b})"
+    );
+    let (r, _, b) = pixel(&it, 50, 10); // user (50,90): distance 40 from center
+    assert!(
+        b > 215 && r < 40,
+        "edge of burst should be near-blue, got r={r} b={b}"
+    );
+    // Beyond the radius: Pad extend keeps the edge color (documented
+    // deviation — sh always extends both ends, see Gfx::sh).
+    let (r, _, b) = pixel(&it, 50, 2);
+    assert!(
+        b > 215 && r < 40,
+        "beyond radius should stay pad-extended blue, got r={r} b={b}"
+    );
+}
+
+#[test]
+fn sh_axial_gradient_respects_rotation_and_anisotropic_scale() {
+    // Coords pass through in *user* space with the CTM handed straight
+    // to the gradient shader as its own transform, rather than
+    // pre-mapping just the two endpoints via user_to_device — the
+    // latter would get the axis direction right but the perpendicular
+    // banding wrong under anisotropic scale. Verified against
+    // tiny-skia's actual Gradient::push_stages behavior (its transform
+    // field is the local-to-device mapping, matching how the CTM
+    // already works everywhere else in this file), not just inferred.
+    //
+    // Endpoints worked out by hand: `translate` is issued before
+    // `rotate`/`scale`, so it applies last (outermost) — a local point
+    // goes through `2 1 scale` first, then `45 rotate`, then the
+    // translate to page center. t=0 (local (0,0)) lands exactly on the
+    // center (100,100); t≈0.1 and t≈0.9 land at ≈(106,94) and
+    // ≈(151,49).
+    let mut it = Interp::with_page(200, 200).expect("test page");
+    it.run_str(
+        "100 100 translate 45 rotate 2 1 scale \
+         << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 40 0] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >> sh",
+    )
+    .expect("sh");
+    let (r, _, b) = pixel(&it, 106, 94);
+    assert!(
+        r > 190 && b < 65,
+        "near t=0 should be red-dominant, got r={r} b={b}"
+    );
+    let (r, _, b) = pixel(&it, 151, 49);
+    assert!(
+        b > 190 && r < 65,
+        "near t=1 should be blue-dominant, got r={r} b={b}"
+    );
+}
+
+#[test]
+fn sh_rejects_malformed_shading_dicts() {
+    let mut it = Interp::with_page(100, 100).expect("test page");
+    assert_eq!(it.run_str("42 sh"), Err(PsError::Typecheck));
+
+    let mut it = Interp::with_page(100, 100).expect("test page");
+    assert_eq!(
+        it.run_str(
+            "<< /ShadingType 9 /ColorSpace /DeviceGray /Coords [0 0 1 0] \
+             /Function << /FunctionType 2 /C0 [0] /C1 [1] >> >> sh"
+        ),
+        Err(PsError::Rangecheck),
+        "unsupported ShadingType"
+    );
+
+    let mut it = Interp::with_page(100, 100).expect("test page");
+    assert_eq!(
+        it.run_str(
+            "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 1 0] \
+             /Function << /FunctionType 2 /C0 [0] /C1 [1] >> >> sh"
+        ),
+        Err(PsError::Rangecheck),
+        "function outputs 1 component, DeviceRGB needs 3"
+    );
+}
