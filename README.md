@@ -80,7 +80,17 @@ document, not just a picture: `%%Title:`/`%%For:` DSC header comments
 (issue #8) become the PDF's `/Info` metadata, so a multi-page piece
 opens in a reader — Kindle's Send-to-Kindle and virtually any e-reader
 or PDF viewer already take PDF directly, no separate export needed —
-with an actual title instead of a filename.
+with an actual title instead of a filename. Level 3's `shfill`
+operator (issue #20) paints axial and radial gradients — `ShadingType` 2/3 with
+`FunctionType` 2/3 (exponential and stitching, so multi-stop ramps
+work, not just two-color) — through the same three seams: real
+tiny-skia gradients on the raster/window path, native
+`<linearGradient>`/`<radialGradient>` in SVG, and a flat average-color
+approximation in PDF (documented gap — real PDF shading needs pattern-
+colorspace machinery this exporter doesn't have). `lib/artkit.ps`'s
+`gradfn`/`axialsh`/`radialsh`/`gradfill` build shading dictionaries
+from a plain array of `[r g b]` colors instead of requiring one by
+hand; `examples/gradients.ps` is the specimen sheet.
 
 **Stage 10 (the LaserWriter experience)**: `--spool DIR`
 turns the window into the printer in the corner of the lab — it

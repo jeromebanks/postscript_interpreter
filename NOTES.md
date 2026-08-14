@@ -3,6 +3,402 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Axial/radial gradient (shading) fill support (issue #20, 2026-08-14)
+
+Closes issue #20. The interpreter had no `shfill`/shading machinery at
+all before this (a grep of `src/ops/graphics.rs` turned up nothing) —
+the issue flagged real uncertainty about whether this was an
+artkit-layer or interpreter-layer feature, and it turned out to be
+both: `shfill` (PostScript Level 3's real shading-fill operator —
+confirmed against gs 10.07.1, `/shfill where` finds it, `/sh where`
+doesn't) landed at the interpreter level (`src/shading.rs`,
+`src/ops/shading.rs`, `Gfx::shfill` in `src/gfx.rs`), with a
+convenience layer on top in `lib/artkit.ps`'s new "gradients" section
+(`gradfn`/`axialsh`/`radialsh`/`gradfill`). A first draft named the
+operator `sh` instead — that's PDF's content-stream operator of the
+same shape (a shading painted directly, no pattern colorspace needed),
+but it takes a shading *resource name*, not the dictionary directly,
+and doesn't exist as a PostScript-language operator at all. Every
+hand-test during development called it `sh` and nothing caught the
+mistake; a Codex review at the PR stage (checked against gs directly,
+not just asserted) did.
+
+Scoped deliberately, not just to the easy subset: `ShadingType` 2
+(axial) and 3 (radial), `ColorSpace` `/DeviceGray`/`/DeviceRGB`/
+`/DeviceCMYK`, and `FunctionType` 2 (exponential interpolation) and 3
+(stitching — what makes multi-stop gradients possible, and what real
+design tools like Illustrator actually emit for anything beyond a
+plain two-color ramp). The 2/3-only cut on functions isn't arbitrary:
+those two types are pure arithmetic over dict contents, so evaluating
+them never needs to run a PostScript procedure through the machine —
+unlike `FunctionType` 0 (sampled) or 4 (PostScript calculator), which
+would need the same `Frame::PostOp` continuation pattern `Separation`
+colorspace uses for its tint transform (`ops/color.rs`). Staying
+inside 2/3 keeps the whole feature synchronous, with no interpreter
+reentrancy questions to answer. `FunctionType` 0/4, an array of
+one-in-one-out functions in place of a single N-out function, and
+Indexed/Separation as a shading's `ColorSpace` are all documented
+gaps, same style as the codebase's existing Indexed/Separation
+deviations in `ops/color.rs`.
+
+`Gfx::shfill` paints via the same masked-full-page-rect mechanism
+`fill`/`clip` already use, so `gsave <path> clip shfill grestore` (the
+standard idiom, and what `gradfill` wraps) bounds it exactly like any
+other paint operator. The one design decision that isn't obvious from
+reading tiny-skia's docs alone: Coords/radii pass through in *user*
+space, with the current CTM handed to the gradient shader as its own
+`transform` parameter, rather than pre-mapping the two endpoints via
+`user_to_device`. Verified empirically before committing to it (a
+render test under `45 rotate`-equivalent rotation+anisotropic-scale,
+`sh_axial_gradient_respects_rotation_and_anisotropic_scale` in
+`tests/render.rs`) rather than trusting the read of tiny-skia's
+internals alone — an `advisor` review flagged this as the plan's one
+load-bearing assumption worth confirming before building the rest on
+top of it, and it came back correct on the first try. The alternative
+(pre-transform points, scale the radius by `ctm_scale()` like `stroke`
+already does for width) would have gotten the axis direction right but
+the perpendicular banding wrong under anisotropic scale.
+
+`/Extend` is parsed and shape-validated but always behaves as
+`[true true]` (`SpreadMode::Pad`) — documented deviation, same style
+as "filter params accepted and ignored" elsewhere in this codebase.
+The realistic idiom already bounds the painted region with an
+explicit clip, so implementing `false` (transparent beyond the axis)
+would only matter for an edge case that idiom doesn't hit; getting it
+exactly right would need a genuinely separate mechanism (a geometric
+band test, not a spread-mode trick — tiny-skia's stop positions can't
+go negative, so there's no way to fake "transparent beyond bounds"
+with stop alpha alone without a discontinuity exactly at the true
+boundary).
+
+A shading's color ramp is pre-sampled into a fixed stop list rather
+than evaluated per-pixel, handed straight to tiny-skia's own
+stop-to-stop linear interpolation. Two rounds of `advisor` review
+shaped this:
+
+The plan review raised two panic risks in the original sketch
+(`stitch_index` reachable with an empty `Functions`/`Bounds` array on
+malformed input, and non-finite color components from `N ≤ 0` or
+non-monotonic `Bounds` silently painting black via an `unwrap_or`),
+fixed with upfront shape/finiteness validation in
+`parse_function`/`build_stops` before any of that reached tiny-skia.
+
+The implementation review (after the code was written and all tests
+were green) caught a real, silent-wrong-render bug the plan review
+couldn't have: `build_stops` was evaluating the function at t-values
+sampled from the *function's* own `/Domain`, while normalizing those
+same samples' gradient position against the *shading's* `/Domain` —
+correct only when the two domains happen to coincide, which every
+existing test used (the default `[0 1]`) without exercising the
+general case. A shading's `/Domain` maps geometric position onto the
+function's input; the function's own `/Domain` only clips that input
+once it arrives — different axes, silently conflated. Fixed by
+sampling gradient *positions* directly and mapping them into t-space
+via the shading's domain (`PsFunction::sample_positions`), with each
+interior stitching-leg boundary (`interior_bound_positions`) and each
+point where the shading's swept t-range crosses the function's own
+domain edge (`clamp_corner_positions` — `eval` clamps there, so the
+color goes flat beyond it, and folding in the corner itself is enough
+to render that flat region exactly) folded in as exact stops. That
+same review pointed out the corollary: since tiny-skia/SVG both
+interpolate linearly, a function that's exactly piecewise-linear
+(every leg's `N == 1`, which is what `gradfn` always emits) needs
+*only* those exact-boundary stops to render correctly — no dense
+sampling at all — cutting a four-stop `axialsh` gradient's SVG output
+from dozens of `<stop>` elements to four. A third, smaller pass closed
+a panic risk the fix itself introduced (non-finite `Domain`/`Bounds`
+values, reachable from a real literal like `1e400` since the lexer's
+`f64` parse doesn't reject those, reaching an `.expect()` in the sort
+comparator) with finiteness validation at the same parse boundary as
+everything else, plus a total-order comparator as defense in depth.
+
+Export: SVG gets real `<linearGradient>`/`<radialGradient>` support
+(`SvgRecorder::shfill`), using the same `gradientUnits="userSpaceOnUse"` +
+`gradientTransform` trick as the raster path, and SVG2's `fx`/`fy`/
+`fr` for the two-circle radial case — emitted only when `r0 > 0`, so
+the common burst-from-a-point case (`r0 = 0`) stays plain SVG 1.1
+markup that renders identically everywhere, and only the rarer
+two-circle case depends on `fr` (uneven renderer support, but
+degrades to an approximate, not broken, render when ignored). PDF
+export approximates a shading as a flat fill in the ramp's average
+color (`PdfRecorder::fill`, reused as-is) — real PDF shading
+dictionaries need pattern-colorspace machinery this exporter doesn't
+have, and building that was out of scope; a `tests/pdf.rs` regression
+test (`shfill_appears_as_an_average_color_fill_in_pdf_only_export`, same
+pattern as the existing `strokes_appear_in_pdf_only_export` guard from
+issue #8/#23) exists specifically to keep this an intentional
+approximation rather than a silent content-drop.
+
+`examples/gradients.ps` is the specimen sheet (raw `shfill` for a two-stop
+axial ramp, `axialsh` for a four-stop ramp, `radialsh` for both a
+point-burst and a two-circle gradient) — clean under `--lint`.
+
+The same Codex review that caught the operator name also checked the
+implementation against gs directly rather than just asserting from the
+spec, and found four more real defects, all pinned by fixes and a
+render.rs regression test each:
+
+- A reversed *function* `/Domain` (e.g. `[1 0]`) reaches `eval`'s
+  `x.clamp(domain.0, domain.1)`, and `f64::clamp` panics if `min >
+  max` — reachable with an empty `Bounds` array, which the
+  bounds-monotonicity check alone doesn't rule out. Confirmed against
+  gs that a *function's* own Domain must be non-decreasing (rangecheck
+  otherwise) — but a *shading*'s top-level `/Domain` is different: gs
+  accepts that one reversed, as the documented way to flip a
+  gradient's direction, and this file's own domain-mapping arithmetic
+  already handles it correctly either way. `parse_function` now
+  rejects only the former; `eval`'s Stitching arm also switched to the
+  same min/max-clamped pattern the Exponential arm already used, so
+  the panic can't resurface even if a future caller builds a
+  `PsFunction` some other way.
+- `FunctionType` 2's `C0`/`C1` were required (confirmed against gs
+  they default to `[0.0]`/`[1.0]` when omitted) while `N` silently
+  defaulted to `1.0` (confirmed against gs it's required — omitting it
+  is a rangecheck). Exactly backwards: rejected valid dicts, accepted
+  invalid ones.
+- A genuinely discontinuous stitching function (e.g. a constant-red
+  leg followed by a constant-blue leg — a real, spec-legal shading,
+  just not one `gradfn` ever emits, so nothing exercised it) rendered
+  wrong: `stitch_index`'s `x < b` test means a sample taken exactly at
+  a bound always resolves to the *right* leg, so the single stop
+  `interior_bound_positions` placed there smeared the *entire
+  preceding leg's segment* into a false gradient instead of a hard
+  edge. Fixed by placing two stops straddling each bound by a small
+  t-space epsilon instead of one exactly on it — small enough that a
+  *continuous* bound (`gradfn`'s own output) still reads as one exact
+  stop in practice.
+- The optional `/Range` key (clips each evaluated output component,
+  independent of `/Domain`, which clips the input) wasn't parsed at
+  all. Added, but deliberately only at the top-level Function a
+  shading dict names directly, not recursively per stitching leg —
+  real-world Range usage is overwhelmingly on a simple function used
+  directly, and supporting it per-leg would have meant threading a new
+  field through every `PsFunction` variant (and every test fixture
+  constructing one directly) for a case nothing here actually needs;
+  documented gap, same style as the other scope cuts in this file.
+
+Also SVG-specific: the two-circle radial branch only emitted `fx`/`fy`
+(the *focal point*) when `r0 > 0`, conflating them with `fr` (the
+*focal radius*, the actually-uncommon SVG2 feature) — a burst-from-a-
+point gradient (`r0 = 0`) whose start point wasn't also the outer
+circle's center silently recentered on the wrong point. `fx`/`fy` are
+plain SVG 1.1 and now always emitted (a no-op when they do coincide
+with the center); only `fr` stays gated on `r0 > 0`.
+
+A *second* Codex review, run on the fixed diff before merging (per
+`work-issue`'s policy: re-review the pushed fix, don't just trust the
+first pass caught everything), found five more real defects the first
+round's fixes had either introduced or left unguarded — all against
+gs again, not just asserted:
+
+- `parse_function`'s recursion (for a Type 3's `/Functions` array) had
+  no depth limit: a few thousand levels of acyclic nesting, or a
+  self-referential dict built via `put` after construction, overflows
+  the Rust stack instead of raising a catchable error. Capped at
+  `MAX_FUNCTION_DEPTH = 32`, past which it's a `limitcheck`.
+- The `/Range` support added in round one had the exact same
+  reversed-pair panic risk the round-one fix had *just* closed for
+  `/Domain`, freshly introduced: `build_stops` feeds an unvalidated
+  `(lo, hi)` pair straight into `f64::clamp`, which panics if `lo >
+  hi`. Confirmed against gs that `/Range [1 0]` is a rangecheck; now
+  validated at parse time.
+- `/Domain` on a *function* dict was silently defaulted to `[0 1]`
+  when absent (via the same `get_domain` helper the *shading*'s own
+  optional top-level Domain uses) — confirmed against gs that it's
+  required on a function (rangecheck if missing), unlike the
+  shading's.
+- The piecewise-linear "exact 2-stop" fast path from round one didn't
+  account for what happens *after* `eval`: `/Range` clamping can
+  introduce a knee partway through an otherwise-linear ramp, and
+  DeviceCMYK's `(1-c)(1-k)`-shaped conversion isn't linear in general
+  even when every component ramps linearly in `t` (C0=[0,0,0,0] to
+  C1=[1,0,0,1] makes red `(1-t)²`, not `1-t`) — so the fast path was
+  silently rendering the wrong curve for CMYK content and anything
+  with a Range. Gated on `range.is_none() &&
+  matches!(cs, Gray | Rgb)` now; DeviceCMYK and Range always take the
+  dense-sampling path.
+- The fast path also didn't account for *nested* stitching: `is_piecewise_linear`'s
+  recursion checked a nested Stitching leg's own children's `N`
+  values, classifying a function as exact even when a nested leg had
+  its own hard color-stop bound — which `interior_bound_positions`
+  can't see (it only reads `self`'s own top-level `bounds`), so that
+  bound's discontinuity was silently smeared into a continuous ramp
+  the same way the round-one single-level bug did, just one level
+  down. Restricted to exactly one level: a leg that's itself a
+  `Stitching`, not a plain `Exponential`, disqualifies the whole
+  function from the fast path — imprecise for that (rare, `gradfn`
+  never produces it) case, but no longer silently wrong.
+
+A *third* Codex review, on the round-two fix, found five more —
+against gs again, plus one against `tiny-skia`'s actual source after
+this file's own comment turned out to have been wrong about it:
+
+- `/BBox` (an optional shading-dict key that further clips the painted
+  region, in the same user space `Coords` uses) was parsed nowhere and
+  ignored entirely — confirmed against gs it's enforced (pixels
+  outside it stay untouched even though `Coords`/`Extend` would
+  otherwise reach them). `Shading` now carries it; `Gfx::shfill` builds
+  its paint path from the transformed BBox corners instead of the
+  whole page when present — a change that, because the raster/SVG/PDF
+  export all already shared that one `path` value, needed no changes
+  to the export code itself.
+- `CsKind::Cmyk::to_rgb` computed `(1-c)(1-k)` etc. straight from
+  whatever components `eval` produced, without clamping them to
+  `[0,1]` first — confirmed against gs's own `setcmykcolor` (`-1 0 0
+  0.5 setcmykcolor` reads back `0.5 0.5 0.5`, i.e. C clamped to 0
+  *before* the product, not the naive `(1-(-1))*(1-0.5) = 1.0`
+  clamping only the result). Out-of-range components are reachable
+  from an ordinary Type 2 function — C0/C1 aren't themselves range-
+  checked — so this wasn't a synthetic edge case.
+- `/Extend` with the wrong array length returned the same `typecheck`
+  as a right-length array with non-boolean elements; confirmed against
+  gs a wrong length is `rangecheck`. Split into two checks.
+- Coincident axial endpoints (`Coords [x y x y]`) are a no-op in gs,
+  even with `Extend [true true]` — but tiny-skia 0.12's
+  `LinearGradient::new` in Pad mode does *not* return `None` for this,
+  despite what `Gfx::shfill`'s own comment claimed: re-reading the
+  actual source (prompted by this review, not the earlier read its
+  doc comment rested on) shows the degenerate-length branch returns
+  `Some(SolidColor(last stop))` for Pad specifically, so the whole
+  clip was silently filling with C1 instead of staying untouched.
+  Checked explicitly before construction now, rather than trusting
+  the return value.
+- A *shrinking* radial (`r0 > r1`, PostScript-legal — confirmed
+  against gs) broke the SVG export: SVG requires `fr <= r`, and the
+  code always mapped PostScript's start circle to `fx/fy/fr` and its
+  end circle to `cx/cy/r`, regardless of which was bigger. Now swaps
+  which circle is "outer" vs "focal" when `r0 > r1`, and reverses the
+  stop offsets to compensate (SVG's offset 0 is always the focal
+  circle).
+
+A *fourth* Codex review, on the round-three fix, found four more:
+
+- `/BBox` support (round three) only reached the raster and PDF paint
+  paths, which already shared one `path` value — the SVG call site
+  still always drew a full-page `<rect>`, ignoring `/BBox` entirely.
+  `SvgRecorder::shfill` now takes that same `path`'s SVG data and
+  paints a `<path>` instead of an unconditional whole-canvas `<rect>`,
+  so `/BBox` (or lack of one) reaches SVG export the same way it
+  already reached the other two.
+- The PDF average-color fallback was an unweighted mean over the stop
+  list, not weighted by how much of the `[0,1]` axis each stop
+  actually represents — `build_stops` packs extra stops at stitching
+  bounds and domain-clamp corners, so a ramp that's red through
+  position 0.99 and blue only for the last 1% has just a handful of
+  stops clustered near that boundary, and an unweighted mean rendered
+  it roughly 50/50 purple instead of ~99% red. Switched to trapezoidal
+  integration weighted by each consecutive pair's position gap.
+- The axial coincident-endpoint check (round three) used a fixed
+  `1e-6` epsilon in *user* space — scale-blind: under a large CTM
+  (`1e8 1e8 scale`), two Coords 1e-7 apart (under the threshold, so
+  treated as coincident and skipped) still span 10 device units, a
+  real, visible near-hard transition. Switched to exact equality,
+  which is scale-invariant by construction and precisely matches the
+  one case actually confirmed against gs (literal coincidence);
+  anything short of exact equality renders as an ordinary, if sharp,
+  gradient, same as gs would.
+- SVG's two-circle radial model only renders *faithfully* when the
+  focal circle is entirely inside the outer one
+  (`distance(centers) + focal_r <= outer_r`); an off-center
+  `ShadingType` 3 that fails that (real, valid PostScript — no such
+  constraint exists there) isn't detected or worked around, so its SVG
+  export can visibly diverge from the raster. Pointed out because this
+  file's *own* two-circle test and, it turned out, one hand-picked
+  test geometry (`examples/gradients.ps`'s own two-circle panel was
+  actually fine, checked by hand after the fact) were themselves
+  uncontained — replaced with contained geometry; documented as a gap
+  rather than building a rasterized-fallback embedding for SVG (the
+  `image` operator's PNG-embedding machinery could do it, but that's a
+  bigger lift than this pass warranted).
+
+A *fifth* Codex review, on the round-four fix, found one real bug and
+raised one suspected gap that turned out, on direct testing against
+gs, not to be one:
+
+- **Real:** a stitching `Bounds` entry coinciding with the function's
+  own `/Domain` edge (`/Domain [0 1] /Bounds [1]`, giving the *last*
+  leg zero width — accepted by gs) rendered as a full-width smooth
+  gradient instead of the near-solid color gs actually shows (a bound
+  exactly at the domain's *own* start is a no-op by construction —
+  `eval` always resolves it to the leg *after* the zero-width one
+  already — but a bound at the domain's *end* needs the same
+  discontinuity-preserving straddle treatment the interior case
+  already had, and `interior_bound_positions`' strict `>`/`<` filter
+  excluded exactly this edge case). Relaxed to `>=`/`<=`; verified
+  directly against gs before and after (solid red across the whole
+  visible axis both times, matching within a hairline).
+- **Not a bug, on inspection:** the review flagged coincident-center,
+  equal-*positive*-radius radials (`/Coords [50 50 20 50 50 20]`) as
+  another case where tiny-skia returns `None` and nothing paints. That
+  claim traced back to this file's own comment, which still said so
+  after the axial-specific version of the same claim was corrected two
+  rounds ago — the radial mention was never re-checked. Rendering the
+  exact case directly (both against gs and against this branch's own
+  build) shows it already matches gs pixel-for-pixel: tiny-skia's
+  degenerate fallback for a coincident-center, positive-equal-radius
+  pair returns `Some` (a solid disk of the start color, nothing
+  painted beyond it), not `None` — the same fallback shape already
+  confirmed for the *shrinking-but-distinct* case two rounds back, just
+  not re-verified for this exact-equal-radius variant until now. Fixed
+  the comment; left the (already-correct) behavior alone. Worth
+  recording precisely because it's a case where taking a Codex finding
+  at face value, without reproducing it first, would have meant
+  "fixing" code that wasn't broken.
+
+A *sixth* Codex review, on the round-five fix, found five more, all
+confirmed against gs before fixing:
+
+- tiny-skia's own internal degenerate-length threshold (~3e-5,
+  `DEGENERATE_THRESHOLD`) still applies to the *raw* user-space points
+  `Gfx::shfill` hands it, even after round four's fix to this file's
+  *own* coincident-check — a tiny-but-nonzero raw axis (`/Coords
+  [0 0 1e-7 0]` under `1e8 1e8 scale`, a real 10-device-pixel
+  gradient) still got silently flattened to solid C1 by tiny-skia
+  itself before ever reaching that check. Fixed by rescaling the
+  geometry and compensating via `ctm.pre_scale` before construction —
+  an exact reparametrization (`ctm' = ctm.pre_scale(1/k, 1/k)` exactly
+  undoes multiplying the points by `k`), not an approximation, so it
+  can't regress the anisotropic-scale/rotation correctness the
+  raw-points-plus-CTM-transform design was built around. The round-4
+  test for this exact axis had been asserting the *wrong* expectation
+  the whole time — it queried the exact device-space axis-start pixel
+  and expected the far/extended color, which only "passed" because the
+  whole gradient had gone flat; rewritten with the actual device-space
+  geometry worked out by hand.
+- The domain-span "treat as zero" checks (three call sites) used
+  `<= 1e-12` instead of exact zero — the same class of unjustified
+  epsilon round three's `/Range`/`/Domain` reversed-pair fixes had
+  already replaced with exact comparisons elsewhere in this file, just
+  not here yet. `/Domain [0 1e-13]` (confirmed valid and non-flat
+  against gs) collapsed to one constant color. Switched to `== 0.0`;
+  the straddle epsilon in `interior_bound_positions` also had an
+  absolute `.max(1.0)` floor that turned out *larger than that whole
+  tiny domain*, collapsing both straddle points onto the same domain
+  edge — removed, so the epsilon now scales purely proportionally to
+  whatever the function's own domain span actually is.
+- A negative `/N` was accepted (confirmed against gs it's a
+  rangecheck) and could reach `x.powf(n)` at `x=0` as `+inf`, which the
+  finite-component check downstream would only catch for stops that
+  happen to sample exactly `x=0`. Rejected at parse time instead.
+- `ShadingType`/`ColorSpace`/`Function` absent from a shading dict
+  returned `rangecheck` (via the shared `get` helper every other key
+  in this file also uses) where gs reports `undefined`; `Coords` and
+  most function-dict keys are genuinely `rangecheck` on gs's own
+  behavior and stay that way. Split into a separate `get_required`
+  helper for just those three keys, rather than changing `get` itself.
+- SVG's `fmt_f32` truncates to 3 decimals — fine for device-pixel path
+  data, wrong for gradient-*local* coordinates and stop offsets, which
+  a `gradientTransform` can multiply back up by an arbitrary factor (a
+  shading authored in tiny raw units the same way the raster-side fix
+  above targets, or this file's own straddle-epsilon stop-offset
+  pairs, which sit far below 3-decimal precision and were silently
+  merging back into a single offset in SVG output specifically, even
+  though the raster and PDF paths render the discontinuity correctly).
+  Added `fmt_precise` (plain `{v}` Display, which already gives the
+  shortest round-trip-exact string) for exactly the values inside
+  `SvgRecorder::shfill` that need it, leaving `fmt_f32` for the
+  genuinely device-pixel-scale values elsewhere in this file.
+
 ## Noise and flow-field procedures for artkit (issue #19, 2026-08-14)
 
 Closes issue #19. Added a "noise / flow fields" section to

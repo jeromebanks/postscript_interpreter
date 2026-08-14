@@ -104,3 +104,109 @@ fn single_page_program_yields_one_document() {
     let pages = svg_pages("newpath 10 10 moveto 90 10 lineto 50 90 lineto closepath fill showpage");
     assert_eq!(pages.len(), 1, "trailing blank canvas is not a page");
 }
+
+#[test]
+fn shfill_axial_becomes_a_linear_gradient() {
+    let pages = svg_pages(
+        "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [1 1 1] /N 1 >> >> shfill",
+    );
+    let svg = &pages[0];
+    assert!(
+        svg.contains(
+            "<linearGradient id=\"g0\" gradientUnits=\"userSpaceOnUse\" \
+                       x1=\"0\" y1=\"0\" x2=\"100\" y2=\"0\""
+        ),
+        "{svg}"
+    );
+    assert!(svg.contains("spreadMethod=\"pad\""), "{svg}");
+    assert!(svg.contains("<stop offset=\"0\""), "{svg}");
+    assert!(svg.contains("<stop offset=\"1\""), "{svg}");
+    assert!(svg.contains("fill=\"url(#g0)\""), "{svg}");
+}
+
+#[test]
+fn shfill_radial_burst_omits_fr_but_two_circle_includes_it() {
+    // r0 = 0 (the common burst case): plain SVG 1.1 markup, no `fr`.
+    let pages = svg_pages(
+        "<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [50 50 0 50 50 40] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >> shfill",
+    );
+    let svg = &pages[0];
+    assert!(
+        svg.contains(
+            "<radialGradient id=\"g0\" gradientUnits=\"userSpaceOnUse\" \
+                       cx=\"50\" cy=\"50\" r=\"40\""
+        ),
+        "{svg}"
+    );
+    assert!(!svg.contains("fr=\""), "r0=0 should not emit fr: {svg}");
+
+    // r0 > 0 (a genuine two-circle gradient): SVG2's fx/fy/fr. Focal
+    // circle (60,50 r=10) is fully inside the outer one (50,50 r=40) —
+    // distance(centers)=10, 10+10<=40 — so SVG's cone model renders it
+    // faithfully (an earlier version of this test used off-center
+    // geometry SVG can't represent faithfully at all; see shfill's
+    // module doc in svg.rs for why that's a documented gap, not
+    // something this file works around).
+    let pages = svg_pages(
+        "<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [60 50 10 50 50 40] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >> shfill",
+    );
+    let svg = &pages[0];
+    assert!(
+        svg.contains("cx=\"50\" cy=\"50\" r=\"40\" fx=\"60\" fy=\"50\" fr=\"10\""),
+        "{svg}"
+    );
+}
+
+#[test]
+fn sh_shrinking_radial_swaps_circles_and_reverses_stops() {
+    // PostScript allows r0 > r1 (a burst that shrinks toward its
+    // center); SVG requires fr <= r, so the bigger circle (here the
+    // *start*, r0=40) must become cx/cy/r (the outer circle) and the
+    // smaller (r1=10, the *end*) becomes fx/fy/fr, with stop offsets
+    // reversed to compensate (SVG's offset 0 is always the focal
+    // circle, offset 1 the outer one).
+    let pages = svg_pages(
+        "<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [50 50 40 50 50 10] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >> shfill",
+    );
+    let svg = &pages[0];
+    assert!(
+        svg.contains("cx=\"50\" cy=\"50\" r=\"40\" fx=\"50\" fy=\"50\" fr=\"10\""),
+        "{svg}"
+    );
+    // C0 (red, PostScript t=0/r0=40, the *outer* circle after the
+    // swap) must land at SVG offset 1; C1 (blue, t=1/r1=10, the focal
+    // circle) at offset 0.
+    assert!(
+        svg.contains("<stop offset=\"0\" stop-color=\"#0000ff\"/>"),
+        "{svg}"
+    );
+    assert!(
+        svg.contains("<stop offset=\"1\" stop-color=\"#ff0000\"/>"),
+        "{svg}"
+    );
+}
+
+#[test]
+fn sh_gradient_local_coordinates_keep_full_precision() {
+    // A shading axis authored in tiny raw user-space units under a
+    // large gradientTransform: fmt_f32's fixed 3-decimal truncation
+    // would round x2 (0.0004) down to "0", collapsing the whole
+    // gradient once the transform's 100000 scale is applied -- the
+    // same failure class as the raster path's tiny-skia-internal-
+    // threshold bug this same round of review found, but in the SVG
+    // formatting layer instead.
+    let pages = svg_pages(
+        "100000 100000 scale \
+         << /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 0.0004 0] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >> shfill",
+    );
+    let svg = &pages[0];
+    assert!(
+        svg.contains("x1=\"0\"") && svg.contains("x2=\"0.0004\""),
+        "expected full-precision gradient-local coordinates: {svg}"
+    );
+}

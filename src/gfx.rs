@@ -15,7 +15,10 @@
 //! will draw uniform-width strokes where real PostScript draws elliptical
 //! pens. Revisit if it ever matters.
 
-use tiny_skia::{FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{
+    Color, FillRule, GradientStop, LineCap, LineJoin, LinearGradient, Paint, PathBuilder, Pixmap,
+    Point, RadialGradient, SpreadMode, Stroke, Transform,
+};
 
 use crate::error::PsError;
 use crate::font::FontState;
@@ -723,6 +726,266 @@ impl Gfx {
         self.newpath();
     }
 
+    /// `shfill` (issue #20): paint a shading's gradient within the
+    /// current clip (the whole page, if unclipped) — same masked-full-
+    /// page-rect mechanism `fill`/`clip` already use, so an arbitrary
+    /// path clipped beforehand (`gsave <path> clip shfill grestore`,
+    /// the usual idiom) bounds it exactly like any other paint
+    /// operator.
+    ///
+    /// The shading's Coords/radii are passed through in *user space*,
+    /// with the current CTM handed to the gradient shader as its own
+    /// transform (mirroring how `tiny_skia`'s `LinearGradient`/
+    /// `RadialGradient` already expect a local-space-to-device
+    /// transform) rather than pre-mapping the two endpoints through
+    /// `user_to_device` — that gets rotation and anisotropic scale
+    /// exactly right, unlike the √|det CTM| approximation `stroke`
+    /// needs for width (module doc). Verified empirically (render.rs's
+    /// `shfill_axial_gradient_respects_rotation_and_scale`).
+    ///
+    /// `/Extend` is validated for shape at parse time but always
+    /// behaves as `[true true]` here (`SpreadMode::Pad`): the realistic
+    /// idiom already bounds the painted region with an explicit clip,
+    /// so the only visible effect of implementing `false` would be an
+    /// edge case nobody's `clip shfill` triggers. Documented deviation.
+    pub(crate) fn shfill(&mut self, shading: crate::shading::Shading) -> Result<(), PsError> {
+        if self.suppress_paint > 0 {
+            return Ok(());
+        }
+        let stops: Vec<GradientStop> = shading
+            .stops
+            .iter()
+            .map(|&(pos, r, g, b)| {
+                GradientStop::new(pos, Color::from_rgba(r, g, b, 1.0).unwrap_or(Color::BLACK))
+            })
+            .collect();
+        // Coincident axial endpoints (Coords [x y x y]) are a no-op in
+        // gs — nothing painted, even with Extend true. tiny-skia
+        // 0.12's LinearGradient::new in Pad mode does *not* return
+        // None for this, though: re-reading its source (a Codex
+        // review's prompt to actually check, not the earlier read of
+        // its doc comment that this file's design already rested on)
+        // shows the degenerate-length branch returns
+        // Some(SolidColor(last stop)) for Pad specifically — so
+        // without this check the whole clip would have silently
+        // filled with C1 instead of staying untouched. Checked before
+        // construction rather than relying on the return value.
+        //
+        // Exact equality, not a small-but-nonzero epsilon: an earlier
+        // draft used `< 1e-6` in *user* space, but that's scale-blind
+        // — under a large CTM (`1e8 1e8 scale`), two Coords 1e-7 apart
+        // (well under the threshold) still span 10 device units, a
+        // visible near-hard transition this would have wrongly
+        // skipped (a Codex review caught this). The one case actually
+        // confirmed against gs is literal coincidence, which exact
+        // equality catches precisely and is scale-invariant by
+        // construction (equal points stay equal under any linear
+        // transform); anything short of that renders as an ordinary,
+        // if very sharp, gradient — exactly what gs would do too.
+        if let crate::shading::ShadingKind::Axial { x0, y0, x1, y1 } = shading.kind
+            && x0 == x1
+            && y0 == y1
+        {
+            return Ok(());
+        }
+        let ctm = self.state.ctm;
+        // A safety margin comfortably above tiny-skia's own internal
+        // degenerate-length threshold (DEGENERATE_THRESHOLD =
+        // 1/32768 ≈ 3e-5, checked against these *raw*, untransformed
+        // points): if this shape's own characteristic length (axis
+        // length for axial; the larger of the two radii or the
+        // center-to-center distance for radial) is under `SAFE_LEN` in
+        // raw user-space units, rescale the geometry *and* the
+        // transform together so tiny-skia never sees a spuriously
+        // short length — a pure reparametrization (the composed
+        // mapping stays mathematically identical: `ctm.pre_scale(1/k,
+        // 1/k)` undoes the `*k` on the points exactly), not an
+        // approximation. Needed because raw user-space coordinates can
+        // be any scale — found content sometimes authors geometry in
+        // tiny units under a matching large CTM magnification — and
+        // tiny-skia's fixed threshold has no way to know a "short" raw
+        // length still spans real device pixels once the CTM is
+        // applied. Confirmed concretely by a Codex review with
+        // `/Coords [0 0 1e-7 0]` under `1e8 1e8 scale` (a visible
+        // 10-device-pixel gradient, wrongly flattened to solid C1
+        // without this).
+        const SAFE_LEN: f32 = 1.0;
+        let shader = match shading.kind {
+            crate::shading::ShadingKind::Axial { x0, y0, x1, y1 } => {
+                let (x0, y0, x1, y1) = (x0 as f32, y0 as f32, x1 as f32, y1 as f32);
+                let len = (x1 - x0).hypot(y1 - y0);
+                let k = if len > 0.0 && len < SAFE_LEN {
+                    SAFE_LEN / len
+                } else {
+                    1.0
+                };
+                LinearGradient::new(
+                    Point::from_xy(x0 * k, y0 * k),
+                    Point::from_xy(x1 * k, y1 * k),
+                    stops,
+                    SpreadMode::Pad,
+                    ctm.pre_scale(1.0 / k, 1.0 / k),
+                )
+            }
+            crate::shading::ShadingKind::Radial {
+                x0,
+                y0,
+                r0,
+                x1,
+                y1,
+                r1,
+            } => {
+                let (x0, y0, r0, x1, y1, r1) = (
+                    x0 as f32, y0 as f32, r0 as f32, x1 as f32, y1 as f32, r1 as f32,
+                );
+                let char_len = r0.max(r1).max((x1 - x0).hypot(y1 - y0));
+                let k = if char_len > 0.0 && char_len < SAFE_LEN {
+                    SAFE_LEN / char_len
+                } else {
+                    1.0
+                };
+                RadialGradient::new(
+                    Point::from_xy(x0 * k, y0 * k),
+                    r0 * k,
+                    Point::from_xy(x1 * k, y1 * k),
+                    r1 * k,
+                    stops,
+                    SpreadMode::Pad,
+                    ctm.pre_scale(1.0 / k, 1.0 / k),
+                )
+            }
+        };
+        // Degenerate geometry that genuinely has no shader (e.g. both
+        // radii ~0) — tiny-skia returns None; treat as a no-op rather
+        // than an error, consistent with how other geometric
+        // degeneracies in this file (e.g. a singular CTM at
+        // device_to_user) fail soft rather than raising. A coincident-
+        // center, equal-*positive*-radius radial does *not* fall here
+        // — tiny-skia's own degenerate fallback for that (a solid disk
+        // of the start color, Pad-extended with nothing beyond it)
+        // already matches gs, verified directly by rendering
+        // `/Coords [50 50 20 50 50 20] /Extend [true true]` against
+        // both (a Codex review raised this as a suspected gap from
+        // reading this comment's own earlier, overbroad wording — not
+        // from an actual repro — so the fix here is the comment, not
+        // the behavior).
+        // Unlike `fill`/`stroke`, `shfill` never touches the current
+        // path — it paints the clip region, per the PLRM — so both the
+        // degenerate no-op below and the normal case leave it alone.
+        let Some(shader) = shader else {
+            return Ok(());
+        };
+        self.prepare_paint();
+        // /BBox further restricts the painted region to a rectangle in
+        // the same user space as Coords (confirmed against gs: pixels
+        // outside it stay untouched even though the shading's own
+        // Coords/Extend would otherwise reach them) — corners go
+        // through the CTM like any other user-space geometry, so a
+        // BBox under a rotated CTM comes out as the correct
+        // parallelogram, not an axis-aligned device-space box.
+        let path = match shading.bbox {
+            Some((llx, lly, urx, ury)) => {
+                let mut p = PsPath::default();
+                p.move_to(self.user_to_device(llx, lly));
+                p.line_to(self.user_to_device(urx, lly));
+                p.line_to(self.user_to_device(urx, ury));
+                p.line_to(self.user_to_device(llx, ury));
+                p.close();
+                p
+            }
+            None => self.page_rect_path(),
+        };
+        if let Some(skia_path) = path.to_skia() {
+            let paint = Paint {
+                shader,
+                anti_alias: true,
+                ..Default::default()
+            };
+            let mask = self.clip_mask();
+            self.pixmap.fill_path(
+                &skia_path,
+                &paint,
+                FillRule::Winding,
+                Transform::identity(),
+                mask.as_deref(),
+            );
+            if self.svg.is_some() {
+                let svg_kind = match shading.kind {
+                    crate::shading::ShadingKind::Axial { x0, y0, x1, y1 } => {
+                        crate::svg::ShKind::Axial {
+                            x0: x0 as f32,
+                            y0: y0 as f32,
+                            x1: x1 as f32,
+                            y1: y1 as f32,
+                        }
+                    }
+                    crate::shading::ShadingKind::Radial {
+                        x0,
+                        y0,
+                        r0,
+                        x1,
+                        y1,
+                        r1,
+                    } => crate::svg::ShKind::Radial {
+                        x0: x0 as f32,
+                        y0: y0 as f32,
+                        r0: r0 as f32,
+                        x1: x1 as f32,
+                        y1: y1 as f32,
+                        r1: r1 as f32,
+                    },
+                };
+                let svg_ctm = [ctm.sx, ctm.ky, ctm.kx, ctm.sy, ctm.tx, ctm.ty];
+                let chain = self.state.clip.as_ref().map(|c| c.node.clone());
+                // The same device-space path the raster painted with
+                // (whole page, or the BBox parallelogram) — passing its
+                // SVG path data through means the exported region
+                // matches exactly, /BBox included, rather than always
+                // the whole page bounded only by the clip.
+                let region_d = path.to_svg_data();
+                if let Some(svg) = &mut self.svg {
+                    svg.shfill(&svg_kind, svg_ctm, &shading.stops, &region_d, &chain);
+                }
+            }
+            if self.pdf.is_some() {
+                // PDF export approximates a shading as a flat fill in
+                // the ramp's *position-weighted* average color — real
+                // PDF shading dictionaries need pattern-colorspace
+                // machinery this exporter doesn't have; documented gap
+                // (HANDOFF.md). Weighted by the position gap between
+                // consecutive stops (trapezoidal integration), not a
+                // flat mean over the stop list: stops aren't evenly
+                // spaced (build_stops packs extra ones at stitching
+                // bounds and domain-clamp corners), so an unweighted
+                // mean lets a tiny sliver of stops dominate the
+                // average — e.g. a ramp that's red through position
+                // 0.99 then blue only has ~4 stops near that boundary,
+                // and an unweighted mean renders 50/50 purple instead
+                // of ~99% red (caught by a Codex review). Stops always
+                // span the full [0,1] position range (`sample_positions`
+                // starts at 0.0 and ends at 1.0), so the weights here
+                // already sum to 1.0 with no separate normalization.
+                let (mut sr, mut sg, mut sb) = (0.0f32, 0.0f32, 0.0f32);
+                for w in shading.stops.windows(2) {
+                    let (p0, r0, g0, b0) = w[0];
+                    let (p1, r1, g1, b1) = w[1];
+                    let width = p1 - p0;
+                    sr += (r0 + r1) * 0.5 * width;
+                    sg += (g0 + g1) * 0.5 * width;
+                    sb += (b0 + b1) * 0.5 * width;
+                }
+                let avg = (sr, sg, sb);
+                let chain = self.state.clip.as_ref().map(|c| c.node.clone());
+                let Gfx { pdf, .. } = self;
+                if let Some(pdf) = pdf {
+                    pdf.fill(&path, FillRule::Winding, avg, &chain);
+                }
+            }
+            self.dirty = true;
+        }
+        Ok(())
+    }
+
     pub fn stroke(&mut self) {
         if self.suppress_paint > 0 {
             self.newpath();
@@ -1193,17 +1456,22 @@ impl Gfx {
     pub fn set_path_to_clip(&mut self) {
         match &self.state.clip {
             Some(c) => self.state.path = c.node.path.clone(),
-            None => {
-                let (w, h) = (self.pixmap.width() as f32, self.pixmap.height() as f32);
-                let mut p = PsPath::default();
-                p.move_to(DevPoint { x: 0.0, y: 0.0 });
-                p.line_to(DevPoint { x: w, y: 0.0 });
-                p.line_to(DevPoint { x: w, y: h });
-                p.line_to(DevPoint { x: 0.0, y: h });
-                p.close();
-                self.state.path = p;
-            }
+            None => self.state.path = self.page_rect_path(),
         }
+    }
+
+    /// The whole canvas as a device-space rectangle path — the
+    /// unclipped-`clippath` fallback above, and `shfill`'s paint region
+    /// (which the current clip mask then bounds, same as `fill`).
+    fn page_rect_path(&self) -> PsPath {
+        let (w, h) = (self.pixmap.width() as f32, self.pixmap.height() as f32);
+        let mut p = PsPath::default();
+        p.move_to(DevPoint { x: 0.0, y: 0.0 });
+        p.line_to(DevPoint { x: w, y: 0.0 });
+        p.line_to(DevPoint { x: w, y: h });
+        p.line_to(DevPoint { x: 0.0, y: h });
+        p.close();
+        p
     }
 
     /// Bounding box of the current path in user space (control points
