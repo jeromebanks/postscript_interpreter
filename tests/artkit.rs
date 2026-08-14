@@ -29,6 +29,15 @@ fn ink_count(it: &Interp) -> usize {
         .count()
 }
 
+fn pixel(it: &Interp, x: u32, y: u32) -> (u8, u8, u8) {
+    let p = it
+        .gfx()
+        .pixmap
+        .pixel(x, y)
+        .unwrap_or_else(|| panic!("pixel ({x},{y}) out of bounds"));
+    (p.red(), p.green(), p.blue())
+}
+
 #[test]
 fn random_helpers_are_seeded_and_in_range() {
     let got = eval("3 srand 100 chance 3 srand 100 chance");
@@ -2326,5 +2335,101 @@ fn advect_nested_in_its_own_field_proc_needs_the_inner_call_wrapped_in_a_dict() 
     assert!(
         (wx - 12.0).abs() < 1e-9 && wy.abs() < 1e-9,
         "wrapped: outer particle (12 steps of (1,0)) should end at exactly (12, 0), got ({wx}, {wy})"
+    );
+}
+
+#[test]
+fn gradfn_builds_a_stitching_function_shaped_by_the_color_count() {
+    // 3 colors -> 2 legs -> 1 bound -> 4 encode entries.
+    assert_eq!(
+        eval(
+            "[[1 0 0] [0 1 0] [0 0 1]] gradfn \
+             dup /FunctionType get exch \
+             dup /Functions get length exch \
+             dup /Bounds get length exch \
+             /Encode get length"
+        ),
+        ["3", "2", "1", "4"]
+    );
+    // 2 colors -> 1 leg -> 0 bounds -> 2 encode entries.
+    assert_eq!(
+        eval(
+            "[[1 0 0] [0 0 1]] gradfn \
+             dup /Functions get length exch \
+             /Bounds get length"
+        ),
+        ["1", "0"]
+    );
+}
+
+#[test]
+fn gradfn_places_bounds_evenly_across_the_domain() {
+    let got = eval("[[1 0 0] [0 1 0] [0 0 1] [1 1 0]] gradfn /Bounds get aload pop");
+    let b0: f64 = got[0].parse().unwrap();
+    let b1: f64 = got[1].parse().unwrap();
+    assert!((b0 - 1.0 / 3.0).abs() < 1e-9, "b0={b0}");
+    assert!((b1 - 2.0 / 3.0).abs() < 1e-9, "b1={b1}");
+}
+
+#[test]
+fn gradfn_legs_carry_the_adjacent_input_colors() {
+    // First leg's C0 is the first color, last leg's C1 is the last.
+    assert_eq!(
+        eval("[[1 0 0] [0 1 0] [0 0 1]] gradfn /Functions get 0 get /C0 get aload pop"),
+        ["1", "0", "0"]
+    );
+    assert_eq!(
+        eval("[[1 0 0] [0 1 0] [0 0 1]] gradfn /Functions get 1 get /C1 get aload pop"),
+        ["0", "0", "1"]
+    );
+}
+
+#[test]
+fn axialsh_and_radialsh_build_shading_dicts_with_correct_shape() {
+    assert_eq!(
+        eval(
+            "10 20 30 40 [[1 0 0] [0 0 1]] axialsh \
+             dup /ShadingType get exch \
+             dup /ColorSpace get exch \
+             /Coords get aload pop"
+        ),
+        ["2", "/DeviceRGB", "10", "20", "30", "40"]
+    );
+    assert_eq!(
+        eval(
+            "1 2 3 4 5 6 [[1 0 0] [0 0 1]] radialsh dup /ShadingType get exch /Coords get aload pop"
+        ),
+        ["3", "1", "2", "3", "4", "5", "6"]
+    );
+}
+
+#[test]
+fn gradfill_paints_an_axial_gradient_clipped_to_the_path() {
+    let mut it = Interp::with_page(100, 100).expect("page");
+    load(&mut it);
+    it.run_str(
+        "newpath 0 0 moveto 100 0 lineto 100 100 lineto 0 100 lineto closepath \
+         0 0 100 0 [[0 0 0] [1 1 1]] axialsh gradfill",
+    )
+    .unwrap_or_else(|e| panic!("gradfill failed: {}", it.error_report(&e)));
+    let (r, _, _) = pixel(&it, 5, 50);
+    assert!(r < 40, "near t=0 should be dark, got {r}");
+    let (r, _, _) = pixel(&it, 95, 50);
+    assert!(r > 215, "near t=1 should be light, got {r}");
+}
+
+#[test]
+fn gradfill_clips_to_the_current_path_not_the_whole_page() {
+    let mut it = Interp::with_page(100, 100).expect("page");
+    load(&mut it);
+    it.run_str(
+        "newpath 10 10 moveto 40 10 lineto 40 40 lineto 10 40 lineto closepath \
+         0 0 100 0 [[0 0 0] [1 1 1]] axialsh gradfill",
+    )
+    .unwrap_or_else(|e| panic!("gradfill failed: {}", it.error_report(&e)));
+    assert_eq!(
+        pixel(&it, 80, 80),
+        (255, 255, 255),
+        "gradfill must not paint outside the clipped path"
     );
 }

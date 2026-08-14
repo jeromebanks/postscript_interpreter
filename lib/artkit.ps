@@ -34,12 +34,14 @@
 %             cx cy r p q depth {proc} httile
 %   noise/flow  noiseinit | x y noise2 | x y eps {proc} curl2 -> dx dy
 %             | x y n stepsize {proc} advect
+%   gradients [[rgb]...] gradfn -> fndict | x0 y0 x1 y1 [[rgb]...] axialsh
+%             | x0 y0 r0 x1 y1 r1 [[rgb]...] radialsh | shdict gradfill
 %
 % Convention: helper names are lowercase and short; internal scratch
 % names carry two-letter prefixes (ad-, ap-, c2-, cp-, ct-, ef-, ep-,
-% g2-, gh-, gk-, ha-, hg-, ho-, hp-, hr-, ht-, hy-, ld-, ls-, n2-, nf-,
-% ni-, nl-, pt-, tg-, tk-) — avoid redefining those inside brush/draw
-% procs.
+% g2-, gd-, gh-, gk-, ha-, hg-, ho-, hp-, hr-, ht-, hy-, ld-, ls-, n2-,
+% nf-, ni-, nl-, pt-, tg-, tk-) — avoid redefining those inside
+% brush/draw procs.
 
 % --- random ----------------------------------------------------------
 % Deterministic (rand), reproducible under srand. Drawn from rand's
@@ -1773,4 +1775,67 @@ end
         adx ady lineto
     } repeat
 } def
+
+% --- gradients (axial and radial shading fills) ------------------------
+% A thin convenience layer over the interpreter's `sh` operator (issue
+% #20): builds PLRM shading dictionaries from a plain array of [r g b]
+% colors -- the same representation `mix3`/`shade`/`Palettes` already
+% use -- instead of requiring callers to hand-write FunctionType 2/3
+% function dicts themselves.
+%
+%   [[r g b] ...] gradfn -> functiondict
+%   x0 y0 x1 y1 [[r g b] ...] axialsh -> shadingdict
+%   x0 y0 r0 x1 y1 r1 [[r g b] ...] radialsh -> shadingdict
+%   shadingdict gradfill -   (gsave, clip to the current path, sh, grestore)
+%
+% Build the region to paint with ordinary path construction first, same
+% as any other fill -- gradfill just clips to whatever path is current:
+%   0 0 moveto 400 0 lineto 400 400 lineto 0 400 lineto closepath
+%   50 50 0 350 350 40 [[1 0 0] [0 0 1]] radialsh gradfill
+%
+% `gradfn` always builds a FunctionType 3 (stitching) function, even
+% for a two-color ramp -- one code path for both the simple two-stop
+% case and a multi-stop gradient, with legs evenly spaced across [0 1].
+
+/gradfn {                                        % [[r g b]...] -> fndict
+    /gdc exch def
+    /gdn gdc length 1 sub def
+    gdn 1 lt { /gdn 1 def } if
+    /gdfuncs gdn array def
+    /gdbounds gdn 1 sub array def
+    /gdenc gdn 2 mul array def
+    0 1 gdn 1 sub {
+        /gdi exch def
+        /gdlo gdi gdc length 1 sub min def
+        /gdhi gdi 1 add gdc length 1 sub min def
+        gdfuncs gdi
+        << /FunctionType 2 /Domain [0 1]
+           /C0 gdc gdlo get /C1 gdc gdhi get /N 1 >>
+        put
+        gdi 0 gt { gdbounds gdi 1 sub gdi gdn div put } if
+        gdenc gdi 2 mul 0 put
+        gdenc gdi 2 mul 1 add 1 put
+    } for
+    << /FunctionType 3 /Domain [0 1]
+       /Functions gdfuncs /Bounds gdbounds /Encode gdenc >>
+} def
+
+/axialsh {                                % x0 y0 x1 y1 colors -> shdict
+    /gdcolors exch def
+    /gdy1 exch def /gdx1 exch def /gdy0 exch def /gdx0 exch def
+    << /ShadingType 2 /ColorSpace /DeviceRGB
+       /Coords [gdx0 gdy0 gdx1 gdy1]
+       /Function gdcolors gradfn >>
+} def
+
+/radialsh {                        % x0 y0 r0 x1 y1 r1 colors -> shdict
+    /gdcolors exch def
+    /gdr1 exch def /gdy1 exch def /gdx1 exch def
+    /gdr0 exch def /gdy0 exch def /gdx0 exch def
+    << /ShadingType 3 /ColorSpace /DeviceRGB
+       /Coords [gdx0 gdy0 gdr0 gdx1 gdy1 gdr1]
+       /Function gdcolors gradfn >>
+} def
+
+/gradfill { gsave clip sh grestore } def          % shadingdict gradfill -
 %%EOF

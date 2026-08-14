@@ -1,0 +1,82 @@
+%!PS-Adobe-3.0
+%%Title: Gradients — an axial/radial shading specimen sheet
+%%BoundingBox: 0 0 650 700
+%%EndComments
+
+% Specimen sheet for issue #20's shading-fill support: the raw `sh`
+% operator (Level 3's shading-fill operator, ShadingType 2/3, Function
+% Type 2/3) plus artkit's convenience layer built on top of it
+% (lib/artkit.ps's "gradients" section: gradfn/axialsh/radialsh/
+% gradfill). Four panels: an axial two-stop ramp via the raw operator
+% (no artkit), an axial four-stop ramp, a radial burst from a point
+% (r0=0), and a two-circle radial gradient (an off-center focal
+% circle). Run from the repo root:
+%
+%   pscat --page 650x700 examples/gradients.ps
+
+(lib/artkit.ps) run
+
+1 1 1 setrgbcolor clippath fill
+
+/Palatino-Bold findfont 22 scalefont setfont
+0.1 0.1 0.12 setrgbcolor
+(Axial & Radial Gradients) 325 660 showctr
+/Palatino-Italic findfont 11 scalefont setfont
+(the sh operator, and artkit's gradfn / axialsh / radialsh / gradfill) 325 642 showctr
+
+% --- panel 1: axial, two stops, the raw `sh` operator directly -------
+gsave
+  40 360 translate
+  newpath 0 0 moveto 260 0 lineto 260 220 lineto 0 220 lineto closepath
+  gsave
+    clip
+    << /ShadingType 2 /ColorSpace /DeviceRGB
+       /Coords [0 0 260 220]
+       /Function << /FunctionType 2 /Domain [0 1]
+                     /C0 [0.05 0.05 0.35] /C1 [0.98 0.75 0.25] /N 1 >> >>
+    sh
+  grestore
+  0 0 0 setrgbcolor 1 setlinewidth
+  newpath 0 0 moveto 260 0 lineto 260 220 lineto 0 220 lineto closepath stroke
+  /Palatino findfont 11 scalefont setfont
+  (raw sh: two-stop axial) 130 -14 showctr
+grestore
+
+% --- panel 2: axial, four-stop ramp via axialsh/gradfill --------------
+gsave
+  350 360 translate
+  newpath 0 0 moveto 260 0 lineto 260 220 lineto 0 220 lineto closepath
+  0 0 260 0
+  [[0.85 0.15 0.25] [0.95 0.55 0.15] [0.25 0.65 0.35] [0.15 0.35 0.75]]
+  axialsh gradfill
+  0 0 0 setrgbcolor 1 setlinewidth
+  newpath 0 0 moveto 260 0 lineto 260 220 lineto 0 220 lineto closepath stroke
+  /Palatino findfont 11 scalefont setfont
+  (axialsh: four-stop ramp) 130 -14 showctr
+grestore
+
+% --- panel 3: radial burst from a point (r0=0) -------------------------
+gsave
+  40 60 translate
+  newpath 0 0 moveto 260 0 lineto 260 220 lineto 0 220 lineto closepath
+  130 110 0 130 110 140 [[1.0 0.95 0.6] [0.85 0.2 0.1]]
+  radialsh gradfill
+  0 0 0 setrgbcolor 1 setlinewidth
+  newpath 0 0 moveto 260 0 lineto 260 220 lineto 0 220 lineto closepath stroke
+  /Palatino findfont 11 scalefont setfont
+  (radialsh: burst from a point) 130 -14 showctr
+grestore
+
+% --- panel 4: two-circle radial, an off-center focal point -------------
+gsave
+  350 60 translate
+  newpath 0 0 moveto 260 0 lineto 260 220 lineto 0 220 lineto closepath
+  90 150 15 150 90 150 [[0.95 0.95 1.0] [0.1 0.15 0.45]]
+  radialsh gradfill
+  0 0 0 setrgbcolor 1 setlinewidth
+  newpath 0 0 moveto 260 0 lineto 260 220 lineto 0 220 lineto closepath stroke
+  /Palatino findfont 11 scalefont setfont
+  (radialsh: two-circle) 130 -14 showctr
+grestore
+
+showpage
