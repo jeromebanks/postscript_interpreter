@@ -32,11 +32,14 @@
 %             x1 y1 x2 y2 horthocircle | cx cy r x1 y1 x2 y2 hgeo
 %             cx cy r [verts] hpoly | a b r isline x y hreflect
 %             cx cy r p q depth {proc} httile
+%   noise/flow  noiseinit | x y noise2 | x y eps {proc} curl2 -> dx dy
+%             | x y n stepsize {proc} advect
 %
 % Convention: helper names are lowercase and short; internal scratch
-% names carry two-letter prefixes (ap-, ct-, cp-, ef-, ep-, gk-, ha-,
-% hg-, ho-, hp-, hr-, ht-, hy-, ld-, ls-, pt-, tg-, tk-) — avoid
-% redefining those inside brush/draw procs.
+% names carry two-letter prefixes (ad-, ap-, c2-, cp-, ct-, ef-, ep-,
+% g2-, gh-, gk-, ha-, hg-, ho-, hp-, hr-, ht-, hy-, ld-, ls-, n2-, nf-,
+% ni-, nl-, pt-, tg-, tk-) — avoid redefining those inside brush/draw
+% procs.
 
 % --- random ----------------------------------------------------------
 % Deterministic (rand), reproducible under srand. Drawn from rand's
@@ -1577,5 +1580,169 @@ end
             } for
         } if
     } loop
+} def
+
+% --- noise / flow fields ----------------------------------------------
+% Coherent (Perlin-style) gradient noise for organic texture, curl noise
+% for divergence-free flow fields, and particle advection to draw along
+% one. Build the permutation table once per srand with `noiseinit`
+% (consumes rand -- call it after `N srand`, before any noise2 sampling,
+% same "seed once, draw many" contract as everything else in this file);
+% `noise2` then samples deterministically off that table.
+%
+%   noiseinit                              -   (once per srand)
+%   x y noise2 -> n                        (~[-0.66,0.66], empirically;
+%                                            continuous, exactly 0 at
+%                                            every integer lattice point)
+%   x y eps {x y -> n} curl2 -> dx dy      (unit flow vector, or 0 0 if
+%                                            the field is locally flat)
+%   x y n stepsize {x y -> dx dy} advect - (moveto's x y, then walks n
+%                                            steps of stepsize*(dx,dy);
+%                                            stops early on a 0 0 field)
+%
+% `noise2` takes no caller proc, so it can never re-enter itself
+% mid-computation -- domain warping (perturbing x/y with another
+% noise2 call before sampling) is safe with its plain global scratch
+% names, no dict-wrap needed, which matters since a flow-field piece
+% samples it on the order of 10^5 times. `curl2` and `advect` *do* take
+% a caller-supplied proc (the field), so each wraps its own body in a
+% private dict: the gasket/carpet/hexgrid gotcha this file has hit
+% before (see gasket's header) is a caller proc that itself calls back
+% into curl2/advect -- composing two flow fields, or a particle
+% spawning a child trail -- corrupting the outer call's own in-flight
+% scratch. Affordable here since both run orders of magnitude less
+% often than noise2 itself.
+%
+% `curl2`'s `eps` is in whatever units the field proc's x/y expect --
+% typically raw caller-space if the proc does its own frequency scaling
+% internally, e.g.:
+%   /flow { 0.02 mul exch 0.02 mul exch noise2 } def
+%   x y 0.5 /flow load curl2 -> dx dy
+% Too small an eps against that scale cancels to noise-floor garbage
+% (two nearly-identical noise2 samples subtracted); too large blurs
+% past the field's own texture. 0.5 above is a good starting point for
+% a 0.02 frequency (a ~50-unit feature size) -- scale eps down if you
+% scale frequency up.
+
+/Grad2 [
+    1 0    -1 0    0 1    0 -1
+    0.70710678 0.70710678    -0.70710678 0.70710678
+    0.70710678 -0.70710678   -0.70710678 -0.70710678
+] def
+
+% Fisher-Yates shuffle of 0..255 via `chance`, so the field is
+% `srand`-deterministic like everything else here. `and 255` (not
+% `mod`) does the lattice wraparound throughout this section -- `mod`
+% truncates toward zero and returns negative remainders for negative
+% dividends (would index Perm out of range for x<0 or y<0); `and 255`
+% on this interpreter's two's-complement ints gives the correct
+% floor-mod-256 result for negative operands too (confirmed directly:
+% `-1 255 and` is 255, matching floor(-1) mod 256).
+/noiseinit {
+    /Perm 256 array def
+    0 1 255 { /nii exch def Perm nii nii put } for
+    255 -1 1 {
+        /nii exch def
+        /nij nii 1 add chance def
+        /nitmp Perm nii get def
+        Perm nii Perm nij get put
+        Perm nij nitmp put
+    } for
+} def
+
+/gethash {                                       % xi yi -> h  (0..255)
+    /ghy exch def /ghx exch def
+    Perm ghx get ghy add 255 and
+    Perm exch get
+} def
+
+/grad2 {                                         % h x y -> dot
+    /g2y exch def /g2x exch def /g2h exch def
+    /g2i g2h 7 and 2 mul def
+    Grad2 g2i get g2x mul
+    Grad2 g2i 1 add get g2y mul add
+} def
+
+/nfade {                                         % t -> f(t)  (quintic
+    /nft exch def                                % smoothstep, fade(0)=0,
+    /nft2 nft nft mul def                        % fade(1)=1 -- fade(0)=0
+    /nft3 nft2 nft mul def                       % is what makes noise2
+    nft3 10 mul                                  % exactly 0 at integer
+    nft3 nft mul 15 mul sub                      % lattice points, since
+    nft3 nft2 mul 6 mul add                      % it zeroes both lerps
+} def
+
+/nlerp { /nlt exch def /nlb exch def /nla exch def   % a b t -> a+(b-a)*t
+    nlb nla sub nlt mul nla add
+} def
+
+/noise2 {                                        % x y -> n
+    /n2y exch def /n2x exch def
+    /n2x0 n2x floor cvi def
+    /n2y0 n2y floor cvi def
+    /n2xf n2x n2x0 sub def
+    /n2yf n2y n2y0 sub def
+    /n2xi n2x0 255 and def
+    /n2yi n2y0 255 and def
+    /n2xi1 n2xi 1 add 255 and def
+    /n2yi1 n2yi 1 add 255 and def
+    /n2u n2xf nfade def
+    /n2v n2yf nfade def
+    /n2n00 n2xi n2yi gethash n2xf n2yf grad2 def
+    /n2n10 n2xi1 n2yi gethash n2xf 1 sub n2yf grad2 def
+    /n2n01 n2xi n2yi1 gethash n2xf n2yf 1 sub grad2 def
+    /n2n11 n2xi1 n2yi1 gethash n2xf 1 sub n2yf 1 sub grad2 def
+    n2n00 n2n10 n2u nlerp
+    n2n01 n2n11 n2u nlerp
+    n2v nlerp
+} def
+
+% x y eps {x y -> n} curl2 -> dx dy
+% Curl noise: the field's perpendicular gradient (dPsi/dy, -dPsi/dx),
+% central-differenced at +-eps and normalized -- divergence-free by
+% construction, so particles advected along it neither pool nor
+% source, they only circulate (the "iron filings" look). 0 0 if the
+% sampled gradient is (numerically) exactly flat, so `advect` can treat
+% that as a stopping condition without a special case of its own.
+/curl2 {
+    9 dict begin
+        /c2p exch def /c2e exch def /c2y exch def /c2x exch def
+        c2x c2y c2e add c2p exec
+        c2x c2y c2e sub c2p exec
+        sub /c2dy exch def
+        c2x c2e add c2y c2p exec
+        c2x c2e sub c2y c2p exec
+        sub /c2dx exch def
+        /c2vx c2dy def
+        /c2vy c2dx neg def
+        /c2len c2vx dup mul c2vy dup mul add sqrt def
+        c2len 1e-9 gt {
+            c2vx c2len div c2vy c2len div
+        } { 0 0 } ifelse
+    end
+} def
+
+% x y n stepsize {x y -> dx dy} advect -
+% Traces one particle: moveto's the start, then n times calls the field
+% proc and lineto's stepsize*(dx,dy) further along -- stops early (fewer
+% than n linetos) if the field returns exactly 0 0. advect does not
+% normalize the field's return value itself; it trusts whatever
+% magnitude the proc hands back (curl2's is always a unit vector, but a
+% hand-written field need not be -- advect just scales by stepsize and
+% steps).
+/advect {
+    7 dict begin
+        /adf exch def /adstep exch def /adn exch def
+        /ady exch def /adx exch def
+        adx ady moveto
+        adn {
+            adx ady adf exec
+            /adfy exch def /adfx exch def
+            adfx 0 eq adfy 0 eq and { exit } if
+            /adx adx adfx adstep mul add def
+            /ady ady adfy adstep mul add def
+            adx ady lineto
+        } repeat
+    end
 } def
 %%EOF

@@ -1893,3 +1893,258 @@ fn tfcols_returns_leftover_when_text_exceeds_all_columns() {
         "expected non-empty leftover once both narrow columns fill up, got {got:?}"
     );
 }
+
+// --- noise / flow fields (issue #19) -------------------------------
+
+#[test]
+fn noise2_is_deterministic_under_the_same_seed() {
+    let got = eval("9 srand noiseinit 1.37 -4.21 noise2 9 srand noiseinit 1.37 -4.21 noise2");
+    assert_eq!(got[0], got[1], "same seed, same noise2 sample");
+}
+
+#[test]
+fn noise2_is_exactly_zero_at_every_integer_lattice_point() {
+    // A real Perlin invariant, not a coincidence of the implementation:
+    // fade(0)=0 on both axes collapses the double lerp to the corner's
+    // own gradient dotted with the zero displacement vector, which is
+    // 0 regardless of which gradient the hash picked. Checked at
+    // positive, negative, and mixed-sign lattice points -- negative
+    // coordinates are exactly where a `mod`-instead-of-`and` bug (see
+    // the noiseinit header) would misindex Perm and this would stop
+    // holding.
+    for (x, y) in [(0, 0), (3, 4), (-3, -4), (-3, 4), (17, -255), (256, 256)] {
+        let got = eval(&format!("5 srand noiseinit {x} {y} noise2"));
+        let n: f64 = got[0].parse().unwrap();
+        assert!(n.abs() < 1e-9, "noise2({x},{y}) = {n}, expected exactly 0");
+    }
+}
+
+#[test]
+fn noise2_is_continuous_across_lattice_boundaries_positive_and_negative() {
+    // Straddle x=1 and x=-1 by 1e-4 on each side. A wrong `+1` wrap or
+    // a `mod` sneaking in where `and 255` is needed shows up here as a
+    // large jump right at the boundary, not as an out-of-range crash --
+    // exactly the bug class direct-arithmetic-only testing would miss.
+    for boundary in [1.0, -1.0] {
+        let got = eval(&format!(
+            "6 srand noiseinit {} 0.3 noise2 {} 0.3 noise2",
+            boundary - 1e-4,
+            boundary + 1e-4
+        ));
+        let a: f64 = got[0].parse().unwrap();
+        let b: f64 = got[1].parse().unwrap();
+        assert!(
+            (a - b).abs() < 1e-3,
+            "noise2 jumps from {a} to {b} across x={boundary}"
+        );
+    }
+}
+
+#[test]
+fn noise2_is_coherent_and_stays_within_its_empirical_range() {
+    // Coherence (the actual point of "coherent noise"): nearby samples
+    // should differ much less than distant ones. A field that's just
+    // flat, or just bounded random noise with no spatial correlation,
+    // would pass a range-only check but fail this. Range bound is
+    // empirical (~[-0.66, 0.66] measured over a 300x300 grid during
+    // development, see NOTES.md) with headroom, not a derived textbook
+    // constant -- this repo's convention for gradient-table-dependent
+    // bounds.
+    let got = eval(
+        "8 srand noiseinit
+         1.234 5.678 noise2
+         1.254 5.678 noise2
+         1.234 5.678 noise2
+         4.234 8.678 noise2",
+    );
+    let a1: f64 = got[0].parse().unwrap();
+    let a2: f64 = got[1].parse().unwrap();
+    let b1: f64 = got[2].parse().unwrap();
+    let b2: f64 = got[3].parse().unwrap();
+    let near_delta = (a1 - a2).abs();
+    let far_delta = (b1 - b2).abs();
+    assert!(
+        near_delta < far_delta,
+        "adjacent samples (delta {near_delta}) should differ less than distant ones (delta {far_delta})"
+    );
+
+    let mut min = f64::MAX;
+    let mut max = f64::MIN;
+    let mut it = Interp::new();
+    load(&mut it);
+    it.run_str("3 srand noiseinit").unwrap();
+    for ix in 0..60 {
+        for iy in 0..60 {
+            let x = ix as f64 * 0.37;
+            let y = iy as f64 * 0.29;
+            let got = it
+                .run_str(&format!("{x} {y} noise2"))
+                .map(|_| it.operand_stack()[0].repr())
+                .unwrap();
+            it.run_str("pop").unwrap();
+            let n: f64 = got.parse().unwrap();
+            min = min.min(n);
+            max = max.max(n);
+        }
+    }
+    assert!(
+        (-0.8..=0.8).contains(&min) && (-0.8..=0.8).contains(&max),
+        "noise2 range [{min}, {max}] outside the expected envelope"
+    );
+}
+
+#[test]
+fn noiseinit_produces_a_valid_permutation() {
+    // Fisher-Yates over 0..255 must yield every value exactly once --
+    // a shuffle bug (off-by-one range, or a swap that drops a value)
+    // would silently bias which gradients get picked instead of
+    // erroring.
+    let got = eval(
+        "9 srand noiseinit
+         /seen 256 array def
+         0 1 255 { seen exch 0 put } for
+         0 1 255 {
+             /pi exch def
+             /pv Perm pi get def
+             seen pv seen pv get 1 add put
+         } for
+         /allonce true def
+         0 1 255 { seen exch get 1 ne { /allonce false def } if } for
+         allonce",
+    );
+    assert_eq!(got[0], "true", "Perm is not a valid permutation of 0..255");
+}
+
+#[test]
+fn curl2_is_unit_length_and_orthogonal_to_the_gradient_at_the_gallery_eps() {
+    // eps=0.5 against a 0.02 frequency (the exact combo the gallery
+    // piece uses) is the realistic cancellation-risk case documented
+    // in curl2's header -- same shape as
+    // httile_survives_catastrophic_cancellation_at_high_p_q. Dotting
+    // the result against the field's own central-difference gradient
+    // at the same point/eps catches a swapped-component bug
+    // ((dx,-dy) instead of (dy,-dx)); a whole-vector sign flip would
+    // still pass this (it stays orthogonal, and only reverses flow
+    // direction, which is aesthetically irrelevant) so this is the
+    // right and sufficient check, not "unit length" alone.
+    let got = eval(
+        "9 srand noiseinit
+         /flow { 0.02 mul exch 0.02 mul exch noise2 } def
+         /cx 137.0 def /cy 219.0 def /ceps 0.5 def
+         cx cy ceps /flow load curl2
+         /cdy exch def /cdx exch def
+         cx cy ceps add flow
+         cx cy ceps sub flow
+         sub /gdy exch def
+         cx ceps add cy flow
+         cx ceps sub cy flow
+         sub /gdx exch def
+         cdx gdx mul cdy gdy mul add
+         cdx dup mul cdy dup mul add sqrt",
+    );
+    let dot: f64 = got[0].parse().unwrap();
+    let len: f64 = got[1].parse().unwrap();
+    assert!(
+        dot.abs() < 1e-6,
+        "curl2 not orthogonal to gradient: dot={dot}"
+    );
+    assert!((len - 1.0).abs() < 1e-6, "curl2 not unit length: len={len}");
+}
+
+#[test]
+fn curl2_returns_zero_vector_for_a_perfectly_flat_field() {
+    let got = eval("100 100 0.5 { pop pop 42 } curl2");
+    let dx: f64 = got[0].parse().unwrap();
+    let dy: f64 = got[1].parse().unwrap();
+    assert_eq!((dx, dy), (0.0, 0.0), "flat field should curl to 0 0");
+}
+
+#[test]
+fn curl2_survives_a_field_proc_that_calls_curl2_again() {
+    // Regression for the gasket/carpet/hexgrid gotcha this file has
+    // hit before (see gasket's header): a caller proc that re-enters
+    // curl2 (composing two flow fields) must not corrupt the outer
+    // call's own in-flight c2* scratch. curl2's private `9 dict begin
+    // ... end` is the fix; this pins that it actually works, not just
+    // that curl2 runs without erroring.
+    let got = eval(
+        "9 srand noiseinit
+         /basefield { 0.02 mul exch 0.02 mul exch noise2 } def
+         /innerfield { 0.5 /basefield load curl2 pop } def
+         100 100 0.5 /innerfield load curl2",
+    );
+    let dx: f64 = got[0].parse().unwrap();
+    let dy: f64 = got[1].parse().unwrap();
+    let len = (dx * dx + dy * dy).sqrt();
+    assert!(
+        (len - 1.0).abs() < 1e-6 || len < 1e-9,
+        "nested curl2 produced a non-unit, non-zero vector (len {len}) -- scratch corruption"
+    );
+}
+
+#[test]
+fn advect_does_not_normalize_the_fields_return_value() {
+    // advect trusts the field's own magnitude and just scales by
+    // stepsize -- curl2's output happens to be unit length, but a
+    // hand-written field need not be, and advect must not silently
+    // renormalize it out from under the caller.
+    let got = eval("newpath 100 100 3 1 { pop pop 2 0 } advect currentpoint");
+    let x: f64 = got[0].parse().unwrap();
+    let y: f64 = got[1].parse().unwrap();
+    assert!(
+        (x - 106.0).abs() < 1e-9 && (y - 100.0).abs() < 1e-9,
+        "expected (106, 100) from 3 steps of (2,0)*1, got ({x}, {y})"
+    );
+}
+
+#[test]
+fn advect_stops_early_and_leaves_no_linetos_on_a_zero_field() {
+    let got = eval(
+        "newpath 100 100 5 1 { pop pop 0 0 } advect
+         /n 0 def
+         { pop pop } { pop pop /n n 1 add def } { pop pop pop pop pop pop } { } pathforall
+         n currentpoint",
+    );
+    let n: f64 = got[0].parse().unwrap();
+    let x: f64 = got[1].parse().unwrap();
+    let y: f64 = got[2].parse().unwrap();
+    assert_eq!(n, 0.0, "a zero field should stop before any lineto");
+    assert!(
+        (x - 100.0).abs() < 1e-9 && (y - 100.0).abs() < 1e-9,
+        "particle should not have moved from its start, got ({x}, {y})"
+    );
+}
+
+#[test]
+fn advect_survives_a_field_proc_that_calls_advect_again() {
+    // Same regression shape as curl2's nesting test, for advect's own
+    // private `7 dict begin ... end`: a field proc that spawns a child
+    // trail (a nested advect call) must not corrupt the outer
+    // particle's own in-flight ad* scratch (its position, remaining
+    // step count). The child draws on its own isolated subpath
+    // (gsave/newpath/...grestore) so this isolates scratch-corruption
+    // from ordinary shared-current-path interaction.
+    let got = eval(
+        "/childcount 0 def
+         /spawnfield {
+             pop pop
+             /childcount childcount 1 add def
+             childcount 5 mod 0 eq {
+                 gsave newpath 0 0 3 0.3 { pop pop 1 0 } advect grestore
+             } if
+             1 0
+         } def
+         newpath 0 0 12 1.0 /spawnfield load advect currentpoint",
+    );
+    assert_eq!(
+        got.len(),
+        2,
+        "field proc should leave exactly 2 values (dx,dy) per call, not leak -- got {got:?}"
+    );
+    let x: f64 = got[0].parse().unwrap();
+    let y: f64 = got[1].parse().unwrap();
+    assert!(
+        (x - 12.0).abs() < 1e-9 && y.abs() < 1e-9,
+        "outer particle (12 steps of (1,0)) should end at (12, 0), got ({x}, {y}) -- scratch corruption from the nested advect call"
+    );
+}

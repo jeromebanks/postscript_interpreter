@@ -142,7 +142,26 @@ review caught before any template code existed -- artkit's `fitfont`
 enlarging as well as shrinking, and two of artkit's mood palettes not
 actually being ordered dark-to-light despite looking like they were --
 and one real implementation bug `--lint` caught on the first rendered
-example, a copy-paste-misaligned `tfblock` call in `pgletter`).
+example, a copy-paste-misaligned `tfblock` call in `pgletter`). Also
+done: issue #19, noise and flow-field procedures for artkit —
+`noiseinit`/`noise2` (2D gradient/Perlin noise off a `srand`-shuffled
+permutation table), `curl2` (turns any `{x y -> n}` scalar field into
+a divergence-free flow via its perpendicular gradient), and `advect`
+(traces a particle through a `{x y -> dx dy}` field as `lineto`s).
+`noise2` uses plain global scratch (no caller proc, so it can't
+re-enter itself, and it's sampled ~10^5 times per piece); `curl2`/
+`advect` each wrap their own body in a private dict since they *do*
+take a caller proc and the gasket/carpet/hexgrid reentrancy gotcha
+applies — fixed inside the library this time, not left as a caller
+caveat, confirmed by nesting-regression tests.
+`examples/noise.ps` and the gallery piece `Lodestone`
+(`gallery/lodestone.ps`, 1,400 `advect`-traced iron filings curling
+around a jittered rock) demonstrate it (NOTES.md's entry has the full
+story, including two real bugs caught empirically before either
+reached a permanent test: `and 255` vs. `mod` for negative lattice
+coordinates, and a field proc that doesn't consume its `x y` silently
+leaking stack values instead of erroring — the same class of bug
+`--lint` also caught directly in `examples/noise.ps`'s first draft).
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;

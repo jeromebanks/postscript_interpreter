@@ -3,6 +3,92 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Noise and flow-field procedures for artkit (issue #19, 2026-08-14)
+
+Closes issue #19. Added a "noise / flow fields" section to
+`lib/artkit.ps`: `noiseinit`/`noise2` (classic 2D gradient/Perlin
+noise — a 256-entry Fisher-Yates-shuffled permutation table, 8 fixed
+unit/diagonal gradient directions selected by `hash & 7`, quintic
+fade, bilinear interpolation), `curl2` (turns *any* `{x y -> n}`
+scalar-field proc into a divergence-free flow by central-differencing
+its perpendicular gradient), and `advect` (traces one particle through
+a `{x y -> dx dy}` field proc as a sequence of `lineto`s). Three
+composable primitives, not a `noise2`-specific convenience wrapper —
+matches the file's existing pattern (`grid`/`hexgrid`/`gasket` all
+take caller procs rather than hardcoding what they paint).
+
+Scoping followed a real tradeoff, not a default: `noise2` uses plain
+global scratch (`n2*` names) since it takes no caller proc — it can
+never re-enter itself mid-computation, so domain warping is safe
+without a dict wrapper, and it matters because a flow-field piece
+samples it ~10^5 times. `curl2` and `advect` *do* take a caller-
+supplied field proc, so each wraps its own body in a private
+`N dict begin ... end` — the gasket/carpet/hexgrid gotcha this file
+has hit three times before (a caller proc that re-enters the same
+library proc corrupts the outer call's in-flight scratch), but fixed
+inside the library this time rather than left as a documented caller
+caveat, since both run orders of magnitude less often than `noise2`.
+Confirmed by two regression tests (`curl2_survives_a_field_proc_that_
+calls_curl2_again`, `advect_survives_a_field_proc_that_calls_advect_
+again`) that a field proc composing two flow fields, or a particle
+spawning a child trail, doesn't corrupt the outer call.
+
+Two real bugs caught during development, both empirically, before
+either reached a permanent test:
+
+- **`-1 255 and` vs. `mod` for negative lattice coordinates.**
+  `noise2` needs to wrap negative lattice indices into the 256-entry
+  permutation table; `mod` truncates toward zero and returns negative
+  remainders for negative dividends (would index `Perm` out of range
+  for `x<0` or `y<0`), while `and 255` on this interpreter's two's-
+  complement ints gives the correct floor-mod-256 result — checked
+  directly against the interpreter (`-1 255 and` is `255`) before
+  committing to the design, then pinned by
+  `noise2_is_exactly_zero_at_every_integer_lattice_point`
+  (checked at negative and mixed-sign lattice points specifically)
+  and `noise2_is_continuous_across_lattice_boundaries_positive_and_
+  negative`.
+- **A field proc that doesn't consume its `x y` arguments silently
+  leaks stack values instead of erroring.** Building the nesting-
+  regression test for `advect`, an early draft's field proc pushed
+  `1 0` without first popping the `x y` `advect` hands it — the bug
+  was invisible when only checking `currentpoint` afterward (a
+  graphics-state query, unaffected by operand-stack garbage), and
+  only surfaced once the test asserted the exact stack length. Now
+  `advect_survives_a_field_proc_that_calls_advect_again` asserts
+  `got.len() == 2` explicitly, and `--lint` (issue #17) was run over
+  every touched `examples/`/`gallery/` file — it caught the same
+  class of bug directly in `examples/noise.ps`'s first draft, where
+  the demo's `advect` panel was accidentally passed the scalar
+  `noise2`-wrapper proc `curl2` itself expects, instead of a proper
+  2-value flow-vector proc.
+
+New demo: `examples/noise.ps`, a three-panel specimen sheet (`noise2`
+as a tinted grid, `curl2` as a grid of direction arrows, `advect` as
+fifty traced particles — the same shared field threading all three).
+New gallery piece: `gallery/lodestone.ps`, "Lodestone" — a naturalist's
+demonstration plate of 1,400 `advect`-traced iron filings around a
+jittered rock, following a `curl2` field built from a hand-composed
+potential (coherent `noise2` texture plus a term proportional to
+distance from the stone). Curl is the perpendicular gradient, so a
+purely radial potential curls into concentric tangential flow — any
+radial field's gradient points straight at/away from the center;
+rotate that 90 degrees and it runs in loops around it instead — and
+the noise term breaks the perfect circles into the ragged, organic
+loops real filings make. No new artkit.ps API needed for that
+composition; it's exactly the kind of caller-side proc composition
+`curl2`'s generic signature was designed for.
+
+Deliberately not built: fbm/multi-octave noise (not one of the three
+things the issue named, and single-octave noise already demonstrates
+"coherent noise field"), simplex noise (its main advantage over
+gradient/Perlin — avoiding directional artifacts at higher dimension —
+doesn't matter at 2D), and a `curl2`-of-`noise2` convenience wrapper
+baked into the library (`curl2`'s docstring shows the one-line wrapper
+verbatim instead — `/flow { 0.02 mul exch 0.02 mul exch noise2 } def`
+— keeping the library to 3 orthogonal primitives rather than
+multiplying entry points).
+
 ## Parameterized page templates for artkit (issue #18, 2026-08-08)
 
 Closes issue #18. The issue asked for reusable page/document templates

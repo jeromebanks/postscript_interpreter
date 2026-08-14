@@ -1,0 +1,127 @@
+%!PS-Adobe-3.0
+%%Title: Lodestone
+%%BoundingBox: 0 0 640 640
+%%Creator: Claude & a nostalgic LaserWriter fan
+%%EndComments
+
+% A naturalist's demonstration plate: a lodestone on a parchment page,
+% its magnetism made visible as a scatter of iron filings. Each filing
+% is one very short `advect` trace (issue #19) through a curl-noise
+% flow field (`curl2`) built from a hand-composed potential -- a
+% coherent `noise2` texture for organic irregularity, plus a term
+% proportional to distance from the stone. Curl is the perpendicular
+% gradient, so a purely radial term curls into concentric tangential
+% flow (any radial field's gradient points straight at/away from the
+% center; rotate that 90 degrees and it runs in loops around it) --
+% the noise term breaks the perfect circles into the ragged, organic
+% loops real filings actually make. Run from the repo root:
+%
+%   pscat --page 640x640 gallery/lodestone.ps
+
+(lib/artkit.ps) run
+21 srand
+noiseinit
+
+% --- page: parchment wash -------------------------------------------------
+0 1 15 {
+    /band exch def
+    /bt band 15 div def
+    /parchment pal 0 get /parchment pal 1 get bt mix3 setrgbcolor
+    newpath 0 band 640 mul 15 div 640 640 15 div 1 add rectfill
+} for
+
+/lcx 330 def /lcy 300 def
+
+% --- the lodestone: a jittered rock, fixed once so fill and stroke ------
+% trace the same silhouette (same convention as hexgrid/trigrid calling
+% hex/tri twice in examples/tiling.ps).
+/lodeR 76 def
+/lodeN 24 def
+/lodeVerts lodeN 2 mul array def
+0 1 lodeN 1 sub {
+    /li exch def
+    /lang li lodeN div 360 mul def
+    /lr lodeR 11 jit add def
+    lodeVerts li 2 mul lang cos lr mul lcx add put
+    lodeVerts li 2 mul 1 add lang sin lr mul lcy add put
+} for
+/lodeshape {
+    lodeVerts 0 get lodeVerts 1 get moveto
+    1 1 lodeN 1 sub {
+        /li exch def
+        lodeVerts li 2 mul get lodeVerts li 2 mul 1 add get lineto
+    } for
+    closepath
+} def
+
+newpath lodeshape
+/stone pal 0 get aload pop setrgbcolor fill
+gsave
+    newpath lodeshape clip
+    % A few concentric bands (outer lighter, inner darker) for volume,
+    % rather than a single flat fill.
+    0 1 5 {
+        /bi exch def
+        /bt bi 5 div def
+        /stone pal 1 get /stone pal 0 get bt mix3 setrgbcolor
+        newpath lcx lcy lodeR 1.0 bt 0.85 mul sub mul 0 360 arc fill
+    } for
+    % A handful of short, irregular crack lines -- jittered chords, not
+    % all converging on the exact center, so it reads as mineral
+    % fracture rather than a regular radial pattern.
+    /stone pal 2 get aload pop setrgbcolor
+    0 1 5 {
+        pop
+        /ca 360 chance def
+        /cr1 lodeR 0.15 mul lodeR 0.5 mul frnd mul add def
+        /cr2 cr1 lodeR 0.2 mul lodeR 0.4 mul frnd mul add add def
+        0.6 setlinewidth
+        newpath
+        ca cos cr1 mul lcx add 8 jit add ca sin cr1 mul lcy add 8 jit add moveto
+        ca 25 jit add cos cr2 mul lcx add ca 25 jit add sin cr2 mul lcy add lineto
+        stroke
+    } for
+grestore
+newpath lodeshape
+0.16 0.12 0.09 setrgbcolor 1.8 setlinewidth stroke
+gsave
+    newpath lcx 26 sub lcy 32 add 20 55 210 arc
+    /parchment pal 0 get aload pop setrgbcolor 0.9 setlinewidth stroke
+grestore
+
+% --- the field: coherent noise plus a radial term, curled into flow -----
+/potential {                                     % x y -> psi
+    /py exch def /px exch def
+    /pr px lcx sub dup mul py lcy sub dup mul add sqrt def
+    px 0.012 mul py 0.012 mul noise2 15 mul
+    pr 0.55 mul add
+} def
+/lodefield { 3 /potential load curl2 } def
+
+% --- iron filings: hundreds of short advect traces ------------------------
+0.14 0.12 0.11 setrgbcolor
+0 1 1399 {
+    pop
+    /fx frnd 640 mul def
+    /fy frnd 640 mul def
+    /fdx fx lcx sub def /fdy fy lcy sub def
+    fdx dup mul fdy dup mul add sqrt lodeR 9 add gt {
+        0.28 frnd 0.35 mul add setlinewidth
+        0.14 frnd 0.08 mul add /fk exch def
+        fk fk fk 0.06 add setrgbcolor
+        newpath
+        fx fy 5 3 /lodefield load advect
+        stroke
+    } if
+} for
+
+% --- title -----------------------------------------------------------------
+/Palatino-Bold findfont 26 scalefont setfont
+0.14 0.1 0.08 setrgbcolor
+(Lodestone) 320 596 showctr
+/Palatino-Italic findfont 12 scalefont setfont
+/stone pal 1 get aload pop setrgbcolor
+(curl noise around a magnetic stone, one advect trace per filing) 320 578 showctr
+
+showpage
+%%EOF
