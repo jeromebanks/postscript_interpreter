@@ -1,0 +1,106 @@
+%!PS-Adobe-3.0
+%%Title: Coherent Noise & Flow Fields — a specimen sheet for artkit's noise library
+%%BoundingBox: 0 0 650 380
+%%EndComments
+
+% Specimen sheet for artkit's noise/flow-fields section (lib/artkit.ps):
+% three panels, one primitive each, left to right in the order each
+% builds on the last. Left is noise2 itself, visualized as a tinted
+% grid -- the raw coherent-noise field everything else in this section
+% is built from. Middle is curl2: that same noise2 field turned into a
+% flow by taking its perpendicular gradient and normalizing to a unit
+% vector, drawn as a grid of short direction arrows. Right is advect:
+% fifty particles released into that same flow field and traced for a
+% few dozen steps each -- the payoff the other two primitives exist
+% for. Run from the repo root:
+%
+%   pscat --page 650x380 examples/noise.ps
+
+(lib/artkit.ps) run
+4 srand
+noiseinit
+
+1 1 1 setrgbcolor clippath fill
+
+/Palatino-Bold findfont 20 scalefont setfont
+0.1 0.1 0.12 setrgbcolor
+(Coherent Noise & Flow Fields) 325 355 showctr
+/Palatino-Italic findfont 11 scalefont setfont
+(noise2, curl2, advect) 325 340 showctr
+
+% The field every panel shares: noise2 at a 0.02 frequency (a ~50-unit
+% feature size), the same combo curl2's own docstring recommends and
+% tests/artkit.rs pins for cancellation safety. `flow` is the scalar
+% field curl2 takes; `curlflow` wraps it into the 2-value vector field
+% advect needs (advect's proc contract is {x y -> dx dy}, not {x y -> n}
+% -- curl2 is what bridges the two).
+/flow { 0.02 mul exch 0.02 mul exch noise2 } def
+/curlflow { 0.5 /flow load curl2 } def
+
+/Palatino findfont 10 scalefont setfont
+
+% --- left: noise2 as a tinted grid --------------------------------------
+gsave
+    20 40 translate
+    0 1 18 {
+        /gx exch def
+        0 1 27 {
+            /gy exch def
+            /nx gx 10 mul def
+            /ny gy 10 mul def
+            /nv nx 0.025 mul ny 0.025 mul noise2 def
+            /gray 0.5 nv 0.7 mul add def
+            gray gray gray setrgbcolor
+            newpath nx ny 10 10 rectfill
+        } for
+    } for
+grestore
+0.1 0.1 0.12 setrgbcolor 0.75 setlinewidth
+newpath 20 40 moveto 20 320 lineto 210 320 lineto 210 40 lineto closepath stroke
+0.1 0.1 0.12 setrgbcolor
+(noise2 -- a tinted lattice, dark to light) 115 25 showctr
+
+% --- middle: curl2 as a grid of direction arrows ------------------------
+gsave
+    230 40 translate
+    0.15 0.2 0.35 setrgbcolor
+    1 setlinewidth 1 setlinecap
+    0 1 9 {
+        /gx exch def
+        0 1 13 {
+            /gy exch def
+            /ax gx 19 mul 9.5 add def
+            /ay gy 20 mul 10 add def
+            ax ay 0.5 /flow load curl2
+            /vy exch def /vx exch def
+            newpath ax ay moveto ax vx 7 mul add ay vy 7 mul add lineto stroke
+            newpath ax vx 7 mul add ay vy 7 mul add 1 0 360 arc fill
+        } for
+    } for
+grestore
+0.1 0.1 0.12 setrgbcolor 0.75 setlinewidth
+newpath 230 40 moveto 230 320 lineto 420 320 lineto 420 40 lineto closepath stroke
+0.1 0.1 0.12 setrgbcolor
+(curl2 -- the same field's flow direction) 325 25 showctr
+
+% --- right: advect, fifty particles traced through the flow -------------
+gsave
+    440 40 translate
+    newpath 0 0 190 280 rectclip
+    0.5 setlinewidth
+    0 1 49 {
+        pop
+        /sx frnd 190 mul def
+        /sy frnd 280 mul def
+        /tide pal oneof aload pop setrgbcolor
+        newpath
+        sx sy 45 2.5 /curlflow load advect
+        stroke
+    } for
+grestore
+0.1 0.1 0.12 setrgbcolor 0.75 setlinewidth
+newpath 440 40 moveto 440 320 lineto 630 320 lineto 630 40 lineto closepath stroke
+0.1 0.1 0.12 setrgbcolor
+(advect -- particles traced through curl2) 535 25 showctr
+
+showpage

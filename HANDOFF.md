@@ -142,7 +142,31 @@ review caught before any template code existed -- artkit's `fitfont`
 enlarging as well as shrinking, and two of artkit's mood palettes not
 actually being ordered dark-to-light despite looking like they were --
 and one real implementation bug `--lint` caught on the first rendered
-example, a copy-paste-misaligned `tfblock` call in `pgletter`).
+example, a copy-paste-misaligned `tfblock` call in `pgletter`). Also
+done: issue #19, noise and flow-field procedures for artkit —
+`noiseinit`/`noise2` (2D gradient/Perlin noise off a `srand`-shuffled
+permutation table), `curl2` (turns any `{x y -> n}` scalar field into
+a unit-vector flow via its normalized perpendicular gradient), and
+`advect` (traces a particle through a `{x y -> dx dy}` field as
+`lineto`s). All three use plain global scratch, no caller proc gets a
+private dict opened for it during `exec` — an original draft did wrap
+`curl2`/`advect` (they take a caller-supplied field proc, so the
+gasket/carpet/hexgrid nested-composition gotcha applies), but a
+cross-model (Codex) review at the PR stage found that auto-wrapping
+silently swallows any ordinary (non-nesting) field proc's own plain
+`def`-based state; switched to `gasket`/`carpet`'s own precedent
+instead (library stays unwrapped, caller wraps their own nested call).
+`examples/noise.ps` and the gallery piece `Lodestone`
+(`gallery/lodestone.ps`, 1,400 `advect`-traced iron filings curling
+around a jittered rock) demonstrate it (NOTES.md's entry has the full
+story, including that Codex review — it also caught `curl2`'s
+docstring overclaiming exact divergence-freedom for its normalized
+output, measured at ~-0.27 for one test field, now documented
+accurately — and two real bugs caught empirically before either
+reached a permanent test: `and 255` vs. `mod` for negative lattice
+coordinates, and a field proc that doesn't consume its `x y` silently
+leaking stack values instead of erroring — the same class of bug
+`--lint` also caught directly in `examples/noise.ps`'s first draft).
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;

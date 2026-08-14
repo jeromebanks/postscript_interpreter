@@ -3,6 +3,154 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Noise and flow-field procedures for artkit (issue #19, 2026-08-14)
+
+Closes issue #19. Added a "noise / flow fields" section to
+`lib/artkit.ps`: `noiseinit`/`noise2` (classic 2D gradient/Perlin
+noise — a 256-entry Fisher-Yates-shuffled permutation table, 8 fixed
+unit/diagonal gradient directions selected by `hash & 7`, quintic
+fade, bilinear interpolation), `curl2` (turns *any* `{x y -> n}`
+scalar-field proc into a flow by central-differencing its
+perpendicular gradient and normalizing to a unit vector), and `advect`
+(traces one particle through a `{x y -> dx dy}` field proc as a
+sequence of `lineto`s). Three composable primitives, not a
+`noise2`-specific convenience wrapper — matches the file's existing
+pattern (`grid`/`hexgrid`/`gasket` all take caller procs rather than
+hardcoding what they paint).
+
+Scoping went through a real revision, not just a first-draft
+adjustment: `curl2`/`advect` originally wrapped their own bodies in a
+private `N dict begin ... end` on every call, reasoning that they take
+a caller-supplied field proc (so the gasket/carpet/hexgrid nested-
+composition gotcha applies) and run orders of magnitude less often
+than `noise2` (~10^5 samples/piece), so the dict-alloc cost seemed
+cheap insurance. A cross-model (Codex) review at the PR stage found
+the real cost of that convenience: the private dict is current for
+every field-proc call, not just nested ones, so an entirely ordinary
+(non-nesting) field proc that tries to hold plain `def`-based state
+across calls — the same thing every other artkit callback can do —
+gets silently discarded the moment the dict closes; confirmed
+empirically (a `/calls calls 1 add def` counter read back as `0` after
+3 `advect` calls). Switched `curl2`/`advect` to plain global scratch
+(`c2*`/`ad*`), matching `gasket`/`carpet`'s own precedent exactly: the
+library doesn't protect itself from a caller who nests, the caller
+wraps *their own* inner call in a private dict if they need to nest
+(documented in the section header, same wording gasket's header
+already uses). Four regression tests now cover both directions per
+primitive: `curl2_uses_plain_globals_so_an_ordinary_field_proc_can_
+hold_state` / `advect_uses_plain_globals_so_an_ordinary_field_proc_
+can_hold_state` pin the common case that motivated the change, and
+`curl2_nested_in_its_own_field_proc_needs_the_inner_call_wrapped_in_a_
+dict` / `advect_nested_in_its_own_field_proc_needs_the_inner_call_
+wrapped_in_a_dict` pin both halves of the nesting caveat (unwrapped
+measurably corrupts the outer call's result; wrapped restores it
+exactly), mirroring `gasket_nested_in_its_own_leaf_needs_the_inner_
+call_wrapped_in_a_dict`'s own two-part structure. Rendered output
+(`examples/noise.ps`, `gallery/lodestone.ps`) is byte-identical before
+and after the change, confirming it's purely a scoping fix, not a
+math change.
+
+The same review also caught an overclaim in `curl2`'s original
+docstring: "divergence-free by construction, so particles neither pool
+nor source" is true of the *unnormalized* perpendicular gradient (an
+exact vector-calculus identity) but not of the *unit vector* `curl2`
+actually returns — normalizing by a position-dependent magnitude does
+not preserve the identity in general, measured directly (not just
+argued) at around -0.27 divergence for a field with a strongly varying
+gradient (`x*y`) at one test point. Normalizing anyway is the standard
+curl-noise tradeoff (a raw curl vector's magnitude swings with local
+field steepness, unusable for `advect`'s fixed-stepsize walk); the
+docstring and a new pinned test
+(`curl2_output_is_not_exactly_divergence_free_after_normalization`)
+now say so accurately instead of overclaiming an exact guarantee the
+returned value doesn't have.
+
+A second Codex review round (after pushing the scoping/docstring fixes
+above) found a third real bug: `curl2`'s flatness guard used an
+arbitrary absolute cutoff (`c2len 1e-9 gt`) that didn't actually match
+what its own docstring already promised ("0 0 if the gradient is
+*exactly* flat") -- a field with a real but tiny uniform gradient
+(`(x+y)*1e-10`) finite-differences to a magnitude under `1e-9` and got
+misclassified as flat, so `advect` would stop immediately on a field
+that never actually goes flat. A genuinely flat/constant field's
+finite difference subtracts two identical evaluations to exactly
+`0.0` (not just something small), so the fix is `c2len 0 gt` --
+matches the docstring exactly now instead of approximating it, and
+`curl2_normalizes_a_low_amplitude_but_genuinely_nonzero_gradient` pins
+Codex's own repro case (`2 3 1 { add 1e-10 mul } curl2`) against the
+field's analytically-known curl direction.
+
+Two more real bugs caught during development, both empirically, before
+either reached a permanent test:
+
+- **`-1 255 and` vs. `mod` for negative lattice coordinates.**
+  `noise2` needs to wrap negative lattice indices into the 256-entry
+  permutation table; `mod` truncates toward zero and returns negative
+  remainders for negative dividends (would index `Perm` out of range
+  for `x<0` or `y<0`), while `and 255` on this interpreter's two's-
+  complement ints gives the correct floor-mod-256 result — checked
+  directly against the interpreter (`-1 255 and` is `255`) before
+  committing to the design, then pinned by
+  `noise2_is_exactly_zero_at_every_integer_lattice_point` (checked at
+  negative and mixed-sign lattice points specifically) and
+  `noise2_is_continuous_across_lattice_boundaries_positive_and_negative`.
+- **A field proc that doesn't consume its `x y` arguments silently
+  leaks stack values instead of erroring.** Building the nesting-
+  regression test for `advect`, an early draft's field proc pushed
+  `1 0` without first popping the `x y` `advect` hands it — the bug
+  was invisible when only checking `currentpoint` afterward (a
+  graphics-state query, unaffected by operand-stack garbage), and
+  only surfaced once the test asserted the exact stack length. Now
+  `advect_nested_in_its_own_field_proc_needs_the_inner_call_wrapped_in_a_dict`
+  asserts `got.len() == 2` explicitly, and `--lint` (issue #17) was run over
+  every touched `examples/`/`gallery/` file — it caught the same
+  class of bug directly in `examples/noise.ps`'s first draft, where
+  the demo's `advect` panel was accidentally passed the scalar
+  `noise2`-wrapper proc `curl2` itself expects, instead of a proper
+  2-value flow-vector proc.
+
+New demo: `examples/noise.ps`, a three-panel specimen sheet (`noise2`
+as a tinted grid, `curl2` as a grid of direction arrows, `advect` as
+fifty traced particles — the same shared field threading all three).
+New gallery piece: `gallery/lodestone.ps`, "Lodestone" — a naturalist's
+demonstration plate of 1,400 `advect`-traced iron filings around a
+jittered rock, following a `curl2` field built from a hand-composed
+potential (coherent `noise2` texture plus a term proportional to
+distance from the stone). Curl is the perpendicular gradient, so a
+purely radial potential curls into concentric tangential flow — any
+radial field's gradient points straight at/away from the center;
+rotate that 90 degrees and it runs in loops around it instead — and
+the noise term breaks the perfect circles into the ragged, organic
+loops real filings make. No new artkit.ps API needed for that
+composition; it's exactly the kind of caller-side proc composition
+`curl2`'s generic signature was designed for.
+
+Deliberately not built: fbm/multi-octave noise (not one of the three
+things the issue named, and single-octave noise already demonstrates
+"coherent noise field"), simplex noise (its main advantage over
+gradient/Perlin — avoiding directional artifacts at higher dimension —
+doesn't matter at 2D), and a `curl2`-of-`noise2` convenience wrapper
+baked into the library (`curl2`'s docstring shows the one-line wrapper
+verbatim instead — `/flow { 0.02 mul exch 0.02 mul exch noise2 } def`
+— keeping the library to 3 orthogonal primitives rather than
+multiplying entry points).
+
+Checked against gs directly, not just this interpreter, per HANDOFF's
+"gs is the oracle" convention — both constructs the design leans on
+are gs-accepted: `-1 255 and` (255, matching this interpreter) and
+`1e-9`-style exponent-notation reals (`curl2`'s flatness threshold).
+`ghostscript_accepts_artkit`'s shared driver string (one exercise per
+library section) now also calls `noiseinit`/`noise2`/`curl2`/`advect`,
+matching how every prior section landed in that same test.
+
+Also brought `README.md`'s "Making art" prose and `site/gallery.html`
+up to date with this section/piece — both had already fallen behind
+by one prior gallery piece (issue #16's "The Compositor's Proof" is in
+`gallery/README.md`'s table but not in either of those two), a
+pre-existing gap this issue didn't create and doesn't fix (issue #63
+tracks the same class of gap for issue #18's page templates); flagged
+here rather than silently left for the next person to rediscover.
+
 ## Parameterized page templates for artkit (issue #18, 2026-08-08)
 
 Closes issue #18. The issue asked for reusable page/document templates

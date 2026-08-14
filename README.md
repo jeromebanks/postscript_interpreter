@@ -285,8 +285,14 @@ generator (presets `/koch` and `/quadkoch` in `FractalGens`, retrieved
 with `fgen`), walked around any closed polygon — and `gasket`/`carpet`,
 Sierpinski-style recursive area subdivision for a triangle and a
 square (see gallery's Recursive Peaks, gasket-faceted mountains under
-a carpet-driven starfield). All of it deterministic under `srand`, all
-of it running unchanged in Ghostscript.
+a carpet-driven starfield). A noise/flow-fields section adds `noise2`
+(2D gradient/Perlin coherent noise off a `srand`-shuffled permutation
+table), `curl2` (turns any scalar field into a unit-vector flow by
+taking its normalized perpendicular gradient), and `advect` (traces a
+particle through a vector field as a sequence of `lineto`s) — see gallery's
+Lodestone, iron filings curling around a magnetic stone. All of it
+deterministic under `srand`, all of it running unchanged in
+Ghostscript.
 
 ```postscript
 (lib/artkit.ps) run
