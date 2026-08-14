@@ -463,3 +463,75 @@ fn shfill_rejects_deeply_nested_functions_instead_of_overflowing_the_stack() {
     );
     assert_eq!(it.run_str(&src), Err(PsError::Limitcheck));
 }
+
+#[test]
+fn shfill_bbox_restricts_the_painted_region() {
+    // Confirmed against gs: /BBox further clips the shading, in the
+    // same user space Coords is defined in -- pixels outside it stay
+    // untouched even though Coords/Extend would otherwise reach them.
+    let it = render(
+        "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 100 0] \
+         /BBox [20 20 40 40] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >> shfill",
+    );
+    assert_eq!(pixel(&it, 10, 50), WHITE, "outside BBox, left");
+    assert_eq!(pixel(&it, 90, 50), WHITE, "outside BBox, right");
+    // Inside the bbox (device x 20..40, y 60..80): some ink, not white.
+    let (r, _, _) = pixel(&it, 30, 70);
+    assert!(r < 250, "inside BBox should show the gradient, got r={r}");
+}
+
+#[test]
+fn shfill_clamps_cmyk_components_before_converting_not_after() {
+    // Confirmed against gs: `-1 0 0 0.5 setcmykcolor` reads back as
+    // 0.5 0.5 0.5 (C clamped to 0 *before* the (1-c)(1-k) product),
+    // not the naive (1-(-1))*(1-0.5) = 1.0 clamping only the result.
+    // C0 here is out of range on purpose (C=-1); a Type 2 function is
+    // happy to produce it, since C0/C1 aren't themselves range-checked.
+    let it = render(
+        "<< /ShadingType 2 /ColorSpace /DeviceCMYK /Coords [0 0 100 0] \
+         /Function << /FunctionType 2 /Domain [0 1] \
+         /C0 [-1 0 0 0.5] /C1 [-1 0 0 0.5] /N 1 >> >> shfill",
+    );
+    let (r, g, b) = pixel(&it, 50, 50);
+    assert_eq!((r, g, b), (128, 128, 128), "expected clamped 0.5 gray");
+}
+
+#[test]
+fn shfill_extend_wrong_length_is_rangecheck_not_typecheck() {
+    // Confirmed against gs: /Extend with other than 2 elements is a
+    // rangecheck, distinct from a typecheck for wrong element types.
+    let mut it = Interp::with_page(100, 100).expect("test page");
+    assert_eq!(
+        it.run_str(
+            "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 100 0] /Extend [true] \
+             /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >> shfill"
+        ),
+        Err(PsError::Rangecheck)
+    );
+    let mut it = Interp::with_page(100, 100).expect("test page");
+    assert_eq!(
+        it.run_str(
+            "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 100 0] /Extend [1 2] \
+             /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >> shfill"
+        ),
+        Err(PsError::Typecheck)
+    );
+}
+
+#[test]
+fn shfill_coincident_axial_endpoints_paint_nothing() {
+    // Confirmed against gs: Coords [x y x y] (coincident start/end) is
+    // a no-op, even with Extend [true true] -- tiny-skia's own
+    // LinearGradient::new does *not* return None for this in Pad mode
+    // (it returns a solid fill of the last stop), so this needs an
+    // explicit check rather than relying on that return value.
+    let it = render(
+        "1 1 1 setrgbcolor 0 0 100 100 rectfill \
+         0 0 0 setrgbcolor \
+         << /ShadingType 2 /ColorSpace /DeviceGray /Coords [50 50 50 50] \
+         /Extend [true true] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >> shfill",
+    );
+    assert_eq!(pixel(&it, 50, 50), WHITE, "coincident axial paints nothing");
+}

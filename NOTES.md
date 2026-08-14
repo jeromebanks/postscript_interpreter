@@ -229,6 +229,48 @@ gs again, not just asserted:
   function from the fast path — imprecise for that (rare, `gradfn`
   never produces it) case, but no longer silently wrong.
 
+A *third* Codex review, on the round-two fix, found five more —
+against gs again, plus one against `tiny-skia`'s actual source after
+this file's own comment turned out to have been wrong about it:
+
+- `/BBox` (an optional shading-dict key that further clips the painted
+  region, in the same user space `Coords` uses) was parsed nowhere and
+  ignored entirely — confirmed against gs it's enforced (pixels
+  outside it stay untouched even though `Coords`/`Extend` would
+  otherwise reach them). `Shading` now carries it; `Gfx::shfill` builds
+  its paint path from the transformed BBox corners instead of the
+  whole page when present — a change that, because the raster/SVG/PDF
+  export all already shared that one `path` value, needed no changes
+  to the export code itself.
+- `CsKind::Cmyk::to_rgb` computed `(1-c)(1-k)` etc. straight from
+  whatever components `eval` produced, without clamping them to
+  `[0,1]` first — confirmed against gs's own `setcmykcolor` (`-1 0 0
+  0.5 setcmykcolor` reads back `0.5 0.5 0.5`, i.e. C clamped to 0
+  *before* the product, not the naive `(1-(-1))*(1-0.5) = 1.0`
+  clamping only the result). Out-of-range components are reachable
+  from an ordinary Type 2 function — C0/C1 aren't themselves range-
+  checked — so this wasn't a synthetic edge case.
+- `/Extend` with the wrong array length returned the same `typecheck`
+  as a right-length array with non-boolean elements; confirmed against
+  gs a wrong length is `rangecheck`. Split into two checks.
+- Coincident axial endpoints (`Coords [x y x y]`) are a no-op in gs,
+  even with `Extend [true true]` — but tiny-skia 0.12's
+  `LinearGradient::new` in Pad mode does *not* return `None` for this,
+  despite what `Gfx::shfill`'s own comment claimed: re-reading the
+  actual source (prompted by this review, not the earlier read its
+  doc comment rested on) shows the degenerate-length branch returns
+  `Some(SolidColor(last stop))` for Pad specifically, so the whole
+  clip was silently filling with C1 instead of staying untouched.
+  Checked explicitly before construction now, rather than trusting
+  the return value.
+- A *shrinking* radial (`r0 > r1`, PostScript-legal — confirmed
+  against gs) broke the SVG export: SVG requires `fr <= r`, and the
+  code always mapped PostScript's start circle to `fx/fy/fr` and its
+  end circle to `cx/cy/r`, regardless of which was bigger. Now swaps
+  which circle is "outer" vs "focal" when `r0 > r1`, and reverses the
+  stop offsets to compensate (SVG's offset 0 is always the focal
+  circle).
+
 ## Noise and flow-field procedures for artkit (issue #19, 2026-08-14)
 
 Closes issue #19. Added a "noise / flow fields" section to

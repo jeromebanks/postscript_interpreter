@@ -286,12 +286,22 @@ impl CsKind {
         }
     }
 
+    /// Components clamp to `[0,1]` *before* conversion, not just the
+    /// final RGB after — confirmed against gs's own `setcmykcolor`
+    /// (`-1 0 0 0.5 setcmykcolor` reads back as `0.5 0.5 0.5`, i.e. C
+    /// clamped to 0 first, not the naive `(1-(-1))*(1-0.5) = 1.0`
+    /// clamping only the *product*). Matters for CMYK specifically:
+    /// the conversion is multiplicative, so an out-of-range component
+    /// (reachable from an Exponential function's C0/C1 or an N that
+    /// extrapolates past them) changes the *other* channels' results
+    /// too, not just its own.
     fn to_rgb(self, c: &[f64]) -> (f64, f64, f64) {
+        let clamp = |v: f64| v.clamp(0.0, 1.0);
         match self {
-            CsKind::Gray => (c[0], c[0], c[0]),
-            CsKind::Rgb => (c[0], c[1], c[2]),
+            CsKind::Gray => (clamp(c[0]), clamp(c[0]), clamp(c[0])),
+            CsKind::Rgb => (clamp(c[0]), clamp(c[1]), clamp(c[2])),
             CsKind::Cmyk => {
-                let (cy, m, y, k) = (c[0], c[1], c[2], c[3]);
+                let (cy, m, y, k) = (clamp(c[0]), clamp(c[1]), clamp(c[2]), clamp(c[3]));
                 (
                     (1.0 - cy) * (1.0 - k),
                     (1.0 - m) * (1.0 - k),
@@ -327,6 +337,11 @@ pub(crate) enum ShadingKind {
 pub(crate) struct Shading {
     pub(crate) kind: ShadingKind,
     pub(crate) stops: Vec<(f32, f32, f32, f32)>,
+    /// Optional `/BBox [llx lly urx ury]`, in the same user space as
+    /// `Coords` — confirmed against gs it further clips the painted
+    /// region (`Gfx::shfill` builds its paint path from this instead
+    /// of the whole page when present).
+    pub(crate) bbox: Option<(f64, f64, f64, f64)>,
 }
 
 fn get(d: &Dict, key: &str) -> Result<crate::object::Object, PsError> {
@@ -610,14 +625,17 @@ pub(crate) fn parse_shading_dict(d: &Dict) -> Result<Shading, PsError> {
         Some(_) => get_domain(d)?,
     };
     // /Extend, if present, must have the PLRM shape — accepted and
-    // validated but not otherwise honored; see Gfx::shfill.
+    // validated but not otherwise honored; see Gfx::shfill. Length and
+    // element-type mismatches get different errors (confirmed against
+    // gs: a wrong-length array is a rangecheck, not a typecheck).
     if let Some(ext) = d.get("Extend") {
         let Value::Array(a) = ext.value else {
             return Err(PsError::Typecheck);
         };
-        if a.len() != 2
-            || !(0..2).all(|i| matches!(a.get(i).map(|o| o.value), Some(Value::Boolean(_))))
-        {
+        if a.len() != 2 {
+            return Err(PsError::Rangecheck);
+        }
+        if !(0..2).all(|i| matches!(a.get(i).map(|o| o.value), Some(Value::Boolean(_)))) {
             return Err(PsError::Typecheck);
         }
     }
@@ -649,8 +667,18 @@ pub(crate) fn parse_shading_dict(d: &Dict) -> Result<Shading, PsError> {
         },
         _ => return Err(PsError::Rangecheck),
     };
+    let bbox = match d.get("BBox") {
+        None => None,
+        Some(_) => {
+            let flat = get_farray(d, "BBox")?;
+            match flat.as_slice() {
+                [llx, lly, urx, ury] => Some((*llx, *lly, *urx, *ury)),
+                _ => return Err(PsError::Rangecheck),
+            }
+        }
+    };
     let stops = build_stops(cs, &function, range.as_deref(), shading_domain)?;
-    Ok(Shading { kind, stops })
+    Ok(Shading { kind, stops, bbox })
 }
 
 #[cfg(test)]

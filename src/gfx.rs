@@ -759,6 +759,22 @@ impl Gfx {
                 GradientStop::new(pos, Color::from_rgba(r, g, b, 1.0).unwrap_or(Color::BLACK))
             })
             .collect();
+        // Coincident axial endpoints (Coords [x y x y]) are a no-op in
+        // gs — nothing painted, even with Extend true. tiny-skia
+        // 0.12's LinearGradient::new in Pad mode does *not* return
+        // None for this, though: re-reading its source (a Codex
+        // review's prompt to actually check, not the earlier read of
+        // its doc comment that this file's design already rested on)
+        // shows the degenerate-length branch returns
+        // Some(SolidColor(last stop)) for Pad specifically — so
+        // without this check the whole clip would have silently
+        // filled with C1 instead of staying untouched. Checked before
+        // construction rather than relying on the return value.
+        if let crate::shading::ShadingKind::Axial { x0, y0, x1, y1 } = shading.kind
+            && (x1 - x0).hypot(y1 - y0) < 1e-6
+        {
+            return Ok(());
+        }
         let ctm = self.state.ctm;
         let shader = match shading.kind {
             crate::shading::ShadingKind::Axial { x0, y0, x1, y1 } => LinearGradient::new(
@@ -797,7 +813,25 @@ impl Gfx {
             return Ok(());
         };
         self.prepare_paint();
-        let path = self.page_rect_path();
+        // /BBox further restricts the painted region to a rectangle in
+        // the same user space as Coords (confirmed against gs: pixels
+        // outside it stay untouched even though the shading's own
+        // Coords/Extend would otherwise reach them) — corners go
+        // through the CTM like any other user-space geometry, so a
+        // BBox under a rotated CTM comes out as the correct
+        // parallelogram, not an axis-aligned device-space box.
+        let path = match shading.bbox {
+            Some((llx, lly, urx, ury)) => {
+                let mut p = PsPath::default();
+                p.move_to(self.user_to_device(llx, lly));
+                p.line_to(self.user_to_device(urx, lly));
+                p.line_to(self.user_to_device(urx, ury));
+                p.line_to(self.user_to_device(llx, ury));
+                p.close();
+                p
+            }
+            None => self.page_rect_path(),
+        };
         if let Some(skia_path) = path.to_skia() {
             let paint = Paint {
                 shader,

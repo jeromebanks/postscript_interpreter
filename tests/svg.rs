@@ -153,3 +153,33 @@ fn shfill_radial_burst_omits_fr_but_two_circle_includes_it() {
         "{svg}"
     );
 }
+
+#[test]
+fn sh_shrinking_radial_swaps_circles_and_reverses_stops() {
+    // PostScript allows r0 > r1 (a burst that shrinks toward its
+    // center); SVG requires fr <= r, so the bigger circle (here the
+    // *start*, r0=40) must become cx/cy/r (the outer circle) and the
+    // smaller (r1=10, the *end*) becomes fx/fy/fr, with stop offsets
+    // reversed to compensate (SVG's offset 0 is always the focal
+    // circle, offset 1 the outer one).
+    let pages = svg_pages(
+        "<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [50 50 40 50 50 10] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >> shfill",
+    );
+    let svg = &pages[0];
+    assert!(
+        svg.contains("cx=\"50\" cy=\"50\" r=\"40\" fx=\"50\" fy=\"50\" fr=\"10\""),
+        "{svg}"
+    );
+    // C0 (red, PostScript t=0/r0=40, the *outer* circle after the
+    // swap) must land at SVG offset 1; C1 (blue, t=1/r1=10, the focal
+    // circle) at offset 0.
+    assert!(
+        svg.contains("<stop offset=\"0\" stop-color=\"#0000ff\"/>"),
+        "{svg}"
+    );
+    assert!(
+        svg.contains("<stop offset=\"1\" stop-color=\"#ff0000\"/>"),
+        "{svg}"
+    );
+}
