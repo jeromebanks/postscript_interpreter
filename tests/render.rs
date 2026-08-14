@@ -161,6 +161,25 @@ fn sh_axial_gradient_basic() {
 }
 
 #[test]
+fn sh_honors_a_non_default_shading_domain() {
+    // /Domain [0 0.5] sweeps only the first half of the function's own
+    // ramp across the *whole* geometric axis: the shading's Domain
+    // (not the function's own) is what maps gradient position onto
+    // the function's input. At the far edge (pos≈0.95), t = 0.95*0.5
+    // ≈ 0.475, so the color should sit near the function's *midpoint*
+    // value, nowhere near its t=1 endpoint (pure white).
+    let it = render(
+        "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] /Domain [0 0.5] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [1 1 1] /N 1 >> >> sh",
+    );
+    let (r, _, _) = pixel(&it, 95, 50);
+    assert!(
+        (95..150).contains(&r),
+        "expected mid-range gray near the far edge (t≈0.475), got {r}"
+    );
+}
+
+#[test]
 fn sh_does_not_consume_the_current_path() {
     // Unlike fill/stroke, sh paints the clip region and leaves the
     // current path (and currentpoint) alone, per the PLRM.
@@ -265,4 +284,19 @@ fn sh_rejects_malformed_shading_dicts() {
         Err(PsError::Rangecheck),
         "function outputs 1 component, DeviceRGB needs 3"
     );
+}
+
+#[test]
+fn sh_accepts_extend_true_true_even_though_it_is_not_otherwise_honored() {
+    // /Extend [true true] is near-universal in real-world shading
+    // content (it's what most gradient-producing tools emit). It's
+    // validated for shape but always behaves as if true regardless of
+    // its actual value (Gfx::sh's module doc) -- this pins that the
+    // validator itself doesn't reject the common case.
+    let mut it = Interp::with_page(100, 100).expect("test page");
+    it.run_str(
+        "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] /Extend [true true] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [1 1 1] /N 1 >> >> sh",
+    )
+    .expect("Extend [true true] must be accepted");
 }

@@ -29,8 +29,9 @@
 use crate::error::PsError;
 use crate::object::{Dict, Value};
 
-/// Samples per stitching leg (or total, for a non-stitched function).
-const SAMPLES_PER_LEG: usize = 48;
+/// Total samples across the shading's whole [0,1] gradient-position
+/// axis, for a function that isn't exactly piecewise-linear.
+const SAMPLE_COUNT: usize = 64;
 
 #[derive(Clone)]
 pub(crate) enum PsFunction {
@@ -88,24 +89,62 @@ impl PsFunction {
         }
     }
 
-    /// Every t-value (in this function's own domain) worth sampling —
-    /// every stitching leg's endpoints included, so hard color-stop
-    /// boundaries land exactly on a stop instead of being smeared.
-    fn sample_positions(&self) -> Vec<f64> {
+    /// True when every leg evaluates to an exactly linear ramp (`N` ==
+    /// 1 everywhere it appears) — tiny-skia and SVG both interpolate
+    /// linearly between stops, so a function shaped like this needs no
+    /// more than a stop at each leg boundary to render *exactly*, not
+    /// approximately. `gradfn` (`lib/artkit.ps`) always emits `N == 1`
+    /// legs, so every artkit-built gradient takes this path.
+    fn is_piecewise_linear(&self) -> bool {
         match self {
-            PsFunction::Exponential { domain, .. } => linspace(domain.0, domain.1, SAMPLES_PER_LEG),
-            PsFunction::Stitching { domain, bounds, .. } => {
-                let mut edges = Vec::with_capacity(bounds.len() + 2);
-                edges.push(domain.0);
-                edges.extend(bounds.iter().copied());
-                edges.push(domain.1);
-                let mut out = Vec::new();
-                for w in edges.windows(2) {
-                    out.extend(linspace(w[0], w[1], SAMPLES_PER_LEG));
-                }
-                out
+            PsFunction::Exponential { n, .. } => (*n - 1.0).abs() < 1e-12,
+            PsFunction::Stitching { functions, .. } => {
+                functions.iter().all(PsFunction::is_piecewise_linear)
             }
         }
+    }
+
+    /// This function's own top-level stitching bounds, mapped from
+    /// t-space into gradient-position space (`(b - d0) / span`) and
+    /// kept only when they fall strictly inside `shading_domain` —
+    /// the positions a hard leg-to-leg transition needs an exact stop
+    /// at, so it lands on a sample instead of being smeared across a
+    /// sample interval. Doesn't recurse into nested stitching (each
+    /// leg's own Bounds, if it has any, live in that leg's Encode-
+    /// remapped space, not the outer shading's t-axis) — a documented
+    /// simplification `gradfn`'s single-level stitching never hits.
+    fn interior_bound_positions(&self, shading_domain: (f64, f64)) -> Vec<f64> {
+        let PsFunction::Stitching { bounds, .. } = self else {
+            return Vec::new();
+        };
+        let (d0, d1) = shading_domain;
+        let span = d1 - d0;
+        if span.abs() <= 1e-12 {
+            return Vec::new();
+        }
+        let (lo, hi) = (d0.min(d1), d0.max(d1));
+        bounds
+            .iter()
+            .filter(|&&b| b > lo && b < hi)
+            .map(|&b| ((b - d0) / span).clamp(0.0, 1.0))
+            .collect()
+    }
+
+    /// Gradient positions (0..1, geometric — 0 at the shading's first
+    /// Coords point/circle, 1 at its second) worth sampling when this
+    /// function is swept across `shading_domain`. Exact leg boundaries
+    /// for a piecewise-linear function; a uniform grid plus those same
+    /// boundaries otherwise.
+    fn sample_positions(&self, shading_domain: (f64, f64)) -> Vec<f64> {
+        let mut out = if self.is_piecewise_linear() {
+            vec![0.0, 1.0]
+        } else {
+            linspace(0.0, 1.0, SAMPLE_COUNT)
+        };
+        out.extend(self.interior_bound_positions(shading_domain));
+        out.sort_by(|a, b| a.partial_cmp(b).expect("finite positions"));
+        out.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+        out
     }
 }
 
@@ -321,15 +360,17 @@ fn build_stops(
     let (d0, d1) = shading_domain;
     let span = d1 - d0;
     let mut out = Vec::new();
-    for s in function.sample_positions() {
-        // s is in the *function's* domain; map it back to the
-        // shading's 0..1 gradient-position space.
-        let pos = if span.abs() > 1e-12 {
-            ((s - d0) / span) as f32
+    for pos in function.sample_positions(shading_domain) {
+        // pos is a geometric gradient position (0..1); the shading's
+        // own /Domain — not the function's — maps that onto the
+        // function's input t. (The function's own /Domain, handled
+        // inside eval, only clips t once it gets there.)
+        let t = if span.abs() > 1e-12 {
+            d0 + pos * span
         } else {
-            0.0
+            d0
         };
-        let comps = function.eval(s);
+        let comps = function.eval(t);
         if comps.len() != cs.ncomp() {
             return Err(PsError::Rangecheck);
         }
@@ -338,7 +379,7 @@ fn build_stops(
             return Err(PsError::Rangecheck);
         }
         out.push((
-            pos.clamp(0.0, 1.0),
+            pos.clamp(0.0, 1.0) as f32,
             r.clamp(0.0, 1.0) as f32,
             g.clamp(0.0, 1.0) as f32,
             b.clamp(0.0, 1.0) as f32,
@@ -462,7 +503,11 @@ mod tests {
     }
 
     #[test]
-    fn sample_positions_hit_every_leg_boundary_exactly() {
+    fn piecewise_linear_stitching_samples_only_exact_breakpoints() {
+        // Every leg has N=1, so this whole function is exactly
+        // piecewise-linear — sample_positions should need nothing
+        // beyond the endpoints and the one interior leg boundary, not
+        // a dense uniform grid.
         let f = PsFunction::Stitching {
             domain: (0.0, 1.0),
             functions: vec![
@@ -482,12 +527,52 @@ mod tests {
             bounds: vec![0.3],
             encode: vec![(0.0, 1.0), (0.0, 1.0)],
         };
-        let pts = f.sample_positions();
-        assert!(pts.contains(&0.0));
-        assert!(pts.iter().any(|p| (p - 0.3).abs() < 1e-9));
-        assert!(pts.contains(&1.0));
-        // The boundary appears twice (last of leg 0, first of leg 1).
-        assert_eq!(pts.iter().filter(|p| (**p - 0.3).abs() < 1e-9).count(), 2);
+        assert!(f.is_piecewise_linear());
+        let pts = f.sample_positions((0.0, 1.0));
+        assert_eq!(pts.len(), 3, "{pts:?}");
+        assert!((pts[0] - 0.0).abs() < 1e-9);
+        assert!((pts[1] - 0.3).abs() < 1e-9);
+        assert!((pts[2] - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn non_linear_function_samples_a_dense_uniform_grid() {
+        let f = PsFunction::Exponential {
+            domain: (0.0, 1.0),
+            c0: vec![0.0],
+            c1: vec![1.0],
+            n: 2.0,
+        };
+        assert!(!f.is_piecewise_linear());
+        assert_eq!(f.sample_positions((0.0, 1.0)).len(), SAMPLE_COUNT);
+    }
+
+    #[test]
+    fn interior_bound_maps_through_the_shading_domain_not_the_functions() {
+        // The function's own bounds live at t=0.5 (its own [0,1]
+        // domain); the *shading*'s domain is [0, 2] here, so that
+        // bound should land at gradient position 0.25, not 0.5.
+        let f = PsFunction::Stitching {
+            domain: (0.0, 1.0),
+            functions: vec![
+                PsFunction::Exponential {
+                    domain: (0.0, 1.0),
+                    c0: vec![0.0],
+                    c1: vec![1.0],
+                    n: 1.0,
+                },
+                PsFunction::Exponential {
+                    domain: (0.0, 1.0),
+                    c0: vec![0.0],
+                    c1: vec![1.0],
+                    n: 1.0,
+                },
+            ],
+            bounds: vec![0.5],
+            encode: vec![(0.0, 1.0), (0.0, 1.0)],
+        };
+        let positions = f.interior_bound_positions((0.0, 2.0));
+        assert_eq!(positions, vec![0.25]);
     }
 
     #[test]
