@@ -202,6 +202,7 @@ impl SvgRecorder {
         kind: &ShKind,
         ctm: [f32; 6],
         stops: &[(f32, f32, f32, f32)],
+        region_d: &str,
         chain: &Chain,
     ) {
         let id = self.next_grad;
@@ -263,6 +264,23 @@ impl SvgRecorder {
                 // compensate (offset' = 1 - offset, order reversed so
                 // they stay non-decreasing) — caught by a Codex
                 // review; every hand-tested example here only grows.
+                //
+                // Documented gap SVG's model can't fully absorb even
+                // with that swap: SVG's cone construction only renders
+                // *faithfully* when the focal circle is entirely
+                // inside the outer one (distance(centers) + focal_r <=
+                // outer_r) — an off-center two-circle shading that
+                // fails that (a real, valid ShadingType 3; PostScript
+                // has no such constraint) isn't detected or worked
+                // around here, so its SVG export can visibly diverge
+                // from the raster (browsers vary in how they degrade
+                // it). Caught by a Codex review pointing out this
+                // file's *own* two-circle test/example geometry was
+                // itself uncontained — both were replaced with a
+                // contained one; a genuinely faithful fallback for the
+                // uncontained case (e.g. rasterizing just that
+                // gradient into an embedded PNG, the way `image`
+                // already embeds bitmap content) is out of scope here.
                 let (outer_x, outer_y, outer_r, focal_x, focal_y, focal_r, shrinking) = if r0 > r1 {
                     (x0, y0, r0, x1, y1, r1, true)
                 } else {
@@ -308,10 +326,9 @@ impl SvgRecorder {
             }
         }
         let (open, close) = self.clip_wrappers(chain);
-        let (w, h) = (self.width, self.height);
         let _ = write!(
             self.body,
-            "{open}<rect x=\"0\" y=\"0\" width=\"{w}\" height=\"{h}\" fill=\"url(#g{id})\"/>{close}",
+            "{open}<path d=\"{region_d}\" fill=\"url(#g{id})\"/>{close}",
         );
     }
 

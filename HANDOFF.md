@@ -275,8 +275,13 @@ renders eight examples in both and compares block-downsampled output).
   already bounds the painted region, so `false`'s "transparent beyond
   the axis" is an edge case that idiom never hits. SVG export gets
   real `<linearGradient>`/`<radialGradient>`; PDF export approximates
-  a shading as a flat fill
-  in the ramp's average color (no pattern-colorspace machinery).
+  a shading as a flat fill in the ramp's *position-weighted* average
+  color (no pattern-colorspace machinery). SVG's two-circle radial
+  model only renders faithfully when the focal circle sits entirely
+  inside the outer one (`distance(centers) + focal_r <= outer_r`) — an
+  off-center `ShadingType` 3 that fails that (valid PostScript; no
+  such constraint exists there) isn't detected or worked around, so
+  its SVG export can visibly diverge from the raster.
 - `error_report`'s `Line: N` (issue #17) is best-effort, not exact
   source attribution: no `Object` carries a source position, so it
   reports the line of the most recent token scanned directly from the

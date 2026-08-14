@@ -271,6 +271,46 @@ this file's own comment turned out to have been wrong about it:
   stop offsets to compensate (SVG's offset 0 is always the focal
   circle).
 
+A *fourth* Codex review, on the round-three fix, found four more:
+
+- `/BBox` support (round three) only reached the raster and PDF paint
+  paths, which already shared one `path` value — the SVG call site
+  still always drew a full-page `<rect>`, ignoring `/BBox` entirely.
+  `SvgRecorder::shfill` now takes that same `path`'s SVG data and
+  paints a `<path>` instead of an unconditional whole-canvas `<rect>`,
+  so `/BBox` (or lack of one) reaches SVG export the same way it
+  already reached the other two.
+- The PDF average-color fallback was an unweighted mean over the stop
+  list, not weighted by how much of the `[0,1]` axis each stop
+  actually represents — `build_stops` packs extra stops at stitching
+  bounds and domain-clamp corners, so a ramp that's red through
+  position 0.99 and blue only for the last 1% has just a handful of
+  stops clustered near that boundary, and an unweighted mean rendered
+  it roughly 50/50 purple instead of ~99% red. Switched to trapezoidal
+  integration weighted by each consecutive pair's position gap.
+- The axial coincident-endpoint check (round three) used a fixed
+  `1e-6` epsilon in *user* space — scale-blind: under a large CTM
+  (`1e8 1e8 scale`), two Coords 1e-7 apart (under the threshold, so
+  treated as coincident and skipped) still span 10 device units, a
+  real, visible near-hard transition. Switched to exact equality,
+  which is scale-invariant by construction and precisely matches the
+  one case actually confirmed against gs (literal coincidence);
+  anything short of exact equality renders as an ordinary, if sharp,
+  gradient, same as gs would.
+- SVG's two-circle radial model only renders *faithfully* when the
+  focal circle is entirely inside the outer one
+  (`distance(centers) + focal_r <= outer_r`); an off-center
+  `ShadingType` 3 that fails that (real, valid PostScript — no such
+  constraint exists there) isn't detected or worked around, so its SVG
+  export can visibly diverge from the raster. Pointed out because this
+  file's *own* two-circle test and, it turned out, one hand-picked
+  test geometry (`examples/gradients.ps`'s own two-circle panel was
+  actually fine, checked by hand after the fact) were themselves
+  uncontained — replaced with contained geometry; documented as a gap
+  rather than building a rasterized-fallback embedding for SVG (the
+  `image` operator's PNG-embedding machinery could do it, but that's a
+  bigger lift than this pass warranted).
+
 ## Noise and flow-field procedures for artkit (issue #19, 2026-08-14)
 
 Closes issue #19. Added a "noise / flow fields" section to

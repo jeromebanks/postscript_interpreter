@@ -770,8 +770,21 @@ impl Gfx {
         // without this check the whole clip would have silently
         // filled with C1 instead of staying untouched. Checked before
         // construction rather than relying on the return value.
+        //
+        // Exact equality, not a small-but-nonzero epsilon: an earlier
+        // draft used `< 1e-6` in *user* space, but that's scale-blind
+        // — under a large CTM (`1e8 1e8 scale`), two Coords 1e-7 apart
+        // (well under the threshold) still span 10 device units, a
+        // visible near-hard transition this would have wrongly
+        // skipped (a Codex review caught this). The one case actually
+        // confirmed against gs is literal coincidence, which exact
+        // equality catches precisely and is scale-invariant by
+        // construction (equal points stay equal under any linear
+        // transform); anything short of that renders as an ordinary,
+        // if very sharp, gradient — exactly what gs would do too.
         if let crate::shading::ShadingKind::Axial { x0, y0, x1, y1 } = shading.kind
-            && (x1 - x0).hypot(y1 - y0) < 1e-6
+            && x0 == x1
+            && y0 == y1
         {
             return Ok(());
         }
@@ -874,23 +887,44 @@ impl Gfx {
                 };
                 let svg_ctm = [ctm.sx, ctm.ky, ctm.kx, ctm.sy, ctm.tx, ctm.ty];
                 let chain = self.state.clip.as_ref().map(|c| c.node.clone());
+                // The same device-space path the raster painted with
+                // (whole page, or the BBox parallelogram) — passing its
+                // SVG path data through means the exported region
+                // matches exactly, /BBox included, rather than always
+                // the whole page bounded only by the clip.
+                let region_d = path.to_svg_data();
                 if let Some(svg) = &mut self.svg {
-                    svg.shfill(&svg_kind, svg_ctm, &shading.stops, &chain);
+                    svg.shfill(&svg_kind, svg_ctm, &shading.stops, &region_d, &chain);
                 }
             }
             if self.pdf.is_some() {
                 // PDF export approximates a shading as a flat fill in
-                // the ramp's average color — real PDF shading
-                // dictionaries need pattern-colorspace machinery this
-                // exporter doesn't have; documented gap (HANDOFF.md).
+                // the ramp's *position-weighted* average color — real
+                // PDF shading dictionaries need pattern-colorspace
+                // machinery this exporter doesn't have; documented gap
+                // (HANDOFF.md). Weighted by the position gap between
+                // consecutive stops (trapezoidal integration), not a
+                // flat mean over the stop list: stops aren't evenly
+                // spaced (build_stops packs extra ones at stitching
+                // bounds and domain-clamp corners), so an unweighted
+                // mean lets a tiny sliver of stops dominate the
+                // average — e.g. a ramp that's red through position
+                // 0.99 then blue only has ~4 stops near that boundary,
+                // and an unweighted mean renders 50/50 purple instead
+                // of ~99% red (caught by a Codex review). Stops always
+                // span the full [0,1] position range (`sample_positions`
+                // starts at 0.0 and ends at 1.0), so the weights here
+                // already sum to 1.0 with no separate normalization.
                 let (mut sr, mut sg, mut sb) = (0.0f32, 0.0f32, 0.0f32);
-                for &(_, r, g, b) in &shading.stops {
-                    sr += r;
-                    sg += g;
-                    sb += b;
+                for w in shading.stops.windows(2) {
+                    let (p0, r0, g0, b0) = w[0];
+                    let (p1, r1, g1, b1) = w[1];
+                    let width = p1 - p0;
+                    sr += (r0 + r1) * 0.5 * width;
+                    sg += (g0 + g1) * 0.5 * width;
+                    sb += (b0 + b1) * 0.5 * width;
                 }
-                let n = shading.stops.len().max(1) as f32;
-                let avg = (sr / n, sg / n, sb / n);
+                let avg = (sr, sg, sb);
                 let chain = self.state.clip.as_ref().map(|c| c.node.clone());
                 let Gfx { pdf, .. } = self;
                 if let Some(pdf) = pdf {

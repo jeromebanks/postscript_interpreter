@@ -142,14 +142,20 @@ fn shfill_radial_burst_omits_fr_but_two_circle_includes_it() {
     );
     assert!(!svg.contains("fr=\""), "r0=0 should not emit fr: {svg}");
 
-    // r0 > 0 (a genuine two-circle gradient): SVG2's fx/fy/fr.
+    // r0 > 0 (a genuine two-circle gradient): SVG2's fx/fy/fr. Focal
+    // circle (60,50 r=10) is fully inside the outer one (50,50 r=40) —
+    // distance(centers)=10, 10+10<=40 — so SVG's cone model renders it
+    // faithfully (an earlier version of this test used off-center
+    // geometry SVG can't represent faithfully at all; see shfill's
+    // module doc in svg.rs for why that's a documented gap, not
+    // something this file works around).
     let pages = svg_pages(
-        "<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [30 30 10 60 60 40] \
+        "<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [60 50 10 50 50 40] \
          /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >> shfill",
     );
     let svg = &pages[0];
     assert!(
-        svg.contains("cx=\"60\" cy=\"60\" r=\"40\" fx=\"30\" fy=\"30\" fr=\"10\""),
+        svg.contains("cx=\"50\" cy=\"50\" r=\"40\" fx=\"60\" fy=\"50\" fr=\"10\""),
         "{svg}"
     );
 }

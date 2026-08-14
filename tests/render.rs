@@ -535,3 +535,100 @@ fn shfill_coincident_axial_endpoints_paint_nothing() {
     );
     assert_eq!(pixel(&it, 50, 50), WHITE, "coincident axial paints nothing");
 }
+
+#[test]
+fn shfill_short_but_distinct_axial_still_paints_under_a_large_ctm() {
+    // Regression for the epsilon-based version of the coincident-axial
+    // check: a tiny user-space axis (1e-7, well under the old 1e-6
+    // threshold) magnified by a huge CTM scale is a real, visible
+    // near-hard transition, not something to skip. Exact equality
+    // (the fix) never treats *distinct* points as coincident,
+    // regardless of scale.
+    let mut it = Interp::with_page(100, 100).expect("test page");
+    it.run_str(
+        "50 50 translate 1e8 1e8 scale \
+         << /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 1e-7 0] \
+         /Extend [true true] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >> shfill",
+    )
+    .expect("shfill");
+    // The whole visible page sits enormously far to the "extended"
+    // side of a 1e-7-user-unit axis magnified 1e8x -- it should read
+    // as the far (white, C1) side, not the near (black, C0) side, and
+    // absolutely not the untouched white the coincident-endpoint no-op
+    // would leave if this axis were wrongly treated as zero-length
+    // starting from *black*.
+    let (r, _, _) = pixel(&it, 50, 50);
+    assert!(r > 200, "expected the extended C1 side, got r={r}");
+}
+
+#[test]
+fn shfill_pdf_fallback_weights_by_stop_position_not_a_flat_mean() {
+    // A stitching function that's constant red for 99% of the axis
+    // then constant blue for the last 1% -- the position-weighted
+    // average must land close to red, not the ~50/50 purple an
+    // unweighted mean over the stop list would give (the stop list
+    // has only a handful of samples near the bound, not one per unit
+    // of position).
+    let (pdf, _) = {
+        let mut it = Interp::with_page(100, 100).expect("page");
+        it.gfx_mut().enable_pdf();
+        it.run_str(
+            "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] \
+             /Function << /FunctionType 3 /Domain [0 1] /Bounds [0.99] /Encode [0 1 0 1] \
+             /Functions [ \
+               << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [1 0 0] /N 1 >> \
+               << /FunctionType 2 /Domain [0 1] /C0 [0 0 1] /C1 [0 0 1] /N 1 >> \
+             ] >> >> shfill",
+        )
+        .expect("shfill");
+        (
+            it.gfx().pdf_document().expect("recording on"),
+            it.gfx().pixmap.clone(),
+        )
+    };
+    let text = String::from_utf8_lossy(&pdf);
+    // Parse the "R G B rg" fill color out of the content stream: the
+    // three whitespace-separated tokens immediately before the "rg"
+    // operator.
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    let rg_idx = tokens
+        .iter()
+        .position(|&t| t == "rg")
+        .expect("an rg fill-color operator");
+    let nums: Vec<f64> = tokens[rg_idx - 3..rg_idx]
+        .iter()
+        .map(|t| t.parse::<f64>().expect("numeric rg operand"))
+        .collect();
+    assert!(
+        nums[0] > 0.9 && nums[2] < 0.1,
+        "expected a near-red average (R>0.9, B<0.1), got {nums:?}"
+    );
+}
+
+#[test]
+fn shfill_bbox_restricts_svg_export_too() {
+    // Regression for the SVG-specific miss in the raster/PDF BBox fix:
+    // the shading painted a bbox-restricted region on the raster and
+    // PDF paths (they share Gfx::shfill's one `path` value) but the
+    // SVG call still always drew a full-page <rect>, ignoring /BBox
+    // entirely. Now it's a <path> built from the same region.
+    let mut it = Interp::with_page(100, 100).expect("test page");
+    it.gfx_mut().enable_svg();
+    it.run_str(
+        "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 100 0] \
+         /BBox [20 20 40 40] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >> shfill",
+    )
+    .expect("shfill");
+    let svg = it.gfx().svg_pages().expect("recording enabled");
+    let svg = &svg[0];
+    assert!(
+        !svg.contains("<rect x=\"0\" y=\"0\" width=\"100\" height=\"100\""),
+        "BBox must not fall back to a full-page rect: {svg}"
+    );
+    assert!(
+        svg.contains("<path d=\"M20 60") || svg.contains("<path d=\"M20 80"),
+        "expected a path starting at a BBox corner: {svg}"
+    );
+}
