@@ -345,6 +345,60 @@ gs, not to be one:
   at face value, without reproducing it first, would have meant
   "fixing" code that wasn't broken.
 
+A *sixth* Codex review, on the round-five fix, found five more, all
+confirmed against gs before fixing:
+
+- tiny-skia's own internal degenerate-length threshold (~3e-5,
+  `DEGENERATE_THRESHOLD`) still applies to the *raw* user-space points
+  `Gfx::shfill` hands it, even after round four's fix to this file's
+  *own* coincident-check — a tiny-but-nonzero raw axis (`/Coords
+  [0 0 1e-7 0]` under `1e8 1e8 scale`, a real 10-device-pixel
+  gradient) still got silently flattened to solid C1 by tiny-skia
+  itself before ever reaching that check. Fixed by rescaling the
+  geometry and compensating via `ctm.pre_scale` before construction —
+  an exact reparametrization (`ctm' = ctm.pre_scale(1/k, 1/k)` exactly
+  undoes multiplying the points by `k`), not an approximation, so it
+  can't regress the anisotropic-scale/rotation correctness the
+  raw-points-plus-CTM-transform design was built around. The round-4
+  test for this exact axis had been asserting the *wrong* expectation
+  the whole time — it queried the exact device-space axis-start pixel
+  and expected the far/extended color, which only "passed" because the
+  whole gradient had gone flat; rewritten with the actual device-space
+  geometry worked out by hand.
+- The domain-span "treat as zero" checks (three call sites) used
+  `<= 1e-12` instead of exact zero — the same class of unjustified
+  epsilon round three's `/Range`/`/Domain` reversed-pair fixes had
+  already replaced with exact comparisons elsewhere in this file, just
+  not here yet. `/Domain [0 1e-13]` (confirmed valid and non-flat
+  against gs) collapsed to one constant color. Switched to `== 0.0`;
+  the straddle epsilon in `interior_bound_positions` also had an
+  absolute `.max(1.0)` floor that turned out *larger than that whole
+  tiny domain*, collapsing both straddle points onto the same domain
+  edge — removed, so the epsilon now scales purely proportionally to
+  whatever the function's own domain span actually is.
+- A negative `/N` was accepted (confirmed against gs it's a
+  rangecheck) and could reach `x.powf(n)` at `x=0` as `+inf`, which the
+  finite-component check downstream would only catch for stops that
+  happen to sample exactly `x=0`. Rejected at parse time instead.
+- `ShadingType`/`ColorSpace`/`Function` absent from a shading dict
+  returned `rangecheck` (via the shared `get` helper every other key
+  in this file also uses) where gs reports `undefined`; `Coords` and
+  most function-dict keys are genuinely `rangecheck` on gs's own
+  behavior and stay that way. Split into a separate `get_required`
+  helper for just those three keys, rather than changing `get` itself.
+- SVG's `fmt_f32` truncates to 3 decimals — fine for device-pixel path
+  data, wrong for gradient-*local* coordinates and stop offsets, which
+  a `gradientTransform` can multiply back up by an arbitrary factor (a
+  shading authored in tiny raw units the same way the raster-side fix
+  above targets, or this file's own straddle-epsilon stop-offset
+  pairs, which sit far below 3-decimal precision and were silently
+  merging back into a single offset in SVG output specifically, even
+  though the raster and PDF paths render the discontinuity correctly).
+  Added `fmt_precise` (plain `{v}` Display, which already gives the
+  shortest round-trip-exact string) for exactly the values inside
+  `SvgRecorder::shfill` that need it, leaving `fmt_f32` for the
+  genuinely device-pixel-scale values elsewhere in this file.
+
 ## Noise and flow-field procedures for artkit (issue #19, 2026-08-14)
 
 Closes issue #19. Added a "noise / flow fields" section to

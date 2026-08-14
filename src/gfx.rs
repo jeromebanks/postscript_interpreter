@@ -789,14 +789,44 @@ impl Gfx {
             return Ok(());
         }
         let ctm = self.state.ctm;
+        // A safety margin comfortably above tiny-skia's own internal
+        // degenerate-length threshold (DEGENERATE_THRESHOLD =
+        // 1/32768 ≈ 3e-5, checked against these *raw*, untransformed
+        // points): if this shape's own characteristic length (axis
+        // length for axial; the larger of the two radii or the
+        // center-to-center distance for radial) is under `SAFE_LEN` in
+        // raw user-space units, rescale the geometry *and* the
+        // transform together so tiny-skia never sees a spuriously
+        // short length — a pure reparametrization (the composed
+        // mapping stays mathematically identical: `ctm.pre_scale(1/k,
+        // 1/k)` undoes the `*k` on the points exactly), not an
+        // approximation. Needed because raw user-space coordinates can
+        // be any scale — found content sometimes authors geometry in
+        // tiny units under a matching large CTM magnification — and
+        // tiny-skia's fixed threshold has no way to know a "short" raw
+        // length still spans real device pixels once the CTM is
+        // applied. Confirmed concretely by a Codex review with
+        // `/Coords [0 0 1e-7 0]` under `1e8 1e8 scale` (a visible
+        // 10-device-pixel gradient, wrongly flattened to solid C1
+        // without this).
+        const SAFE_LEN: f32 = 1.0;
         let shader = match shading.kind {
-            crate::shading::ShadingKind::Axial { x0, y0, x1, y1 } => LinearGradient::new(
-                Point::from_xy(x0 as f32, y0 as f32),
-                Point::from_xy(x1 as f32, y1 as f32),
-                stops,
-                SpreadMode::Pad,
-                ctm,
-            ),
+            crate::shading::ShadingKind::Axial { x0, y0, x1, y1 } => {
+                let (x0, y0, x1, y1) = (x0 as f32, y0 as f32, x1 as f32, y1 as f32);
+                let len = (x1 - x0).hypot(y1 - y0);
+                let k = if len > 0.0 && len < SAFE_LEN {
+                    SAFE_LEN / len
+                } else {
+                    1.0
+                };
+                LinearGradient::new(
+                    Point::from_xy(x0 * k, y0 * k),
+                    Point::from_xy(x1 * k, y1 * k),
+                    stops,
+                    SpreadMode::Pad,
+                    ctm.pre_scale(1.0 / k, 1.0 / k),
+                )
+            }
             crate::shading::ShadingKind::Radial {
                 x0,
                 y0,
@@ -804,15 +834,26 @@ impl Gfx {
                 x1,
                 y1,
                 r1,
-            } => RadialGradient::new(
-                Point::from_xy(x0 as f32, y0 as f32),
-                r0 as f32,
-                Point::from_xy(x1 as f32, y1 as f32),
-                r1 as f32,
-                stops,
-                SpreadMode::Pad,
-                ctm,
-            ),
+            } => {
+                let (x0, y0, r0, x1, y1, r1) = (
+                    x0 as f32, y0 as f32, r0 as f32, x1 as f32, y1 as f32, r1 as f32,
+                );
+                let char_len = r0.max(r1).max((x1 - x0).hypot(y1 - y0));
+                let k = if char_len > 0.0 && char_len < SAFE_LEN {
+                    SAFE_LEN / char_len
+                } else {
+                    1.0
+                };
+                RadialGradient::new(
+                    Point::from_xy(x0 * k, y0 * k),
+                    r0 * k,
+                    Point::from_xy(x1 * k, y1 * k),
+                    r1 * k,
+                    stops,
+                    SpreadMode::Pad,
+                    ctm.pre_scale(1.0 / k, 1.0 / k),
+                )
+            }
         };
         // Degenerate geometry that genuinely has no shader (e.g. both
         // radii ~0) — tiny-skia returns None; treat as a no-op rather

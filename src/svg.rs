@@ -213,7 +213,7 @@ impl SvgRecorder {
                 let _ = write!(
                     tags,
                     "<stop offset=\"{}\" stop-color=\"{}\"/>",
-                    fmt_f32(pos),
+                    fmt_precise(pos),
                     Self::color((r, g, b)),
                 );
             }
@@ -221,12 +221,12 @@ impl SvgRecorder {
         };
         let matrix = format!(
             "matrix({} {} {} {} {} {})",
-            fmt_f32(ctm[0]),
-            fmt_f32(ctm[1]),
-            fmt_f32(ctm[2]),
-            fmt_f32(ctm[3]),
-            fmt_f32(ctm[4]),
-            fmt_f32(ctm[5]),
+            fmt_precise(ctm[0]),
+            fmt_precise(ctm[1]),
+            fmt_precise(ctm[2]),
+            fmt_precise(ctm[3]),
+            fmt_precise(ctm[4]),
+            fmt_precise(ctm[5]),
         );
         match *kind {
             ShKind::Axial { x0, y0, x1, y1 } => {
@@ -235,10 +235,10 @@ impl SvgRecorder {
                     "<linearGradient id=\"g{id}\" gradientUnits=\"userSpaceOnUse\" \
                      x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" spreadMethod=\"pad\" \
                      gradientTransform=\"{matrix}\">{}</linearGradient>",
-                    fmt_f32(x0),
-                    fmt_f32(y0),
-                    fmt_f32(x1),
-                    fmt_f32(y1),
+                    fmt_precise(x0),
+                    fmt_precise(y0),
+                    fmt_precise(x1),
+                    fmt_precise(y1),
                     stop_tags(stops),
                 );
             }
@@ -310,18 +310,22 @@ impl SvgRecorder {
                 // focal_r > 0 — the common burst-from-a-point case
                 // needs nothing beyond fx/fy to render identically
                 // everywhere.
-                let mut extra = format!(" fx=\"{}\" fy=\"{}\"", fmt_f32(focal_x), fmt_f32(focal_y));
+                let mut extra = format!(
+                    " fx=\"{}\" fy=\"{}\"",
+                    fmt_precise(focal_x),
+                    fmt_precise(focal_y)
+                );
                 if focal_r > 0.0 {
-                    let _ = write!(extra, " fr=\"{}\"", fmt_f32(focal_r));
+                    let _ = write!(extra, " fr=\"{}\"", fmt_precise(focal_r));
                 }
                 let _ = write!(
                     self.defs,
                     "<radialGradient id=\"g{id}\" gradientUnits=\"userSpaceOnUse\" \
                      cx=\"{}\" cy=\"{}\" r=\"{}\"{extra} spreadMethod=\"pad\" \
                      gradientTransform=\"{matrix}\">{tags}</radialGradient>",
-                    fmt_f32(outer_x),
-                    fmt_f32(outer_y),
-                    fmt_f32(outer_r),
+                    fmt_precise(outer_x),
+                    fmt_precise(outer_y),
+                    fmt_precise(outer_r),
                 );
             }
         }
@@ -378,6 +382,23 @@ fn fmt_f32(v: f32) -> String {
     // Enough precision for device coordinates, no trailing noise.
     let s = format!("{v:.3}");
     s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// Full round-trip precision, for values a `gradientTransform` (or
+/// this file's own straddle-epsilon stop offsets) can multiply back up
+/// by an arbitrary factor — `fmt_f32`'s fixed 3 decimals is fine for
+/// device-pixel-space path data, but gradient-*local* coordinates
+/// aren't in that space: a shading authored in tiny raw units under a
+/// large CTM (or a hairline offset pair marking a stitching
+/// discontinuity — see `interior_bound_positions`) would have its
+/// meaningful digits truncated away before the transform ever runs
+/// (confirmed against gs: `x2="0.0004"` under a `100000`-scale
+/// gradientTransform spans 40 real pixels; rounded to `x2="0"` it
+/// collapses the whole gradient). `{v}`'s plain Display impl for f32
+/// already gives the shortest string that round-trips exactly, so no
+/// manual truncation is needed here the way `fmt_f32` needs one.
+fn fmt_precise(v: f32) -> String {
+    format!("{v}")
 }
 
 /// Standard base64, no external dependency needed for one use.

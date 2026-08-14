@@ -538,12 +538,30 @@ fn shfill_coincident_axial_endpoints_paint_nothing() {
 
 #[test]
 fn shfill_short_but_distinct_axial_still_paints_under_a_large_ctm() {
-    // Regression for the epsilon-based version of the coincident-axial
-    // check: a tiny user-space axis (1e-7, well under the old 1e-6
-    // threshold) magnified by a huge CTM scale is a real, visible
-    // near-hard transition, not something to skip. Exact equality
-    // (the fix) never treats *distinct* points as coincident,
-    // regardless of scale.
+    // Regression for two stacked issues on the same underlying shape
+    // (a tiny raw-user-space axis magnified by a huge CTM into a real,
+    // visible device-space gradient):
+    //
+    // 1. This file's own coincident-axial check (round 4) uses exact
+    //    equality, so it never treats *distinct* points as coincident
+    //    regardless of scale -- unlike an epsilon-based version, which
+    //    an earlier draft used and which this exact axis would have
+    //    wrongly tripped (1e-7 was chosen to sit under that old 1e-6
+    //    threshold).
+    // 2. tiny-skia's *own* internal degenerate-length threshold
+    //    (~3e-5) still applies to these raw, untransformed points
+    //    before this file's fix (round 6) rescales geometry to dodge
+    //    it -- without that, tiny-skia collapses the whole gradient to
+    //    solid C1, which an *earlier version of this very test*
+    //    happened to assert as if it were correct (querying the exact
+    //    axis-start device pixel and expecting white/C1, which passed
+    //    only because the whole thing had gone flat) instead of
+    //    catching it.
+    //
+    // 50 50 translate places the axis start (local (0,0)) at device
+    // (50,50) exactly; 1e8 1e8 scale then stretches the local
+    // [0, 1e-7] axis into device [50, 60] along x -- worked out by
+    // hand, not assumed.
     let mut it = Interp::with_page(100, 100).expect("test page");
     it.run_str(
         "50 50 translate 1e8 1e8 scale \
@@ -552,14 +570,18 @@ fn shfill_short_but_distinct_axial_still_paints_under_a_large_ctm() {
          /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >> shfill",
     )
     .expect("shfill");
-    // The whole visible page sits enormously far to the "extended"
-    // side of a 1e-7-user-unit axis magnified 1e8x -- it should read
-    // as the far (white, C1) side, not the near (black, C0) side, and
-    // absolutely not the untouched white the coincident-endpoint no-op
-    // would leave if this axis were wrongly treated as zero-length
-    // starting from *black*.
-    let (r, _, _) = pixel(&it, 50, 50);
-    assert!(r > 200, "expected the extended C1 side, got r={r}");
+    let (r, _, _) = pixel(&it, 50, 50); // device axis start, t=0
+    assert!(r < 40, "axis start should read as near-black C0, got r={r}");
+    let (r, _, _) = pixel(&it, 55, 50); // device axis midpoint, t=0.5
+    assert!(
+        (100..160).contains(&r),
+        "axis midpoint should read as mid-gray, got r={r}"
+    );
+    let (r, _, _) = pixel(&it, 90, 50); // well past the 10-device-pixel axis
+    assert!(
+        r > 200,
+        "extended past t=1 should read as near-white C1, got r={r}"
+    );
 }
 
 #[test]
@@ -682,4 +704,67 @@ fn shfill_stitching_bound_at_a_domain_edge_stays_a_hard_edge() {
         (255, 0, 0),
         "must stay red right to the edge"
     );
+}
+
+#[test]
+fn shfill_rejects_negative_n() {
+    // Confirmed against gs: a negative /N is a rangecheck.
+    let mut it = Interp::with_page(100, 100).expect("test page");
+    assert_eq!(
+        it.run_str(
+            "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 100 0] \
+             /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N -1 >> >> shfill"
+        ),
+        Err(PsError::Rangecheck)
+    );
+}
+
+#[test]
+fn shfill_missing_required_shading_keys_are_undefined() {
+    // Confirmed against gs: ShadingType, ColorSpace, and Function are
+    // each `undefined` when absent from the shading dict -- distinct
+    // from Coords, which is `rangecheck` (already covered elsewhere).
+    for (label, src) in [
+        (
+            "ShadingType",
+            "<< /ColorSpace /DeviceGray /Coords [0 0 100 0] \
+             /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >> shfill",
+        ),
+        (
+            "ColorSpace",
+            "<< /ShadingType 2 /Coords [0 0 100 0] \
+             /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >> shfill",
+        ),
+        (
+            "Function",
+            "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 100 0] >> shfill",
+        ),
+    ] {
+        let mut it = Interp::with_page(100, 100).expect("test page");
+        match it.run_str(src) {
+            Err(PsError::Undefined(_)) => {}
+            other => panic!("missing {label}: expected Undefined, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn shfill_honors_a_domain_span_far_smaller_than_the_old_epsilon() {
+    // Confirmed against gs: /Domain [0 1e-13] (far smaller than the
+    // 1e-12 threshold an earlier draft treated as "zero span") still
+    // sweeps a Type 3 function's two legs across the geometric axis,
+    // not one constant color -- /Domain units are arbitrary, so only
+    // an *exactly* zero span should collapse to a flat fill.
+    let it = render(
+        "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] \
+         /Domain [0 1e-13] \
+         /Function << /FunctionType 3 /Domain [0 1e-13] /Bounds [5e-14] \
+         /Encode [0 1 0 1] \
+         /Functions [ \
+           << /FunctionType 2 /Domain [0 1e-13] /C0 [1 0 0] /C1 [1 0 0] /N 1 >> \
+           << /FunctionType 2 /Domain [0 1e-13] /C0 [0 0 1] /C1 [0 0 1] /N 1 >> \
+         ] >> >> shfill",
+    );
+    assert_eq!(pixel(&it, 10, 50), (255, 0, 0), "first leg: red");
+    assert_eq!(pixel(&it, 90, 50), (0, 0, 255), "second leg: blue");
 }

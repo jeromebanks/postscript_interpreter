@@ -189,3 +189,24 @@ fn sh_shrinking_radial_swaps_circles_and_reverses_stops() {
         "{svg}"
     );
 }
+
+#[test]
+fn sh_gradient_local_coordinates_keep_full_precision() {
+    // A shading axis authored in tiny raw user-space units under a
+    // large gradientTransform: fmt_f32's fixed 3-decimal truncation
+    // would round x2 (0.0004) down to "0", collapsing the whole
+    // gradient once the transform's 100000 scale is applied -- the
+    // same failure class as the raster path's tiny-skia-internal-
+    // threshold bug this same round of review found, but in the SVG
+    // formatting layer instead.
+    let pages = svg_pages(
+        "100000 100000 scale \
+         << /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 0.0004 0] \
+         /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> >> shfill",
+    );
+    let svg = &pages[0];
+    assert!(
+        svg.contains("x1=\"0\"") && svg.contains("x2=\"0.0004\""),
+        "expected full-precision gradient-local coordinates: {svg}"
+    );
+}

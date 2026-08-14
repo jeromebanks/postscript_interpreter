@@ -177,11 +177,24 @@ impl PsFunction {
         };
         let (d0, d1) = shading_domain;
         let span = d1 - d0;
-        if span.abs() <= 1e-12 {
+        // Exactly zero, not a small-epsilon threshold: /Domain units
+        // are arbitrary (confirmed against gs a genuinely tiny but
+        // nonzero span, e.g. [0 1e-13], still sweeps both legs across
+        // the axis, not one constant color) -- an epsilon here would
+        // silently collapse valid, if extreme, shading content.
+        if span == 0.0 {
             return Vec::new();
         }
         let (fd0, fd1) = self.own_domain();
-        let eps_t = (fd1 - fd0).abs().max(1.0) * 1e-7;
+        // No absolute floor: an earlier version clamped this to at
+        // least 1e-7, which is *larger than the entire domain* for a
+        // genuinely tiny one (e.g. /Domain [0 1e-13], confirmed valid
+        // against gs) -- both straddle points would clamp to the same
+        // domain edge, collapsing the straddle back to a single point.
+        // Pure proportionality keeps this a small but always-in-range
+        // fraction of whatever the function's own domain span is,
+        // however small.
+        let eps_t = (fd1 - fd0).abs() * 1e-7;
         let (lo, hi) = (d0.min(d1), d0.max(d1));
         let mut out = Vec::new();
         for &b in bounds {
@@ -212,7 +225,12 @@ impl PsFunction {
     fn clamp_corner_positions(&self, shading_domain: (f64, f64)) -> Vec<f64> {
         let (d0, d1) = shading_domain;
         let span = d1 - d0;
-        if span.abs() <= 1e-12 {
+        // Exactly zero, not a small-epsilon threshold: /Domain units
+        // are arbitrary (confirmed against gs a genuinely tiny but
+        // nonzero span, e.g. [0 1e-13], still sweeps both legs across
+        // the axis, not one constant color) -- an epsilon here would
+        // silently collapse valid, if extreme, shading content.
+        if span == 0.0 {
             return Vec::new();
         }
         let (fd0, fd1) = self.own_domain();
@@ -476,7 +494,16 @@ fn parse_function_at_depth(
             if c0.is_empty() || c0.len() != c1.len() {
                 return Err(PsError::Rangecheck);
             }
+            // Confirmed against gs: a negative N is a rangecheck. Real
+            // reason it matters, not just gs pedantry: eval's `x.powf(n)`
+            // at x=0 with n<0 is +inf, which build_stops' finite-component
+            // check would already catch downstream -- but only for
+            // stops that happen to sample x=0 exactly; N<0 is rejected
+            // here instead so that isn't load-bearing for correctness.
             let n = get_num(&d, "N")?;
+            if n < 0.0 {
+                return Err(PsError::Rangecheck);
+            }
             Ok(PsFunction::Exponential { domain, c0, c1, n })
         }
         3 => {
@@ -557,11 +584,7 @@ fn build_stops(
         // own /Domain — not the function's — maps that onto the
         // function's input t. (The function's own /Domain, handled
         // inside eval, only clips t once it gets there.)
-        let t = if span.abs() > 1e-12 {
-            d0 + pos * span
-        } else {
-            d0
-        };
+        let t = if span != 0.0 { d0 + pos * span } else { d0 };
         let mut comps = function.eval(t);
         if comps.len() != cs.ncomp() {
             return Err(PsError::Rangecheck);
@@ -623,11 +646,25 @@ fn parse_function_range(
     }
 }
 
+/// `ShadingType`/`ColorSpace`/`Function` are required on a shading
+/// dict and report `undefined` when absent (confirmed against gs) —
+/// distinct from `Coords` and most function-dict keys, where a
+/// missing entry is `rangecheck` via the shared `get` helper. Kept as
+/// a separate helper rather than changing `get` itself, since that
+/// would flip the (already gs-verified) error for every other caller.
+fn get_required(d: &Dict, key: &str) -> Result<crate::object::Object, PsError> {
+    d.get(key)
+        .ok_or_else(|| PsError::Undefined(key.to_string()))
+}
+
 pub(crate) fn parse_shading_dict(d: &Dict) -> Result<Shading, PsError> {
-    let shading_type = get_int(d, "ShadingType")?;
-    let cs = parse_colorspace(&get(d, "ColorSpace")?)?;
+    let shading_type = match get_required(d, "ShadingType")?.value {
+        Value::Integer(n) => n,
+        _ => return Err(PsError::Typecheck),
+    };
+    let cs = parse_colorspace(&get_required(d, "ColorSpace")?)?;
     let coords = get_farray(d, "Coords")?;
-    let func_obj = get(d, "Function")?;
+    let func_obj = get_required(d, "Function")?;
     let function = parse_function(&func_obj)?;
     if function.ncomp() != cs.ncomp() {
         return Err(PsError::Rangecheck);
