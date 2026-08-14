@@ -185,6 +185,50 @@ circle's center silently recentered on the wrong point. `fx`/`fy` are
 plain SVG 1.1 and now always emitted (a no-op when they do coincide
 with the center); only `fr` stays gated on `r0 > 0`.
 
+A *second* Codex review, run on the fixed diff before merging (per
+`work-issue`'s policy: re-review the pushed fix, don't just trust the
+first pass caught everything), found five more real defects the first
+round's fixes had either introduced or left unguarded — all against
+gs again, not just asserted:
+
+- `parse_function`'s recursion (for a Type 3's `/Functions` array) had
+  no depth limit: a few thousand levels of acyclic nesting, or a
+  self-referential dict built via `put` after construction, overflows
+  the Rust stack instead of raising a catchable error. Capped at
+  `MAX_FUNCTION_DEPTH = 32`, past which it's a `limitcheck`.
+- The `/Range` support added in round one had the exact same
+  reversed-pair panic risk the round-one fix had *just* closed for
+  `/Domain`, freshly introduced: `build_stops` feeds an unvalidated
+  `(lo, hi)` pair straight into `f64::clamp`, which panics if `lo >
+  hi`. Confirmed against gs that `/Range [1 0]` is a rangecheck; now
+  validated at parse time.
+- `/Domain` on a *function* dict was silently defaulted to `[0 1]`
+  when absent (via the same `get_domain` helper the *shading*'s own
+  optional top-level Domain uses) — confirmed against gs that it's
+  required on a function (rangecheck if missing), unlike the
+  shading's.
+- The piecewise-linear "exact 2-stop" fast path from round one didn't
+  account for what happens *after* `eval`: `/Range` clamping can
+  introduce a knee partway through an otherwise-linear ramp, and
+  DeviceCMYK's `(1-c)(1-k)`-shaped conversion isn't linear in general
+  even when every component ramps linearly in `t` (C0=[0,0,0,0] to
+  C1=[1,0,0,1] makes red `(1-t)²`, not `1-t`) — so the fast path was
+  silently rendering the wrong curve for CMYK content and anything
+  with a Range. Gated on `range.is_none() &&
+  matches!(cs, Gray | Rgb)` now; DeviceCMYK and Range always take the
+  dense-sampling path.
+- The fast path also didn't account for *nested* stitching: `is_piecewise_linear`'s
+  recursion checked a nested Stitching leg's own children's `N`
+  values, classifying a function as exact even when a nested leg had
+  its own hard color-stop bound — which `interior_bound_positions`
+  can't see (it only reads `self`'s own top-level `bounds`), so that
+  bound's discontinuity was silently smeared into a continuous ramp
+  the same way the round-one single-level bug did, just one level
+  down. Restricted to exactly one level: a leg that's itself a
+  `Stitching`, not a plain `Exponential`, disqualifies the whole
+  function from the fast path — imprecise for that (rare, `gradfn`
+  never produces it) case, but no longer silently wrong.
+
 ## Noise and flow-field procedures for artkit (issue #19, 2026-08-14)
 
 Closes issue #19. Added a "noise / flow fields" section to

@@ -408,3 +408,58 @@ fn shfill_applies_function_range_after_evaluation() {
         "Range [0 0.5] should cap near t=1 at ~half-gray, got {r}"
     );
 }
+
+#[test]
+fn shfill_rejects_a_reversed_function_range() {
+    // Confirmed against gs: /Range [1 0] is a rangecheck -- build_stops
+    // feeds it straight into f64::clamp(lo, hi), which panics if
+    // lo > hi.
+    let mut it = Interp::with_page(100, 100).expect("test page");
+    assert_eq!(
+        it.run_str(
+            "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 100 0] \
+             /Function << /FunctionType 2 /Domain [0 1] /Range [1 0] \
+             /C0 [0] /C1 [1] /N 1 >> >> shfill"
+        ),
+        Err(PsError::Rangecheck)
+    );
+}
+
+#[test]
+fn shfill_requires_a_function_domain() {
+    // Confirmed against gs: a Type 2/3 function dict with /Domain
+    // omitted is a rangecheck (unlike a shading's own top-level
+    // /Domain, which is optional and defaults to [0 1]).
+    let mut it = Interp::with_page(100, 100).expect("test page");
+    assert_eq!(
+        it.run_str(
+            "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 100 0] \
+             /Function << /FunctionType 2 /C0 [0] /C1 [1] /N 1 >> >> shfill"
+        ),
+        Err(PsError::Rangecheck)
+    );
+}
+
+#[test]
+fn shfill_rejects_deeply_nested_functions_instead_of_overflowing_the_stack() {
+    // A few thousand levels of acyclic Type 3 nesting (or a
+    // self-referential dict built via `put` after construction) would
+    // overflow the Rust stack in parse_function's recursion without a
+    // depth cap. Build one programmatically -- hand-writing this many
+    // levels in a literal would be enormous -- and confirm it errors
+    // cleanly rather than crashing the process. Constructing the
+    // nested *dict* itself doesn't risk this: `<< >>` runs through the
+    // ordinary PostScript machine, which is an explicit frame stack by
+    // design, not native recursion.
+    let mut func = "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>".to_string();
+    for _ in 0..200 {
+        func = format!(
+            "<< /FunctionType 3 /Domain [0 1] /Functions [{func}] /Bounds [] /Encode [0 1] >>"
+        );
+    }
+    let mut it = Interp::with_page(100, 100).expect("test page");
+    let src = format!(
+        "<< /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 100 0] /Function {func} >> shfill"
+    );
+    assert_eq!(it.run_str(&src), Err(PsError::Limitcheck));
+}

@@ -26,17 +26,27 @@
 //! the function's `/Domain`, which only clips `t` once it gets there;
 //! those are different axes and conflating them was a real bug caught
 //! by an `advisor` review of this file (NOTES.md's entry has the
-//! story). When every leg is exactly linear (`N == 1` — what
-//! `gradfn` in `lib/artkit.ps` always emits), tiny-skia's own
-//! stop-to-stop interpolation is enough to render the whole ramp
-//! *exactly* from just the leg boundaries (`interior_bound_positions`)
-//! and the points where the shading's swept `t`-range crosses the
-//! function's own Domain edge (`clamp_corner_positions` — `eval`
-//! clamps there, so the color goes flat beyond it, and both sides of
-//! that corner land on the same color) — no dense sampling needed.
-//! Anything else (`N != 1` somewhere, or genuinely non-piecewise-
-//! linear) falls back to `SAMPLE_COUNT` uniform samples plus those
-//! same exact positions folded in.
+//! story). When every leg is exactly linear (`N == 1`, one level of
+//! stitching at most — what `gradfn` in `lib/artkit.ps` always emits
+//! — *and* nothing downstream of `eval` could turn that linear-in-t
+//! output into a non-linear-in-t color, i.e. no `/Range` and a
+//! `ColorSpace` that reads the function's output straight through
+//! (`DeviceGray`/`DeviceRGB`, not `DeviceCMYK`'s multiplicative
+//! `(1-c)(1-k)` conversion) — tiny-skia's own stop-to-stop
+//! interpolation is enough to render the whole ramp *exactly* from
+//! just the leg boundaries (`interior_bound_positions`) and the
+//! points where the shading's swept `t`-range crosses the function's
+//! own Domain edge (`clamp_corner_positions` — `eval` clamps there,
+//! so the color goes flat beyond it, and both sides of that corner
+//! land on the same color) — no dense sampling needed. Anything else
+//! falls back to `SAMPLE_COUNT` uniform samples plus those same exact
+//! positions folded in. Every one of these gates — the Range/CMYK
+//! nonlinearity, nested-stitching blindness, a reversed `/Range`
+//! panicking the same way a reversed `/Domain` did, unbounded
+//! `/Functions` recursion, and a function's own `/Domain` wrongly
+//! defaulting instead of being required — came from a second Codex
+//! review of the first round's fix, not the first round itself
+//! (NOTES.md's entry has the full story).
 
 use crate::error::PsError;
 use crate::object::{Dict, Value};
@@ -111,12 +121,24 @@ impl PsFunction {
     /// more than a stop at each leg boundary to render *exactly*, not
     /// approximately. `gradfn` (`lib/artkit.ps`) always emits `N == 1`
     /// legs, so every artkit-built gradient takes this path.
+    ///
+    /// Only *one* level of stitching qualifies — a leg that's itself a
+    /// `Stitching` (nested Type 3) always disqualifies the whole
+    /// function, even if every one of *its* legs is linear too. A
+    /// nested leg's own interior bounds live in a coordinate space
+    /// `interior_bound_positions` doesn't reach (only this function's
+    /// own top-level `bounds`), so classifying that case "exact" would
+    /// silently drop the nested leg's own hard edges instead of just
+    /// sampling them less precisely — caught by a Codex review, not
+    /// hand-testing (`gradfn` never nests, so nothing here exercised
+    /// it). Falling back to the dense uniform grid for a nested case
+    /// is imprecise but not wrong, unlike the fast path would be.
     fn is_piecewise_linear(&self) -> bool {
         match self {
             PsFunction::Exponential { n, .. } => (*n - 1.0).abs() < 1e-12,
-            PsFunction::Stitching { functions, .. } => {
-                functions.iter().all(PsFunction::is_piecewise_linear)
-            }
+            PsFunction::Stitching { functions, .. } => functions.iter().all(
+                |f| matches!(f, PsFunction::Exponential { n, .. } if (*n - 1.0).abs() < 1e-12),
+            ),
         }
     }
 
@@ -193,10 +215,18 @@ impl PsFunction {
     /// Coords point/circle, 1 at its second) worth sampling when this
     /// function is swept across `shading_domain`. Exact leg boundaries
     /// (plus the function's own domain-clamp corners, if the shading
-    /// sweeps past them) for a piecewise-linear function; a uniform
-    /// grid plus those same positions otherwise.
-    fn sample_positions(&self, shading_domain: (f64, f64)) -> Vec<f64> {
-        let mut out = if self.is_piecewise_linear() {
+    /// sweeps past them) for a piecewise-linear function *and* `exact_ok`
+    /// — false whenever anything downstream of `eval` (Range clamping,
+    /// or a colorspace conversion that isn't itself linear in the
+    /// function's output, like DeviceCMYK's `(1-c)(1-k)`) could still
+    /// turn a linear-in-t function into a non-linear-in-t color curve
+    /// (`build_stops` computes it; caught by a Codex review pointing
+    /// out DeviceCMYK specifically — `(1-c)(1-k)` from C0=[0,0,0,0] to
+    /// C1=[1,0,0,1] is `(1-t)²`, not `1-t`, so the 2-stop fast path
+    /// would have rendered it visibly wrong). A uniform grid plus
+    /// those same positions otherwise.
+    fn sample_positions(&self, shading_domain: (f64, f64), exact_ok: bool) -> Vec<f64> {
+        let mut out = if exact_ok && self.is_piecewise_linear() {
             vec![0.0, 1.0]
         } else {
             linspace(0.0, 1.0, SAMPLE_COUNT)
@@ -358,11 +388,35 @@ fn get_domain(d: &Dict) -> Result<(f64, f64), PsError> {
     }
 }
 
+/// Caps `/Functions` nesting (a Type 3 stitching function's legs can
+/// themselves be Type 3). Without a cap, a few thousand levels of
+/// acyclic nesting — or a self-referential dict built via `put` after
+/// construction — overflows the Rust stack instead of raising a
+/// catchable error; found by a Codex review, not hand-testing (every
+/// example here nests one level deep at most).
+const MAX_FUNCTION_DEPTH: usize = 32;
+
 fn parse_function(obj: &crate::object::Object) -> Result<PsFunction, PsError> {
+    parse_function_at_depth(obj, 0)
+}
+
+fn parse_function_at_depth(
+    obj: &crate::object::Object,
+    depth: usize,
+) -> Result<PsFunction, PsError> {
+    if depth > MAX_FUNCTION_DEPTH {
+        return Err(PsError::Limitcheck);
+    }
     let Value::Dict(dr) = &obj.value else {
         return Err(PsError::Typecheck);
     };
     let d = dr.borrow();
+    // /Domain is required on a function dict (confirmed against gs:
+    // omitting it is a rangecheck) -- unlike a *shading*'s top-level
+    // /Domain, which is optional and defaults to [0 1].
+    if d.get("Domain").is_none() {
+        return Err(PsError::Rangecheck);
+    }
     let domain = get_domain(&d)?;
     // A *function's* own Domain must be non-decreasing (confirmed
     // against gs: /Domain [1 0] on a Type 2/3 function dict is a
@@ -405,7 +459,7 @@ fn parse_function(obj: &crate::object::Object) -> Result<PsFunction, PsError> {
                 return Err(PsError::Rangecheck);
             }
             let functions: Vec<PsFunction> = (0..fa.len())
-                .map(|i| parse_function(&fa.get(i).expect("len checked")))
+                .map(|i| parse_function_at_depth(&fa.get(i).expect("len checked"), depth + 1))
                 .collect::<Result<_, _>>()?;
             let ncomp = functions[0].ncomp();
             if functions.iter().any(|f| f.ncomp() != ncomp) {
@@ -462,8 +516,15 @@ fn build_stops(
 ) -> Result<Vec<(f32, f32, f32, f32)>, PsError> {
     let (d0, d1) = shading_domain;
     let span = d1 - d0;
+    // DeviceGray/DeviceRGB read the function's output components
+    // straight through, so a linear-in-t function stays linear-in-t
+    // color; DeviceCMYK's (1-c)(1-k)-shaped conversion doesn't
+    // preserve linearity in general. Range clamping can also introduce
+    // a knee partway through an otherwise-linear ramp. Either
+    // disqualifies the exact 2-stop-per-leg fast path.
+    let exact_ok = range.is_none() && matches!(cs, CsKind::Gray | CsKind::Rgb);
     let mut out = Vec::new();
-    for pos in function.sample_positions(shading_domain) {
+    for pos in function.sample_positions(shading_domain, exact_ok) {
         // pos is a geometric gradient position (0..1); the shading's
         // own /Domain — not the function's — maps that onto the
         // function's input t. (The function's own /Domain, handled
@@ -520,6 +581,13 @@ fn parse_function_range(
         Some(_) => {
             let flat = get_farray(&d, "Range")?;
             if flat.len() != ncomp * 2 {
+                return Err(PsError::Rangecheck);
+            }
+            // Each (min, max) pair must be non-decreasing (confirmed
+            // against gs: /Range [1 0] is a rangecheck) -- build_stops
+            // feeds these straight into f64::clamp(lo, hi), which
+            // panics if lo > hi.
+            if flat.chunks(2).any(|c| c[0] > c[1]) {
                 return Err(PsError::Rangecheck);
             }
             Ok(Some(flat.chunks(2).map(|c| (c[0], c[1])).collect()))
@@ -669,7 +737,7 @@ mod tests {
             encode: vec![(0.0, 1.0), (0.0, 1.0)],
         };
         assert!(f.is_piecewise_linear());
-        let pts = f.sample_positions((0.0, 1.0));
+        let pts = f.sample_positions((0.0, 1.0), true);
         // Endpoints, plus two straddling the one interior boundary
         // (interior_bound_positions' discontinuity-preserving pair) —
         // not the one-sample-per-boundary a purely continuous
@@ -691,7 +759,7 @@ mod tests {
             n: 2.0,
         };
         assert!(!f.is_piecewise_linear());
-        assert_eq!(f.sample_positions((0.0, 1.0)).len(), SAMPLE_COUNT);
+        assert_eq!(f.sample_positions((0.0, 1.0), true).len(), SAMPLE_COUNT);
     }
 
     #[test]
@@ -774,6 +842,95 @@ mod tests {
     }
 
     #[test]
+    fn cmyk_never_takes_the_piecewise_linear_fast_path() {
+        // (1-c)(1-k) is quadratic in t when c and k both ramp linearly
+        // (C0=[0,0,0,0], C1=[1,0,0,1] here), so a 2-stop linear
+        // interpolation would render 1-t where the true curve is
+        // (1-t)^2 -- confirmed by hand, not against gs (gs's CMYK->RGB
+        // conversion isn't the naive product formula this file uses,
+        // so it can't validate *this* formula's own self-consistency).
+        // build_stops must fall back to the dense grid even though
+        // every leg here has N=1 (is_piecewise_linear() is true).
+        let f = PsFunction::Exponential {
+            domain: (0.0, 1.0),
+            c0: vec![0.0, 0.0, 0.0, 0.0],
+            c1: vec![1.0, 0.0, 0.0, 1.0],
+            n: 1.0,
+        };
+        assert!(f.is_piecewise_linear());
+        let stops = build_stops(CsKind::Cmyk, &f, None, (0.0, 1.0)).expect("valid");
+        assert!(
+            stops.len() > 10,
+            "CMYK must use dense sampling, not the 2-stop fast path: {} stops",
+            stops.len()
+        );
+        // The stop nearest pos=0.5 should show the true quadratic R,
+        // not the 1-t a linear interpolation would give.
+        let mid = stops
+            .iter()
+            .min_by(|a, b| (a.0 - 0.5).abs().partial_cmp(&(b.0 - 0.5).abs()).unwrap())
+            .unwrap();
+        assert!(
+            (mid.1 - 0.25).abs() < 0.05,
+            "expected R near (1-0.5)^2=0.25 at pos≈0.5, got {mid:?}"
+        );
+    }
+
+    #[test]
+    fn range_disables_the_piecewise_linear_fast_path() {
+        let f = PsFunction::Exponential {
+            domain: (0.0, 1.0),
+            c0: vec![0.0],
+            c1: vec![1.0],
+            n: 1.0,
+        };
+        assert!(f.is_piecewise_linear());
+        let range = [(0.0, 0.5)];
+        let stops = build_stops(CsKind::Gray, &f, Some(&range), (0.0, 1.0)).expect("valid");
+        assert!(
+            stops.len() > 10,
+            "Range must disable the 2-stop fast path: {} stops",
+            stops.len()
+        );
+    }
+
+    #[test]
+    fn nested_stitching_disqualifies_the_fast_path() {
+        // A one-leg outer Stitching wrapping a child Stitching that
+        // itself has a hard red/blue edge in the middle. Even though
+        // every N is 1, the *nested* discontinuity lives in a
+        // coordinate space interior_bound_positions can't reach, so
+        // is_piecewise_linear must be false here -- the 2-endpoint
+        // fast path would otherwise silently drop the inner edge.
+        let inner = PsFunction::Stitching {
+            domain: (0.0, 1.0),
+            functions: vec![
+                PsFunction::Exponential {
+                    domain: (0.0, 1.0),
+                    c0: vec![1.0, 0.0, 0.0],
+                    c1: vec![1.0, 0.0, 0.0],
+                    n: 1.0,
+                },
+                PsFunction::Exponential {
+                    domain: (0.0, 1.0),
+                    c0: vec![0.0, 0.0, 1.0],
+                    c1: vec![0.0, 0.0, 1.0],
+                    n: 1.0,
+                },
+            ],
+            bounds: vec![0.5],
+            encode: vec![(0.0, 1.0), (0.0, 1.0)],
+        };
+        let outer = PsFunction::Stitching {
+            domain: (0.0, 1.0),
+            functions: vec![inner],
+            bounds: vec![],
+            encode: vec![(0.0, 1.0)],
+        };
+        assert!(!outer.is_piecewise_linear());
+    }
+
+    #[test]
     fn clamp_corner_lands_where_the_shading_domain_crosses_the_functions_own() {
         // Function's own domain is [0,1]; the shading sweeps t across
         // [-1,3] (twice as wide, off-center) -- the function's domain
@@ -804,7 +961,7 @@ mod tests {
             n: 1.0,
         };
         assert!(f.is_piecewise_linear());
-        let positions = f.sample_positions((-1.0, 3.0));
+        let positions = f.sample_positions((-1.0, 3.0), true);
         assert!(
             positions.iter().any(|p| (p - 0.5).abs() < 1e-9),
             "{positions:?}"
