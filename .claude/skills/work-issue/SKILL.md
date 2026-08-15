@@ -113,8 +113,9 @@ if mkdir "$LOCKDIR" 2>/dev/null && date +%s > "$LOCKDIR/heartbeat.tmp" && mv "$L
   echo "RESULT=claimed (fresh)"
 else
   HB="$LOCKDIR/heartbeat"
-  if [ -s "$HB" ] && grep -qE '^[0-9]+$' "$HB"; then
-    AGE=$(( $(date +%s) - $(cat "$HB") ))
+  ORIG_HB_CONTENT=$(cat "$HB" 2>/dev/null)
+  if [ -n "$ORIG_HB_CONTENT" ] && printf '%s' "$ORIG_HB_CONTENT" | grep -qE '^[0-9]+$'; then
+    AGE=$(( $(date +%s) - ORIG_HB_CONTENT ))
   else
     # Missing/unreadable heartbeat is ambiguous on its own: it's both a
     # genuinely crashed claim (died mid-truncation) AND what a *different*
@@ -139,12 +140,24 @@ else
   else
     STEAL="$LOCKDIR.stale.$$.$(date +%s)"
     if mv "$LOCKDIR" "$STEAL" 2>/dev/null; then
-      if mkdir "$LOCKDIR" 2>/dev/null && date +%s > "$LOCKDIR/heartbeat.tmp" && mv "$LOCKDIR/heartbeat.tmp" "$LOCKDIR/heartbeat"; then
-        rm -rf "$STEAL"
-        echo "RESULT=claimed (reclaimed a stale lock)"
+      MOVED_HB_CONTENT=$(cat "$STEAL/heartbeat" 2>/dev/null)
+      if [ "$MOVED_HB_CONTENT" = "$ORIG_HB_CONTENT" ]; then
+        if mkdir "$LOCKDIR" 2>/dev/null && date +%s > "$LOCKDIR/heartbeat.tmp" && mv "$LOCKDIR/heartbeat.tmp" "$LOCKDIR/heartbeat"; then
+          rm -rf "$STEAL"
+          echo "RESULT=claimed (reclaimed a stale lock)"
+        else
+          rm -rf "$STEAL"
+          echo "RESULT=lost a rare 3-way reclaim race — do not resume/claim"
+        fi
       else
-        rm -rf "$STEAL"
-        echo "RESULT=lost a rare 3-way reclaim race — do not resume/claim"
+        # ABA: the object we just moved isn't the stale one we decided
+        # to steal -- a faster racer already reclaimed and recreated it
+        # between our read and our mv, and we grabbed *their* fresh
+        # claim by name instead (mv/rename has no concept of the
+        # object's identity, only its path). Put it back and back off.
+        mv "$STEAL" "$LOCKDIR" 2>/dev/null
+        rm -rf "$STEAL" 2>/dev/null
+        echo "RESULT=lost the reclaim race (ABA detected, restored) — do not resume/claim"
       fi
     else
       echo "RESULT=lost the reclaim race to a concurrent invocation — do not resume/claim"
@@ -163,6 +176,33 @@ worktree).
 the user that issue #<N> looks actively worked on (or was just claimed
 by a concurrent invocation) instead of silently racing another
 session's edits.
+
+**The `ORIG_HB_CONTENT`/`MOVED_HB_CONTENT` comparison after the steal
+closes an ABA race the `mv`-is-atomic argument alone doesn't cover**
+(found by Codex's review of this PR, then reproduced and fixed —
+confirmed empirically): `mv` arbitrates *names*, not *object identity*.
+If racer A reads the same stale lock as racer B, but B wins the steal
+and recreates a fresh `$LOCKDIR` before A's own (possibly delayed —
+scheduler jitter, not just an artificial sleep) `mv` fires, A's `mv`
+still succeeds — it moves *B's brand-new claim* out from under it,
+because `mv $LOCKDIR $STEAL` only cares that something currently
+occupies that name, not which generation of object it is. Without the
+content check, A would then believe it legitimately reclaimed a stale
+lock and report `claimed`, while B's real claim sits orphaned in `$STEAL`
+about to be deleted — two invocations both believing they own the
+issue, the exact failure #35 exists to close. The fix: snapshot the
+heartbeat's content *before* acting on it, and after the `mv`, confirm
+the moved object still has that exact content. A staleness read is
+always 45+ minutes old, so it can never coincidentally match a
+freshly-written "now" timestamp — a mismatch is unambiguous proof
+we grabbed the wrong object. On mismatch, put it back (`mv "$STEAL"
+"$LOCKDIR"`) and back off rather than proceeding; the loser's `mkdir`
+in the ABA-free case is what makes the restore safe to attempt (the
+name is free again, and the low-concurrency threat model here doesn't
+need to handle a third racer landing in that exact instant). Verified
+by artificially delaying one racer's `mv` past the other's full
+reclaim-and-recreate cycle: reproduced the double-claim without this
+check, zero double-claims across repeated runs with it.
 
 `stat -f %m` is BSD/macOS syntax (this repo's environment) — if it
 ever fails for a reason other than a genuinely missing directory, the
@@ -246,7 +286,7 @@ WORKTREE_DIR="../${REPO_DIR}-issue-<N>"
 git worktree add -b "$BRANCH" "$WORKTREE_DIR" origin/main
 
 LOCKDIR="$(git rev-parse --path-format=absolute --git-common-dir)/work-issue-lock-<N>"
-mkdir -p "$LOCKDIR" && date +%s > "$LOCKDIR/heartbeat.tmp" && mv "$LOCKDIR/heartbeat.tmp" "$LOCKDIR/heartbeat"
+date +%s > "$LOCKDIR/heartbeat.tmp" && mv "$LOCKDIR/heartbeat.tmp" "$LOCKDIR/heartbeat"
 ```
 
 The lock/heartbeat lives in the *main repo's* shared git dir, keyed by
@@ -275,19 +315,31 @@ Unlike `$WORKTREE_DIR`-derived paths, `--path-format=absolute
 canonical main-repo path regardless of where cwd happens to be,
 so it's immune to the cwd-reset pitfall below on its own.
 
-Every refresh site from here through step 8 uses `mkdir -p` (idempotent
-— succeeds whether or not the dir already exists), deliberately
-different from step 1's **Claim the issue**, which uses a bare `mkdir`
-(fails if it already exists — that failure *is* the "someone else might
-already own this" signal). A refresh isn't making an ownership
-decision, just keeping one alive, so it should self-heal rather than
-error if the lock dir is ever missing — which happens legitimately if
-step 8's Codex-review loop released the lock at a stop branch and then
-looped back for another round (see step 8):
+Every refresh site from here through step 8 writes into `$LOCKDIR`
+*without* re-`mkdir`ing it — deliberately: the lock dir should already
+exist for the entire span between this claim and step 8's terminal
+non-merge stops (the only places that release it, and only *after* the
+fix-and-re-review loop in step 8 has already concluded — see step 8),
+so a refresh finding it missing is a genuine anomaly, not routine
+housekeeping. An earlier draft of this fix made refreshes self-heal
+with `mkdir -p`, reasoning a refresh "isn't an ownership decision." A
+Codex review of this change caught why that's wrong: if the lock is
+gone because a *different* invocation legitimately claimed the issue
+in the meantime (crash recovery, a stale reclaim, a human re-running
+`/work-issue <N>` after this session's own run ended) and this
+session's refresh code is still executing for some reason — a stray
+retry, a follow-up in the same conversation — `mkdir -p` would silently
+recreate the name and overwrite that invocation's heartbeat with this
+session's own, with neither side any the wiser that two invocations
+are now both editing the same worktree. That's the exact failure #35
+exists to close, reintroduced through the back door of "helpful"
+self-healing. Let the write fail loudly (the redirect errors with no
+such directory) instead — that's the correct signal to stop and
+re-verify ownership via **Claim the issue**, not silently patch over it:
 
 ```sh
 LOCKDIR="$(git rev-parse --path-format=absolute --git-common-dir)/work-issue-lock-<N>"
-mkdir -p "$LOCKDIR" && date +%s > "$LOCKDIR/heartbeat.tmp" && mv "$LOCKDIR/heartbeat.tmp" "$LOCKDIR/heartbeat"
+date +%s > "$LOCKDIR/heartbeat.tmp" && mv "$LOCKDIR/heartbeat.tmp" "$LOCKDIR/heartbeat"
 ```
 
 (the same "re-derive, don't trust a remembered variable" reasoning
@@ -308,7 +360,7 @@ out there —
 ```sh
 BRANCH="$(git -C "$WORKTREE_DIR" branch --show-current)"
 LOCKDIR="$(git rev-parse --path-format=absolute --git-common-dir)/work-issue-lock-<N>"
-mkdir -p "$LOCKDIR" && date +%s > "$LOCKDIR/heartbeat.tmp" && mv "$LOCKDIR/heartbeat.tmp" "$LOCKDIR/heartbeat"
+date +%s > "$LOCKDIR/heartbeat.tmp" && mv "$LOCKDIR/heartbeat.tmp" "$LOCKDIR/heartbeat"
 ```
 
 — instead of recomputing a fresh `SLUG`/`BRANCH` from the issue title.
@@ -346,7 +398,7 @@ step 5 on a plan the advisor pushed back on without addressing why.
 
 Refresh the heartbeat before moving on (re-derive the path and write
 atomically, per step 3's note): `H="$(git rev-parse
---path-format=absolute --git-common-dir)/work-issue-lock-<N>/heartbeat"; mkdir -p "$(dirname "$H")" && date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
+--path-format=absolute --git-common-dir)/work-issue-lock-<N>/heartbeat"; date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
 
 ## 5. Implement
 
@@ -360,7 +412,7 @@ the source of truth:
 - Commit at reasonable checkpoints, not one giant commit at the end —
   and refresh the heartbeat at each one (`H="$(git rev-parse
   --path-format=absolute --git-common-dir)/work-issue-lock-<N>/heartbeat";
-  mkdir -p "$(dirname "$H")" && date +%s > "$H.tmp" && mv "$H.tmp" "$H"`). Without this, step 4's end and step 5's end are
+  date +%s > "$H.tmp" && mv "$H.tmp" "$H"`). Without this, step 4's end and step 5's end are
   the only two heartbeat refreshes bracketing the entire implementation
   phase — for any real code change (edit/build/test cycles, not just a
   doc tweak) that gap alone can exceed the 45-minute staleness
@@ -413,7 +465,7 @@ longest-running step of the whole implementation phase):
 
 ```sh
 H="$(git rev-parse --path-format=absolute --git-common-dir)/work-issue-lock-<N>/heartbeat"
-mkdir -p "$(dirname "$H")" && date +%s > "$H.tmp" && mv "$H.tmp" "$H"
+date +%s > "$H.tmp" && mv "$H.tmp" "$H"
 cargo build && cargo test && cargo clippy --all-targets && cargo fmt --all -- --check
 ```
 
@@ -422,7 +474,7 @@ PR isn't the first place a break shows up.
 
 Refresh the heartbeat again once it's clean: `H="$(git rev-parse
 --path-format=absolute --git-common-dir)/work-issue-lock-<N>/heartbeat";
-mkdir -p "$(dirname "$H")" && date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
+date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
 
 ## 6. Get the implementation reviewed before marking done
 
@@ -450,7 +502,7 @@ advisor pass — don't loop indefinitely chasing a clean bill of health
 on genuinely subjective feedback.
 
 Refresh the heartbeat: `H="$(git rev-parse --path-format=absolute
---git-common-dir)/work-issue-lock-<N>/heartbeat"; mkdir -p "$(dirname "$H")" && date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
+--git-common-dir)/work-issue-lock-<N>/heartbeat"; date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
 
 ## 7. Open the PR, update the issue
 
@@ -537,7 +589,7 @@ make a still-live run look stale to a concurrent invocation:
 ```sh
 rm -f /tmp/codex-review-<N>.json && \
   H="$(git rev-parse --path-format=absolute --git-common-dir)/work-issue-lock-<N>/heartbeat" && \
-  mkdir -p "$(dirname "$H")" && date +%s > "$H.tmp" && mv "$H.tmp" "$H" && \
+  date +%s > "$H.tmp" && mv "$H.tmp" "$H" && \
   cd "$WORKTREE_DIR" && git fetch origin main && \
   test "$(git rev-parse --abbrev-ref HEAD)" = "$BRANCH" && \
   node "$CODEX_SCRIPT" review --wait --json --scope branch --base origin/main \
