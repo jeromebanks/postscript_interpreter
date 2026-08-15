@@ -20,6 +20,10 @@ CLOSED_LIMIT=10
 while [ $# -gt 0 ]; do
   case "$1" in
     --closed)
+      if [ $# -lt 2 ]; then
+        echo "usage: $0 [--closed N]" >&2
+        exit 1
+      fi
       CLOSED_LIMIT="$2"
       shift 2
       ;;
@@ -45,18 +49,15 @@ OPEN_JSON=$(gh issue list --state open --limit 200 \
 PR_JSON=$(gh pr list --state open --limit 200 \
   --json number,url,title,body,updatedAt,reviewDecision,statusCheckRollup)
 
-# `gh issue list --state closed` has no "sort by closedAt" of its own,
-# so this fetches a window ordered by last-updated (the closest proxy
-# gh's search offers — a closed issue's own closedAt doesn't move, so
-# this window still contains genuinely-recent closures) and then jq
-# picks the true N most-recently-*closed* out of that window below.
-# Over-fetch relative to CLOSED_LIMIT so a closed issue with no
-# post-close activity isn't pushed out of the update-ordered window
-# before jq gets to re-sort it by closedAt.
-CLOSED_FETCH=$(( CLOSED_LIMIT > 60 ? CLOSED_LIMIT : 60 ))
-CLOSED_JSON=$(gh issue list --state closed --limit "$CLOSED_FETCH" \
-  --json number,title,url,closedAt,stateReason \
-  --search "sort:updated-desc")
+# `gh issue list --state closed` has no "sort by closedAt" of its own
+# to page against, and any bounded "most recently updated" window can
+# still miss a genuine recent closure that a heavily-commented older
+# issue displaces — so this fetches the whole closed set (bounded at
+# CLOSED_FETCH_CAP as a sanity ceiling, not a recency heuristic) and
+# lets jq pick the true N most-recently-*closed* out of all of it.
+CLOSED_FETCH_CAP=1000
+CLOSED_JSON=$(gh issue list --state closed --limit "$CLOSED_FETCH_CAP" \
+  --json number,title,url,closedAt,stateReason)
 
 echo "# Issue summary — ${REPO}"
 echo "_generated $(date -u +%Y-%m-%dT%H:%M:%SZ)_"
@@ -81,9 +82,14 @@ def pr_lookup:
         pr: $pr.number,
         url: $pr.url,
         ci: (
-          if ($pr.statusCheckRollup | length) == 0 then "no checks"
-          elif ($pr.statusCheckRollup | map(.conclusion) | any(. == "FAILURE" or . == "CANCELLED" or . == "TIMED_OUT" or . == "STARTUP_FAILURE" or . == "ACTION_REQUIRED")) then "failing"
-          elif ($pr.statusCheckRollup | map(.conclusion) | all(. == "SUCCESS")) then "passing"
+          # statusCheckRollup mixes two GraphQL union members: modern
+          # CheckRun entries report outcome via .conclusion, legacy
+          # commit-status (StatusContext) entries via .state instead —
+          # normalize to one field before judging pass/fail.
+          ($pr.statusCheckRollup | map(.conclusion // .state)) as $outcomes |
+          if ($outcomes | length) == 0 then "no checks"
+          elif ($outcomes | any(. == "FAILURE" or . == "ERROR" or . == "CANCELLED" or . == "TIMED_OUT" or . == "STARTUP_FAILURE" or . == "ACTION_REQUIRED")) then "failing"
+          elif ($outcomes | all(. == "SUCCESS")) then "passing"
           else "pending" end
         ),
         review: (
@@ -127,7 +133,7 @@ def pr_suffix($lookup):
 "## Open (\($untouched | length))",
 "",
 (if ($untouched | length) == 0 then "_none_" else
-  ($untouched[] | issue_line) end),
+  ($untouched[] | issue_line + pr_suffix($lookup)) end),
 "",
 ($closed | sort_by(.closedAt) | reverse | .[0:$closed_limit]) as $recent |
 
