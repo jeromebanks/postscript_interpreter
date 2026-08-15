@@ -369,20 +369,34 @@ fn kshow_font_switch_narrows_for_an_ordinary_outline_font() {
     // font to an ordinary registered outline font (Helvetica) must not
     // route the outline font's glyphs through `unicode_glyph`
     // (cmap-based) instead of `outline_glyph` (byte/Encoding-based) —
-    // the wrong resolution path entirely for a byte-oriented face. The
-    // string's second character is plain ASCII 'A' so the switch lands
-    // on a clean byte boundary (see the unflagged-Type3 test above for
-    // why); if the byte path ran, the total advance is exactly
-    // Helvetica's own 'A' width (UniFont's first glyph is zero-width,
-    // per UNICODE_T3's BuildChar) — if `unicode_glyph` ran instead, it
-    // resolves 'A' through Helvetica's cmap to the same glyph anyway,
-    // so this specifically checks the *advance*, not just that
-    // something painted, to catch a wrong-path call that happens to
-    // still hit the same glyph id.
+    // the wrong resolution path entirely for a byte-oriented face.
+    //
+    // Plain ASCII doesn't discriminate the two paths: byte 'A' (0x41)
+    // resolves to the same glyph whether looked up via Helvetica's
+    // Encoding (outline_glyph, correct) or via cmap on codepoint 0x41
+    // (unicode_glyph, the bug) — both give /A, so a wrong-path call
+    // would still pass a same-advance assertion. Instead, re-encode
+    // (the PLRM idiom, see `fonts.rs`'s `reencoding_changes_which_
+    // glyph_a_byte_selects`) byte 105 ('i') to select glyph /A: the
+    // *byte* 105 now means /A, but the *codepoint* 105 (U+0069) still
+    // means 'i' via cmap. Correct routing (outline_glyph reading the
+    // re-encoded byte) advances by 'A''s width; the bug (unicode_glyph
+    // reading the codepoint straight through cmap, ignoring Encoding
+    // entirely) would advance by 'i''s width instead — and Helvetica's
+    // 'A' and 'i' widths are not remotely close, so this test actually
+    // fails if the wrong path runs. The string's second character is
+    // still a single ASCII byte so the switch lands on a clean UTF-8
+    // boundary (see the unflagged-Type3 test above for why that matters).
     let mut it = run(&format!(
         "{UNICODE_T3} /UniFont findfont 12 scalefont setfont
          0 0 moveto
-         {{pop pop /Helvetica findfont 12 scalefont setfont}} (\u{AC00}A) kshow
+         {{
+           pop pop
+           /Helvetica findfont dup length dict copy
+           dup /Encoding StandardEncoding dup length array copy put
+           dup /Encoding get 105 /A put
+           /HelveticaIMeansA exch definefont 12 scalefont setfont
+         }} (\u{AC00}i) kshow
          currentpoint pop"
     ));
     let switched_x = pop_f64(&mut it);
@@ -393,8 +407,10 @@ fn kshow_font_switch_narrows_for_an_ordinary_outline_font() {
 
     assert!(
         (switched_x - a_advance).abs() < 1e-6,
-        "expected Helvetica's own 'A' advance ({a_advance}), got {switched_x} \
-         — looks like unicode_glyph's cmap path ran instead of outline_glyph's"
+        "expected Helvetica's re-encoded byte 105 to advance by 'A''s width \
+         ({a_advance}), got {switched_x} — looks like unicode_glyph's cmap \
+         path ran on codepoint 0x69 ('i') instead of outline_glyph's \
+         Encoding-array lookup"
     );
 }
 
