@@ -172,6 +172,19 @@ determined, fail toward "don't steal" rather than toward "assume
 stale" — the former just delays a legitimate reclaim slightly, the
 latter silently reopens the race this whole mechanism exists to close.
 
+The 10s `DIR_AGE` grace window (not to be confused with the 45-minute
+staleness threshold above) is chosen to be *short*, not long: it only
+needs to outlast the few milliseconds between a legitimate claim's
+`mkdir` and its heartbeat write landing — it is not a safety margin
+against a slow or interrupted claim. If a claim's `&&` chain is ever
+genuinely cut mid-way (the tool call itself killed, not just disk
+slowness — see the auto-backgrounding pitfall below), the lock dir
+sits empty past 10s and the next invocation correctly reads it as
+abandoned and reclaims it. That's the intended behavior for a dead
+claim, not a bug — 10s is picked to reclaim a genuinely dead claim
+promptly, not to give a live one room to breathe (the 45-minute
+threshold already does that job).
+
 45 minutes is deliberately generous, not tight: PR #30 needed six
 Codex review rounds in one legitimate run (~62 min total, each round
 itself several minutes) — a false "still live" fully blocks resume,
@@ -233,7 +246,7 @@ WORKTREE_DIR="../${REPO_DIR}-issue-<N>"
 git worktree add -b "$BRANCH" "$WORKTREE_DIR" origin/main
 
 LOCKDIR="$(git rev-parse --path-format=absolute --git-common-dir)/work-issue-lock-<N>"
-date +%s > "$LOCKDIR/heartbeat.tmp" && mv "$LOCKDIR/heartbeat.tmp" "$LOCKDIR/heartbeat"
+mkdir -p "$LOCKDIR" && date +%s > "$LOCKDIR/heartbeat.tmp" && mv "$LOCKDIR/heartbeat.tmp" "$LOCKDIR/heartbeat"
 ```
 
 The lock/heartbeat lives in the *main repo's* shared git dir, keyed by
@@ -260,11 +273,21 @@ as stale, but only *because* it validates content, not just presence.
 Unlike `$WORKTREE_DIR`-derived paths, `--path-format=absolute
 --git-common-dir` doesn't need `-C` at all — it resolves to the same
 canonical main-repo path regardless of where cwd happens to be,
-so it's immune to the cwd-reset pitfall below on its own:
+so it's immune to the cwd-reset pitfall below on its own.
+
+Every refresh site from here through step 8 uses `mkdir -p` (idempotent
+— succeeds whether or not the dir already exists), deliberately
+different from step 1's **Claim the issue**, which uses a bare `mkdir`
+(fails if it already exists — that failure *is* the "someone else might
+already own this" signal). A refresh isn't making an ownership
+decision, just keeping one alive, so it should self-heal rather than
+error if the lock dir is ever missing — which happens legitimately if
+step 8's Codex-review loop released the lock at a stop branch and then
+looped back for another round (see step 8):
 
 ```sh
 LOCKDIR="$(git rev-parse --path-format=absolute --git-common-dir)/work-issue-lock-<N>"
-date +%s > "$LOCKDIR/heartbeat.tmp" && mv "$LOCKDIR/heartbeat.tmp" "$LOCKDIR/heartbeat"
+mkdir -p "$LOCKDIR" && date +%s > "$LOCKDIR/heartbeat.tmp" && mv "$LOCKDIR/heartbeat.tmp" "$LOCKDIR/heartbeat"
 ```
 
 (the same "re-derive, don't trust a remembered variable" reasoning
@@ -285,7 +308,7 @@ out there —
 ```sh
 BRANCH="$(git -C "$WORKTREE_DIR" branch --show-current)"
 LOCKDIR="$(git rev-parse --path-format=absolute --git-common-dir)/work-issue-lock-<N>"
-date +%s > "$LOCKDIR/heartbeat.tmp" && mv "$LOCKDIR/heartbeat.tmp" "$LOCKDIR/heartbeat"
+mkdir -p "$LOCKDIR" && date +%s > "$LOCKDIR/heartbeat.tmp" && mv "$LOCKDIR/heartbeat.tmp" "$LOCKDIR/heartbeat"
 ```
 
 — instead of recomputing a fresh `SLUG`/`BRANCH` from the issue title.
@@ -323,7 +346,7 @@ step 5 on a plan the advisor pushed back on without addressing why.
 
 Refresh the heartbeat before moving on (re-derive the path and write
 atomically, per step 3's note): `H="$(git rev-parse
---path-format=absolute --git-common-dir)/work-issue-lock-<N>/heartbeat"; date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
+--path-format=absolute --git-common-dir)/work-issue-lock-<N>/heartbeat"; mkdir -p "$(dirname "$H")" && date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
 
 ## 5. Implement
 
@@ -337,7 +360,7 @@ the source of truth:
 - Commit at reasonable checkpoints, not one giant commit at the end —
   and refresh the heartbeat at each one (`H="$(git rev-parse
   --path-format=absolute --git-common-dir)/work-issue-lock-<N>/heartbeat";
-  date +%s > "$H.tmp" && mv "$H.tmp" "$H"`). Without this, step 4's end and step 5's end are
+  mkdir -p "$(dirname "$H")" && date +%s > "$H.tmp" && mv "$H.tmp" "$H"`). Without this, step 4's end and step 5's end are
   the only two heartbeat refreshes bracketing the entire implementation
   phase — for any real code change (edit/build/test cycles, not just a
   doc tweak) that gap alone can exceed the 45-minute staleness
@@ -390,7 +413,7 @@ longest-running step of the whole implementation phase):
 
 ```sh
 H="$(git rev-parse --path-format=absolute --git-common-dir)/work-issue-lock-<N>/heartbeat"
-date +%s > "$H.tmp" && mv "$H.tmp" "$H"
+mkdir -p "$(dirname "$H")" && date +%s > "$H.tmp" && mv "$H.tmp" "$H"
 cargo build && cargo test && cargo clippy --all-targets && cargo fmt --all -- --check
 ```
 
@@ -399,7 +422,7 @@ PR isn't the first place a break shows up.
 
 Refresh the heartbeat again once it's clean: `H="$(git rev-parse
 --path-format=absolute --git-common-dir)/work-issue-lock-<N>/heartbeat";
-date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
+mkdir -p "$(dirname "$H")" && date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
 
 ## 6. Get the implementation reviewed before marking done
 
@@ -427,7 +450,7 @@ advisor pass — don't loop indefinitely chasing a clean bill of health
 on genuinely subjective feedback.
 
 Refresh the heartbeat: `H="$(git rev-parse --path-format=absolute
---git-common-dir)/work-issue-lock-<N>/heartbeat"; date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
+--git-common-dir)/work-issue-lock-<N>/heartbeat"; mkdir -p "$(dirname "$H")" && date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
 
 ## 7. Open the PR, update the issue
 
@@ -514,7 +537,7 @@ make a still-live run look stale to a concurrent invocation:
 ```sh
 rm -f /tmp/codex-review-<N>.json && \
   H="$(git rev-parse --path-format=absolute --git-common-dir)/work-issue-lock-<N>/heartbeat" && \
-  date +%s > "$H.tmp" && mv "$H.tmp" "$H" && \
+  mkdir -p "$(dirname "$H")" && date +%s > "$H.tmp" && mv "$H.tmp" "$H" && \
   cd "$WORKTREE_DIR" && git fetch origin main && \
   test "$(git rev-parse --abbrev-ref HEAD)" = "$BRANCH" && \
   node "$CODEX_SCRIPT" review --wait --json --scope branch --base origin/main \
