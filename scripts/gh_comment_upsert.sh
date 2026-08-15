@@ -9,7 +9,11 @@
 # the *other* job posted most recently and overwrites it — the two
 # jobs fight over one comment instead of each keeping its own updated
 # in place. A marker-based lookup avoids that: each caller owns the
-# one comment that starts with its marker.
+# one comment that starts with its marker AND was posted by
+# github-actions[bot] — the author check matters because comments are
+# public, so a human comment that happens to start with the same
+# marker text must not be matched (and silently overwritten on the
+# next run) or mistaken for this job's own comment.
 #
 #   ./scripts/gh_comment_upsert.sh <marker> <number> <body-file>
 #
@@ -31,7 +35,7 @@ trap 'rm -f "$TMP"' EXIT
 } >"$TMP"
 
 id=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${NUMBER}/comments" --paginate \
-  --jq "[.[] | select(.body | startswith(\"$MARKER\"))] | last | .id // empty")
+  --jq "[.[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$MARKER\")))] | last | .id // empty")
 
 if [ -n "$id" ]; then
   gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${id}" -F body=@"$TMP"

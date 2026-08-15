@@ -327,7 +327,7 @@ fn main() {
     println!("| workload | metric | base | head | \u{394} | |");
     println!("|---|---|---|---|---|---|");
 
-    let mut any_fail = false;
+    let mut failures: Vec<String> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
     for w in workloads() {
         let (head_m, base_m) = match measure_workload(&head, &base, &w, runs) {
@@ -352,7 +352,12 @@ fn main() {
         let clears_floor = base_m.ms >= MIN_MS_FOR_FAIL;
         let (ms_label, ms_fails) = classify(ms_pct, clears_floor);
         let (rss_label, rss_fails) = classify(rss_pct, true);
-        any_fail = any_fail || ms_fails || rss_fails;
+        if ms_fails {
+            failures.push(format!("`{}` time ({:+.1}%)", w.name, ms_pct));
+        }
+        if rss_fails {
+            failures.push(format!("`{}` peak RSS ({:+.1}%)", w.name, rss_pct));
+        }
         if !clears_floor && ms_pct >= FAIL_PCT {
             notes.push(format!(
                 "`{}`: time delta ({:+.1}%) exceeds the {FAIL_PCT:.0}% fail threshold, but \
@@ -384,11 +389,11 @@ fn main() {
     }
 
     println!();
-    if any_fail {
+    if !failures.is_empty() {
         println!(
-            "**Result: \u{274c} failed the gate** — a workload regressed \
-             \u{2265}{FAIL_PCT:.0}% and cleared the {MIN_MS_FOR_FAIL:.0}ms floor; see rows \
-             above."
+            "**Result: \u{274c} failed the gate** — regressed \u{2265}{FAIL_PCT:.0}%: \
+             {}.",
+            failures.join(", ")
         );
         std::process::exit(1);
     } else {

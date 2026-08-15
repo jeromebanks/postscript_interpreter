@@ -126,6 +126,19 @@ a `perf-regression` job in `.github/workflows/ci.yml` close that gap.
   samples) as satisfying "majority" — off-by-one in the comparison
   operator (`<` where `<=` was needed); fixed and re-verified against
   the arithmetic by hand.
+- **A second Codex round on the pushed fix caught two more**: (1)
+  `gh_comment_upsert.sh`'s marker lookup matched *any* comment
+  starting with the marker text regardless of author — since PR
+  comments are public, a human comment that happened to start with
+  the same HTML-comment prefix would be matched and silently
+  overwritten on the next CI run. Fixed by also requiring
+  `.user.login == "github-actions[bot]"` in the lookup. (2) The final
+  "failed the gate" message unconditionally claimed the failing
+  workload "cleared the 15ms floor" — true for a time-metric failure,
+  but the floor doesn't apply to RSS at all, so an RSS-only failure
+  printed a claim that made no sense next to it. Fixed by naming the
+  specific failing `(workload, metric)` pairs in the message instead
+  of a generic floor-referencing sentence.
 - `perf.rs`/`vs_gs.rs` untouched — they keep serving their existing
   purposes (dev-loop tripwire, gs comparison); `regression.rs` is
   purpose-built for the CI A/B and doesn't reuse their code (each is a
