@@ -869,12 +869,19 @@ fn current_unicode_mode(gfx: &Gfx) -> Result<bool, PsError> {
 /// began — this is the fix for issue #31: with no such switch, this
 /// produces byte-identical results to decoding the whole string once
 /// up front.
+///
+/// Validates at most 4 bytes (`char::len_utf8`'s max), not the whole
+/// remaining string: a valid scalar is never longer, and neither is
+/// the "maximal subpart" of an ill-formed one, so this is exactly as
+/// correct as validating the full remainder — just not Θ(n²) over a
+/// long Unicode-mode `show`.
 fn decode_one(text: &[u8], pos: usize, unicode: bool) -> Option<(u32, usize)> {
     let &first = text.get(pos)?;
     if !unicode {
         return Some((u32::from(first), 1));
     }
-    let rest = &text[pos..];
+    let end = (pos + 4).min(text.len());
+    let rest = &text[pos..end];
     match std::str::from_utf8(rest) {
         Ok(s) => {
             let ch = s.chars().next()?;
