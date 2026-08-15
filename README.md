@@ -498,7 +498,7 @@ skill; it's plain markdown, so any agent can read it). `AGENTS.md`
 points there too, which is where Codex looks first.
 
 **MCP-wired agents**: `pscat-mcp` (built alongside `pscat`) is an
-MCP server over stdio exposing three tools:
+MCP server over stdio exposing four tools:
 
 - `render_postscript` — source in; PNG image(s) back inline (or SVG
   text, or a PDF written to `out_path`), with page size, `dpi`, and
@@ -509,6 +509,11 @@ MCP server over stdio exposing three tools:
   silent failure shows up without eyeballing the PNG.
 - `handwrite` — text in, handwritten-note PNG back (the
   `scripts/handwrite.sh` options: size, paper, ink, jitter, seed).
+- `describe_art_capabilities` — the machine-readable catalog of what
+  this build's creative toolkit actually has installed: fonts, Type 3
+  program faces, mood palettes, page templates, and artkit/style-pack
+  procedures (issue #39, `--capabilities` on the CLI). See
+  CAPABILITIES.md.
 - `eval_postscript` — run headlessly, get back what the program
   printed, or the standard error name plus an operand-stack
   post-mortem.

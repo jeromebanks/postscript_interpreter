@@ -3,6 +3,66 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## A machine-readable catalog of agent-usable art capabilities (issue #39, 2026-08-15)
+
+Closes issue #39: an autonomous artist agent needs a dependable way to
+discover which fonts/palettes/templates/procedures a given `pscat`
+build actually has, rather than trusting names remembered from prose
+documentation — which drifts. Confirmed while scoping this issue:
+`psart`'s `SKILL.md` had already fallen behind artkit's
+paragraph-flow, hyperbolic-geometry, noise/flow, and gradient
+sections (issues #16/#10/#19/#20), several of which shipped after the
+skill's "toolkit" tour was last touched.
+
+- `src/capabilities.rs`: `--capabilities` (CLI) and
+  `describe_art_capabilities` (`pscat-mcp`) both serialize one JSON
+  payload — 225 entries as of this build: 105 fonts, 86 procedures
+  (57 from `lib/artkit.ps`, 29 across the four style packs), 22
+  palettes, 7 Type 3 program faces, 5 page templates — plus a
+  `pscat_version` field so a caching agent can treat a version bump as
+  the re-fetch signal.
+- Fonts are the one section built *dynamically*: `font.rs` gained
+  `catalog_entries()`/`FontOrigin` (Builtin/Catalog/Alias), and
+  `available_fonts()` (the existing `--fonts` output) now derives from
+  it instead of duplicating the directory scan — so the catalog's font
+  section and `--fonts`/`findfont` resolution can't independently
+  disagree about what's installed, which is exactly the failure mode
+  the issue is about.
+- Palettes/templates/procedures have no PostScript docstring
+  convention to parse, so their metadata is hand-maintained in
+  `capabilities.rs`'s `ENTRIES` table — but `tests/capabilities.rs`
+  loads each `.ps` source into a real `Interp` and checks the name set
+  in *both* directions: every cataloged name still resolves where
+  claimed (`Palettes`/`userdict`/`FontDirectory`, via
+  `{ pop } forall` collecting every dict key onto the operand stack in
+  one call — no printing/parsing needed), and every name a source file
+  actually defines is either cataloged or on one of two explicit
+  internal-helper allowlists (`ARTKIT_INTERNAL`, `PAGEKIT_INTERNAL` —
+  scratch names like `apseg`/`tfdrawline`, and the `Palettes`/
+  `TurtleState` dicts themselves, not part of the public API). The
+  reverse direction is the one a naively forward-only test would miss:
+  nothing stops a future style pack from registering a new palette or
+  procedure and forgetting to catalog it: with this test, that fails
+  CI instead of silently missing from `--capabilities`.
+- Procedures deliberately get no structured `parameters` — PostScript
+  stack arguments are positional, not named/defaulted, so forcing them
+  into the same `Param` shape templates use (whose content dicts
+  *do* have real optional keys with defaults) would mean inventing
+  names the source doesn't have. A procedure's calling convention
+  lives in `example` instead: the stack-effect comment already written
+  at its definition site.
+- Scope cut, stated rather than silent: `graph.ps`/`dataviz.ps`/
+  `etching.ps`/`hangul.ps` are not cataloged — the issue's "What"
+  section names fonts/Type-3/palettes/style-packs/templates/*artkit*
+  procedures specifically, and those four are independent sibling
+  libraries by design (graph.ps and dataviz.ps share nothing with
+  artkit on purpose, per their own NOTES.md entries). A reasonable
+  follow-up, not an oversight.
+- `CAPABILITIES.md` documents the payload shape and the
+  register-a-new-capability workflow; `.claude/skills/psart/SKILL.md`
+  now points at `--capabilities` as the source of truth over its own
+  prose.
+
 ## Add `/issue-summary` dashboard skill (issue #36, 2026-08-15)
 
 Closes issue #36: seeing "what's been worked on, what's active, what's

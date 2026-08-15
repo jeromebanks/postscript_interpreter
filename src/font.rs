@@ -336,11 +336,52 @@ pub(crate) fn is_unicode_type3(dict: &Rc<RefCell<Dict>>) -> bool {
         .is_some_and(|o| matches!(o.value, Value::Boolean(true)))
 }
 
-/// Names of every face findfont can currently reach without
-/// substitution: builtins, loadable catalog files, and aliases (for
-/// `--fonts`).
-pub fn available_fonts() -> Vec<String> {
-    let mut names: Vec<String> = BUILTINS.iter().map(|b| b.ps_name.to_string()).collect();
+/// How a face named by [`catalog_entries`] is actually reached —
+/// distinguishes what's baked into the binary from what depends on the
+/// font-catalog directory being present at runtime (absent entirely on
+/// wasm, and possibly absent even on desktop if the bundle/checkout is
+/// incomplete). Surfaced to `--capabilities` (issue #39) so a catalog
+/// consumer can tell a permanently-available face from an
+/// environment-dependent one instead of assuming every listed name
+/// resolves everywhere `pscat` runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FontOrigin {
+    /// Compiled into the binary; resolves identically everywhere,
+    /// wasm included.
+    Builtin,
+    /// A file found under the catalog directory at findfont time —
+    /// desktop/bundle only (`#[cfg(not(target_arch = "wasm32"))]`).
+    Catalog,
+    /// A `findfont` name in [`ALIASES`] that resolves to a catalog
+    /// stem; same environment dependency as `Catalog`.
+    Alias,
+}
+
+/// One name `findfont` can currently reach without substitution, with
+/// enough provenance to explain *how* (see [`FontOrigin`]). The single
+/// source both `available_fonts` (plain-text `--fonts`) and
+/// `crate::capabilities` (structured `--capabilities`) build from, so
+/// the two can't independently drift about what's actually installed.
+pub struct FontEntry {
+    pub name: String,
+    pub origin: FontOrigin,
+    /// Set only for `FontOrigin::Alias`: the catalog stem the alias
+    /// resolves to.
+    pub alias_target: Option<&'static str>,
+}
+
+/// Every face findfont can currently reach without substitution:
+/// builtins, then loadable catalog files (sorted), then aliases — same
+/// order `--fonts` has always printed in.
+pub fn catalog_entries() -> Vec<FontEntry> {
+    let mut entries: Vec<FontEntry> = BUILTINS
+        .iter()
+        .map(|b| FontEntry {
+            name: b.ps_name.to_string(),
+            origin: FontOrigin::Builtin,
+            alias_target: None,
+        })
+        .collect();
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(root) = catalog_root() {
         let mut stems = Vec::new();
@@ -361,10 +402,31 @@ pub fn available_fonts() -> Vec<String> {
             }
         }
         stems.sort();
-        names.extend(stems);
-        names.extend(ALIASES.iter().map(|(k, v)| format!("{k} -> {v}")));
+        entries.extend(stems.into_iter().map(|name| FontEntry {
+            name,
+            origin: FontOrigin::Catalog,
+            alias_target: None,
+        }));
+        entries.extend(ALIASES.iter().map(|(k, v)| FontEntry {
+            name: k.to_string(),
+            origin: FontOrigin::Alias,
+            alias_target: Some(v),
+        }));
     }
-    names
+    entries
+}
+
+/// Names of every face findfont can currently reach without
+/// substitution: builtins, loadable catalog files, and aliases (for
+/// `--fonts`).
+pub fn available_fonts() -> Vec<String> {
+    catalog_entries()
+        .into_iter()
+        .map(|e| match e.alias_target {
+            Some(target) => format!("{} -> {target}", e.name),
+            None => e.name,
+        })
+        .collect()
 }
 
 /// Parsed faces, once per process — the bundled data is `'static`, so

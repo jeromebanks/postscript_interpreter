@@ -63,7 +63,12 @@ fn handshake_and_tool_list() {
         .collect();
     assert_eq!(
         names,
-        ["render_postscript", "handwrite", "eval_postscript"],
+        [
+            "render_postscript",
+            "handwrite",
+            "describe_art_capabilities",
+            "eval_postscript"
+        ],
         "the advertised tool set"
     );
     for tool in resp["result"]["tools"].as_array().unwrap() {
