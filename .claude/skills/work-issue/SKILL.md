@@ -25,23 +25,18 @@ If an issue number was given, confirm it's open:
 gh issue view <N> --json state,title,labels
 ```
 
-If it's closed, stop and tell the user. If it carries `in-progress`,
-check whether there's already an open PR claiming it (`gh pr list
---state open --json body --jq` scanning for `Closes #<N>`/`Fixes
-#<N>`/`Resolves #<N>`):
-- **Open PR exists**: stop and tell the user — someone (or another run
-  of this skill) is genuinely already on it.
-- **No open PR**: don't assume crashed — an in-progress issue with no
-  PR yet is *also* the normal state of a session still mid-run (there
-  is no PR until step 7). Run the **live-run check** below before
-  resuming. If it comes back stale, this is a crashed or interrupted
-  prior run — resume it rather than halting. Check for
-  `../<repo>-issue-<N>` (step 3 already contemplates reusing an
-  existing worktree); if it exists, pick up from wherever it left off
-  (uncommitted changes, a branch with commits but no PR, etc. are all
-  normal mid-run states, not corruption). This matters for the
-  unattended-loop case specifically: a session crash shouldn't
-  permanently deadlock the backlog on one issue.
+If it's closed, stop and tell the user. Otherwise, whether it already
+carries `in-progress` or not, run **Claim the issue** below for `<N>`
+before doing anything else — an explicit pick can still race a
+concurrent invocation targeting the exact same number, whether that's
+two sessions racing a brand-new issue or one racing a crashed-or-still
+-live prior run of this same one (there's no PR until step 7, so "no
+PR yet" alone doesn't mean crashed — it's also the normal state of a
+session still mid-run). The one case that skips the claim entirely:
+it already carries `in-progress` *and* an open PR claims it (`gh pr
+list --state open --json body --jq` scanning for `Closes #<N>`/`Fixes
+#<N>`/`Resolves #<N>`) — that's someone genuinely already on it; stop
+and tell the user, don't attempt to claim.
 
 If no number was given, **first check for an abandoned in-progress
 issue to resume** — this takes priority over picking something fresh,
@@ -49,17 +44,17 @@ otherwise a crashed run's issue gets silently skipped forever instead
 of finished:
 
 ```sh
-# in-progress issues with no open PR claiming them = crashed prior runs
+# in-progress issues with no open PR claiming them = crashed-or-still-live prior runs
 gh issue list --state open --label in-progress --json number,title
 gh pr list --state open --json body --jq \
   '[.[].body | scan("(?:Closes|Fixes|Resolves) #([0-9]+)")[][0] | tonumber]'
 ```
 
-If any `in-progress` issue's number isn't in the open-PR list, run the
-same live-run check as the explicit-number path above before treating
-it as resumable, then resume the lowest-numbered one that comes back
-stale (reuse its worktree if one exists) instead of continuing to the
-picker below. If every candidate's heartbeat is still live, fall
+For each `in-progress` issue whose number isn't in the open-PR list
+(lowest first), run **Claim the issue** below. Resume the first one
+that's successfully claimed (reuse its worktree if one exists — step 3
+already contemplates this) instead of continuing to the picker below.
+If every candidate is live (the claim fails for all of them), fall
 through to the picker below rather than resuming a running session.
 
 Otherwise, find the lowest-numbered open issue that isn't already
@@ -75,44 +70,191 @@ gh pr list --state open --json body --jq \
   '[.[].body | scan("(?:Closes|Fixes|Resolves) #([0-9]+)")[][0] | tonumber]'
 ```
 
-Take the first candidate not in the open-PR list. If there are no
-candidates at all, report that the backlog is clear (or everything
-in-flight) instead of inventing work.
+Take the first candidate not in the open-PR list, then run **Claim the
+issue** below for it — even a never-before-touched issue can be raced
+by two invocations picking the same lowest-numbered candidate at once.
+If the claim fails, stop and report the conflict rather than falling
+through to try the next candidate (deliberately not building automatic
+next-candidate retry — see Pitfalls). If there are no candidates at
+all, report that the backlog is clear (or everything in-flight)
+instead of inventing work.
 
-### Live-run check (heartbeat)
+### Claim the issue (atomic lock)
 
 An `in-progress` issue with no open PR is ambiguous on its own — it's
 both the normal state of a session still mid-run *and* what a crashed
-session leaves behind. Steps 3, 4, 5, 6, and 8 each refresh a
-heartbeat timestamp in the worktree at their checkpoints; use it here
-to tell the two apart before resuming, rather than inferring
-abandonment purely from "no PR yet" (which used to misclassify a live
-run — see #29):
+session leaves behind (#29). A never-before-claimed issue has the same
+ambiguity from the other direction: two invocations can both decide
+"nobody's on this" at once. A timestamp comparison alone can't
+arbitrate either case — two invocations that both read the same stale
+(or absent) heartbeat before either writes can both conclude "safe to
+proceed" (#35). The lock below is an atomic claim, not just a
+staleness read: `mkdir` is atomic for a fresh claim (exactly one
+caller can create a given directory name), and `mv` (rename) onto a
+not-yet-existing name is atomic for stealing a stale one (exactly one
+caller can rename a given source name away — every other racer's `mv`
+on that same source fails with "no such file", a clean signal it lost
+rather than a false belief it won — verified empirically).
+
+The lock lives in the *main repo's* shared git dir, keyed by issue
+number — not the worktree's own git dir, which for a fresh pick
+doesn't exist yet at this point in the flow. `--path-format=absolute
+--git-common-dir` resolves to the same canonical path from the main
+checkout or from inside any worktree (verified) — unlike most paths in
+this doc, this one is immune to the cwd-reset pitfall below, so no
+`-C` or remembered variable is needed:
 
 ```sh
-HEARTBEAT="$(git -C "../<repo>-issue-<N>" rev-parse --git-dir 2>/dev/null)/work-issue-heartbeat"
-if [ -s "$HEARTBEAT" ] && grep -qE '^[0-9]+$' "$HEARTBEAT"; then
-  AGE=$(( $(date +%s) - $(cat "$HEARTBEAT") ))
+MAINGIT="$(git rev-parse --path-format=absolute --git-common-dir)"
+[ -n "$MAINGIT" ] || { echo "RESULT=error: could not resolve the main .git dir"; exit 1; }
+LOCKDIR="$MAINGIT/work-issue-lock-<N>"
+
+if mkdir "$LOCKDIR" 2>/dev/null && date +%s > "$LOCKDIR/heartbeat.tmp" && mv "$LOCKDIR/heartbeat.tmp" "$LOCKDIR/heartbeat"; then
+  echo "RESULT=claimed (fresh)"
 else
-  AGE=999999   # missing, empty, or non-numeric (e.g. a write that died mid-truncation): treat as stale
+  HB="$LOCKDIR/heartbeat"
+  ORIG_HB_CONTENT=$(cat "$HB" 2>/dev/null)
+  if [ -n "$ORIG_HB_CONTENT" ] && printf '%s' "$ORIG_HB_CONTENT" | grep -qE '^[0-9]+$'; then
+    AGE=$(( $(date +%s) - ORIG_HB_CONTENT ))
+  else
+    # Missing/unreadable heartbeat is ambiguous on its own: it's both a
+    # genuinely crashed claim (died mid-truncation) AND what a *different*
+    # concurrent invocation's own fresh mkdir looks like for the few
+    # milliseconds between its mkdir succeeding and its heartbeat write
+    # landing (verified empirically — treating this as unconditionally
+    # stale let a second racer steal a lock the first racer had just won,
+    # microseconds after winning it). Fall back to the lock dir's own
+    # mtime: only a dir that's *also* been sitting untouched past a small
+    # grace window is a genuine crash, not an in-flight claim.
+    DIR_MTIME=$(stat -f %m "$LOCKDIR" 2>/dev/null || date +%s)
+    DIR_AGE=$(( $(date +%s) - DIR_MTIME ))
+    if [ "$DIR_AGE" -lt 10 ]; then
+      AGE=0
+    else
+      AGE=999999
+    fi
+  fi
+
+  if [ "$AGE" -lt 2700 ]; then
+    echo "RESULT=live (heartbeat $((AGE / 60)) min old) — do not resume/claim"
+  else
+    STEAL="$LOCKDIR.stale.$$.$(date +%s)"
+    if mv "$LOCKDIR" "$STEAL" 2>/dev/null; then
+      MOVED_HB_CONTENT=$(cat "$STEAL/heartbeat" 2>/dev/null)
+      if [ "$MOVED_HB_CONTENT" = "$ORIG_HB_CONTENT" ]; then
+        if mkdir "$LOCKDIR" 2>/dev/null && date +%s > "$LOCKDIR/heartbeat.tmp" && mv "$LOCKDIR/heartbeat.tmp" "$LOCKDIR/heartbeat"; then
+          rm -rf "$STEAL"
+          echo "RESULT=claimed (reclaimed a stale lock)"
+        else
+          rm -rf "$STEAL"
+          echo "RESULT=lost a rare 3-way reclaim race — do not resume/claim"
+        fi
+      else
+        # ABA: the object we just moved isn't the stale one we decided
+        # to steal -- a faster racer already reclaimed and recreated it
+        # between our read and our mv, and we grabbed *their* fresh
+        # claim by name instead (mv/rename has no concept of the
+        # object's identity, only its path). Put it back and back off.
+        mv "$STEAL" "$LOCKDIR" 2>/dev/null
+        rm -rf "$STEAL" 2>/dev/null
+        echo "RESULT=lost the reclaim race (ABA detected, restored) — do not resume/claim"
+      fi
+    else
+      echo "RESULT=lost the reclaim race to a concurrent invocation — do not resume/claim"
+    fi
+  fi
 fi
 ```
 
-- `AGE` under 2700 (45 min): still live. **Stop — don't resume.**
-  Report to the user that issue #<N> looks actively worked on
-  (heartbeat `$((AGE / 60))` min old) instead of silently racing a
-  live session's edits.
-- `AGE` at or above 2700, or no valid heartbeat file at all: stale —
-  safe to resume. Validating the content (not just presence) matters:
-  a heartbeat write interrupted between the `>` truncation and `date`
-  finishing leaves an empty file, and a bare `$(( ... - $(cat ...) ))`
-  against an empty or garbage value is a shell arithmetic error, not a
-  graceful "treat as stale."
+`RESULT=claimed*`: this invocation owns issue #<N>. Continue (to step
+2 for a genuinely fresh pick — `gh issue edit <N> --add-label
+in-progress` is harmless to re-run on an issue that already carries
+it, for the resume case; straight to step 3 to create or reuse the
+worktree).
+
+`RESULT=live*` or `RESULT=lost*`: **stop, don't proceed.** Report to
+the user that issue #<N> looks actively worked on (or was just claimed
+by a concurrent invocation) instead of silently racing another
+session's edits.
+
+**The `ORIG_HB_CONTENT`/`MOVED_HB_CONTENT` comparison after the steal
+closes an ABA race the `mv`-is-atomic argument alone doesn't cover**
+(found by Codex's review of this PR, then reproduced and fixed —
+confirmed empirically): `mv` arbitrates *names*, not *object identity*.
+If racer A reads the same stale lock as racer B, but B wins the steal
+and recreates a fresh `$LOCKDIR` before A's own (possibly delayed —
+scheduler jitter, not just an artificial sleep) `mv` fires, A's `mv`
+still succeeds — it moves *B's brand-new claim* out from under it,
+because `mv $LOCKDIR $STEAL` only cares that something currently
+occupies that name, not which generation of object it is. Without the
+content check, A would then believe it legitimately reclaimed a stale
+lock and report `claimed`, while B's real claim sits orphaned in `$STEAL`
+about to be deleted — two invocations both believing they own the
+issue, the exact failure #35 exists to close. The fix: snapshot the
+heartbeat's content *before* acting on it, and after the `mv`, confirm
+the moved object still has that exact content. A staleness read is
+always 45+ minutes old, so it can never coincidentally match a
+freshly-written "now" timestamp — a mismatch is unambiguous proof
+we grabbed the wrong object. On mismatch, put it back (`mv "$STEAL"
+"$LOCKDIR"`) and back off rather than proceeding; the loser's `mkdir`
+in the ABA-free case is what makes the restore safe to attempt (the
+name is free again, and the low-concurrency threat model here doesn't
+need to handle a third racer landing in that exact instant). Verified
+by artificially delaying one racer's `mv` past the other's full
+reclaim-and-recreate cycle: reproduced the double-claim without this
+check, zero double-claims across repeated runs with it.
+
+`stat -f %m` is BSD/macOS syntax (this repo's environment) — if it
+ever fails for a reason other than a genuinely missing directory, the
+`|| date +%s` fallback makes `DIR_MTIME` "now," i.e. `DIR_AGE` near
+zero, i.e. `AGE=0` (live). That's deliberate: when the age can't be
+determined, fail toward "don't steal" rather than toward "assume
+stale" — the former just delays a legitimate reclaim slightly, the
+latter silently reopens the race this whole mechanism exists to close.
+
+The 10s `DIR_AGE` grace window (not to be confused with the 45-minute
+staleness threshold above) is chosen to be *short*, not long: it only
+needs to outlast the few milliseconds between a legitimate claim's
+`mkdir` and its heartbeat write landing — it is not a safety margin
+against a slow or interrupted claim. If a claim's `&&` chain is ever
+genuinely cut mid-way (the tool call itself killed, not just disk
+slowness — see the auto-backgrounding pitfall below), the lock dir
+sits empty past 10s and the next invocation correctly reads it as
+abandoned and reclaims it. That's the intended behavior for a dead
+claim, not a bug — 10s is picked to reclaim a genuinely dead claim
+promptly, not to give a live one room to breathe (the 45-minute
+threshold already does that job). If the pause is *not* the tool call
+being killed but the claimant genuinely still running, just suspended
+past 10s between `mkdir` and its heartbeat write, a second invocation
+can still steal it and both ends up believing they own it — a known
+residual gap tracked in #72, not fully closed here (closing it needs
+real compare-and-swap semantics over the whole span, which the
+`mkdir`/`mv` primitives alone don't give once content, not just the
+name, is what needs arbitrating).
 
 45 minutes is deliberately generous, not tight: PR #30 needed six
 Codex review rounds in one legitimate run (~62 min total, each round
 itself several minutes) — a false "still live" fully blocks resume,
 which is worse than a slower crash-detection window.
+
+**The `mkdir` and its immediately-following heartbeat write must stay
+one `&&` chain in a single command, never split across separate tool
+calls or steps** — this minimizes how long the dir-exists-but-empty
+window is open. That window can't be closed to zero in portable POSIX
+shell (there's no atomic "create a populated directory" primitive —
+`mv`'s own directory-destination handling nests rather than replacing
+an existing target), which is why the `DIR_AGE` fallback above exists
+as the real close: even if the window is hit, a lock dir under 10s old
+reads as live (`AGE=0`), not stale, so a racer can't steal a claim
+that's still
+mid-creation. Verified empirically — racing two claims against the
+same fresh lock reproduced a double-claim (both racers reporting
+`RESULT=claimed`) with only the `&&`-chain protection in place; adding
+the `DIR_AGE` fallback and re-running the same race 50 times (30 fresh
+-claim races + 20 stale-reclaim races) produced zero double-claims.
+Don't remove the `DIR_AGE` fallback thinking the `&&` chain alone is
+sufficient — it isn't, and a future edit that "simplifies" it away
+reopens exactly the race #35 exists to close.
 
 ## 2. Mark it in-progress
 
@@ -150,55 +292,94 @@ WORKTREE_DIR="../${REPO_DIR}-issue-<N>"
 
 git worktree add -b "$BRANCH" "$WORKTREE_DIR" origin/main
 
-HEARTBEAT="$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"
-date +%s > "$HEARTBEAT.tmp" && mv "$HEARTBEAT.tmp" "$HEARTBEAT"
+LOCKDIR="$(git rev-parse --path-format=absolute --git-common-dir)/work-issue-lock-<N>"
+date +%s > "$LOCKDIR/heartbeat.tmp" && mv "$LOCKDIR/heartbeat.tmp" "$LOCKDIR/heartbeat"
 ```
 
-The heartbeat file lives in the worktree's git-dir (under the main
-repo's `.git/worktrees/<name>/`), not the tracked working tree — it
-never needs a `.gitignore` entry and never shows up in `git status` or
-a diff. Refresh it at the end of steps 4, 5, 6, and around each Codex
-review round in step 8 — and, since "commit checkpoints" or "step
-boundaries" can themselves be 45+ minutes apart during a long compile
-or a lengthy single edit, also refresh it before starting any single
-operation you expect to take a while (a big `cargo build`/`cargo
-test`, an `advisor` call, the Codex review) rather than only after it
-finishes — so the live-run check above can tell a session still
+The lock/heartbeat lives in the *main repo's* shared git dir, keyed by
+issue number (step 1's **Claim the issue** already created it before
+this step ran) — not inside this worktree's own git dir, so it
+survives independent of whether the worktree itself is later removed.
+It never needs a `.gitignore` entry and never shows up in `git status`
+or a diff. Refresh it at the end of steps 4, 5, 6, and around each
+Codex review round in step 8 — and, since "commit checkpoints" or
+"step boundaries" can themselves be 45+ minutes apart during a long
+compile or a lengthy single edit, also refresh it before starting any
+single operation you expect to take a while (a big `cargo build`/
+`cargo test`, an `advisor` call, the Codex review) rather than only
+after it finishes — so step 1's claim check can tell a session still
 working from one that crashed. Each Bash tool call is a fresh shell —
-a `$HEARTBEAT` variable set here won't survive to a later step's tool
+a `$LOCKDIR` variable set here won't survive to a later step's tool
 call — so those refreshes re-derive the path inline rather than
 trusting a remembered variable. Write it atomically (temp file + `mv`,
 which is atomic on the same filesystem) rather than a bare `>`
 redirect: a process that dies between the redirect's truncation and
 `date` finishing its write would otherwise leave a heartbeat file that
-exists but is empty — the live-run check above already treats that as
-stale, but only *because* it validates content, not just presence:
+exists but is empty — step 1's claim check above already treats that
+as stale, but only *because* it validates content, not just presence.
+Unlike `$WORKTREE_DIR`-derived paths, `--path-format=absolute
+--git-common-dir` doesn't need `-C` at all — it resolves to the same
+canonical main-repo path regardless of where cwd happens to be,
+so it's immune to the cwd-reset pitfall below on its own.
+
+Every refresh site from here through step 8 writes into `$LOCKDIR`
+*without* re-`mkdir`ing it — deliberately: the lock dir should already
+exist for the entire span between this claim and step 8's terminal
+non-merge stops (the only places that release it, and only *after* the
+fix-and-re-review loop in step 8 has already concluded — see step 8),
+so a refresh finding it missing is a genuine anomaly, not routine
+housekeeping. An earlier draft of this fix made refreshes self-heal
+with `mkdir -p`, reasoning a refresh "isn't an ownership decision." A
+Codex review of this change caught why that's wrong: if the lock is
+gone because a *different* invocation legitimately claimed the issue
+in the meantime (crash recovery, a stale reclaim, a human re-running
+`/work-issue <N>` after this session's own run ended) and this
+session's refresh code is still executing for some reason — a stray
+retry, a follow-up in the same conversation — `mkdir -p` would silently
+recreate the name and overwrite that invocation's heartbeat with this
+session's own, with neither side any the wiser that two invocations
+are now both editing the same worktree. That's the exact failure #35
+exists to close, reintroduced through the back door of "helpful"
+self-healing. Let the write fail loudly (the redirect errors with no
+such directory) instead — that's the correct signal to stop and
+re-verify ownership via **Claim the issue**, not silently patch over it.
+
+**A missing lock dir is the anomaly bare writes catch — a lock dir
+that exists but was legitimately reclaimed by someone else in between
+is a related, more dangerous case bare writes do *not* catch**: the
+directory is present, so the write succeeds and silently overwrites
+the new owner's heartbeat, without a mismatch to signal the takeover.
+Closing that fully needs an ownership token verified with real
+compare-and-swap semantics, which POSIX shell can't express atomically
+over the whole read-decide-write span (a token turns the problem into
+"don't let the compare-then-write itself get raced," which is the same
+shape of gap, just narrower) — tracked as a known residual gap in #72
+rather than fixed here:
 
 ```sh
-HEARTBEAT="$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"
-date +%s > "$HEARTBEAT.tmp" && mv "$HEARTBEAT.tmp" "$HEARTBEAT"
+LOCKDIR="$(git rev-parse --path-format=absolute --git-common-dir)/work-issue-lock-<N>"
+date +%s > "$LOCKDIR/heartbeat.tmp" && mv "$LOCKDIR/heartbeat.tmp" "$LOCKDIR/heartbeat"
 ```
 
-(same reasoning already applies to `$WORKTREE_DIR`/`$BRANCH` reused
-across steps 7-9 below — re-emit the assignment in each new Bash block
-rather than assuming it's still set.) `git -C ... rev-parse --git-dir`
-returns an absolute path even when `$WORKTREE_DIR` itself is relative
-(verified) — that matters given the cwd-reset pitfall below, since a
-relative write target would otherwise land wherever cwd happened to be
-for that particular Bash call, not where step 1's check reads from.
+(the same "re-derive, don't trust a remembered variable" reasoning
+already applies to `$WORKTREE_DIR`/`$BRANCH` reused across steps 7-9
+below — re-emit the assignment in each new Bash block rather than
+assuming it's still set; those two *do* still need `-C`/absoluteness
+care, since they resolve to worktree-relative paths, not the
+cwd-independent main-repo one above.)
 
 Everything from here on — reading, editing, building, testing,
 committing — happens *inside `$WORKTREE_DIR`*, not the original
 directory. If a worktree for this issue already exists (a prior
-attempt — the live-run check above already confirmed it's stale),
-reuse it rather than erroring or clobbering it: set `WORKTREE_DIR` to
-the existing path, and read `BRANCH` from what's actually checked out
-there —
+attempt — step 1's claim already confirmed it's stale and reclaimed
+it), reuse it rather than erroring or clobbering it: set `WORKTREE_DIR`
+to the existing path, and read `BRANCH` from what's actually checked
+out there —
 
 ```sh
 BRANCH="$(git -C "$WORKTREE_DIR" branch --show-current)"
-HEARTBEAT="$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"
-date +%s > "$HEARTBEAT.tmp" && mv "$HEARTBEAT.tmp" "$HEARTBEAT"
+LOCKDIR="$(git rev-parse --path-format=absolute --git-common-dir)/work-issue-lock-<N>"
+date +%s > "$LOCKDIR/heartbeat.tmp" && mv "$LOCKDIR/heartbeat.tmp" "$LOCKDIR/heartbeat"
 ```
 
 — instead of recomputing a fresh `SLUG`/`BRANCH` from the issue title.
@@ -235,8 +416,8 @@ substantial) before writing any implementation code. Don't proceed to
 step 5 on a plan the advisor pushed back on without addressing why.
 
 Refresh the heartbeat before moving on (re-derive the path and write
-atomically, per step 3's note): `H="$(git -C "$WORKTREE_DIR" rev-parse
---git-dir)/work-issue-heartbeat"; date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
+atomically, per step 3's note): `H="$(git rev-parse
+--path-format=absolute --git-common-dir)/work-issue-lock-<N>/heartbeat"; date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
 
 ## 5. Implement
 
@@ -248,9 +429,9 @@ the source of truth:
   program-input-derived data, comments explain why not what, tests
   live alongside the code they test).
 - Commit at reasonable checkpoints, not one giant commit at the end —
-  and refresh the heartbeat at each one (`H="$(git -C "$WORKTREE_DIR"
-  rev-parse --git-dir)/work-issue-heartbeat"; date +%s > "$H.tmp" &&
-  mv "$H.tmp" "$H"`). Without this, step 4's end and step 5's end are
+  and refresh the heartbeat at each one (`H="$(git rev-parse
+  --path-format=absolute --git-common-dir)/work-issue-lock-<N>/heartbeat";
+  date +%s > "$H.tmp" && mv "$H.tmp" "$H"`). Without this, step 4's end and step 5's end are
   the only two heartbeat refreshes bracketing the entire implementation
   phase — for any real code change (edit/build/test cycles, not just a
   doc tweak) that gap alone can exceed the 45-minute staleness
@@ -302,7 +483,7 @@ Refresh the heartbeat before this build (it's often the single
 longest-running step of the whole implementation phase):
 
 ```sh
-H="$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"
+H="$(git rev-parse --path-format=absolute --git-common-dir)/work-issue-lock-<N>/heartbeat"
 date +%s > "$H.tmp" && mv "$H.tmp" "$H"
 cargo build && cargo test && cargo clippy --all-targets && cargo fmt --all -- --check
 ```
@@ -310,9 +491,9 @@ cargo build && cargo test && cargo clippy --all-targets && cargo fmt --all -- --
 This is the same gate CI runs — clearing it locally first means the
 PR isn't the first place a break shows up.
 
-Refresh the heartbeat again once it's clean: `H="$(git -C
-"$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat"; date +%s >
-"$H.tmp" && mv "$H.tmp" "$H"`.
+Refresh the heartbeat again once it's clean: `H="$(git rev-parse
+--path-format=absolute --git-common-dir)/work-issue-lock-<N>/heartbeat";
+date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
 
 ## 6. Get the implementation reviewed before marking done
 
@@ -339,8 +520,8 @@ quality gate, and use your judgment on whether it's worth one more
 advisor pass — don't loop indefinitely chasing a clean bill of health
 on genuinely subjective feedback.
 
-Refresh the heartbeat: `H="$(git -C "$WORKTREE_DIR" rev-parse
---git-dir)/work-issue-heartbeat"; date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
+Refresh the heartbeat: `H="$(git rev-parse --path-format=absolute
+--git-common-dir)/work-issue-lock-<N>/heartbeat"; date +%s > "$H.tmp" && mv "$H.tmp" "$H"`.
 
 ## 7. Open the PR, update the issue
 
@@ -426,7 +607,7 @@ make a still-live run look stale to a concurrent invocation:
 
 ```sh
 rm -f /tmp/codex-review-<N>.json && \
-  H="$(git -C "$WORKTREE_DIR" rev-parse --git-dir)/work-issue-heartbeat" && \
+  H="$(git rev-parse --path-format=absolute --git-common-dir)/work-issue-lock-<N>/heartbeat" && \
   date +%s > "$H.tmp" && mv "$H.tmp" "$H" && \
   cd "$WORKTREE_DIR" && git fetch origin main && \
   test "$(git rev-parse --abbrev-ref HEAD)" = "$BRANCH" && \
@@ -528,13 +709,19 @@ any re-review, before continuing.
 
 With the review clean (nothing left unfixed without a stated reason,
 via whichever path ran), decide merge eligibility from the policy:
-- `human-only`: stop here. Report the PR as open and awaiting merge;
-  don't attempt to merge it.
+- `human-only`: stop here. Release the lock (`rm -rf "$(git rev-parse
+  --path-format=absolute --git-common-dir)/work-issue-lock-<N>"`) —
+  the label already flipped to `in-review` at step 7, so step 1 can't
+  re-select this issue via the automatic picker regardless, but
+  releasing explicitly here still matters for the explicit-number path
+  (`/work-issue <N>` re-run after a human closes this PR unmerged and
+  leaves the issue open, for instance). Report the PR as open and
+  awaiting merge; don't attempt to merge it.
 - `agent-full`: eligible regardless of diff size or files touched.
 - `size-and-risk-bar`: eligible only if the diff (excluding doc-only
   files) is under `max_changed_lines` and touches none of
-  `sensitive_paths`; otherwise stop here and say which condition it
-  missed, same as the `human-only` case.
+  `sensitive_paths`; otherwise stop here (same lock release as the
+  `human-only` case above) and say which condition it missed.
 
 If eligible, merge:
 
@@ -570,11 +757,16 @@ gh issue view <N> --json state   # confirm Closes #<N> auto-closed it
 git worktree remove "$WORKTREE_DIR" 2>&1 || true
 git -C "$(git rev-parse --show-toplevel)" branch -d "$BRANCH" 2>&1 || true
 git -C "$(git rev-parse --show-toplevel)" fetch origin --prune
+rm -rf "$(git rev-parse --path-format=absolute --git-common-dir)/work-issue-lock-<N>"
 ```
 
 `git worktree remove` can fail with "branch used by worktree" if run
 in the wrong order — remove the worktree *before* trying to delete the
-local branch, not after, or the branch delete will block on it.
+local branch, not after, or the branch delete will block on it. The
+lock removal is separate and explicit — unlike the old heartbeat file,
+the lock now lives in the *main repo's* shared git dir (step 1's
+**Claim the issue**), not inside the worktree's own git dir, so
+`git worktree remove` no longer cleans it up as a side effect.
 
 Report back: issue number and title, branch name, PR URL and its merge
 commit, and confirmation the issue closed and the worktree/branch were
@@ -667,3 +859,16 @@ there may be follow-up commits before a human merges it.
   `codex-companion.mjs` review job, poll it directly (`status --all
   --json` / `result <job-id> --json`, per the pitfall above) or via
   `Monitor`/background-task notifications — not `ScheduleWakeup`.
+- **The lock's `mkdir` and its first heartbeat write must be one `&&`
+  chain, never split** (step 1's **Claim the issue**) — splitting them
+  reopens the exact TOCTOU race #35 exists to close: a second
+  invocation's `mkdir` fails, it reads the not-yet-written heartbeat
+  as empty/stale, and steals from a run that already believes it won.
+  Same reasoning applies to the reclaim path's post-`mv` `mkdir` +
+  heartbeat write.
+- **The lock lives in the main repo's shared git dir
+  (`work-issue-lock-<N>`), not the worktree's** — this is deliberate
+  (a fresh pick has no worktree yet to hang a lock off of), but it
+  means `git worktree remove` at step 9 no longer cleans it up as a
+  side effect the way the old worktree-gitdir heartbeat file did.
+  Step 9's explicit `rm -rf` is load-bearing, not decorative.
