@@ -3,6 +3,48 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Surface CI test results on the PR (issue #24, 2026-08-14)
+
+Closes issue #24: `cargo test`'s real pass/fail counts and failure
+output are now posted directly on the PR and echoed to the issue it
+closes, not just visible via a green/red `test` status check that
+requires a trip into Actions to corroborate.
+
+- `.github/workflows/ci.yml`'s test step now tees output to a log,
+  runs under `continue-on-error: true`, and a new
+  `scripts/ci_test_summary.sh` turns that log into a markdown summary
+  (pass/fail/ignored counts, failing test names, panic output capped
+  at 4000 chars) written to `$GITHUB_STEP_SUMMARY` on every run and
+  posted via `gh pr comment --edit-last --create-if-none` on
+  `pull_request` runs — edited in place on re-push rather than
+  appended, so a PR doesn't accumulate one comment per commit.
+- The same summary is echoed to whichever issue the PR's `Closes
+  #N`/`Fixes #N`/`Resolves #N` line references, matching `work-issue`'s
+  PR template — read via `PR_BODY` env var rather than templated
+  directly into the `run:` script, since PR body text is
+  attacker-controlled on a public repo and interpolating it into a
+  shell command is a known Actions injection vector.
+- A separate final step re-fails the job if the (continue-on-error'd)
+  test step actually failed, so suppressing its immediate failure to
+  let the summary/comment steps run doesn't weaken the `test` required
+  check `SDLC.md` keys merge eligibility on.
+- The two comment-posting steps run under `continue-on-error: true` —
+  a fork PR's read-only `GITHUB_TOKEN` (a GitHub Actions security
+  default, not something this repo works around) or a transient GitHub
+  API error must not flip the `test` check red on a run where the
+  tests themselves passed; the job summary already carries the same
+  content as a fallback for that case.
+- Confirmed via `cli/cli`'s source that `--edit-last` scopes to the
+  *current authenticated user's* comments only, so `--create-if-none`
+  correctly creates on the first CI run even though the issue/PR
+  already has human comments from other authors (`work-issue`'s
+  "Opened <PR URL>" note, etc.) — it isn't fooled into thinking a
+  comment already exists.
+- Deferred: clippy/build/fmt results aren't surfaced the same way —
+  the issue scoped this to test evidence specifically, and those three
+  already fail the job outright with output in the existing status
+  check, so there's less of a "trust me, it passed" gap to close there.
+
 ## Sweep / contact-sheet rendering (issue #21, 2026-08-14)
 
 Closes issue #21: render a file once per seed or parameter value in a

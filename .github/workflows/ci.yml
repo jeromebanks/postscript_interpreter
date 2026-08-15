@@ -2,12 +2,29 @@
 # the automated half of AGENTS.md's quality bar (`cargo build && cargo
 # test && cargo clippy --all-targets && cargo fmt --check`), so a PR
 # can't land without it passing.
+#
+# The test step's real pass/fail counts and failure output are also
+# posted as a PR comment (and echoed to the linked issue) via
+# scripts/ci_test_summary.sh — not just the green/red `test` status
+# check — so a PR carries evidence tests actually ran, not just a
+# self-reported checkbox (issue #24). Comments only happen on
+# `pull_request` runs, where GITHUB_TOKEN gets write access from
+# workflow-level `permissions:` below; PRs from forks still get a
+# read-only token regardless (a GitHub Actions security default, not
+# something to work around here), so the comment step silently no-ops
+# for those. The job summary always gets the same content via
+# $GITHUB_STEP_SUMMARY, fork PRs included.
 name: ci
 
 on:
   push:
     branches: ["main"]
   pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
 
 jobs:
   test:
@@ -21,4 +38,45 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo build
-      - run: cargo test
+      - name: Run tests
+        id: test
+        continue-on-error: true
+        run: cargo test 2>&1 | tee test-output.log
+
+      - name: Summarize test results
+        if: "!cancelled() && steps.test.outcome != 'skipped'"
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          ./scripts/ci_test_summary.sh test-output.log "${{ steps.test.outcome }}" "$RUN_URL" \
+            | tee test-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      # continue-on-error: a comment-posting failure (fork PR read-only
+      # token, transient API error) must not flip the required `test`
+      # check red on a run where the actual tests passed — the job
+      # summary above already carries the same content as a fallback.
+      - name: Comment on PR
+        if: "!cancelled() && steps.test.outcome != 'skipped' && github.event_name == 'pull_request'"
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --body-file test-summary.md --edit-last --create-if-none
+
+      - name: Comment on linked issue
+        if: "!cancelled() && steps.test.outcome != 'skipped' && github.event_name == 'pull_request'"
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          issue=$(printf '%s' "$PR_BODY" \
+            | grep -Eio '(Closes|Fixes|Resolves) #[0-9]+' | grep -Eo '[0-9]+' | head -1 || true)
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --body-file test-summary.md --edit-last --create-if-none
+          fi
+
+      - name: Fail job if tests failed
+        if: steps.test.outcome == 'failure'
+        run: exit 1
