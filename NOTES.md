@@ -237,6 +237,41 @@ inclusive upper-bound endpoint even though every real value along the
 way was finite — fixed by accumulating incrementally (`v += step`)
 instead of recomputing from an index each time.
 
+A sixth pass was considered but not run: by round five the findings had
+shifted from bugs in this issue's own diff to a pre-existing property
+of the interpreter (`Interp::with_page_scaled`, documented in
+`HANDOFF.md` well before issue #21) and to inputs no real caller would
+send (`--grid 70000x70000`, `1e400` seeds) — a signal to stop reviewing
+and instead act on what round five had already surfaced, rather than
+asking a reviewer that has run out of diff to review for one more
+round. Two things from round five's own findings still needed
+follow-up, both applied without a further review round:
+
+`break_permanent_dict_cycle` originally took `&mut self` with a doc
+comment saying "safe to call only once you're done with this
+`Interp`" — a real but purely-documented guarantee on a `pub fn` in a
+library crate. Changed it to take `self` by value instead: calling it
+now consumes the `Interp`, so a caller that mistakenly tried to keep
+using it afterward gets a compile error (use of moved value) rather
+than a runtime `undefined` once systemdict's operators are gone. This
+is a better fix than a stronger doc comment or a debug assertion
+because the compiler enforces it unconditionally, not just in debug
+builds or for a reader who read the comment.
+
+Re-reading the fix with "who else constructs many `Interp`s in one
+process run" in mind (the exact question round five's finding raised)
+turned up a second, live instance of the same leak that hadn't been
+touched: `--spool`'s watch loop (`window.rs::poll_spool`) constructs a
+fresh `Interp` per job and assigns it into a struct field
+(`self.interp = interp`), which drops the *previous* job's `Interp` in
+place — and unlike the sweep loop's bounded frame count, `--spool`
+runs indefinitely, so this leaked one systemdict/userdict cycle per
+completed job for the life of the process. Fixed with `mem::replace`
+to pull the outgoing job's `Interp` out of the field before the new
+one overwrites it, then `break_permanent_dict_cycle()` on the
+returned value. `HANDOFF.md`'s gotcha note now names both call sites
+so a future third one doesn't get missed the same way.
+
 ## Axial/radial gradient (shading) fill support (issue #20, 2026-08-14)
 
 Closes issue #20. The interpreter had no `shfill`/shading machinery at

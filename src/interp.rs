@@ -1181,21 +1181,26 @@ impl Interp {
         self.seed_override_fired
     }
 
-    /// Break systemdict's self-referential `Rc` cycle. systemdict
-    /// holds a strong reference to itself and to `userdict` (per the
-    /// PLRM's "found code writes `systemdict begin`" idiom); with
-    /// plain `Rc` and no cycle collector, that means neither dict —
-    /// nor anything a program stored in `userdict` — is ever freed by
-    /// simply dropping the `Interp` (see `HANDOFF.md`'s "systemdict
-    /// self-reference" gotcha). Normally that's one small, bounded,
-    /// process-lifetime leak and genuinely doesn't matter. It stops
-    /// being bounded for a caller that constructs many `Interp`s
-    /// within one process run (issue #21's `--sweep-seed`/`--sweep`
-    /// loop) — call this once a given `Interp` is done running and
-    /// about to be dropped, and nothing will run PostScript on it
-    /// again (it empties systemdict, including every built-in
-    /// operator, which is fine since nothing needs them afterward).
-    pub fn break_permanent_dict_cycle(&mut self) {
+    /// Break systemdict's self-referential `Rc` cycle and consume this
+    /// `Interp`. systemdict holds a strong reference to itself and to
+    /// `userdict` (per the PLRM's "found code writes `systemdict
+    /// begin`" idiom); with plain `Rc` and no cycle collector, that
+    /// means neither dict — nor anything a program stored in
+    /// `userdict` — is ever freed by simply dropping the `Interp` (see
+    /// `HANDOFF.md`'s "systemdict self-reference" gotcha). Normally
+    /// that's one small, bounded, process-lifetime leak and genuinely
+    /// doesn't matter. It stops being bounded for a caller that
+    /// constructs many `Interp`s within one process run (issue #21's
+    /// `--sweep-seed`/`--sweep` loop, and `--spool`'s one-`Interp`-
+    /// per-job pattern) — call this once a given `Interp` is done
+    /// running, in place of dropping it directly. Taking `self` by
+    /// value (not `&mut self`) makes "nothing runs PostScript on it
+    /// again" a compile-time guarantee rather than a documented
+    /// promise: emptying systemdict here removes every built-in
+    /// operator, so a caller that kept the `Interp` around and tried
+    /// to use it afterward would otherwise hit `undefined` errors at
+    /// runtime instead of a compile error.
+    pub fn break_permanent_dict_cycle(self) {
         if let Some(system) = self.dstack.first() {
             system.borrow_mut().clear();
         }
@@ -1316,10 +1321,9 @@ mod tests {
     /// entry are both strong `Rc`s with no cycle collector).
     #[test]
     fn break_permanent_dict_cycle_frees_userdict() {
-        let mut interp = Interp::new();
+        let interp = Interp::new();
         let weak = std::rc::Rc::downgrade(&interp.dstack[1]);
         interp.break_permanent_dict_cycle();
-        drop(interp);
         assert!(weak.upgrade().is_none(), "userdict must be freed");
     }
 

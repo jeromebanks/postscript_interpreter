@@ -339,7 +339,16 @@ impl App {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| job.display().to_string());
             self.options.title = format!("{base_title} — {name}");
-            self.interp = interp;
+            // Same leak as the sweep loop, different shape: this
+            // assignment drops the *previous* job's Interp in place,
+            // and --spool's whole point is to keep watching (and thus
+            // constructing fresh Interps) indefinitely, so an
+            // unbounded number of systemdict/userdict cycles would
+            // otherwise pile up for the life of the process (round-5
+            // cross-model review, PR #66; see
+            // Interp::break_permanent_dict_cycle's doc comment).
+            let finished = std::mem::replace(&mut self.interp, interp);
+            finished.break_permanent_dict_cycle();
             self.running = true;
             self.had_error = false;
             self.back = 0;

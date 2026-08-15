@@ -361,11 +361,20 @@ renders eight examples in both and compares block-downsampled output).
   usual one-`Interp`-per-process pattern, but it also leaks `userdict`
   (and everything a program stored there), since systemdict holds a
   strong reference to it too. A caller that constructs many `Interp`s
-  in one process run (issue #21's `--sweep-seed`/`--sweep`) must call
-  `Interp::break_permanent_dict_cycle()` on each one before dropping
-  it, or that stops being bounded — confirmed empirically via
-  `Rc::downgrade`/`strong_count`, not just reasoned about (NOTES.md's
-  issue #21 entry has the story).
+  in one process run must call `Interp::break_permanent_dict_cycle(self)`
+  on each one instead of just dropping it, or that stops being
+  bounded — confirmed empirically via `Rc::downgrade`/`strong_count`,
+  not just reasoned about (NOTES.md's issue #21 entry has the story).
+  It takes `self` by value specifically so a caller can't accidentally
+  keep using an `Interp` after its systemdict has been emptied — that
+  would be a compile error, not a silent `undefined` at runtime. Two
+  call sites do this today: issue #21's `--sweep-seed`/`--sweep` loop
+  (`main.rs::run_sweep`, one call per frame) and `--spool`'s per-job
+  loop (`window.rs::poll_spool`, via `mem::replace` to get the
+  outgoing job's `Interp` out of the struct field before the new one
+  overwrites it). Any future caller that constructs more than one
+  `Interp` in a long-running or high-iteration process should do the
+  same.
 - tiny-skia `Transform::from_row(sx, ky, kx, sy, tx, ty)` matches the
   PS matrix order `[a b c d tx ty]` — `ops/matrix.rs` documents it;
   don't rediscover this the hard way.
