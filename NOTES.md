@@ -64,7 +64,15 @@ a `perf-regression` job in `.github/workflows/ci.yml` close that gap.
   jitter, not interpretation, and was the noisiest row in every local
   smoke test. Below the floor its time metric can still warn but never
   contributes to a job failure; `fern`/`fib`/`defloop` all clear it
-  comfortably.
+  comfortably. This floor is *absolute* but proxies a *relative*
+  property (startup-dominated), which only holds as long as the
+  runner's actual launch overhead stays well under 15ms — flagged as a
+  watch item on issue #68 rather than redesigned now, since there's no
+  GitHub-runner data yet to size it against. When a row is
+  floor-suppressed despite a delta past `FAIL_PCT`, the report says so
+  explicitly (a line below the table) — the closing summary says "no
+  workload **failed the gate**," not "no workload regressed," so it
+  can never contradict a visibly large delta sitting right above it.
 - Delivery mirrors issue #24's `ci_test_summary.sh` pattern, with one
   change from how #24 shipped: both this job and the `test` job now
   post via a new `scripts/gh_comment_upsert.sh` (find-by-marker,

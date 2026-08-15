@@ -217,6 +217,7 @@ fn main() {
     println!("|---|---|---|---|---|---|");
 
     let mut any_fail = false;
+    let mut floor_suppressed: Vec<String> = Vec::new();
     for w in workloads() {
         // Interleave which side runs first each iteration so drift
         // over the loop doesn't all land on one side.
@@ -278,9 +279,18 @@ fn main() {
 
         let ms_pct = pct_delta(base_m.ms, head_m.ms);
         let rss_pct = pct_delta(base_m.rss_bytes as f64, head_m.rss_bytes as f64);
-        let (ms_label, ms_fails) = classify(ms_pct, base_m.ms >= MIN_MS_FOR_FAIL);
+        let clears_floor = base_m.ms >= MIN_MS_FOR_FAIL;
+        let (ms_label, ms_fails) = classify(ms_pct, clears_floor);
         let (rss_label, rss_fails) = classify(rss_pct, true);
         any_fail = any_fail || ms_fails || rss_fails;
+        if !clears_floor && ms_pct >= FAIL_PCT {
+            floor_suppressed.push(format!(
+                "`{}`: time delta ({:+.1}%) exceeds the {FAIL_PCT:.0}% fail threshold, but \
+                 base time ({:.0}ms) is under the {MIN_MS_FOR_FAIL:.0}ms floor — not gated, \
+                 treated as launch-jitter-dominated rather than a real regression.",
+                w.name, ms_pct, base_m.ms
+            ));
+        }
 
         println!(
             "| {} | time | {:.0}ms | {:.0}ms | {:+.1}% | {} |",
@@ -296,16 +306,26 @@ fn main() {
         );
     }
 
+    if !floor_suppressed.is_empty() {
+        println!();
+        for note in &floor_suppressed {
+            println!("> \u{26a0}\u{fe0f} {note}");
+        }
+    }
+
     println!();
     if any_fail {
         println!(
-            "**Result: \u{274c} regression \u{2265}{FAIL_PCT:.0}% detected** — see rows above."
+            "**Result: \u{274c} failed the gate** — a workload regressed \
+             \u{2265}{FAIL_PCT:.0}% and cleared the {MIN_MS_FOR_FAIL:.0}ms floor; see rows \
+             above."
         );
         std::process::exit(1);
     } else {
         println!(
-            "**Result: \u{2705} no workload regressed \u{2265}{FAIL_PCT:.0}%.** Rows marked \
-             \u{26a0}\u{fe0f} above are worth a human glance, not blocking."
+            "**Result: \u{2705} no workload failed the gate.** Rows marked \u{26a0}\u{fe0f} \
+             above, plus any floor-suppressed note below the table, are worth a human \
+             glance, not blocking."
         );
     }
 }
