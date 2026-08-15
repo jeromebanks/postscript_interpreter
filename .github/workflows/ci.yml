@@ -14,6 +14,23 @@
 # something to work around here), so the comment step silently no-ops
 # for those. The job summary always gets the same content via
 # $GITHUB_STEP_SUMMARY, fork PRs included.
+#
+# The perf-regression job (issue #25) runs benches/regression.rs,
+# comparing a HEAD-built `pscat` binary against one built from the
+# PR's merge base *on the same runner, in the same job* — same-job A/B
+# rather than a stored cross-run baseline, so runner-to-runner
+# hardware/thermal noise cancels out instead of contaminating the
+# comparison. It posts the same way the test summary does. It is
+# deliberately NOT in `required_status_checks` below (see SDLC.md) —
+# a red ❌ here is a strong signal, not an enforced merge block; see
+# NOTES.md for why and the follow-up issue tracking promoting it.
+#
+# Both jobs post via scripts/gh_comment_upsert.sh (a marker-based
+# find-or-create/update), not `gh pr comment --edit-last`: `--edit-last`
+# scopes to the authenticated user's *most recent* comment with no
+# content awareness, so two jobs both posting as github-actions[bot]
+# would clobber each other's comment on every run instead of each
+# keeping its own updated in place.
 name: ci
 
 on:
@@ -78,8 +95,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh pr comment "${{ github.event.pull_request.number }}" \
-            --body-file test-summary.md --edit-last --create-if-none
+          ./scripts/gh_comment_upsert.sh '<!-- ci-test-summary -->' \
+            "${{ github.event.pull_request.number }}" test-summary.md
 
       - name: Comment on linked issue
         if: "!cancelled() && github.event_name == 'pull_request'"
@@ -91,9 +108,97 @@ jobs:
           issue=$(printf '%s' "$PR_BODY" \
             | grep -Eio '(Closes|Fixes|Resolves) #[0-9]+' | grep -Eo '[0-9]+' | head -1 || true)
           if [ -n "$issue" ]; then
-            gh issue comment "$issue" --body-file test-summary.md --edit-last --create-if-none
+            ./scripts/gh_comment_upsert.sh '<!-- ci-test-summary -->' "$issue" test-summary.md
           fi
 
       - name: Fail job if tests failed
         if: steps.test.outcome == 'failure'
+        run: exit 1
+
+  perf-regression:
+    # Only meaningful on a PR — the comparison is HEAD vs. the PR's
+    # merge base, and a bare push to main has no "base" to diff.
+    if: github.event_name == 'pull_request'
+    runs-on: macos-latest
+    defaults:
+      run:
+        shell: bash
+        # head/ is checked out below; everything past that checkout
+        # step runs with head/ as cwd by default (workload .ps files
+        # and scripts/gh_comment_upsert.sh both need to resolve
+        # against HEAD's checkout, not the job root).
+        working-directory: head
+    steps:
+      - name: Check out HEAD
+        uses: actions/checkout@v4
+        with:
+          path: head
+      - name: Check out merge base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            head -> target
+            base -> target
+
+      - name: Build HEAD pscat binary (release)
+        run: cargo build --release --bin pscat
+      - name: Build base pscat binary (release)
+        working-directory: base
+        run: cargo build --release --bin pscat
+
+      # benches/regression.rs only exists on HEAD (it's what this PR
+      # adds) — it is compiled from the head/ checkout and pointed at
+      # both prebuilt binaries by path, rather than each side running
+      # its own copy of the harness. This also means workload .ps
+      # files always come from HEAD for both sides: a PR that only
+      # edits a gallery file can't masquerade as an interpreter
+      # regression.
+      - name: Run perf/memory regression check
+        id: perf
+        continue-on-error: true
+        run: |
+          cargo bench --bench regression -- \
+            --head "$GITHUB_WORKSPACE/head/target/release/pscat" \
+            --base "$GITHUB_WORKSPACE/base/target/release/pscat" \
+            --runs 5 > perf-summary.md
+
+      - name: Post job summary
+        if: "!cancelled()"
+        run: cat perf-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      # continue-on-error: same reasoning as the test job's comment
+      # steps — a comment-posting failure must not obscure the actual
+      # perf result, which the job summary above already carries.
+      - name: Comment on PR
+        if: "!cancelled()"
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./scripts/gh_comment_upsert.sh '<!-- perf-regression -->' \
+            "${{ github.event.pull_request.number }}" perf-summary.md
+
+      - name: Comment on linked issue
+        if: "!cancelled()"
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          issue=$(printf '%s' "$PR_BODY" \
+            | grep -Eio '(Closes|Fixes|Resolves) #[0-9]+' | grep -Eo '[0-9]+' | head -1 || true)
+          if [ -n "$issue" ]; then
+            ./scripts/gh_comment_upsert.sh '<!-- perf-regression -->' "$issue" perf-summary.md
+          fi
+
+      # Not in required_status_checks (SDLC.md) — see the module
+      # comment at the top of this file — but the job itself still
+      # goes red on a >=FAIL_PCT regression so it's a visible signal.
+      - name: Fail job if regression check failed
+        if: steps.perf.outcome == 'failure'
         run: exit 1

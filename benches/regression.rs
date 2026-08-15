@@ -1,0 +1,405 @@
+//! CI perf/memory regression gate — issue #25. Unlike `perf.rs` (a
+//! dev-loop tripwire run by hand against one build) and `vs_gs.rs`
+//! (pscat vs Ghostscript), this bench compares two *already-built*
+//! `pscat` binaries — the PR's HEAD and the PR's merge base — on the
+//! same runner, in the same job, so runner-to-runner hardware/thermal
+//! noise (a real risk on shared GitHub-hosted macOS runners) cancels
+//! out instead of contaminating the comparison. `.github/workflows/
+//! ci.yml`'s `perf-regression` job builds both binaries (from two
+//! separate checkouts) and invokes this bench — which is compiled
+//! from the HEAD checkout only — pointed at both paths. Workload `.ps`
+//! files always come from the HEAD checkout, for both sides: this
+//! means a PR that only edits `gallery/fern.ps` correctly shows up as
+//! a workload change, not a false "interpreter regression."
+//!
+//! Run with `cargo bench --bench regression -- --head <path-to-pscat>
+//! --base <path-to-pscat> [--runs N]`. Prints a markdown report to
+//! stdout (posted verbatim to the PR/issue by ci.yml, mirroring
+//! `scripts/ci_test_summary.sh`'s delivery shape) and exits non-zero
+//! if any workload regressed past `FAIL_PCT`, or if peak-RSS
+//! measurement failed outright (an infra problem, not a real
+//! signal — must not silently read as "no regression"). A plain
+//! `cargo bench` (no `--` args) runs every `[[bench]]` target
+//! including this one — with neither flag given, this bench prints a
+//! one-line skip notice and exits 0 rather than panicking, so it
+//! doesn't break `perf.rs`'s documented bare-`cargo bench` workflow.
+//!
+//! A workload whose *base* binary exits non-zero (e.g. a feature PR
+//! that both adds a PostScript operator and updates
+//! `gallery/fern.ps`/`examples/sierpinski.ps` to use it — normal per
+//! `AGENTS.md`'s note that gallery art tracks the interpreter's
+//! current operator set) is reported as "incomparable" rather than
+//! crashing the whole check: the base build genuinely cannot run
+//! HEAD-only workload content, which isn't a regression signal. A
+//! HEAD binary that exits non-zero is a hard failure instead — that
+//! means this PR broke the interpreter itself, not a base-mismatch.
+
+use std::process::Command;
+use std::time::Instant;
+
+/// Below this, a delta is noise — don't even mention it.
+const WARN_PCT: f64 = 20.0;
+/// Above this, a delta is implausible as pure CI noise for these
+/// workloads (see NOTES.md Stage 8/11 for stable same-hardware
+/// numbers) — fail the job. Not wired into `required_status_checks`
+/// yet (see NOTES.md and the PR this bench shipped in); a failing job
+/// here is a strong signal, not an enforced merge block.
+const FAIL_PCT: f64 = 50.0;
+/// A workload whose *base* wall time is below this is dominated by
+/// process-launch jitter, not interpretation — `sierpinski` measures
+/// ~5ms against a ~4ms startup baseline (see `vs_gs.rs`/NOTES Stage
+/// 11), so a couple of ms of scheduler noise reads as a large
+/// percentage. Below this floor, the time metric can still warn but
+/// never fails the job.
+const MIN_MS_FOR_FAIL: f64 = 15.0;
+
+struct Workload {
+    name: &'static str,
+    source: Source,
+    page: Option<(u32, u32)>,
+}
+
+enum Source {
+    Snippet(&'static str),
+    File(&'static str),
+}
+
+const FIB: &str =
+    "/fib { dup 2 lt { pop 1 } { dup 1 sub fib exch 2 sub fib add } ifelse } def 27 fib pop";
+const DEFLOOP: &str = "/x 0 def 200000 { /x x 1 add def } repeat";
+
+fn workloads() -> [Workload; 4] {
+    [
+        Workload {
+            name: "fib 27",
+            source: Source::Snippet(FIB),
+            page: None,
+        },
+        Workload {
+            name: "defloop 200k",
+            source: Source::Snippet(DEFLOOP),
+            page: None,
+        },
+        Workload {
+            name: "sierpinski",
+            source: Source::File("examples/sierpinski.ps"),
+            page: Some((500, 500)),
+        },
+        Workload {
+            name: "fern",
+            source: Source::File("gallery/fern.ps"),
+            page: Some((620, 800)),
+        },
+    ]
+}
+
+fn pscat_cmd(binary: &str, w: &Workload) -> Command {
+    let mut c = Command::new(binary);
+    if let Some((pw, ph)) = w.page {
+        c.arg("--page").arg(format!("{pw}x{ph}"));
+    }
+    match &w.source {
+        Source::Snippet(s) => {
+            c.arg("-e").arg(s);
+        }
+        Source::File(f) => {
+            c.arg("--headless").arg(f);
+        }
+    }
+    c
+}
+
+struct Sample {
+    secs: f64,
+    rss: Option<u64>,
+}
+
+/// One timed + RSS-measured invocation via `/usr/bin/time -l`
+/// (macOS). `perf.rs`/`vs_gs.rs` established this as the working
+/// peak-RSS source on this repo's actual CI platform. `Err` means the
+/// workload itself exited non-zero under `binary` — a content/binary
+/// mismatch, not an infra problem, so callers decide whether that's
+/// fatal (HEAD) or just "incomparable" (base). Failing to launch
+/// `/usr/bin/time` at all is a genuine infra problem and still
+/// panics directly.
+fn sample(binary: &str, w: &Workload) -> Result<Sample, String> {
+    let inner = pscat_cmd(binary, w);
+    let mut timed = Command::new("/usr/bin/time");
+    timed.arg("-l").arg(inner.get_program());
+    timed.args(inner.get_args());
+    timed.stdout(std::process::Stdio::null());
+
+    let t = Instant::now();
+    let out = timed
+        .output()
+        .unwrap_or_else(|e| panic!("failed to launch /usr/bin/time for {}: {e}", w.name));
+    let secs = t.elapsed().as_secs_f64();
+    if !out.status.success() {
+        // stderr is the workload's own error output followed by
+        // /usr/bin/time -l's resource-usage report — cap it so a
+        // failure note stays readable in a PR comment instead of
+        // dumping the full time -l block.
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let snippet: String = stderr.chars().take(200).collect();
+        return Err(format!("exited non-zero under binary {binary}: {snippet}"));
+    }
+    let text = String::from_utf8_lossy(&out.stderr);
+    let rss = text
+        .lines()
+        .find(|l| l.contains("maximum resident set size"))
+        .and_then(|l| l.split_whitespace().next())
+        .and_then(|n| n.parse::<u64>().ok());
+    Ok(Sample { secs, rss })
+}
+
+struct Measurement {
+    /// Best-of-N wall time.
+    ms: f64,
+    /// Median of successfully captured peak-RSS samples.
+    rss_bytes: u64,
+}
+
+/// Reduces one side's per-run samples to best-of-N wall time and
+/// median peak RSS. Panics (hard CI failure, not a silent "-") unless
+/// a *strict* majority of runs yielded an RSS reading — exactly half
+/// is not a majority, so e.g. 2 of 4 must still fail this check.
+fn finish(mut ms: Vec<f64>, mut rss: Vec<u64>, side: &str, name: &str) -> Measurement {
+    if rss.len() * 2 <= ms.len() {
+        panic!(
+            "workload {name}: /usr/bin/time -l reported peak RSS for only {}/{} {side} \
+             runs — treat as a broken measurement environment",
+            rss.len(),
+            ms.len()
+        );
+    }
+    ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    rss.sort_unstable();
+    let ms_best = ms[0] * 1000.0;
+    let rss_med = rss[rss.len() / 2];
+    Measurement {
+        ms: ms_best,
+        rss_bytes: rss_med,
+    }
+}
+
+/// Runs `runs` interleaved samples of `w` against both binaries. A
+/// HEAD-side workload failure panics (this PR broke the interpreter).
+/// A base-side failure returns `Err` — the base build genuinely can't
+/// run HEAD-only workload content (e.g. a feature PR that both adds
+/// an operator and updates a workload `.ps` file to use it), which
+/// isn't a regression signal, so the caller reports it as
+/// incomparable rather than crashing the whole check.
+fn measure_workload(
+    head: &str,
+    base: &str,
+    w: &Workload,
+    runs: u32,
+) -> Result<(Measurement, Measurement), String> {
+    let mut head_ms = Vec::new();
+    let mut head_rss = Vec::new();
+    let mut base_ms = Vec::new();
+    let mut base_rss = Vec::new();
+
+    let sample_head = |binary: &str| {
+        sample(binary, w).unwrap_or_else(|e| panic!("HEAD workload {}: {e}", w.name))
+    };
+
+    for run_idx in 0..runs {
+        // Interleave which side runs first each iteration so drift
+        // over the loop doesn't all land on one side.
+        let (h, b) = if run_idx % 2 == 0 {
+            let h = sample_head(head);
+            let b = sample(base, w)?;
+            (h, b)
+        } else {
+            let b = sample(base, w)?;
+            let h = sample_head(head);
+            (h, b)
+        };
+        head_ms.push(h.secs);
+        if let Some(r) = h.rss {
+            head_rss.push(r);
+        }
+        base_ms.push(b.secs);
+        if let Some(r) = b.rss {
+            base_rss.push(r);
+        }
+    }
+
+    let head_m = finish(head_ms, head_rss, "head", w.name);
+    let base_m = finish(base_ms, base_rss, "base", w.name);
+    Ok((head_m, base_m))
+}
+
+fn pct_delta(base: f64, head: f64) -> f64 {
+    if base == 0.0 {
+        0.0
+    } else {
+        (head - base) / base * 100.0
+    }
+}
+
+/// A metric increasing (slower / more memory) is a regression; a
+/// metric *decreasing* by a large amount is flagged too (a workload
+/// that quietly stopped doing its work would also look "faster"), but
+/// worded as a surprise, not a regression, and never fails the job —
+/// only a large *positive* delta does that, and only when
+/// `allow_fail` (the workload ran long enough that the delta isn't
+/// just launch jitter).
+fn classify(pct: f64, allow_fail: bool) -> (&'static str, bool) {
+    if allow_fail && pct >= FAIL_PCT {
+        ("\u{274c} regression", true)
+    } else if pct >= WARN_PCT {
+        ("\u{26a0}\u{fe0f} slower/bigger", false)
+    } else if pct <= -WARN_PCT {
+        ("\u{26a0}\u{fe0f} surprisingly faster/smaller", false)
+    } else {
+        ("\u{2705}", false)
+    }
+}
+
+/// `None` means neither `--head` nor `--base` was given — the case
+/// when a plain `cargo bench` (no `--` args) runs every `[[bench]]`
+/// target, this one included; `main` treats that as "nothing to
+/// compare, skip cleanly" rather than a usage error. Exactly one of
+/// the two given without the other is still a real usage error.
+fn parse_args() -> Option<(String, String, u32)> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut head = None;
+    let mut base = None;
+    let mut runs = 5u32;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--head" => {
+                head = args.get(i + 1).cloned();
+                i += 2;
+            }
+            "--base" => {
+                base = args.get(i + 1).cloned();
+                i += 2;
+            }
+            "--runs" => {
+                runs = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(runs);
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+    match (head, base) {
+        (None, None) => None,
+        (Some(head), Some(base)) => Some((head, base, runs)),
+        _ => panic!(
+            "--head and --base must both be given together (or neither, which skips this \
+             bench cleanly under plain `cargo bench`)"
+        ),
+    }
+}
+
+fn main() {
+    let Some((head, base, runs)) = parse_args() else {
+        println!(
+            "## Perf/memory regression check\n\nSkipped: no --head/--base given. This bench \
+             is meant to be invoked by ci.yml's perf-regression job with explicit binary \
+             paths; a bare `cargo bench` runs every [[bench]] target, this one included, so \
+             it exits cleanly here instead of erroring."
+        );
+        return;
+    };
+
+    println!("## Perf/memory regression check");
+    println!();
+    println!(
+        "Comparing HEAD against merge base, {runs} interleaved runs per workload on this \
+         runner (same-job A/B — not a stored cross-run baseline, to cancel out \
+         runner-to-runner noise). \u{2705} < {WARN_PCT:.0}% delta (noise); \u{26a0}\u{fe0f} \
+         \u{2265}{WARN_PCT:.0}% either direction (a large *improvement* is flagged too, since \
+         a workload that silently stopped doing its work would also look faster); \u{274c} \
+         \u{2265}{FAIL_PCT:.0}% *slower/bigger* fails this job (never a large improvement — \
+         only a regression fails). A workload whose base time is under {MIN_MS_FOR_FAIL:.0}ms \
+         is dominated by process-launch jitter, not interpretation, so its time metric can \
+         warn but never fails. **Not currently a required status check** — a red \u{274c} \
+         here is a strong signal for a human/agent to look at, not an enforced merge block."
+    );
+    println!();
+    println!("| workload | metric | base | head | \u{394} | |");
+    println!("|---|---|---|---|---|---|");
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    for w in workloads() {
+        let (head_m, base_m) = match measure_workload(&head, &base, &w, runs) {
+            Ok(pair) => pair,
+            Err(reason) => {
+                println!(
+                    "| {} | (incomparable) | \u{2014} | \u{2014} | \u{2014} | \u{26a0}\u{fe0f} |",
+                    w.name
+                );
+                notes.push(format!(
+                    "`{}`: base binary couldn't run this workload ({reason}) — likely uses a \
+                     PostScript operator only added in this PR. Treated as incomparable, not \
+                     gated.",
+                    w.name
+                ));
+                continue;
+            }
+        };
+
+        let ms_pct = pct_delta(base_m.ms, head_m.ms);
+        let rss_pct = pct_delta(base_m.rss_bytes as f64, head_m.rss_bytes as f64);
+        let clears_floor = base_m.ms >= MIN_MS_FOR_FAIL;
+        let (ms_label, ms_fails) = classify(ms_pct, clears_floor);
+        let (rss_label, rss_fails) = classify(rss_pct, true);
+        if ms_fails {
+            failures.push(format!("`{}` time ({:+.1}%)", w.name, ms_pct));
+        }
+        if rss_fails {
+            failures.push(format!("`{}` peak RSS ({:+.1}%)", w.name, rss_pct));
+        }
+        if !clears_floor && ms_pct >= FAIL_PCT {
+            notes.push(format!(
+                "`{}`: time delta ({:+.1}%) exceeds the {FAIL_PCT:.0}% fail threshold, but \
+                 base time ({:.0}ms) is under the {MIN_MS_FOR_FAIL:.0}ms floor — not gated, \
+                 treated as launch-jitter-dominated rather than a real regression.",
+                w.name, ms_pct, base_m.ms
+            ));
+        }
+
+        println!(
+            "| {} | time | {:.0}ms | {:.0}ms | {:+.1}% | {} |",
+            w.name, base_m.ms, head_m.ms, ms_pct, ms_label
+        );
+        println!(
+            "| {} | peak RSS | {:.1}MB | {:.1}MB | {:+.1}% | {} |",
+            w.name,
+            base_m.rss_bytes as f64 / (1024.0 * 1024.0),
+            head_m.rss_bytes as f64 / (1024.0 * 1024.0),
+            rss_pct,
+            rss_label
+        );
+    }
+
+    if !notes.is_empty() {
+        println!();
+        for note in &notes {
+            println!("> \u{26a0}\u{fe0f} {note}");
+        }
+    }
+
+    println!();
+    if !failures.is_empty() {
+        println!(
+            "**Result: \u{274c} failed the gate** — regressed \u{2265}{FAIL_PCT:.0}%: \
+             {}.",
+            failures.join(", ")
+        );
+        std::process::exit(1);
+    } else {
+        println!(
+            "**Result: \u{2705} no workload failed the gate.** Rows marked \u{26a0}\u{fe0f} \
+             above, plus any note below the table, are worth a human glance, not blocking."
+        );
+    }
+}

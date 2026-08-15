@@ -3,6 +3,149 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Gate merges on a perf/memory regression check (issue #25, 2026-08-15)
+
+Closes issue #25: `benches/perf.rs` and `benches/vs_gs.rs` existed as
+regression tripwires nobody pulled — `cargo bench` wasn't part of CI,
+and memory wasn't measured at all. A new `benches/regression.rs` plus
+a `perf-regression` job in `.github/workflows/ci.yml` close that gap.
+
+- **Same-job A/B, not a stored baseline.** The job checks out both the
+  PR's HEAD and its merge base (`github.event.pull_request.base.sha`)
+  into `head/`/`base/`, builds a release `pscat` binary from each, then
+  runs `benches/regression.rs` — compiled from `head/` only — pointed
+  at both binaries by path. Comparing on the *same runner in the same
+  job* cancels out GitHub-hosted macOS runner-to-runner hardware/
+  thermal noise, which the issue flagged as a real risk, rather than
+  inheriting it the way a baseline stored from a separate prior run
+  would. `benches/regression.rs` only exists on HEAD, so this also
+  sidesteps a bootstrap problem: running two different bench-harness
+  versions against each other would be an apples-to-oranges
+  comparison, and a `main` checkout that predates this PR doesn't have
+  the harness at all. One harness, two binaries.
+- Workload `.ps` files (`examples/sierpinski.ps`, `gallery/fern.ps`)
+  always come from the HEAD checkout for both sides (the bench's cwd
+  is `head/`) — a PR that only edits a gallery file can't misreport as
+  an interpreter regression.
+- Reuses the same peak-RSS measurement this repo already proved out in
+  `vs_gs.rs`: subprocess launch under `/usr/bin/time -l` (macOS). No
+  new tool (`valgrind`/massif/heaptrack/dhat) — those are Linux-first
+  and this repo's CI is macOS-hosted.
+- Four workloads (fib 27, defloop 200k, sierpinski, fern — mirroring
+  `perf.rs`'s set), 5 interleaved runs each (A/B/A/B..., alternating
+  which side goes first per run to avoid loop-drift landing on one
+  side), best-of-5 wall time, median-of-5 peak RSS.
+- Two named thresholds (`WARN_PCT` = 20%, `FAIL_PCT` = 50%) at the top
+  of `regression.rs`. Unvalidated against the actual GitHub-hosted
+  runner at merge time — this PR's own run (touches no `src/`, so its
+  expected delta is ~0) is the first real noise-floor sample; retune
+  if that run's deltas sit close to `WARN_PCT`. Locally (M-series), an
+  identical-binary smoke test showed -2.1%..+3.1% on wall time, well
+  inside the current band.
+- **Missing RSS is a hard failure, not a silent `-`.** If
+  `/usr/bin/time -l` doesn't yield a reading for a *majority* of a
+  workload/side's samples, the bench panics rather than reporting "no
+  regression" — an `-` here would have meant the memory half of the
+  check silently stopped checking anything. (A minority miss — one
+  dropped sample out of five — is tolerated as ordinary measurement
+  jitter and just shrinks the median's sample size.)
+- **Gates on signed delta, never `.abs()`.** A large positive delta
+  (slower/bigger) can fail the job; a large *negative* delta
+  (surprisingly faster/smaller) is flagged in the report — a workload
+  that quietly stopped doing real work would also look faster, so it's
+  worth a glance — but is worded as a surprise, not a "regression," and
+  never fails the job on its own. An `.abs()`-based first draft would
+  have failed CI on a genuine speedup; caught by `advisor` before this
+  PR was opened, verified with a head/base-swapped smoke test (exit 0,
+  ⚠️ rows, no ❌) alongside the reverse (exit 1) case.
+- **A workload under `MIN_MS_FOR_FAIL` (15ms) can't fail on time.**
+  `sierpinski` measures ~5ms end-to-end against a ~4ms process-startup
+  baseline (`vs_gs.rs`/Stage 11) — almost the whole row is launch
+  jitter, not interpretation, and was the noisiest row in every local
+  smoke test. Below the floor its time metric can still warn but never
+  contributes to a job failure; `fern`/`fib`/`defloop` all clear it
+  comfortably. This floor is *absolute* but proxies a *relative*
+  property (startup-dominated), which only holds as long as the
+  runner's actual launch overhead stays well under 15ms — flagged as a
+  watch item on issue #68 rather than redesigned now, since there's no
+  GitHub-runner data yet to size it against. When a row is
+  floor-suppressed despite a delta past `FAIL_PCT`, the report says so
+  explicitly (a line below the table) — the closing summary says "no
+  workload **failed the gate**," not "no workload regressed," so it
+  can never contradict a visibly large delta sitting right above it.
+- Delivery mirrors issue #24's `ci_test_summary.sh` pattern, with one
+  change from how #24 shipped: both this job and the `test` job now
+  post via a new `scripts/gh_comment_upsert.sh` (find-by-marker,
+  then PATCH or POST) instead of `gh pr comment --edit-last`.
+  `--edit-last` scopes to the authenticated user's *most recent*
+  comment with no content awareness — with two jobs both posting as
+  github-actions[bot], each one's `--edit-last` would grab whichever
+  comment the *other* job had posted most recently and overwrite it,
+  so the PR's one bot comment would ping-pong between test results and
+  perf results on every push. Caught by `advisor`, not by testing
+  (both jobs work fine individually; the collision only shows up with
+  both present on the same PR). Fixing it required touching the `test`
+  job's comment steps too — a one-sided fix would just move which job
+  wins the clobber.
+- **Deliberately not blocking merge.** `perf-regression` is *not* added
+  to `SDLC.md`'s `required_status_checks` — that frontmatter is
+  `sdlcify`-owned branch-protection config (shared GitHub state), not
+  something to hand-edit mid-issue without confirming the policy
+  change separately. The job still exits non-zero (visible red ❌) on
+  a `>=FAIL_PCT` regression, so it's a strong signal even though
+  `agent-full` merge policy can currently proceed past it. Follow-up:
+  issue #68 tracks the decision to promote it to required once real
+  GitHub-runner threshold data exists.
+- **This PR's own `perf-regression` run was the noise-floor validation
+  it committed to.** Both binaries built from identical `src/`, so
+  every delta is pure runner noise: -0.5%..+1.3% across all eight
+  rows on GitHub's actual macOS-hosted runner — well inside `WARN_PCT`
+  (20%). No retuning needed; `sierpinski`'s base time was 9ms on that
+  runner (vs. ~5ms locally), still comfortably under the 15ms floor.
+  Confirmed the comment-upsert fix at the same time: exactly two
+  `github-actions[bot]` comments total on the PR and the issue (one
+  `ci-test-summary`, one `perf-regression`), not four.
+- **Codex review on the first pushed diff caught three more real
+  bugs**, all in code the local smoke tests structurally couldn't
+  reach: (1) a plain `cargo bench` (no args) now runs every
+  `[[bench]]` target including `regression.rs`, which panicked on
+  missing `--head`/`--base` — broke `perf.rs`'s documented bare-
+  `cargo bench` dev workflow; fixed by having `regression.rs` print a
+  one-line skip notice and exit 0 when *both* flags are absent
+  (exactly one present without the other is still a real usage
+  error). (2) A feature PR that both adds a PostScript operator and
+  updates `gallery/fern.ps`/`examples/sierpinski.ps` to use it (normal
+  per `AGENTS.md` — gallery art tracks the interpreter's current
+  operator set) would have the *base* binary exit non-zero on that
+  workload and crash the whole check with a panic, hard-failing a
+  perfectly normal PR. Fixed: a base-side failure is now reported as
+  "incomparable" (a distinct table row + explanatory note) rather than
+  fatal; a *HEAD*-side failure still panics, since that means this PR
+  broke the interpreter itself, which should never quietly pass. (3)
+  The RSS-majority check in `finish()` accepted an exact tie (2 of 4
+  samples) as satisfying "majority" — off-by-one in the comparison
+  operator (`<` where `<=` was needed); fixed and re-verified against
+  the arithmetic by hand.
+- **A second Codex round on the pushed fix caught two more**: (1)
+  `gh_comment_upsert.sh`'s marker lookup matched *any* comment
+  starting with the marker text regardless of author — since PR
+  comments are public, a human comment that happened to start with
+  the same HTML-comment prefix would be matched and silently
+  overwritten on the next CI run. Fixed by also requiring
+  `.user.login == "github-actions[bot]"` in the lookup. (2) The final
+  "failed the gate" message unconditionally claimed the failing
+  workload "cleared the 15ms floor" — true for a time-metric failure,
+  but the floor doesn't apply to RSS at all, so an RSS-only failure
+  printed a claim that made no sense next to it. Fixed by naming the
+  specific failing `(workload, metric)` pairs in the message instead
+  of a generic floor-referencing sentence.
+- `perf.rs`/`vs_gs.rs` untouched — they keep serving their existing
+  purposes (dev-loop tripwire, gs comparison); `regression.rs` is
+  purpose-built for the CI A/B and doesn't reuse their code (each is a
+  handful of lines; not worth a shared module for two call sites, and
+  the file-provenance requirement above means it *can't* just call
+  `vs_gs.rs`'s `measure()`, which hardcodes `CARGO_BIN_EXE_pscat`).
+
 ## Surface CI test results on the PR (issue #24, 2026-08-14)
 
 Closes issue #24: `cargo test`'s real pass/fail counts and failure
