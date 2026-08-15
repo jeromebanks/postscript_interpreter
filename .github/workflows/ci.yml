@@ -24,6 +24,13 @@
 # deliberately NOT in `required_status_checks` below (see SDLC.md) —
 # a red ❌ here is a strong signal, not an enforced merge block; see
 # NOTES.md for why and the follow-up issue tracking promoting it.
+#
+# Both jobs post via scripts/gh_comment_upsert.sh (a marker-based
+# find-or-create/update), not `gh pr comment --edit-last`: `--edit-last`
+# scopes to the authenticated user's *most recent* comment with no
+# content awareness, so two jobs both posting as github-actions[bot]
+# would clobber each other's comment on every run instead of each
+# keeping its own updated in place.
 name: ci
 
 on:
@@ -88,8 +95,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh pr comment "${{ github.event.pull_request.number }}" \
-            --body-file test-summary.md --edit-last --create-if-none
+          ./scripts/gh_comment_upsert.sh '<!-- ci-test-summary -->' \
+            "${{ github.event.pull_request.number }}" test-summary.md
 
       - name: Comment on linked issue
         if: "!cancelled() && github.event_name == 'pull_request'"
@@ -101,7 +108,7 @@ jobs:
           issue=$(printf '%s' "$PR_BODY" \
             | grep -Eio '(Closes|Fixes|Resolves) #[0-9]+' | grep -Eo '[0-9]+' | head -1 || true)
           if [ -n "$issue" ]; then
-            gh issue comment "$issue" --body-file test-summary.md --edit-last --create-if-none
+            ./scripts/gh_comment_upsert.sh '<!-- ci-test-summary -->' "$issue" test-summary.md
           fi
 
       - name: Fail job if tests failed
@@ -116,6 +123,11 @@ jobs:
     defaults:
       run:
         shell: bash
+        # head/ is checked out below; everything past that checkout
+        # step runs with head/ as cwd by default (workload .ps files
+        # and scripts/gh_comment_upsert.sh both need to resolve
+        # against HEAD's checkout, not the job root).
+        working-directory: head
     steps:
       - name: Check out HEAD
         uses: actions/checkout@v4
@@ -134,9 +146,10 @@ jobs:
             base -> target
 
       - name: Build HEAD pscat binary (release)
-        run: cargo build --release --manifest-path head/Cargo.toml --bin pscat
+        run: cargo build --release --bin pscat
       - name: Build base pscat binary (release)
-        run: cargo build --release --manifest-path base/Cargo.toml --bin pscat
+        working-directory: base
+        run: cargo build --release --bin pscat
 
       # benches/regression.rs only exists on HEAD (it's what this PR
       # adds) — it is compiled from the head/ checkout and pointed at
@@ -144,17 +157,15 @@ jobs:
       # its own copy of the harness. This also means workload .ps
       # files always come from HEAD for both sides: a PR that only
       # edits a gallery file can't masquerade as an interpreter
-      # regression. cwd is head/, so relative workload paths resolve
-      # against HEAD's checkout.
+      # regression.
       - name: Run perf/memory regression check
         id: perf
         continue-on-error: true
-        working-directory: head
         run: |
           cargo bench --bench regression -- \
             --head "$GITHUB_WORKSPACE/head/target/release/pscat" \
             --base "$GITHUB_WORKSPACE/base/target/release/pscat" \
-            --runs 5 > "$GITHUB_WORKSPACE/perf-summary.md"
+            --runs 5 > perf-summary.md
 
       - name: Post job summary
         if: "!cancelled()"
@@ -169,8 +180,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh pr comment "${{ github.event.pull_request.number }}" \
-            --body-file perf-summary.md --edit-last --create-if-none
+          ./scripts/gh_comment_upsert.sh '<!-- perf-regression -->' \
+            "${{ github.event.pull_request.number }}" perf-summary.md
 
       - name: Comment on linked issue
         if: "!cancelled()"
@@ -182,7 +193,7 @@ jobs:
           issue=$(printf '%s' "$PR_BODY" \
             | grep -Eio '(Closes|Fixes|Resolves) #[0-9]+' | grep -Eo '[0-9]+' | head -1 || true)
           if [ -n "$issue" ]; then
-            gh issue comment "$issue" --body-file perf-summary.md --edit-last --create-if-none
+            ./scripts/gh_comment_upsert.sh '<!-- perf-regression -->' "$issue" perf-summary.md
           fi
 
       # Not in required_status_checks (SDLC.md) — see the module

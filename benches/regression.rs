@@ -31,6 +31,13 @@ const WARN_PCT: f64 = 20.0;
 /// yet (see NOTES.md and the PR this bench shipped in); a failing job
 /// here is a strong signal, not an enforced merge block.
 const FAIL_PCT: f64 = 50.0;
+/// A workload whose *base* wall time is below this is dominated by
+/// process-launch jitter, not interpretation — `sierpinski` measures
+/// ~5ms against a ~4ms startup baseline (see `vs_gs.rs`/NOTES Stage
+/// 11), so a couple of ms of scheduler noise reads as a large
+/// percentage. Below this floor, the time metric can still warn but
+/// never fails the job.
+const MIN_MS_FOR_FAIL: f64 = 15.0;
 
 struct Workload {
     name: &'static str,
@@ -139,13 +146,22 @@ fn pct_delta(base: f64, head: f64) -> f64 {
     }
 }
 
-fn status_icon(pct: f64) -> &'static str {
-    if pct.abs() >= FAIL_PCT {
-        "\u{274c}" // ❌
-    } else if pct.abs() >= WARN_PCT {
-        "\u{26a0}\u{fe0f}" // ⚠️
+/// A metric increasing (slower / more memory) is a regression; a
+/// metric *decreasing* by a large amount is flagged too (a workload
+/// that quietly stopped doing its work would also look "faster"), but
+/// worded as a surprise, not a regression, and never fails the job —
+/// only a large *positive* delta does that, and only when
+/// `allow_fail` (the workload ran long enough that the delta isn't
+/// just launch jitter).
+fn classify(pct: f64, allow_fail: bool) -> (&'static str, bool) {
+    if allow_fail && pct >= FAIL_PCT {
+        ("\u{274c} regression", true)
+    } else if pct >= WARN_PCT {
+        ("\u{26a0}\u{fe0f} slower/bigger", false)
+    } else if pct <= -WARN_PCT {
+        ("\u{26a0}\u{fe0f} surprisingly faster/smaller", false)
     } else {
-        "\u{2705}" // ✅
+        ("\u{2705}", false)
     }
 }
 
@@ -185,18 +201,22 @@ fn main() {
     println!("## Perf/memory regression check");
     println!();
     println!(
-        "Comparing HEAD against merge base, {runs} interleaved runs per workload \
-         on this runner (same-job A/B — not a stored cross-run baseline, to cancel \
-         out runner-to-runner noise). \u{2705} < {WARN_PCT:.0}% delta (noise), \
-         \u{26a0}\u{fe0f} {WARN_PCT:.0}\u{2013}{FAIL_PCT:.0}%, \u{274c} \u{2265}{FAIL_PCT:.0}% \
-         (fails this job). **Not currently a required status check** — a red \u{274c} \
+        "Comparing HEAD against merge base, {runs} interleaved runs per workload on this \
+         runner (same-job A/B — not a stored cross-run baseline, to cancel out \
+         runner-to-runner noise). \u{2705} < {WARN_PCT:.0}% delta (noise); \u{26a0}\u{fe0f} \
+         \u{2265}{WARN_PCT:.0}% either direction (a large *improvement* is flagged too, since \
+         a workload that silently stopped doing its work would also look faster); \u{274c} \
+         \u{2265}{FAIL_PCT:.0}% *slower/bigger* fails this job (never a large improvement — \
+         only a regression fails). A workload whose base time is under {MIN_MS_FOR_FAIL:.0}ms \
+         is dominated by process-launch jitter, not interpretation, so its time metric can \
+         warn but never fails. **Not currently a required status check** — a red \u{274c} \
          here is a strong signal for a human/agent to look at, not an enforced merge block."
     );
     println!();
     println!("| workload | metric | base | head | \u{394} | |");
     println!("|---|---|---|---|---|---|");
 
-    let mut worst_pct = 0.0f64;
+    let mut any_fail = false;
     for w in workloads() {
         // Interleave which side runs first each iteration so drift
         // over the loop doesn't all land on one side.
@@ -231,10 +251,17 @@ fn main() {
         }
 
         let finish = |mut ms: Vec<f64>, mut rss: Vec<u64>, side: &str, name: &str| {
-            if rss.is_empty() {
+            // A majority (not just one) of runs must have yielded an
+            // RSS reading — one dropped sample is measurement jitter,
+            // but a minority successfully captured means `/usr/bin/
+            // time -l` itself is unreliable here, not that the
+            // workload is memory-free.
+            if rss.len() * 2 < ms.len() {
                 panic!(
-                    "workload {name}: /usr/bin/time -l never reported peak RSS for {side} \
-                     across {runs} runs — treat as a broken measurement environment"
+                    "workload {name}: /usr/bin/time -l reported peak RSS for only \
+                     {}/{} {side} runs — treat as a broken measurement environment",
+                    rss.len(),
+                    ms.len()
                 );
             }
             ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -251,15 +278,13 @@ fn main() {
 
         let ms_pct = pct_delta(base_m.ms, head_m.ms);
         let rss_pct = pct_delta(base_m.rss_bytes as f64, head_m.rss_bytes as f64);
-        worst_pct = worst_pct.max(ms_pct.abs()).max(rss_pct.abs());
+        let (ms_label, ms_fails) = classify(ms_pct, base_m.ms >= MIN_MS_FOR_FAIL);
+        let (rss_label, rss_fails) = classify(rss_pct, true);
+        any_fail = any_fail || ms_fails || rss_fails;
 
         println!(
             "| {} | time | {:.0}ms | {:.0}ms | {:+.1}% | {} |",
-            w.name,
-            base_m.ms,
-            head_m.ms,
-            ms_pct,
-            status_icon(ms_pct)
+            w.name, base_m.ms, head_m.ms, ms_pct, ms_label
         );
         println!(
             "| {} | peak RSS | {:.1}MB | {:.1}MB | {:+.1}% | {} |",
@@ -267,22 +292,20 @@ fn main() {
             base_m.rss_bytes as f64 / (1024.0 * 1024.0),
             head_m.rss_bytes as f64 / (1024.0 * 1024.0),
             rss_pct,
-            status_icon(rss_pct)
+            rss_label
         );
     }
 
     println!();
-    if worst_pct >= FAIL_PCT {
+    if any_fail {
         println!(
             "**Result: \u{274c} regression \u{2265}{FAIL_PCT:.0}% detected** — see rows above."
         );
         std::process::exit(1);
-    } else if worst_pct >= WARN_PCT {
-        println!(
-            "**Result: \u{26a0}\u{fe0f} within noise-to-{FAIL_PCT:.0}% band** — worth a human \
-             glance, not blocking."
-        );
     } else {
-        println!("**Result: \u{2705} no workload moved past the {WARN_PCT:.0}% noise band.**");
+        println!(
+            "**Result: \u{2705} no workload regressed \u{2265}{FAIL_PCT:.0}%.** Rows marked \
+             \u{26a0}\u{fe0f} above are worth a human glance, not blocking."
+        );
     }
 }

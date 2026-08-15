@@ -43,17 +43,42 @@ a `perf-regression` job in `.github/workflows/ci.yml` close that gap.
   identical-binary smoke test showed -2.1%..+3.1% on wall time, well
   inside the current band.
 - **Missing RSS is a hard failure, not a silent `-`.** If
-  `/usr/bin/time -l` doesn't yield a reading for every sample of a
-  workload/side, the bench panics rather than reporting "no
+  `/usr/bin/time -l` doesn't yield a reading for a *majority* of a
+  workload/side's samples, the bench panics rather than reporting "no
   regression" — an `-` here would have meant the memory half of the
-  check silently stopped checking anything.
-- Delivery mirrors issue #24's `ci_test_summary.sh` pattern exactly:
-  the bench's own stdout *is* the markdown (table of workload × metric
-  × base/head/Δ/status, tiered ✅/⚠️/❌), written to
-  `$GITHUB_STEP_SUMMARY` and posted via `gh pr comment --edit-last
-  --create-if-none` (and echoed to the linked issue), all under
-  `continue-on-error: true` so a comment-posting failure can't obscure
-  a real result already visible in the job summary.
+  check silently stopped checking anything. (A minority miss — one
+  dropped sample out of five — is tolerated as ordinary measurement
+  jitter and just shrinks the median's sample size.)
+- **Gates on signed delta, never `.abs()`.** A large positive delta
+  (slower/bigger) can fail the job; a large *negative* delta
+  (surprisingly faster/smaller) is flagged in the report — a workload
+  that quietly stopped doing real work would also look faster, so it's
+  worth a glance — but is worded as a surprise, not a "regression," and
+  never fails the job on its own. An `.abs()`-based first draft would
+  have failed CI on a genuine speedup; caught by `advisor` before this
+  PR was opened, verified with a head/base-swapped smoke test (exit 0,
+  ⚠️ rows, no ❌) alongside the reverse (exit 1) case.
+- **A workload under `MIN_MS_FOR_FAIL` (15ms) can't fail on time.**
+  `sierpinski` measures ~5ms end-to-end against a ~4ms process-startup
+  baseline (`vs_gs.rs`/Stage 11) — almost the whole row is launch
+  jitter, not interpretation, and was the noisiest row in every local
+  smoke test. Below the floor its time metric can still warn but never
+  contributes to a job failure; `fern`/`fib`/`defloop` all clear it
+  comfortably.
+- Delivery mirrors issue #24's `ci_test_summary.sh` pattern, with one
+  change from how #24 shipped: both this job and the `test` job now
+  post via a new `scripts/gh_comment_upsert.sh` (find-by-marker,
+  then PATCH or POST) instead of `gh pr comment --edit-last`.
+  `--edit-last` scopes to the authenticated user's *most recent*
+  comment with no content awareness — with two jobs both posting as
+  github-actions[bot], each one's `--edit-last` would grab whichever
+  comment the *other* job had posted most recently and overwrite it,
+  so the PR's one bot comment would ping-pong between test results and
+  perf results on every push. Caught by `advisor`, not by testing
+  (both jobs work fine individually; the collision only shows up with
+  both present on the same PR). Fixing it required touching the `test`
+  job's comment steps too — a one-sided fix would just move which job
+  wins the clobber.
 - **Deliberately not blocking merge.** `perf-regression` is *not* added
   to `SDLC.md`'s `required_status_checks` — that frontmatter is
   `sdlcify`-owned branch-protection config (shared GitHub state), not
