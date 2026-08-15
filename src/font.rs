@@ -402,16 +402,31 @@ pub fn catalog_entries() -> Vec<FontEntry> {
             }
         }
         stems.sort();
+        // An alias only actually resolves (see catalog_fid's own stem/
+        // -Regular-fallback lookup) when its target file is present —
+        // an incomplete catalog install can have the directory but be
+        // missing individual files, and listing an alias that would
+        // really substitute Helvetica misreports it as installed.
+        let stem_set: std::collections::HashSet<String> =
+            stems.iter().map(|s| s.to_ascii_lowercase()).collect();
         entries.extend(stems.into_iter().map(|name| FontEntry {
             name,
             origin: FontOrigin::Catalog,
             alias_target: None,
         }));
-        entries.extend(ALIASES.iter().map(|(k, v)| FontEntry {
-            name: k.to_string(),
-            origin: FontOrigin::Alias,
-            alias_target: Some(v),
-        }));
+        entries.extend(
+            ALIASES
+                .iter()
+                .filter(|(_, target)| {
+                    stem_set.contains(&target.to_ascii_lowercase())
+                        || stem_set.contains(&format!("{target}-Regular").to_ascii_lowercase())
+                })
+                .map(|(k, v)| FontEntry {
+                    name: k.to_string(),
+                    origin: FontOrigin::Alias,
+                    alias_target: Some(v),
+                }),
+        );
     }
     entries
 }
