@@ -427,15 +427,16 @@ fn numbered_path(path: &str, n: usize) -> String {
 }
 
 /// A single swept `--sweep NAME=` value. `Decimal(n, scale)` means
-/// `n / 10^scale` and is how *every* plain decimal literal ("5",
-/// "-3.25", "9007199254740993", "0.0000000001") is represented —
-/// exact integer arithmetic end to end, both parsing a list and
-/// generating a range, so it can neither drift (a `0.1` step never
-/// lands on `0.7000000000000001`) nor lose precision (a huge integer
-/// literal never rounds to its nearest `f64`). Only a literal this
-/// scheme can't read as a plain decimal (scientific notation, "inf",
-/// "nan") falls back to `Float`, printed via Rust's own shortest-
-/// round-trip `Display`. This replaced an all-`f64` first draft after
+/// `n / 10^scale` and is how *every* decimal literal — plain ("5",
+/// "-3.25", "9007199254740993", "0.0000000001") or scientific
+/// ("1e-20") — is represented: exact integer arithmetic end to end,
+/// both parsing a list and generating a range, so it can neither
+/// drift (a `0.1` step never lands on `0.7000000000000001`) nor lose
+/// precision (a huge integer literal never rounds to its nearest
+/// `f64`, `1e-20` never rounds to `0`). Only a literal past
+/// [`parse_decimal_exact`]'s own precision cap, or "inf"/"nan", falls
+/// back to `Float`, printed via Rust's own shortest-round-trip
+/// `Display`. This replaced an all-`f64` first draft after
 /// a cross-model review, empirically running the binary, found three
 /// distinct correctness bugs traceable to that single design choice
 /// (see NOTES.md's issue #21 entry) — worth fixing at the root rather
@@ -641,23 +642,31 @@ fn run_sweep(options: &Options, source: &[u8]) -> ExitCode {
 
 const MAX_SWEEP: usize = 64;
 
-/// Read a plain decimal literal ("5", "-3.25", "9007199254740993",
-/// "0.0000000001" — but not scientific notation, "inf", or "nan") as
-/// an exact `(numerator, scale)` pair where the value is `numerator /
-/// 10^scale`. This is what lets [`parse_sweep_spec`] generate a range
-/// with pure integer arithmetic and format a value exactly, instead
-/// of accumulating binary floating-point error the way repeatedly
-/// computing `a + i as f64 * step` does. `frac_part` over 30 digits
-/// falls back to `None` (the caller's `f64` path) rather than
-/// `10u128.pow`-overflowing — no realistic CLI literal is that
-/// precise.
+/// Read a decimal literal — plain ("5", "-3.25", "9007199254740993",
+/// "0.0000000001") or scientific ("1e-20", "9.999999999e-1") — as an
+/// exact `(numerator, scale)` pair where the value is `numerator /
+/// 10^scale`. Not "inf"/"nan": those have no such representation.
+/// This is what lets [`parse_sweep_spec`] generate a range with pure
+/// integer arithmetic and format a value exactly, instead of
+/// accumulating binary floating-point error the way repeatedly
+/// computing `a + i as f64 * step` does, or losing precision the way
+/// routing a literal through `f64` does (a round-2 cross-model review
+/// caught `--sweep X=1e-20` silently becoming `/X 0 def` when
+/// scientific notation still fell back to `f64` here — round 3, PR
+/// #66). A resulting scale/shift past 30 digits falls back to `None`
+/// (the caller's `f64` path) rather than overflowing `i128` — no
+/// realistic CLI literal needs more precision than that.
 fn parse_decimal_exact(s: &str) -> Option<(i128, u32)> {
     let s = s.trim();
     let (neg, s) = match s.strip_prefix('-') {
         Some(rest) => (true, rest),
         None => (false, s.strip_prefix('+').unwrap_or(s)),
     };
-    let (int_part, frac_part) = s.split_once('.').unwrap_or((s, ""));
+    let (mantissa, exp) = match s.find(['e', 'E']) {
+        Some(i) => (&s[..i], s[i + 1..].parse::<i32>().ok()?),
+        None => (s, 0i32),
+    };
+    let (int_part, frac_part) = mantissa.split_once('.').unwrap_or((mantissa, ""));
     if int_part.is_empty() && frac_part.is_empty() {
         return None;
     }
@@ -667,12 +676,27 @@ fn parse_decimal_exact(s: &str) -> Option<(i128, u32)> {
     {
         return None;
     }
-    let scale = frac_part.len() as u32;
     let digits = format!("{int_part}{frac_part}");
     let magnitude: i128 = if digits.is_empty() {
         0
     } else {
         digits.parse().ok()?
+    };
+    // value = digits * 10^(exp - frac_part.len()); a non-negative
+    // shift multiplies the magnitude up (scale 0), a negative one
+    // becomes the fractional scale directly.
+    let shift = exp - frac_part.len() as i32;
+    let (magnitude, scale) = if shift >= 0 {
+        if shift > 30 {
+            return None;
+        }
+        (magnitude.checked_mul(10i128.checked_pow(shift as u32)?)?, 0)
+    } else {
+        let scale = shift.unsigned_abs();
+        if scale > 30 {
+            return None;
+        }
+        (magnitude, scale)
     };
     Some((if neg { -magnitude } else { magnitude }, scale))
 }
@@ -704,12 +728,12 @@ fn format_decimal(n: i128, scale: u32) -> String {
 
 /// Parse `"A:B"` / `"A:B:STEP"` (inclusive range, STEP default 1,
 /// must be > 0, A <= B) or `"A,B,C,..."` (explicit list, sweep order
-/// as given) for `--sweep NAME=`. Every value that parses as a plain
-/// decimal literal ([`parse_decimal_exact`]) generates/prints exactly
-/// via integer arithmetic; anything else (scientific notation) falls
-/// back to `f64`, rejecting non-finite values ("inf"/"nan") so a spec
-/// like `0:inf:1` errors instead of looping forever, with a per-step
-/// tolerance so binary rounding can't push a value past `B`.
+/// as given) for `--sweep NAME=`. Every value that parses as a
+/// decimal literal, plain or scientific ([`parse_decimal_exact`]),
+/// generates/prints exactly via integer arithmetic; only a literal
+/// past that function's own precision cap falls back to `f64`,
+/// rejecting non-finite values ("inf"/"nan") so a spec like `0:inf:1`
+/// errors instead of looping forever.
 ///
 /// The frame count is bounded *inside* the generating loop (checked
 /// before every push, both here and in the exact-integer path), never
@@ -808,12 +832,20 @@ fn parse_sweep_spec(spec: &str) -> Result<Vec<SweepValue>, String> {
                 if a > b {
                     return Err(format!("invalid range: {spec:?} (A must be <= B)"));
                 }
-                let tol = step * 1e-9;
+                // No tolerance here: the plain-decimal drift this
+                // once existed to hide (e.g. a `0.1` step landing on
+                // `0.7000000000000001`) is handled exactly above now
+                // -- this loop only runs for a genuinely non-decimal
+                // literal (scientific notation past the 30-digit-
+                // shift cap). A tolerance instead let a scientific
+                // range generate a value past its declared bound, and
+                // near f64::MAX could overflow `b + tol` to infinity
+                // (round-3 cross-model review, PR #66).
                 let mut values = Vec::new();
                 let mut i: usize = 0;
                 loop {
                     let v = a + i as f64 * step;
-                    if v > b + tol {
+                    if v > b {
                         break;
                     }
                     bounded_push(&mut values, SweepValue::Float(v))?;
@@ -918,12 +950,13 @@ fn parse_seed_spec(spec: &str) -> Result<Vec<i64>, String> {
 fn format_sweep_value(v: SweepValue) -> String {
     match v {
         SweepValue::Decimal(n, scale) => format_decimal(n, scale),
-        SweepValue::Float(v) if v.fract() == 0.0 && v.abs() < 1e15 => format!("{}", v as i64),
-        SweepValue::Float(v) => {
-            let s = format!("{v:.12}");
-            let s = s.trim_end_matches('0');
-            s.trim_end_matches('.').to_string()
-        }
+        // Reached only when a literal overflows parse_decimal_exact's
+        // own 30-digit-shift cap (a magnitude/precision far beyond
+        // any realistic sweep parameter) -- Rust's shortest-round-
+        // trip Display is the honest value for that, not a fixed
+        // rounding that would just reintroduce round 3's bug one
+        // level further out.
+        SweepValue::Float(v) => format!("{v}"),
     }
 }
 
@@ -1161,7 +1194,7 @@ mod sweep_tests {
     }
 
     #[test]
-    fn decimal_exact_reads_plain_literals() {
+    fn decimal_exact_reads_plain_and_scientific_literals() {
         assert_eq!(parse_decimal_exact("5"), Some((5, 0)));
         assert_eq!(parse_decimal_exact("-3.25"), Some((-325, 2)));
         assert_eq!(parse_decimal_exact(".5"), Some((5, 1)));
@@ -1169,9 +1202,14 @@ mod sweep_tests {
             parse_decimal_exact("9007199254740993"),
             Some((9007199254740993, 0))
         );
-        // Scientific notation and non-numeric text aren't plain
-        // decimals -- the caller falls back to f64 for these.
-        assert_eq!(parse_decimal_exact("1e10"), None);
+        assert_eq!(parse_decimal_exact("1e10"), Some((10000000000, 0)));
+        assert_eq!(parse_decimal_exact("1e-20"), Some((1, 20)));
+        assert_eq!(
+            parse_decimal_exact("-9.999999999e-1"),
+            Some((-9999999999, 10))
+        );
+        // "inf"/"nan" and non-numeric text have no such representation
+        // -- the caller falls back to f64 for these.
         assert_eq!(parse_decimal_exact("inf"), None);
         assert_eq!(parse_decimal_exact("abc"), None);
     }
@@ -1273,6 +1311,30 @@ mod sweep_tests {
             parse_sweep_spec("100000000000000000000000000000:1:0.000000000000000000000000000001")
                 .is_err()
         );
+    }
+
+    /// Regression (cross-model review round 3, PR #66): scientific
+    /// notation used to fall back to `f64` and then get truncated by
+    /// a fixed 12-decimal rounding on the way out --
+    /// `--sweep X=1e-20` silently became `/X 0 def`. Scientific
+    /// notation is now read exactly by `parse_decimal_exact`, same as
+    /// a plain decimal.
+    #[test]
+    fn scientific_notation_literal_preserves_exact_value() {
+        let values = parse_sweep_spec("1e-20").unwrap();
+        assert_eq!(values, vec![SweepValue::Decimal(1, 20)]);
+        assert_eq!(dec(values[0]), "0.00000000000000000001");
+    }
+
+    /// Regression (cross-model review round 3, PR #66): a scientific-
+    /// notation range used to fall back to the `f64` range path,
+    /// whose tolerance could admit a value past the declared upper
+    /// bound the same way a plain-decimal range once could. Now
+    /// routed through the same exact integer path as a plain decimal.
+    #[test]
+    fn scientific_notation_range_never_generates_past_its_upper_bound() {
+        let values = parse_sweep_spec("0e0:9.999999999e-1:1e0").unwrap();
+        assert_eq!(values, vec![SweepValue::Decimal(0, 10)]);
     }
 
     #[test]

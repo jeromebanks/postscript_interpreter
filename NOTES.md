@@ -158,6 +158,27 @@ so even that edge case errors instead of panicking. `--sweep-seed`
 already avoided `f64` from round one; its own count-overflow bug got
 the same iterate-with-inline-bounds-check fix.
 
+A third review round, on that rewrite, found the one class of value
+`parse_decimal_exact` still didn't read exactly: scientific notation
+("1e-20") still fell to the `Float`/`f64` fallback, which a fixed
+12-decimal-rounding then truncated to `0` on the way out — the exact
+same precision bug round two had just fixed for plain decimals and
+huge integers, one input form further out. `--sweep
+X=0e0:9.999999999e-1:1e0` (scientific notation for the round-two
+overshoot example) reproduced that bug too, for the same reason.
+Rather than special-case scientific notation's formatting or its range
+tolerance yet again, `parse_decimal_exact` itself now reads a
+mantissa+exponent literal into the same exact `(numerator, scale)`
+representation as a plain decimal (`1e-20` → `(1, 20)`, i.e. exactly
+`1 / 10^20`) — folding the entire scientific-notation case into the
+already-exact Decimal path instead of leaving it in the lossy
+fallback. With that, the `Float` fallback's range tolerance (still
+there to hide legitimate `f64` drift for a value past
+`parse_decimal_exact`'s own 30-digit-shift precision cap) was also
+simplified to a direct bound comparison — the tolerance's original
+job was entirely about plain-decimal literals, which no longer reach
+that code path at all.
+
 ## Axial/radial gradient (shading) fill support (issue #20, 2026-08-14)
 
 Closes issue #20. The interpreter had no `shfill`/shading machinery at
