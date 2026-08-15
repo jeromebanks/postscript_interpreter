@@ -837,6 +837,59 @@ pub(crate) enum ShowStep {
     Again,
 }
 
+/// Whether the font live in `gfx`'s current graphics state is
+/// Unicode-mode: a `CatalogEncoding::Unicode` catalog face, or a Type 3
+/// dict with `/UnicodeBuildChar true`. Re-derived fresh every time it's
+/// needed — never cached across a glyph — since a kshow proc or a
+/// nested show inside BuildChar can change the font between glyphs.
+fn current_unicode_mode(gfx: &Gfx) -> Result<bool, PsError> {
+    let fs = gfx.state().font.as_ref().ok_or(PsError::InvalidFont)?;
+    Ok(if fs.fid >= 0 {
+        is_unicode_font(fs.fid)
+    } else {
+        is_unicode_type3(&fs.dict)
+    })
+}
+
+/// Decode one glyph code from `text` starting at byte offset `pos`,
+/// against `unicode` (the live font's mode at this position — see
+/// `current_unicode_mode`): a single raw byte in byte mode, or one
+/// lossily-decoded UTF-8 scalar (invalid bytes become U+FFFD, per
+/// `char::REPLACEMENT_CHARACTER`, consuming the same "maximal valid
+/// subpart" `String::from_utf8_lossy` would) in Unicode mode. Returns
+/// the code and how many bytes it consumed; `None` at end of string.
+///
+/// Because this is called once per glyph against whatever font is live
+/// *right then*, a font switch mid-string re-segments the *remaining*
+/// bytes rather than reinterpreting a decision made when the show
+/// began — this is the fix for issue #31: with no such switch, this
+/// produces byte-identical results to decoding the whole string once
+/// up front.
+fn decode_one(text: &[u8], pos: usize, unicode: bool) -> Option<(u32, usize)> {
+    let &first = text.get(pos)?;
+    if !unicode {
+        return Some((u32::from(first), 1));
+    }
+    let rest = &text[pos..];
+    match std::str::from_utf8(rest) {
+        Ok(s) => {
+            let ch = s.chars().next()?;
+            Some((u32::from(ch), ch.len_utf8()))
+        }
+        Err(e) if e.valid_up_to() > 0 => {
+            // Safe: `valid_up_to()` bytes are a validated UTF-8 prefix,
+            // so its first scalar decodes without touching the error.
+            let valid = std::str::from_utf8(&rest[..e.valid_up_to()]).ok()?;
+            let ch = valid.chars().next()?;
+            Some((u32::from(ch), ch.len_utf8()))
+        }
+        Err(e) => {
+            let len = e.error_len().unwrap_or(rest.len()).max(1);
+            Some((u32::from(char::REPLACEMENT_CHARACTER), len))
+        }
+    }
+}
+
 /// The execution-stack frame behind the whole show family (`FONTS.md`
 /// Decision 6). One glyph per machine step: outline glyphs paint
 /// synchronously, Type 3 glyphs yield to their BuildChar/BuildGlyph
@@ -846,19 +899,18 @@ pub(crate) enum ShowStep {
 /// on the operand stack before the next token runs — frame order *is*
 /// program order.
 pub(crate) struct ShowCtx {
-    /// Character codes to show, one `u32` per glyph. For ordinary
-    /// (byte-oriented) fonts these are the string's raw bytes widened
-    /// to `u32`; for Unicode-mode catalog faces (see `CatalogEncoding`)
-    /// they're the string decoded as UTF-8, one Unicode scalar per
-    /// glyph — the deliberate, documented deviation from PostScript's
-    /// byte-oriented string model that makes Hangul/kana/kanji/Thai
-    /// text reachable at all.
-    codes: Vec<u32>,
-    /// Whether `codes` holds decoded Unicode scalars (true) or raw
-    /// bytes (false) — decided once, from the font in effect when the
-    /// show began; see `unicode_glyph` vs `outline_glyph`.
-    unicode_mode: bool,
-    idx: usize,
+    /// The string's raw bytes, untouched. Re-segmented into codes one
+    /// glyph at a time (see `decode_one`) against whichever font is
+    /// live *at that point* — not decoded up front under a single
+    /// decision — because a kshow proc (or a nested show inside
+    /// BuildChar) can switch between byte-oriented and Unicode-mode
+    /// fonts (see `CatalogEncoding`) mid-string, and only a live byte
+    /// cursor can recover the right UTF-8 boundaries for a mid-string
+    /// switch into Unicode mode: bytes already split apart under a
+    /// byte-mode decision can never be recombined later.
+    text: Vec<u8>,
+    /// Byte offset of the next undecoded code in `text`.
+    pos: usize,
     /// Device-space pen. The current point is re-fetched after each
     /// kshow proc so the proc can move it — that's what kshow is *for*.
     pen: DevPoint,
@@ -875,24 +927,14 @@ pub(crate) struct ShowCtx {
 impl ShowCtx {
     pub(crate) fn new(
         text: Vec<u8>,
-        unicode_mode: bool,
         params: ShowParams,
         mode: ShowMode,
         kshow_proc: Option<Object>,
         pen: DevPoint,
     ) -> Self {
-        let codes = if unicode_mode {
-            String::from_utf8_lossy(&text)
-                .chars()
-                .map(u32::from)
-                .collect()
-        } else {
-            text.iter().map(|&b| u32::from(b)).collect()
-        };
         ShowCtx {
-            codes,
-            unicode_mode,
-            idx: 0,
+            text,
+            pos: 0,
             pen,
             total: (0.0, 0.0),
             params,
@@ -935,7 +977,7 @@ impl ShowCtx {
             let (wx, wy) = p.width.unwrap_or((0.0, 0.0));
             let m = p.matrix;
             self.advance(gfx, p.code, (m[0] * wx + m[2] * wy, m[1] * wx + m[3] * wy));
-            if let Some(step) = self.maybe_kshow() {
+            if let Some(step) = self.maybe_kshow(gfx, p.code)? {
                 return Ok(step);
             }
             return Ok(ShowStep::Again);
@@ -948,65 +990,53 @@ impl ShowCtx {
                 self.pen = gfx.device_current_point().ok_or(PsError::NoCurrentPoint)?;
             }
         }
-        let Some(&code) = self.codes.get(self.idx) else {
+        // The font is read per glyph — and now so is the segmentation of
+        // the remaining text: a kshow proc (or a nested show inside
+        // BuildChar) may have changed the font, and `decode_one` re-reads
+        // the *raw bytes* against whichever font is live right now rather
+        // than trusting a decision made when the show began (issue #31).
+        let fs = gfx.state().font.clone().ok_or(PsError::InvalidFont)?;
+        let unicode = if fs.fid >= 0 {
+            is_unicode_font(fs.fid)
+        } else {
+            is_unicode_type3(&fs.dict)
+        };
+        let Some((code, len)) = decode_one(&self.text, self.pos, unicode) else {
             return Ok(match self.mode {
                 ShowMode::Width => ShowStep::PopPushWidth(self.total.0, self.total.1),
                 _ => ShowStep::Pop,
             });
         };
-        // The font is read per glyph: a kshow proc (or a nested show
-        // inside BuildChar) may have changed it.
-        let fs = gfx.state().font.clone().ok_or(PsError::InvalidFont)?;
+        self.pos += len;
         if fs.fid >= 0 {
-            // Same re-check as the Type 3 branch below: `self.unicode_mode`
-            // is decided once for the whole show, but a kshow proc can
-            // switch fonts mid-string. A Unicode-mode font earlier in the
-            // string must not leave `code` routed through `unicode_glyph`
-            // for an ordinary byte-oriented outline font later in the same
-            // show — that's the wrong glyph-resolution path for it, not
-            // just an out-of-range code.
-            let adv = if self.unicode_mode && is_unicode_font(fs.fid) {
+            let adv = if unicode {
                 unicode_glyph(gfx, &fs, code, &self.mode, self.pen)?
             } else {
                 outline_glyph(gfx, &fs, code as u8, &self.mode, self.pen)?
             };
-            self.idx += 1;
             self.advance(gfx, code, adv);
-            if let Some(step) = self.maybe_kshow() {
+            if let Some(step) = self.maybe_kshow(gfx, code)? {
                 return Ok(step);
             }
             Ok(ShowStep::Again)
         } else {
             // No registry entry: a procedural font. Type 3 glyph
             // procedures win; otherwise Type 1 CharStrings render
-            // synchronously like outlines.
+            // synchronously like outlines. `code` is already correctly
+            // narrowed to a byte by `decode_one` for a Type 1 dict (its
+            // `unicode` is always false — see `is_unicode_type3`), so
+            // no further narrowing is needed here.
             let is_type3 = {
                 let d = fs.dict.borrow();
                 d.get("BuildGlyph").is_some() || d.get("BuildChar").is_some()
             };
             if is_type3 {
-                // `self.unicode_mode` is decided once for the whole
-                // show, from the font active when it began — but `fs`
-                // is re-read per glyph (a kshow proc, or a nested show
-                // inside BuildChar, may switch fonts mid-string). An
-                // opted-in font earlier in the string must not leave
-                // `code` un-narrowed for an ordinary Type 3 font later
-                // in the same show: that font's BuildChar typically
-                // indexes a 256-entry Encoding with it, and a stray
-                // multi-byte codepoint would rangecheck. So re-check
-                // *this* font's own flag rather than trusting the
-                // show-wide `unicode_mode`.
-                if self.unicode_mode && is_unicode_type3(&fs.dict) {
-                    self.begin_type3_glyph(gfx, fs, code)
-                } else {
-                    self.begin_type3_glyph(gfx, fs, u32::from(code as u8))
-                }
+                self.begin_type3_glyph(gfx, fs, code)
             } else {
                 let byte = code as u8;
                 let adv = type1_glyph(gfx, &fs, byte, &self.mode, self.pen)?;
-                self.idx += 1;
                 self.advance(gfx, code, adv);
-                if let Some(step) = self.maybe_kshow() {
+                if let Some(step) = self.maybe_kshow(gfx, code)? {
                     return Ok(step);
                 }
                 Ok(ShowStep::Again)
@@ -1038,16 +1068,24 @@ impl ShowCtx {
     }
 
     /// Between two characters (never before the first or after the
-    /// last), kshow pushes their codes and runs its proc.
-    fn maybe_kshow(&mut self) -> Option<ShowStep> {
-        let proc = self.kshow_proc.as_ref()?;
-        let &next = self.codes.get(self.idx)?;
-        let prev = self.codes[self.idx - 1];
+    /// last), kshow pushes their codes and runs its proc. `prev` is the
+    /// code just shown; `next` is peeked (without consuming it — the
+    /// real decode happens on the following `step`) against the font
+    /// still live right now, since the kshow proc that might change it
+    /// hasn't run yet.
+    fn maybe_kshow(&mut self, gfx: &Gfx, prev: u32) -> Result<Option<ShowStep>, PsError> {
+        let Some(proc) = self.kshow_proc.clone() else {
+            return Ok(None);
+        };
+        let unicode = current_unicode_mode(gfx)?;
+        let Some((next, _)) = decode_one(&self.text, self.pos, unicode) else {
+            return Ok(None);
+        };
         self.kshow_wait = true;
-        Some(ShowStep::Exec {
+        Ok(Some(ShowStep::Exec {
             operands: vec![Object::int(i64::from(prev)), Object::int(i64::from(next))],
-            target: proc.clone(),
-        })
+            target: proc,
+        }))
     }
 
     /// Open a Type 3 glyph context: snapshot the graphics state, set the
@@ -1106,7 +1144,6 @@ impl ShowCtx {
             (f64::from(self.pen.y) + off.1) as f32,
         ));
         gfx.newpath();
-        self.idx += 1;
         self.pending = Some(PendingGlyph {
             code,
             width: None,

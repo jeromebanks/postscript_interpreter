@@ -257,15 +257,7 @@ fn begin_show(
     mode: ShowMode,
     kshow_proc: Option<Object>,
 ) -> Result<(), PsError> {
-    let fs = it
-        .gfx
-        .state()
-        .font
-        .as_ref()
-        .ok_or(PsError::InvalidFont)?
-        .clone();
-    let unicode_mode =
-        font::is_unicode_font(fs.fid) || (fs.fid < 0 && font::is_unicode_type3(&fs.dict));
+    it.gfx.state().font.as_ref().ok_or(PsError::InvalidFont)?;
     let pen = match mode {
         // stringwidth is pure metrics; no current point required.
         ShowMode::Width => crate::gfx::DevPoint { x: 0.0, y: 0.0 },
@@ -276,7 +268,6 @@ fn begin_show(
     };
     it.begin_show(font::ShowCtx::new(
         text.to_vec(),
-        unicode_mode,
         params,
         mode,
         kshow_proc,

@@ -422,3 +422,52 @@ block, ink from each of the six layout classes, the jitter and
 same-seed invariants, non-Hangul codepoints not erroring, and the
 linecount/write agreement `lib/handscript.ps`'s own tests establish the
 same pattern for). `examples/hangul_handscript.ps` is the specimen.
+
+## Post-roadmap addendum — per-glyph segmentation for mid-show font switches (issue #31)
+
+Both Unicode-mode addenda above described `unicode_mode` as "decided
+once, from the font in effect when the show began" — `ShowCtx::new`
+eagerly decoded the *entire* string into `Vec<u32>` codes under that
+single decision, even though the font itself is legitimately re-read
+per glyph (a `kshow` proc, or a nested `show` inside `BuildChar`, can
+switch fonts mid-string). The per-glyph rechecks that already existed
+(`is_unicode_font`/`is_unicode_type3`) could only pick the right
+*resolution function* for whatever code was already sitting in that
+pre-decoded vector — they couldn't undo a segmentation decision made
+before the switch was known about. Concretely: a kshow proc switching
+from an ordinary byte-mode font to a Unicode-mode one mid-string would
+find U+AC00's three UTF-8 bytes (`EA B0 80`) already split into three
+separate byte-codes, unrecoverable as one codepoint.
+
+**The fix**: `ShowCtx` now holds the raw `Vec<u8>` and a byte cursor
+(`pos`) instead of a pre-decoded code vector. Each glyph step decodes
+exactly one code from `text[pos..]` — one raw byte in byte mode, one
+UTF-8 scalar in Unicode mode — against whichever font is live *at that
+point*, then advances `pos` by however many bytes that consumed. With
+no mid-string font switch this is byte-identical to the old eager
+decode, so the byte-mode regression gate and all of `tests/catalog.rs`
+pass unchanged.
+
+**Deliberately asymmetric, not a bug**: fixing the switch-*into*-
+Unicode-mode direction changed behavior for the reverse
+(Unicode-mode-*out*-to-byte-mode) direction too, in a way worth calling
+out explicitly. Switching a byte-mode font in mid-string can't "know"
+three leftover UTF-8 continuation bytes were meant to be one codepoint
+— an ordinary font always receives raw bytes, one glyph per byte (same
+invariant `unflagged_type3_still_gets_raw_bytes_not_utf8_decoded`
+pins). So a switch that lands *inside* a multi-byte codepoint rather
+than on a clean boundary now correctly produces one BuildChar/glyph
+call per leftover raw byte, not one call with a truncated scalar. Two
+existing `tests/type3.rs` tests previously asserted the latter — an
+artifact of the old bug (the byte-mode font received a pre-decoded
+full scalar, narrowed via `code as u8`, rather than the actual raw byte
+sitting at that position in the string) — and were updated to land the
+switch on a clean ASCII byte boundary instead, which is what makes
+their original assertions meaningful again. A new test
+(`kshow_font_switch_leaves_leftover_utf8_bytes_as_separate_glyphs`)
+pins the corrected mid-codepoint-switch behavior explicitly.
+
+Tests: `tests/type3.rs`'s switch-direction tests (both directions, plus
+the mid-codepoint-switch case above) and
+`tests/catalog.rs::kshow_font_switch_into_unicode_catalog_font_recombines_utf8_bytes`
+(the same fix for bundled-TrueType Unicode-mode faces, not just Type 3).

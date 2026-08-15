@@ -330,14 +330,17 @@ fn unflagged_type3_still_gets_raw_bytes_not_utf8_decoded() {
 
 #[test]
 fn kshow_font_switch_narrows_for_an_unflagged_type3_font() {
-    // `unicode_mode` is decided once for the whole show, from the
-    // font active when it began, but the font itself is re-read per
-    // glyph — a kshow proc is exactly how it can change mid-string.
-    // An opted-in font earlier in the string must not leave later
-    // glyphs on an ordinary Type 3 font un-narrowed: that font's own
-    // BuildChar has no reason to expect anything past a byte, and a
-    // stray multi-byte codepoint reaching an Encoding-array lookup
-    // would rangecheck in a real font (this one just stashes it).
+    // The font is re-read per glyph, and (issue #31) so is the
+    // segmentation of the remaining raw bytes — a kshow proc switching
+    // from a Unicode-mode font to an ordinary Type 3 font mid-string
+    // must not leave that font's BuildChar fed anything past a byte:
+    // its own Encoding-array lookup has no reason to expect more, and
+    // a stray multi-byte codepoint would rangecheck in a real font
+    // (this one just stashes it). The string's second character is
+    // plain ASCII 'A' precisely so it lands on a clean byte boundary
+    // after the first (3-byte) Hangul syllable is consumed — see
+    // `kshow_font_switch_leaves_leftover_utf8_bytes_as_separate_glyphs`
+    // below for what happens when the switch instead lands mid-codepoint.
     let mut it = run(&format!(
         "{UNICODE_T3}
          /P 6 dict def
@@ -350,14 +353,11 @@ fn kshow_font_switch_narrows_for_an_unflagged_type3_font() {
          /PlainFont P definefont pop
          /UniFont findfont 12 scalefont setfont
          0 0 moveto
-         {{pop pop /PlainFont findfont 12 scalefont setfont}} (\u{AC00}\u{AC01}) kshow
+         {{pop pop /PlainFont findfont 12 scalefont setfont}} (\u{AC00}A) kshow
          Got"
     ));
-    // U+AC01's low byte is 0x01 — nowhere near the raw codepoint
-    // (0xAC01 = 44033), which is what an un-narrowed pass-through
-    // would have left in Got.
     match it.pop().expect("Got").value {
-        Value::Integer(n) => assert_eq!(n, 0x01),
+        Value::Integer(n) => assert_eq!(n, i64::from(b'A')),
         _ => panic!("expected integer"),
     }
 }
@@ -367,20 +367,22 @@ fn kshow_font_switch_narrows_for_an_ordinary_outline_font() {
     // The same collision, in ShowCtx::step's *other* branch
     // (`fs.fid >= 0`): switching from a /UnicodeBuildChar true Type 3
     // font to an ordinary registered outline font (Helvetica) must not
-    // leave `self.unicode_mode` routing the outline font's glyphs
-    // through `unicode_glyph` (cmap-based) instead of `outline_glyph`
-    // (byte/Encoding-based) — the wrong resolution path entirely for a
-    // byte-oriented face. U+AC41's low byte is 0x41 = 'A' in
-    // StandardEncoding: if the byte path ran, the total advance is
-    // exactly Helvetica's own 'A' width (UniFont's first glyph is
-    // zero-width, per UNICODE_T3's BuildChar); if `unicode_glyph` ran
-    // instead, it resolves 0xAC41 through Helvetica's cmap — which
-    // doesn't cover Hangul — to some other (`.notdef`-shaped) advance,
-    // not 'A''s.
+    // route the outline font's glyphs through `unicode_glyph`
+    // (cmap-based) instead of `outline_glyph` (byte/Encoding-based) —
+    // the wrong resolution path entirely for a byte-oriented face. The
+    // string's second character is plain ASCII 'A' so the switch lands
+    // on a clean byte boundary (see the unflagged-Type3 test above for
+    // why); if the byte path ran, the total advance is exactly
+    // Helvetica's own 'A' width (UniFont's first glyph is zero-width,
+    // per UNICODE_T3's BuildChar) — if `unicode_glyph` ran instead, it
+    // resolves 'A' through Helvetica's cmap to the same glyph anyway,
+    // so this specifically checks the *advance*, not just that
+    // something painted, to catch a wrong-path call that happens to
+    // still hit the same glyph id.
     let mut it = run(&format!(
         "{UNICODE_T3} /UniFont findfont 12 scalefont setfont
          0 0 moveto
-         {{pop pop /Helvetica findfont 12 scalefont setfont}} (\u{AC00}\u{AC41}) kshow
+         {{pop pop /Helvetica findfont 12 scalefont setfont}} (\u{AC00}A) kshow
          currentpoint pop"
     ));
     let switched_x = pop_f64(&mut it);
@@ -393,5 +395,101 @@ fn kshow_font_switch_narrows_for_an_ordinary_outline_font() {
         (switched_x - a_advance).abs() < 1e-6,
         "expected Helvetica's own 'A' advance ({a_advance}), got {switched_x} \
          — looks like unicode_glyph's cmap path ran instead of outline_glyph's"
+    );
+}
+
+#[test]
+fn kshow_font_switch_leaves_leftover_utf8_bytes_as_separate_glyphs() {
+    // Issue #31's fix re-segments the *remaining* raw bytes against
+    // whichever font is live at each glyph, rather than trusting a
+    // decision made once when the show began. That's deliberately
+    // asymmetric with the reverse (byte-mode -> Unicode-mode) fix:
+    // switching a byte-mode font in mid-string can never "know" that
+    // three leftover bytes were meant to be one codepoint (see
+    // `unflagged_type3_still_gets_raw_bytes_not_utf8_decoded` above —
+    // an ordinary font always gets raw bytes, one glyph per byte). So
+    // when the switch lands *inside* a multi-byte codepoint rather than
+    // on a clean boundary, the ordinary font correctly receives each of
+    // the leftover UTF-8 bytes as its own separate glyph, not one
+    // glyph, not a rangecheck, not silently dropped bytes.
+    let mut it = run(&format!(
+        "{UNICODE_T3}
+         /P 6 dict def
+         P begin
+           /FontType 3 def
+           /FontMatrix [0.001 0 0 0.001 0 0] def
+           /Encoding 256 array def 0 1 255 {{ Encoding exch /.notdef put }} for
+           /BuildChar {{ exch pop /Got exch def /Count Count 1 add def 0 0 setcharwidth }} def
+         end
+         /PlainFont P definefont pop
+         /Count 0 def
+         /UniFont findfont 12 scalefont setfont
+         0 0 moveto
+         {{pop pop /PlainFont findfont 12 scalefont setfont}} (\u{AC00}\u{AC01}) kshow
+         Got Count"
+    ));
+    // \u{AC00}\u{AC01} is EA B0 80 EA B0 81 in UTF-8. UniFont consumes
+    // the first 3 bytes as one Hangul glyph; the kshow proc then
+    // switches to PlainFont for the remaining 3 raw bytes EA, B0, 81 —
+    // three separate BuildChar calls, the last leaving Got = 0x81.
+    let count = match it.pop().expect("Count").value {
+        Value::Integer(n) => n,
+        _ => panic!("expected integer"),
+    };
+    let got = match it.pop().expect("Got").value {
+        Value::Integer(n) => n,
+        _ => panic!("expected integer"),
+    };
+    assert_eq!(count, 3, "expected 3 separate byte glyphs on PlainFont");
+    assert_eq!(got, 0x81, "expected the last leftover byte in Got");
+}
+
+#[test]
+fn kshow_font_switch_into_unicode_type3_recombines_utf8_bytes() {
+    // Issue #31's actual bug: a kshow proc switching *into* a
+    // /UnicodeBuildChar true font from a byte-mode font. Before the
+    // fix, `ShowCtx` decided `unicode_mode` once, from the font active
+    // when the show began — an ordinary byte-mode font here — and
+    // pre-split the whole string into individual bytes. By the time the
+    // proc switched to UniFont, U+AC00's three UTF-8 bytes (EA B0 80)
+    // had already been split apart and could never be recombined: they
+    // would arrive at BuildChar as three separate byte-sized calls
+    // (0xEA, 0xB0, 0x80) instead of one call with the full codepoint
+    // 0xAC00. The fix re-segments the *remaining* raw bytes against
+    // whichever font is live at each glyph, so the switch recovers the
+    // UTF-8 boundary correctly.
+    let mut it = run(&format!(
+        "{UNICODE_T3}
+         /P 6 dict def
+         P begin
+           /FontType 3 def
+           /FontMatrix [0.001 0 0 0.001 0 0] def
+           /Encoding 256 array def 0 1 255 {{ Encoding exch /.notdef put }} for
+           /BuildChar {{ exch pop /Count Count 1 add def 0 0 setcharwidth }} def
+         end
+         /PlainFont P definefont pop
+         /Count 0 def
+         /PlainFont findfont 12 scalefont setfont
+         0 0 moveto
+         {{pop pop /UniFont findfont 12 scalefont setfont}} (A\u{AC00}) kshow
+         Got Count"
+    ));
+    let count = match it.pop().expect("Count").value {
+        Value::Integer(n) => n,
+        _ => panic!("expected integer"),
+    };
+    let got = match it.pop().expect("Got").value {
+        Value::Integer(n) => n,
+        _ => panic!("expected integer"),
+    };
+    assert_eq!(
+        count, 1,
+        "PlainFont's BuildChar should run once, for 'A' only — not again \
+         for any part of U+AC00 after the switch"
+    );
+    assert_eq!(
+        got, 0xAC00,
+        "UniFont's BuildChar should receive one recombined codepoint, \
+         not the first raw UTF-8 byte of U+AC00"
     );
 }

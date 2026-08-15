@@ -276,3 +276,34 @@ fn kshow_pushes_unicode_scalars_not_bytes_in_unicode_mode() {
         "kshow should see Unicode scalar codes, not byte-truncated ones"
     );
 }
+
+#[test]
+fn kshow_font_switch_into_unicode_catalog_font_recombines_utf8_bytes() {
+    // Issue #31: `ShowCtx` used to decide `unicode_mode` once, from the
+    // font active when the show began. A kshow proc switching from an
+    // ordinary byte-mode font (Helvetica) into a Unicode-mode catalog
+    // face (NotoSansKR-Regular) mid-string would leave U+C548's three
+    // UTF-8 bytes (already split apart on the byte-mode assumption)
+    // unable to recombine into one codepoint. The fix re-segments the
+    // remaining raw bytes against whichever font is live at each glyph,
+    // so the switch recovers the UTF-8 boundary and the total advance
+    // matches showing each piece under its own font separately.
+    let mut it = run("/Helvetica findfont 40 scalefont setfont \
+         0 0 moveto \
+         {pop pop /NotoSansKR-Regular findfont 40 scalefont setfont} (A\u{c548}) kshow \
+         currentpoint pop");
+    let switched_x = top_f64(&mut it);
+
+    let mut reference = run(
+        "/Helvetica findfont 40 scalefont setfont 0 0 moveto (A) show \
+         /NotoSansKR-Regular findfont 40 scalefont setfont (\u{c548}) show \
+         currentpoint pop",
+    );
+    let expected_x = top_f64(&mut reference);
+
+    assert!(
+        (switched_x - expected_x).abs() < 1e-6,
+        "expected the switch to recombine U+C548's UTF-8 bytes into one glyph \
+         (advance {expected_x}), got {switched_x}"
+    );
+}
