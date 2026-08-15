@@ -223,7 +223,14 @@ sits empty past 10s and the next invocation correctly reads it as
 abandoned and reclaims it. That's the intended behavior for a dead
 claim, not a bug — 10s is picked to reclaim a genuinely dead claim
 promptly, not to give a live one room to breathe (the 45-minute
-threshold already does that job).
+threshold already does that job). If the pause is *not* the tool call
+being killed but the claimant genuinely still running, just suspended
+past 10s between `mkdir` and its heartbeat write, a second invocation
+can still steal it and both ends up believing they own it — a known
+residual gap tracked in #72, not fully closed here (closing it needs
+real compare-and-swap semantics over the whole span, which the
+`mkdir`/`mv` primitives alone don't give once content, not just the
+name, is what needs arbitrating).
 
 45 minutes is deliberately generous, not tight: PR #30 needed six
 Codex review rounds in one legitimate run (~62 min total, each round
@@ -335,7 +342,19 @@ are now both editing the same worktree. That's the exact failure #35
 exists to close, reintroduced through the back door of "helpful"
 self-healing. Let the write fail loudly (the redirect errors with no
 such directory) instead — that's the correct signal to stop and
-re-verify ownership via **Claim the issue**, not silently patch over it:
+re-verify ownership via **Claim the issue**, not silently patch over it.
+
+**A missing lock dir is the anomaly bare writes catch — a lock dir
+that exists but was legitimately reclaimed by someone else in between
+is a related, more dangerous case bare writes do *not* catch**: the
+directory is present, so the write succeeds and silently overwrites
+the new owner's heartbeat, without a mismatch to signal the takeover.
+Closing that fully needs an ownership token verified with real
+compare-and-swap semantics, which POSIX shell can't express atomically
+over the whole read-decide-write span (a token turns the problem into
+"don't let the compare-then-write itself get raced," which is the same
+shape of gap, just narrower) — tracked as a known residual gap in #72
+rather than fixed here:
 
 ```sh
 LOCKDIR="$(git rev-parse --path-format=absolute --git-common-dir)/work-issue-lock-<N>"
