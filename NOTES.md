@@ -55,6 +55,27 @@ requires a trip into Actions to corroborate.
   one for the same ref/PR (superseded push, manual rerun) could finish
   last and overwrite the PR/issue comment with stale results via
   `--edit-last`.
+- A second Codex round on that fix caught one more real gap: when a
+  *later* push fails fmt/clippy/build (so the test step is skipped
+  entirely), the summary/comment steps used to no-op too — leaving the
+  *previous* commit's green "passed" comment sitting on the PR looking
+  current. Fixed: those steps now run whenever the job wasn't
+  cancelled (`ci_test_summary.sh` handles `skipped` as a distinct case,
+  before it ever touches the log file that in that case doesn't
+  exist) and post "tests did not run this time" instead of leaving
+  stale data in place.
+- Deliberately not fixed: that same round flagged that a *manually
+  rerun* old job can still race a newer completed run and overwrite
+  the comment, since `concurrency`'s cancellation is arrival-order,
+  not commit-recency, and only cancels a still-*running* job, not one
+  that already finished. A correct fix means comparing the run's
+  commit SHA against the PR's live head before writing the comment,
+  which needs an extra API call and meaningfully complicates the
+  workflow for a failure mode that requires someone deliberately
+  clicking "re-run jobs" on an old run after newer commits landed — not
+  a path this repo's actual (agent-driven, `agent-full`-policy) flow
+  exercises. Noted here rather than fixed now; revisit if a real rerun
+  ever actually produces a stale comment in practice.
 - Deferred: clippy/build/fmt results aren't surfaced the same way —
   the issue scoped this to test evidence specifically, and those three
   already fail the job outright with output in the existing status

@@ -61,7 +61,7 @@ jobs:
         run: cargo test 2>&1 | tee test-output.log
 
       - name: Summarize test results
-        if: "!cancelled() && steps.test.outcome != 'skipped'"
+        if: "!cancelled()"
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -73,7 +73,7 @@ jobs:
       # check red on a run where the actual tests passed — the job
       # summary above already carries the same content as a fallback.
       - name: Comment on PR
-        if: "!cancelled() && steps.test.outcome != 'skipped' && github.event_name == 'pull_request'"
+        if: "!cancelled() && github.event_name == 'pull_request'"
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -82,7 +82,7 @@ jobs:
             --body-file test-summary.md --edit-last --create-if-none
 
       - name: Comment on linked issue
-        if: "!cancelled() && steps.test.outcome != 'skipped' && github.event_name == 'pull_request'"
+        if: "!cancelled() && github.event_name == 'pull_request'"
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}

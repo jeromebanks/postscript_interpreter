@@ -7,15 +7,29 @@
 #
 #   ./scripts/ci_test_summary.sh <test-output-log> <step-outcome> [run-url]
 #
-# <step-outcome> is the `cargo test` step's real outcome ("success" or
-# "failure") — passed in separately because a compile error can make
-# cargo test exit nonzero while producing zero "test result:" lines,
-# which needs to render differently from "0 failed".
+# <step-outcome> is the `cargo test` step's real outcome ("success",
+# "failure", or "skipped") — passed in separately because a compile
+# error can make cargo test exit nonzero while producing zero "test
+# result:" lines (needs to render differently from "0 failed"), and
+# "skipped" means the log file doesn't exist at all (an earlier
+# fmt/clippy/build step failed first, so cargo test never ran).
 set -uo pipefail  # no -e: grep/awk finding no match is expected here, not a script error
 
 LOG="$1"
 OUTCOME="$2"
 RUN_URL="${3:-}"
+
+echo "## CI test results"
+echo
+
+if [ "$OUTCOME" = "skipped" ]; then
+  echo "**cargo test: ⏭️ did not run** — an earlier step (fmt/clippy/build) failed first, so tests never started this run."
+  if [ -n "$RUN_URL" ]; then
+    echo
+    echo "[View full run]($RUN_URL)"
+  fi
+  exit 0
+fi
 
 read -r passed failed ignored <<<"$(grep -E '^test result: ' "$LOG" | awk '
   {
@@ -27,9 +41,6 @@ read -r passed failed ignored <<<"$(grep -E '^test result: ' "$LOG" | awk '
   }
   END { printf "%d %d %d", passed + 0, failed + 0, ignored + 0 }
 ')"
-
-echo "## CI test results"
-echo
 
 if [ "$OUTCOME" != "success" ] && [ "${failed:-0}" -eq 0 ]; then
   echo "**cargo test: ⚠️ did not complete** — no test results were produced (likely a compile error)."
