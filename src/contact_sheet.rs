@@ -17,17 +17,20 @@ pub const MAX_SIDE_PX: u32 = 8000;
 /// Gap in device pixels painted white between cells.
 pub const GAP: u32 = 4;
 
-/// Lay `pages` into a `cols`×`rows` grid, row-major in the order
-/// given (cell 0 top-left, cell 1 to its right, ...). Extra cells
-/// beyond `pages.len()` stay white. Errors instead of allocating past
-/// [`MAX_SIDE_PX`] on a side, or if `pages` is empty.
-pub fn compose(pages: &[Pixmap], cols: u32, rows: u32, gap: u32) -> Result<Pixmap, String> {
-    let Some(first) = pages.first() else {
-        return Err("contact sheet: no frames to compose".to_string());
-    };
-    let (w, h) = (first.width(), first.height());
-    let sheet_w = cols * w + gap * cols.saturating_sub(1);
-    let sheet_h = rows * h + gap * rows.saturating_sub(1);
+/// Allocate a blank (white) `cols`×`rows` grid sized for `cell_w`×
+/// `cell_h` cells with `gap` device pixels between them. Errors
+/// instead of allocating past [`MAX_SIDE_PX`] on a side — a caller
+/// (`main.rs`'s sweep loop) calls this *before* rendering any frames,
+/// so an oversized request fails fast instead of after N renders.
+pub fn new_sheet(
+    cols: u32,
+    rows: u32,
+    cell_w: u32,
+    cell_h: u32,
+    gap: u32,
+) -> Result<Pixmap, String> {
+    let sheet_w = cols * cell_w + gap * cols.saturating_sub(1);
+    let sheet_h = rows * cell_h + gap * rows.saturating_sub(1);
     if sheet_w > MAX_SIDE_PX || sheet_h > MAX_SIDE_PX {
         return Err(format!(
             "contact sheet would be {sheet_w}x{sheet_h}px, over the {MAX_SIDE_PX}px-per-side \
@@ -38,17 +41,39 @@ pub fn compose(pages: &[Pixmap], cols: u32, rows: u32, gap: u32) -> Result<Pixma
     let mut sheet = Pixmap::new(sheet_w, sheet_h)
         .ok_or_else(|| format!("cannot allocate a {sheet_w}x{sheet_h}px contact sheet"))?;
     sheet.fill(tiny_skia::Color::WHITE);
+    Ok(sheet)
+}
+
+/// Copy `frame` into cell `index` (row-major: 0 top-left, 1 to its
+/// right, ...) of a `cols`-wide grid on `sheet`, with `gap` device
+/// pixels between cells. `frame` must fit within one cell (true for
+/// every sweep frame -- all render at the same `--page`/`--dpi`).
+pub fn blit_cell(sheet: &mut Pixmap, cols: u32, gap: u32, index: usize, frame: &Pixmap) {
+    let (w, h) = (frame.width(), frame.height());
+    let (col, row) = (index as u32 % cols, index as u32 / cols);
+    let (ox, oy) = (col * (w + gap), row * (h + gap));
     let sw = sheet.width();
     let sdata = sheet.data_mut();
+    let pdata = frame.data();
+    for y in 0..h {
+        let src = &pdata[(y * w * 4) as usize..((y * w + w) * 4) as usize];
+        let dst = (((oy + y) * sw + ox) * 4) as usize;
+        sdata[dst..dst + src.len()].copy_from_slice(src);
+    }
+}
+
+/// Lay `pages` into a `cols`×`rows` grid in one call — the batch form
+/// of [`new_sheet`]/[`blit_cell`], for a caller that already has every
+/// frame in memory (this module's own tests; `main.rs`'s sweep loop
+/// uses the two primitives directly to stream frames instead). Extra
+/// cells beyond `pages.len()` stay white.
+pub fn compose(pages: &[Pixmap], cols: u32, rows: u32, gap: u32) -> Result<Pixmap, String> {
+    let Some(first) = pages.first() else {
+        return Err("contact sheet: no frames to compose".to_string());
+    };
+    let mut sheet = new_sheet(cols, rows, first.width(), first.height(), gap)?;
     for (i, page) in pages.iter().enumerate() {
-        let (col, row) = (i as u32 % cols, i as u32 / cols);
-        let (ox, oy) = (col * (w + gap), row * (h + gap));
-        let pdata = page.data();
-        for y in 0..h {
-            let src = &pdata[(y * w * 4) as usize..((y * w + w) * 4) as usize];
-            let dst = (((oy + y) * sw + ox) * 4) as usize;
-            sdata[dst..dst + src.len()].copy_from_slice(src);
-        }
+        blit_cell(&mut sheet, cols, gap, i, page);
     }
     Ok(sheet)
 }

@@ -67,6 +67,53 @@ it). `examples/sweep_demo.ps` is the specimen — an N-petaled rosette
 that demonstrates both mechanisms (a hardcoded `srand` for seed
 sweeping, a `/Petals where` lookup for parameter sweeping).
 
+A cross-model (Codex) review at the PR stage, which ran the binary
+empirically rather than only reading the diff, caught six real bugs in
+the first draft, all fixed before merge:
+
+- The first draft accumulated every rendered frame in one `Vec<Pixmap>`
+  before writing anything — at `--dpi 300` even the default page is
+  ~34MB/frame, so a 64-frame sweep held over 2GB in memory before the
+  first byte hit disk, and an oversized `--contact-sheet` was rejected
+  only *after* every frame had already rendered. Fixed by streaming:
+  `--png` now saves each frame as it renders; `src/contact_sheet.rs`
+  gained `new_sheet`/`blit_cell` primitives so the sheet is allocated
+  (and its size validated) *before* the loop starts, and each frame
+  blits straight in and is dropped, never accumulating a `Vec` at all.
+- A range spec like `--sweep X=0:1000000000` eagerly `collect()`ed the
+  whole (billion-element) `Vec<f64>` before the `MAX_SWEEP` cap check
+  ran afterward — a short string could still attempt a multi-gigabyte
+  allocation. Fixed by checking the computed count against the cap
+  *before* generating the range, in both `parse_sweep_spec` and the
+  new seed-specific parser below.
+- `--sweep-seed` parsed every value through `f64` on the way to `i64`,
+  which loses integer distinctness above 2^53 (`9007199254740992` and
+  `...993` collapsed to the same seed) and silently saturates an
+  out-of-range value on the `as i64` cast. Fixed with a dedicated
+  `parse_seed_spec` that stays in native `i64`/`i128` arithmetic
+  throughout, never touching `f64`.
+- `format_sweep_value`'s fixed 9-decimal rounding (added to hide
+  binary float drift from *range* generation, e.g. a `0.1` step
+  landing on `0.7000000000000001`) was applied uniformly, so a
+  literal list value like `--sweep X=0.0000000001` silently became
+  `/X 0 def`. Fixed by only rounding range-*computed* values; a
+  literal typed on the command line now prints via Rust's exact
+  shortest-round-trip `Display`, whatever its precision.
+- `--contact-sheet`/`--grid` with neither `--sweep-seed` nor `--sweep`
+  passed every validation check and then silently did nothing (no
+  file written) — nothing in the non-sweep code path ever consumed
+  those two options. Fixed with an explicit rejection.
+- A sweep frame's `--pstack-on-error` was silently dropped: the
+  per-frame error branch printed `error_report` but never called
+  `print_pstack`, even though the flag is honored for an ordinary
+  (non-sweep) headless run. Fixed to match.
+
+`--grid`'s own validation was already tightened once during
+plan-then-implementation review to bound both axes to `1..=MAX_SWEEP`
+(a `--grid 70000x70000` typo could otherwise overflow `u32` in the
+`cols * rows` multiply — a debug-build panic) before the Codex pass
+even started; that fix predates and is independent of the six above.
+
 ## Axial/radial gradient (shading) fill support (issue #20, 2026-08-14)
 
 Closes issue #20. The interpreter had no `shfill`/shading machinery at

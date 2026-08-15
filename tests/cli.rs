@@ -452,3 +452,77 @@ fn sweep_frame_error_continues_the_sweep_and_reports_nonzero() {
     );
     assert!(out.with_file_name("sweep-error-002.png").exists());
 }
+
+/// Regression (cross-model review, PR #66): `--pstack-on-error` was
+/// silently ignored for a failed sweep frame, even though the flag is
+/// accepted and works for a normal (non-sweep) headless run.
+#[test]
+fn sweep_frame_error_honors_pstack_on_error() {
+    let out = tmp("sweep-pstack.png");
+    let source = "/Div where { pop Div } { 1 } ifelse 10 exch div pop 0 0 10 10 rectfill";
+    let (ok, _out_text, stderr) = run(
+        &[
+            "--page",
+            "10x10",
+            "--pstack-on-error",
+            "--sweep",
+            "Div=0",
+            "--png",
+            out.to_str().unwrap(),
+            "-",
+        ],
+        source,
+    );
+    assert!(!ok);
+    assert!(
+        stderr.contains("Operand stack"),
+        "pstack printed for the failed frame: {stderr}"
+    );
+}
+
+/// Regression (cross-model review, PR #66): `--contact-sheet`/`--grid`
+/// with no sweep axis used to validate cleanly and then silently do
+/// nothing (no file written, since no code path ever consumed them).
+#[test]
+fn contact_sheet_without_a_sweep_axis_errors() {
+    let sheet = tmp("orphan-sheet.png");
+    let (ok, _out, stderr) = run(
+        &[
+            "--headless",
+            "--contact-sheet",
+            sheet.to_str().unwrap(),
+            "-",
+        ],
+        "0 0 10 10 rectfill",
+    );
+    assert!(!ok);
+    assert!(stderr.contains("--sweep-seed or --sweep"), "{stderr}");
+    assert!(!sheet.exists());
+}
+
+/// Regression (cross-model review, PR #66): an oversized contact
+/// sheet used to be rejected only *after* every frame had already
+/// rendered (and stayed resident in memory). It must now fail before
+/// the first frame renders -- no `pscat: sweep:` progress line at all.
+#[test]
+fn oversized_contact_sheet_fails_before_any_frame_renders() {
+    let sheet = tmp("oversized-sheet.png");
+    let (ok, stdout, stderr) = run(
+        &[
+            "--page",
+            "8000x8000",
+            "--sweep-seed",
+            "1:8",
+            "--contact-sheet",
+            sheet.to_str().unwrap(),
+            "-",
+        ],
+        "0 0 10 10 rectfill",
+    );
+    assert!(!ok);
+    assert!(stderr.contains("over the"), "stderr: {stderr}");
+    assert!(
+        !stdout.contains("pscat: sweep:"),
+        "no frame should have started rendering: {stdout}"
+    );
+}

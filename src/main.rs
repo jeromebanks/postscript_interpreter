@@ -39,7 +39,7 @@ struct Options {
     /// Predefine `/NAME <value> def` in userdict before each sweep
     /// frame (issue #21): opt-in, the source must look `/NAME` up
     /// itself (e.g. `/NAME where { pop NAME } { 0 } ifelse`).
-    sweep_param: Option<(String, Vec<f64>)>,
+    sweep_param: Option<(String, Vec<f64>, bool)>,
     /// Composite every sweep frame into one grid PNG.
     contact_sheet: Option<String>,
     /// Explicit (cols, rows) for --contact-sheet; default is a
@@ -87,6 +87,12 @@ fn main() -> ExitCode {
             );
             return ExitCode::FAILURE;
         }
+    } else if options.contact_sheet.is_some() || options.grid.is_some() {
+        // Neither flag does anything without a sweep axis (cross-model
+        // review, PR #66: `--contact-sheet` with no `--sweep-seed`/
+        // `--sweep` silently exited clean without writing anything).
+        eprintln!("pscat: --contact-sheet/--grid need --sweep-seed or --sweep");
+        return ExitCode::FAILURE;
     }
 
     if let Some(dir) = &options.spool {
@@ -400,10 +406,14 @@ fn numbered_path(path: &str, n: usize) -> String {
 }
 
 /// A `--sweep-seed`/`--sweep` axis: either a list of forced RNG seeds
-/// or a named PostScript value defined once per frame.
+/// or a named PostScript value defined once per frame. The `bool` on
+/// `Param` is whether the values were range-*computed* (`A:B:STEP`)
+/// rather than typed literally (`A,B,C`) — only computed values get
+/// [`format_sweep_value`]'s drift-hiding rounding, so a literal like
+/// `0.0000000001` prints exactly instead of being truncated.
 enum SweepAxis {
     Seed(Vec<i64>),
-    Param(String, Vec<f64>),
+    Param(String, Vec<f64>, bool),
 }
 
 /// Render `source` once per sweep value (issue #21). Each frame gets
@@ -413,20 +423,79 @@ enum SweepAxis {
 /// (matching this CLI's existing partial-render-on-error philosophy:
 /// `finish_headless` writes a PNG even after an error), but the
 /// overall exit code is nonzero if any frame failed.
+///
+/// Frames are streamed, not accumulated: `--png` writes each one as
+/// it renders, and `--contact-sheet` blits each one straight into a
+/// sheet allocated *before* the loop starts. Holding all N full-
+/// resolution frames in memory at once (a first draft did exactly
+/// that) was flagged in cross-model review — at `--dpi 300` even the
+/// default page is ~34MB/frame, so 64 frames is >2GB before the first
+/// byte hits disk, and an oversized `--contact-sheet` was only
+/// rejected *after* paying for every frame instead of before any of
+/// them rendered.
 fn run_sweep(options: &Options, source: &[u8]) -> ExitCode {
     let axis = if let Some(seeds) = &options.sweep_seed {
         SweepAxis::Seed(seeds.clone())
-    } else if let Some((name, values)) = &options.sweep_param {
-        SweepAxis::Param(name.clone(), values.clone())
+    } else if let Some((name, values, computed)) = &options.sweep_param {
+        SweepAxis::Param(name.clone(), values.clone(), *computed)
     } else {
         unreachable!("run_sweep is only called once a sweep axis is set")
     };
     let n = match &axis {
         SweepAxis::Seed(v) => v.len(),
-        SweepAxis::Param(_, v) => v.len(),
+        SweepAxis::Param(_, v, _) => v.len(),
     };
 
-    let mut frames: Vec<tiny_skia::Pixmap> = Vec::with_capacity(n);
+    // Every frame renders at this same pixel size (a probe Interp,
+    // not a duplicated copy of with_page_scaled's point->pixel
+    // formula) -- needed up front to size the contact sheet before
+    // any frame actually runs.
+    let Some(probe) = Interp::with_page_scaled(options.page.0, options.page.1, options.dpi / 72.0)
+    else {
+        eprintln!(
+            "pscat: unusable page size {}x{}",
+            options.page.0, options.page.1
+        );
+        return ExitCode::FAILURE;
+    };
+    let (cell_w, cell_h) = (probe.gfx().pixmap.width(), probe.gfx().pixmap.height());
+    drop(probe);
+
+    let mut sheet = match &options.contact_sheet {
+        None => None,
+        Some(_) => {
+            let (cols, rows) = match options.grid {
+                Some((c, r)) => {
+                    if (c as usize) * (r as usize) < n {
+                        eprintln!(
+                            "pscat: --grid {c}x{r} has only {} cells for {n} frames",
+                            c as usize * r as usize
+                        );
+                        return ExitCode::FAILURE;
+                    }
+                    (c, r)
+                }
+                None => {
+                    let cols = (n as f64).sqrt().ceil() as u32;
+                    (cols, (n as u32).div_ceil(cols))
+                }
+            };
+            match pscat::contact_sheet::new_sheet(
+                cols,
+                rows,
+                cell_w,
+                cell_h,
+                pscat::contact_sheet::GAP,
+            ) {
+                Ok(s) => Some((s, cols)),
+                Err(msg) => {
+                    eprintln!("pscat: {msg}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+    };
+
     let mut any_failed = false;
     let mut seed_ever_fired = false;
 
@@ -445,8 +514,8 @@ fn run_sweep(options: &Options, source: &[u8]) -> ExitCode {
                 interp.set_seed_override(Some(seeds[i]));
                 format!("seed={}", seeds[i])
             }
-            SweepAxis::Param(name, values) => {
-                let text = format_sweep_value(values[i]);
+            SweepAxis::Param(name, values, computed) => {
+                let text = format_sweep_value(values[i], *computed);
                 let preamble = format!("/{name} {text} def");
                 if let Err(e) = interp.run_source(preamble.as_bytes()) {
                     eprintln!(
@@ -464,6 +533,9 @@ fn run_sweep(options: &Options, source: &[u8]) -> ExitCode {
             Err(e) => {
                 eprintln!("pscat: sweep: frame {}/{n} ({label}) failed:", i + 1);
                 eprintln!("{}", interp.error_report(&e));
+                if options.pstack_on_error {
+                    print_pstack(&interp);
+                }
                 any_failed = true;
                 false
             }
@@ -493,14 +565,19 @@ fn run_sweep(options: &Options, source: &[u8]) -> ExitCode {
 
         let status = if ok { "" } else { " (failed)" };
         match &options.png {
-            Some(path) => println!(
-                "pscat: sweep: {}/{n} {label}{status} -> {}",
-                i + 1,
-                numbered_path(path, i + 1)
-            ),
+            Some(path) => {
+                let out = numbered_path(path, i + 1);
+                if let Err(e) = page.save_png(&out) {
+                    eprintln!("pscat: cannot write {out}: {e}");
+                    return ExitCode::FAILURE;
+                }
+                println!("pscat: sweep: {}/{n} {label}{status} -> {out}", i + 1);
+            }
             None => println!("pscat: sweep: {}/{n} {label}{status}", i + 1),
         }
-        frames.push(page);
+        if let Some((sheet, cols)) = sheet.as_mut() {
+            pscat::contact_sheet::blit_cell(sheet, *cols, pscat::contact_sheet::GAP, i, &page);
+        }
     }
 
     if matches!(axis, SweepAxis::Seed(_)) && !seed_ever_fired {
@@ -510,46 +587,12 @@ fn run_sweep(options: &Options, source: &[u8]) -> ExitCode {
         );
     }
 
-    if let Some(path) = &options.png {
-        for (i, page) in frames.iter().enumerate() {
-            let out = numbered_path(path, i + 1);
-            if let Err(e) = page.save_png(&out) {
-                eprintln!("pscat: cannot write {out}: {e}");
-                return ExitCode::FAILURE;
-            }
+    if let (Some((sheet, _)), Some(path)) = (&sheet, &options.contact_sheet) {
+        if let Err(e) = sheet.save_png(path) {
+            eprintln!("pscat: cannot write {path}: {e}");
+            return ExitCode::FAILURE;
         }
-    }
-
-    if let Some(path) = &options.contact_sheet {
-        let (cols, rows) = match options.grid {
-            Some((c, r)) => {
-                if ((c * r) as usize) < n {
-                    eprintln!(
-                        "pscat: --grid {c}x{r} has only {} cells for {n} frames",
-                        c * r
-                    );
-                    return ExitCode::FAILURE;
-                }
-                (c, r)
-            }
-            None => {
-                let cols = (n as f64).sqrt().ceil() as u32;
-                (cols, (n as u32).div_ceil(cols))
-            }
-        };
-        match pscat::contact_sheet::compose(&frames, cols, rows, pscat::contact_sheet::GAP) {
-            Ok(sheet) => {
-                if let Err(e) = sheet.save_png(path) {
-                    eprintln!("pscat: cannot write {path}: {e}");
-                    return ExitCode::FAILURE;
-                }
-                println!("pscat: wrote {path}");
-            }
-            Err(msg) => {
-                eprintln!("pscat: {msg}");
-                return ExitCode::FAILURE;
-            }
-        }
+        println!("pscat: wrote {path}");
     }
 
     if any_failed {
@@ -563,16 +606,27 @@ const MAX_SWEEP: usize = 64;
 
 /// Parse `"A:B"` / `"A:B:STEP"` (inclusive range, STEP default 1,
 /// must be > 0, A <= B) or `"A,B,C,..."` (explicit list, sweep order
-/// as given). Capped at `MAX_SWEEP` values — the same spirit as
-/// `--page`/`--dpi`'s clamps, so a typo'd range can't drive an
-/// unbounded render.
-fn parse_sweep_spec(spec: &str) -> Result<Vec<f64>, String> {
+/// as given) for `--sweep NAME=`. Capped at `MAX_SWEEP` values — the
+/// same spirit as `--page`/`--dpi`'s clamps, so a typo'd range can't
+/// drive an unbounded render; checked *before* generating the range
+/// (a `0:1000000000` spec must not try to collect a billion-element
+/// `Vec` first and hit the cap only afterward — cross-model review,
+/// PR #66). Returns `(values, computed)`: `computed` is `true` for a
+/// range (`format_sweep_value` rounds these to hide float drift from
+/// the generating arithmetic), `false` for a literal list (printed
+/// exactly, no rounding).
+///
+/// `--sweep-seed` does *not* use this — see `parse_seed_spec`, which
+/// stays in native `i64` throughout rather than routing seeds through
+/// `f64` (which loses distinctness above 2^53 and silently saturates
+/// out-of-range values on the `as i64` cast).
+fn parse_sweep_spec(spec: &str) -> Result<(Vec<f64>, bool), String> {
     let parse_one = |s: &str| -> Result<f64, String> {
         s.trim()
             .parse()
             .map_err(|_| format!("invalid number in sweep spec {spec:?}: {s:?}"))
     };
-    let values = if spec.contains(':') {
+    let (values, computed) = if spec.contains(':') {
         let parts: Vec<&str> = spec.split(':').collect();
         let (a, b, step) = match parts.as_slice() {
             [a, b] => (parse_one(a)?, parse_one(b)?, 1.0),
@@ -590,11 +644,73 @@ fn parse_sweep_spec(spec: &str) -> Result<Vec<f64>, String> {
             return Err(format!("invalid range: {spec:?} (A must be <= B)"));
         }
         let count = ((b - a) / step + 1e-9).floor() as usize + 1;
-        (0..count).map(|i| a + i as f64 * step).collect()
+        if count > MAX_SWEEP {
+            return Err(format!(
+                "sweep produces {count} values, over the {MAX_SWEEP}-frame limit"
+            ));
+        }
+        ((0..count).map(|i| a + i as f64 * step).collect(), true)
+    } else {
+        (
+            spec.split(',')
+                .map(parse_one)
+                .collect::<Result<Vec<f64>, String>>()?,
+            false,
+        )
+    };
+    if values.is_empty() {
+        return Err(format!("empty sweep: {spec:?}"));
+    }
+    if values.len() > MAX_SWEEP {
+        return Err(format!(
+            "sweep produces {} values, over the {MAX_SWEEP}-frame limit",
+            values.len()
+        ));
+    }
+    Ok((values, computed))
+}
+
+/// Same grammar as [`parse_sweep_spec`] but native `i64` arithmetic
+/// throughout, for `--sweep-seed` (see that function's doc comment
+/// for why: `f64` loses seed distinctness above 2^53 and silently
+/// saturates out-of-range values). `i128` intermediates avoid
+/// overflow while generating a range near the `i64` edges.
+fn parse_seed_spec(spec: &str) -> Result<Vec<i64>, String> {
+    let parse_one = |s: &str| -> Result<i64, String> {
+        s.trim()
+            .parse()
+            .map_err(|_| format!("invalid seed in {spec:?}: {s:?} (must be an integer)"))
+    };
+    let values = if spec.contains(':') {
+        let parts: Vec<&str> = spec.split(':').collect();
+        let (a, b, step) = match parts.as_slice() {
+            [a, b] => (parse_one(a)?, parse_one(b)?, 1i64),
+            [a, b, s] => (parse_one(a)?, parse_one(b)?, parse_one(s)?),
+            _ => {
+                return Err(format!(
+                    "invalid range: {spec:?} (expected A:B or A:B:STEP)"
+                ));
+            }
+        };
+        if step <= 0 {
+            return Err(format!("invalid range: {spec:?} (STEP must be > 0)"));
+        }
+        if a > b {
+            return Err(format!("invalid range: {spec:?} (A must be <= B)"));
+        }
+        let count = ((b as i128 - a as i128) / step as i128) as usize + 1;
+        if count > MAX_SWEEP {
+            return Err(format!(
+                "sweep produces {count} values, over the {MAX_SWEEP}-frame limit"
+            ));
+        }
+        (0..count)
+            .map(|i| (a as i128 + i as i128 * step as i128) as i64)
+            .collect()
     } else {
         spec.split(',')
             .map(parse_one)
-            .collect::<Result<Vec<f64>, String>>()?
+            .collect::<Result<Vec<i64>, String>>()?
     };
     if values.is_empty() {
         return Err(format!("empty sweep: {spec:?}"));
@@ -608,16 +724,24 @@ fn parse_sweep_spec(spec: &str) -> Result<Vec<f64>, String> {
     Ok(values)
 }
 
-/// Format a swept value for both the `/NAME <v> def` preamble and the
-/// per-frame stdout line — an integer-valued float prints bare (`5`,
-/// not `5.0`); anything else rounds to 9 decimals to hide binary
-/// floating-point noise from range generation (e.g. a `0.1` step
-/// landing on `0.7000000000000001`), then trims trailing zeros.
-fn format_sweep_value(v: f64) -> String {
+/// Format a swept `--sweep NAME=` value for both the `/NAME <v> def`
+/// preamble and the per-frame stdout line — an integer-valued float
+/// prints bare (`5`, not `5.0`). A literal list value (`computed`
+/// `false`) prints exactly via Rust's shortest-round-trip `Display`,
+/// preserving whatever precision was typed. A range-*computed* value
+/// (`computed` true) rounds to 12 decimals first, to hide binary
+/// floating-point noise from the generating arithmetic (e.g. a `0.1`
+/// step landing on `0.7000000000000001`) — a range spec with
+/// intentional sub-1e-12 precision is not a realistic use case this
+/// trades away.
+fn format_sweep_value(v: f64, computed: bool) -> String {
     if v.fract() == 0.0 && v.abs() < 1e15 {
         return format!("{}", v as i64);
     }
-    let s = format!("{v:.9}");
+    if !computed {
+        return format!("{v}");
+    }
+    let s = format!("{v:.12}");
     let s = s.trim_end_matches('0');
     s.trim_end_matches('.').to_string()
 }
@@ -707,18 +831,7 @@ fn parse_args() -> Result<Options, String> {
             }
             "--sweep-seed" => {
                 let spec = args.next().ok_or("missing SPEC after --sweep-seed")?;
-                let values = parse_sweep_spec(&spec)?;
-                let seeds = values
-                    .iter()
-                    .map(|&v| {
-                        if v.fract() == 0.0 {
-                            Ok(v as i64)
-                        } else {
-                            Err(format!("--sweep-seed values must be integers, got {v}"))
-                        }
-                    })
-                    .collect::<Result<Vec<i64>, String>>()?;
-                options.sweep_seed = Some(seeds);
+                options.sweep_seed = Some(parse_seed_spec(&spec)?);
             }
             "--sweep" => {
                 let spec = args.next().ok_or("missing NAME=SPEC after --sweep")?;
@@ -732,8 +845,8 @@ fn parse_args() -> Result<Options, String> {
                         "invalid --sweep name: {name:?} (expected an identifier)"
                     ));
                 }
-                let values = parse_sweep_spec(rest)?;
-                options.sweep_param = Some((name.to_string(), values));
+                let (values, computed) = parse_sweep_spec(rest)?;
+                options.sweep_param = Some((name.to_string(), values, computed));
             }
             "--contact-sheet" => {
                 options.contact_sheet =
@@ -863,21 +976,23 @@ mod sweep_tests {
     use super::*;
 
     #[test]
-    fn comma_list_parses_in_order() {
-        assert_eq!(parse_sweep_spec("4,1,9").unwrap(), vec![4.0, 1.0, 9.0]);
+    fn comma_list_parses_in_order_and_is_not_marked_computed() {
+        let (values, computed) = parse_sweep_spec("4,1,9").unwrap();
+        assert_eq!(values, vec![4.0, 1.0, 9.0]);
+        assert!(!computed);
     }
 
     #[test]
-    fn range_defaults_to_step_one_and_is_inclusive() {
-        assert_eq!(parse_sweep_spec("1:4").unwrap(), vec![1.0, 2.0, 3.0, 4.0]);
+    fn range_defaults_to_step_one_and_is_inclusive_and_marked_computed() {
+        let (values, computed) = parse_sweep_spec("1:4").unwrap();
+        assert_eq!(values, vec![1.0, 2.0, 3.0, 4.0]);
+        assert!(computed);
     }
 
     #[test]
     fn range_with_explicit_step() {
-        assert_eq!(
-            parse_sweep_spec("0:1:0.25").unwrap(),
-            vec![0.0, 0.25, 0.5, 0.75, 1.0]
-        );
+        let (values, _) = parse_sweep_spec("0:1:0.25").unwrap();
+        assert_eq!(values, vec![0.0, 0.25, 0.5, 0.75, 1.0]);
     }
 
     #[test]
@@ -897,6 +1012,16 @@ mod sweep_tests {
         assert!(parse_sweep_spec(&spec).is_err());
     }
 
+    /// Regression (cross-model review, PR #66): a huge range used to
+    /// eagerly `collect()` before the cap check ran, so a short spec
+    /// like this could try to allocate a billion-element `Vec` instead
+    /// of erroring immediately. This must return quickly.
+    #[test]
+    fn a_huge_range_is_rejected_without_allocating_it() {
+        assert!(parse_sweep_spec("0:1000000000").is_err());
+        assert!(parse_seed_spec("0:1000000000").is_err());
+    }
+
     #[test]
     fn empty_and_garbage_specs_error() {
         assert!(parse_sweep_spec("").is_err());
@@ -905,16 +1030,50 @@ mod sweep_tests {
 
     #[test]
     fn integer_valued_floats_format_bare() {
-        assert_eq!(format_sweep_value(5.0), "5");
-        assert_eq!(format_sweep_value(-3.0), "-3");
+        assert_eq!(format_sweep_value(5.0, false), "5");
+        assert_eq!(format_sweep_value(-3.0, true), "-3");
     }
 
     #[test]
-    fn fractional_values_format_and_trim() {
-        assert_eq!(format_sweep_value(0.5), "0.5");
+    fn fractional_computed_values_are_rounded_to_hide_float_drift() {
+        assert_eq!(format_sweep_value(0.5, true), "0.5");
         // 7 * 0.1 lands on 0.7000000000000001 in f64 -- must not leak
         // that noise into the generated PostScript or the stdout line.
         let noisy = 7.0 * 0.1;
-        assert_eq!(format_sweep_value(noisy), "0.7");
+        assert_eq!(format_sweep_value(noisy, true), "0.7");
+    }
+
+    /// Regression (cross-model review, PR #66): a literal list value
+    /// used to go through the same 9-decimal rounding as a computed
+    /// range, so `--sweep X=0.0000000001` silently became `/X 0 def`.
+    /// A non-computed value must print exactly, whatever its precision.
+    #[test]
+    fn fractional_literal_values_print_exactly() {
+        assert_eq!(format_sweep_value(0.0000000001, false), "0.0000000001");
+    }
+
+    #[test]
+    fn seed_spec_comma_list_parses_exactly() {
+        assert_eq!(parse_seed_spec("4,1,9").unwrap(), vec![4, 1, 9]);
+    }
+
+    #[test]
+    fn seed_spec_range_is_inclusive() {
+        assert_eq!(parse_seed_spec("1:4").unwrap(), vec![1, 2, 3, 4]);
+    }
+
+    /// Regression (cross-model review, PR #66): seeds used to route
+    /// through `f64`, which loses integer distinctness above 2^53 --
+    /// these two adjacent seeds used to collapse to the same value.
+    #[test]
+    fn seed_spec_preserves_distinctness_above_2_pow_53() {
+        let seeds = parse_seed_spec("9007199254740992,9007199254740993").unwrap();
+        assert_eq!(seeds, vec![9007199254740992, 9007199254740993]);
+        assert_ne!(seeds[0], seeds[1]);
+    }
+
+    #[test]
+    fn seed_spec_rejects_non_integers() {
+        assert!(parse_seed_spec("1.5,2").is_err());
     }
 }
