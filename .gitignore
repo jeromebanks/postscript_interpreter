@@ -3,6 +3,8 @@ tests/corpus/
 web/pscat.wasm
 _site/
 /dist/
+/test-output.log
+/test-summary.md
 
 # sdlcify: common ignores
 .DS_Store

@@ -3,6 +3,84 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Surface CI test results on the PR (issue #24, 2026-08-14)
+
+Closes issue #24: `cargo test`'s real pass/fail counts and failure
+output are now posted directly on the PR and echoed to the issue it
+closes, not just visible via a green/red `test` status check that
+requires a trip into Actions to corroborate.
+
+- `.github/workflows/ci.yml`'s test step now tees output to a log,
+  runs under `continue-on-error: true`, and a new
+  `scripts/ci_test_summary.sh` turns that log into a markdown summary
+  (pass/fail/ignored counts, failing test names, panic output capped
+  at 4000 chars) written to `$GITHUB_STEP_SUMMARY` on every run and
+  posted via `gh pr comment --edit-last --create-if-none` on
+  `pull_request` runs — edited in place on re-push rather than
+  appended, so a PR doesn't accumulate one comment per commit.
+- The same summary is echoed to whichever issue the PR's `Closes
+  #N`/`Fixes #N`/`Resolves #N` line references, matching `work-issue`'s
+  PR template — read via `PR_BODY` env var rather than templated
+  directly into the `run:` script, since PR body text is
+  attacker-controlled on a public repo and interpolating it into a
+  shell command is a known Actions injection vector.
+- A separate final step re-fails the job if the (continue-on-error'd)
+  test step actually failed, so suppressing its immediate failure to
+  let the summary/comment steps run doesn't weaken the `test` required
+  check `SDLC.md` keys merge eligibility on.
+- The two comment-posting steps run under `continue-on-error: true` —
+  a fork PR's read-only `GITHUB_TOKEN` (a GitHub Actions security
+  default, not something this repo works around) or a transient GitHub
+  API error must not flip the `test` check red on a run where the
+  tests themselves passed; the job summary already carries the same
+  content as a fallback for that case.
+- Confirmed via `cli/cli`'s source that `--edit-last` scopes to the
+  *current authenticated user's* comments only, so `--create-if-none`
+  correctly creates on the first CI run even though the issue/PR
+  already has human comments from other authors (`work-issue`'s
+  "Opened <PR URL>" note, etc.) — it isn't fooled into thinking a
+  comment already exists.
+- Cross-model (Codex) review caught a real bug: GitHub Actions' *implicit*
+  default shell (no `shell:` on a step) is `bash -e` **without**
+  `pipefail`, so `cargo test 2>&1 | tee test-output.log` reported
+  `tee`'s exit code (always 0), not cargo test's — `steps.test.outcome`
+  stayed `success` on a failing test run, silently defeating both the
+  required `test` check and the "Fail job if tests failed" step.
+  Confirmed empirically (`bash -e -c 'false | tee ...; echo $?'` → `0`
+  vs. `bash -eo pipefail -c '...'` → nonzero) before fixing by setting
+  `defaults: run: shell: bash` on the job, which gets `-eo pipefail`
+  from Actions' *explicit*-bash default. Also added a
+  `concurrency: {group: ci-<workflow>-<ref>, cancel-in-progress: true}`
+  per Codex's second finding — without it, an old run outliving a newer
+  one for the same ref/PR (superseded push, manual rerun) could finish
+  last and overwrite the PR/issue comment with stale results via
+  `--edit-last`.
+- A second Codex round on that fix caught one more real gap: when a
+  *later* push fails fmt/clippy/build (so the test step is skipped
+  entirely), the summary/comment steps used to no-op too — leaving the
+  *previous* commit's green "passed" comment sitting on the PR looking
+  current. Fixed: those steps now run whenever the job wasn't
+  cancelled (`ci_test_summary.sh` handles `skipped` as a distinct case,
+  before it ever touches the log file that in that case doesn't
+  exist) and post "tests did not run this time" instead of leaving
+  stale data in place.
+- Deliberately not fixed: that same round flagged that a *manually
+  rerun* old job can still race a newer completed run and overwrite
+  the comment, since `concurrency`'s cancellation is arrival-order,
+  not commit-recency, and only cancels a still-*running* job, not one
+  that already finished. A correct fix means comparing the run's
+  commit SHA against the PR's live head before writing the comment,
+  which needs an extra API call and meaningfully complicates the
+  workflow for a failure mode that requires someone deliberately
+  clicking "re-run jobs" on an old run after newer commits landed — not
+  a path this repo's actual (agent-driven, `agent-full`-policy) flow
+  exercises. Noted here rather than fixed now; revisit if a real rerun
+  ever actually produces a stale comment in practice.
+- Deferred: clippy/build/fmt results aren't surfaced the same way —
+  the issue scoped this to test evidence specifically, and those three
+  already fail the job outright with output in the existing status
+  check, so there's less of a "trust me, it passed" gap to close there.
+
 ## Sweep / contact-sheet rendering (issue #21, 2026-08-14)
 
 Closes issue #21: render a file once per seed or parameter value in a
