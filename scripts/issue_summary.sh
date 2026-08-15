@@ -87,9 +87,15 @@ def pr_lookup:
           # commit-status (StatusContext) entries via .state instead —
           # normalize to one field before judging pass/fail.
           ($pr.statusCheckRollup | map(.conclusion // .state)) as $outcomes |
+          # Explicit success-like/failing-like sets, not "anything
+          # other than SUCCESS counts as pending" — a completed but
+          # SKIPPED/NEUTRAL CheckRun (conditional or continue-on-error
+          # jobs) or a STALE one is a terminal result, not one still
+          # queued or running, so it must land in one bucket or the
+          # other, not fall through to pending by default.
           if ($outcomes | length) == 0 then "no checks"
-          elif ($outcomes | any(. == "FAILURE" or . == "ERROR" or . == "CANCELLED" or . == "TIMED_OUT" or . == "STARTUP_FAILURE" or . == "ACTION_REQUIRED")) then "failing"
-          elif ($outcomes | all(. == "SUCCESS")) then "passing"
+          elif ($outcomes | any(. == "FAILURE" or . == "ERROR" or . == "CANCELLED" or . == "TIMED_OUT" or . == "STARTUP_FAILURE" or . == "ACTION_REQUIRED" or . == "STALE")) then "failing"
+          elif ($outcomes | all(. == "SUCCESS" or . == "NEUTRAL" or . == "SKIPPED")) then "passing"
           else "pending" end
         ),
         review: (
