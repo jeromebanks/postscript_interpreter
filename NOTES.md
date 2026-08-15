@@ -179,6 +179,24 @@ simplified to a direct bound comparison — the tolerance's original
 job was entirely about plain-decimal literals, which no longer reach
 that code path at all.
 
+A fourth review round found four smaller, genuinely edge-case defects,
+all fixed rather than dismissed as unrealistic given the previous three
+rounds' hit rate on this exact area: an exponent near `i32::MIN`
+(`1.0e-2147483648`) underflowed the `exp - frac_len` subtraction in
+`parse_decimal_exact` (`checked_sub` now); a value past that function's
+own precision cap where `step` was smaller than an ULP at that
+magnitude (`1e31:1e31`) never advanced in the `f64` fallback loop, so
+it kept pushing the same value until wrongly erroring past `MAX_SWEEP`
+instead of yielding the one correct frame (the loop now detects no
+forward progress and stops); the comma-list `f64` fallback accepted
+"inf"/"nan"/an overflowing literal like "1e400" (which parses to
+infinity, not a parse error) instead of rejecting them the way the
+range path already did; and `contact_sheet::compose` — a public
+library function, not just `main.rs`'s own already-validated call
+site — didn't check `cols*rows >= pages.len()` before blitting,
+letting an undersized grid index past the sheet's own cell count and
+panic.
+
 ## Axial/radial gradient (shading) fill support (issue #20, 2026-08-14)
 
 Closes issue #20. The interpreter had no `shfill`/shading machinery at

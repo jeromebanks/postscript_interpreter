@@ -71,6 +71,18 @@ pub fn compose(pages: &[Pixmap], cols: u32, rows: u32, gap: u32) -> Result<Pixma
     let Some(first) = pages.first() else {
         return Err("contact sheet: no frames to compose".to_string());
     };
+    // main.rs's sweep loop validates this itself before ever calling
+    // new_sheet/blit_cell directly, but compose is a public API of
+    // its own -- a caller that skips that check would otherwise send
+    // an out-of-grid index into blit_cell's slice arithmetic and
+    // panic (round-4 cross-model review, PR #66).
+    if (cols as u64) * (rows as u64) < pages.len() as u64 {
+        return Err(format!(
+            "contact sheet: {cols}x{rows} grid has only {} cells for {} frames",
+            cols as u64 * rows as u64,
+            pages.len()
+        ));
+    }
     let mut sheet = new_sheet(cols, rows, first.width(), first.height(), gap)?;
     for (i, page) in pages.iter().enumerate() {
         blit_cell(&mut sheet, cols, gap, i, page);
@@ -121,6 +133,17 @@ mod tests {
         let pages: Vec<_> = std::iter::repeat_n(page, 9).collect();
         let err = compose(&pages, 9, 9, 0).unwrap_err();
         assert!(err.contains("over the"), "{err}");
+    }
+
+    /// Regression (round-4 cross-model review, PR #66): a grid with
+    /// fewer cells than pages used to send an out-of-grid index into
+    /// `blit_cell`'s slice arithmetic and panic, rather than erroring.
+    #[test]
+    fn grid_too_small_for_pages_errors_instead_of_panicking() {
+        let a = solid(2, 2, [0, 0, 0, 255]);
+        let b = solid(2, 2, [0, 0, 0, 255]);
+        let err = compose(&[a, b], 1, 1, 0).unwrap_err();
+        assert!(err.contains("only 1 cells for 2 frames"), "{err}");
     }
 
     #[test]

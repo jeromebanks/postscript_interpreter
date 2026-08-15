@@ -684,8 +684,11 @@ fn parse_decimal_exact(s: &str) -> Option<(i128, u32)> {
     };
     // value = digits * 10^(exp - frac_part.len()); a non-negative
     // shift multiplies the magnitude up (scale 0), a negative one
-    // becomes the fractional scale directly.
-    let shift = exp - frac_part.len() as i32;
+    // becomes the fractional scale directly. checked_sub, not `-`: an
+    // exponent near i32::MIN (e.g. "1.0e-2147483648") would otherwise
+    // underflow this subtraction -- a panic in debug, a silently
+    // wrong value in release (round-4 cross-model review, PR #66).
+    let shift = exp.checked_sub(frac_part.len() as i32)?;
     let (magnitude, scale) = if shift >= 0 {
         if shift > 30 {
             return None;
@@ -843,12 +846,24 @@ fn parse_sweep_spec(spec: &str) -> Result<Vec<SweepValue>, String> {
                 // (round-3 cross-model review, PR #66).
                 let mut values = Vec::new();
                 let mut i: usize = 0;
+                let mut prev: Option<f64> = None;
                 loop {
                     let v = a + i as f64 * step;
                     if v > b {
                         break;
                     }
+                    // A magnitude past the exact parser's cap can
+                    // dwarf `step` (e.g. `1e31:1e31`, step defaulting
+                    // to 1): `v` stops advancing once `step` is
+                    // smaller than an ULP at that magnitude, so keep
+                    // pushing the same value forever until MAX_SWEEP
+                    // errors instead of the single correct frame
+                    // (round-4 cross-model review, PR #66).
+                    if prev == Some(v) {
+                        break;
+                    }
                     bounded_push(&mut values, SweepValue::Float(v))?;
+                    prev = Some(v);
                     i += 1;
                 }
                 values
@@ -860,11 +875,21 @@ fn parse_sweep_spec(spec: &str) -> Result<Vec<SweepValue>, String> {
             let v = if let Some((n, scale)) = parse_decimal_exact(s) {
                 SweepValue::Decimal(n, scale)
             } else {
-                SweepValue::Float(
-                    s.trim()
-                        .parse::<f64>()
-                        .map_err(|_| format!("invalid number in sweep spec {spec:?}: {s:?}"))?,
-                )
+                // Same finite check as the range path's parse_finite
+                // -- s.parse::<f64>() succeeds (not an Err) for
+                // "inf"/"nan" and an overflowing literal like "1e400"
+                // (which rounds to infinity rather than failing to
+                // parse), so those must be rejected explicitly or
+                // they'd reach run_sweep as an unusable PostScript
+                // value instead of failing argument parsing (round-4
+                // cross-model review, PR #66).
+                let v: f64 = s
+                    .trim()
+                    .parse()
+                    .ok()
+                    .filter(|v: &f64| v.is_finite())
+                    .ok_or_else(|| format!("invalid number in sweep spec {spec:?}: {s:?}"))?;
+                SweepValue::Float(v)
             };
             values.push(v);
         }
@@ -1335,6 +1360,39 @@ mod sweep_tests {
     fn scientific_notation_range_never_generates_past_its_upper_bound() {
         let values = parse_sweep_spec("0e0:9.999999999e-1:1e0").unwrap();
         assert_eq!(values, vec![SweepValue::Decimal(0, 10)]);
+    }
+
+    /// Regression (cross-model review round 4, PR #66): an exponent
+    /// near i32::MIN underflowed `exp - frac_part.len()` -- a panic
+    /// in debug, a silently wrong value in release. Must not panic,
+    /// either erroring or falling back cleanly.
+    #[test]
+    fn extreme_negative_exponent_does_not_panic() {
+        let _ = parse_decimal_exact("1.0e-2147483648");
+        let _ = parse_sweep_spec("1.0e-2147483648");
+    }
+
+    /// Regression (cross-model review round 4, PR #66): a range past
+    /// the exact parser's cap where `step` is smaller than an ULP at
+    /// that magnitude never advanced `v`, so the loop kept pushing
+    /// the same value until it wrongly hit MAX_SWEEP and errored,
+    /// instead of producing the one correct (A == B) frame.
+    #[test]
+    fn stalled_float_range_yields_exactly_one_value() {
+        let values = parse_sweep_spec("1e31:1e31").unwrap();
+        assert_eq!(values.len(), 1);
+    }
+
+    /// Regression (cross-model review round 4, PR #66): a comma list
+    /// value that falls back to `f64` (past the exact parser's cap)
+    /// still accepted "inf"/"nan"/an overflowing literal like "1e400"
+    /// -- these must fail argument parsing, not reach run_sweep as an
+    /// unusable PostScript value.
+    #[test]
+    fn comma_list_rejects_non_finite_fallback_values() {
+        assert!(parse_sweep_spec("inf").is_err());
+        assert!(parse_sweep_spec("nan").is_err());
+        assert!(parse_sweep_spec("1e400").is_err());
     }
 
     #[test]
