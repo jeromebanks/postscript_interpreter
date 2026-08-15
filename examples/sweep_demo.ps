@@ -1,0 +1,43 @@
+%!PS-Adobe-3.0
+%%Title: Sweep Rosette — a specimen for --sweep-seed and --sweep
+%%BoundingBox: 0 0 200 200
+%%EndComments
+
+% Specimen for issue #21's frame-sweep CLI. A single run draws one
+% N-petaled rosette; the interesting part is what a sweep does to it
+% without editing this file at all:
+%
+%   pscat --page 200x200 examples/sweep_demo.ps --png rosette.png
+%
+%   # --sweep-seed: overrides the `3 srand` below transparently, so
+%   # petal color/jitter varies across frames with no source change.
+%   pscat --page 200x200 examples/sweep_demo.ps \
+%       --sweep-seed 1:6 --contact-sheet rosette-seeds.png
+%
+%   # --sweep NAME=: this script opts in by looking up /Petals itself
+%   # (the `where` idiom below) -- petal count varies across frames.
+%   pscat --page 200x200 examples/sweep_demo.ps \
+%       --sweep Petals=4,6,9,12 --contact-sheet rosette-petals.png
+
+3 srand % --sweep-seed overrides this operand transparently
+
+/Petals where { pop Petals } { 6 } ifelse /N exch def
+
+1 1 1 setrgbcolor clippath fill
+100 100 translate
+
+0 1 N 1 sub {
+  /i exch def
+  gsave
+    360 N div i mul rotate
+    0 30 translate
+    1 2.2 scale
+    rand 1000 mod 1000 div 0.4 mul 0.5 add  % a jittered hue per petal
+    dup 1 exch sub 0.5                       % -> a warm/cool rgb triple
+    setrgbcolor
+    0 0 18 0 360 arc fill
+  grestore
+} for
+
+0.15 0.15 0.2 setrgbcolor
+0 0 8 0 360 arc fill

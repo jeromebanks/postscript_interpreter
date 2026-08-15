@@ -5,6 +5,8 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+use tiny_skia::Pixmap;
+
 const BIN: &str = env!("CARGO_BIN_EXE_pscat");
 
 fn tmp(name: &str) -> std::path::PathBuf {
@@ -187,6 +189,7 @@ fn lint_is_clean_on_real_example_and_gallery_pieces() {
     for path in [
         "examples/paragraph_layout.ps",
         "examples/etching_demo.ps",
+        "examples/sweep_demo.ps",
         "gallery/compositors_proof.ps",
     ] {
         let png = tmp(&format!("lint-corpus-{}.png", path.replace('/', "_")));
@@ -204,4 +207,344 @@ fn error_report_includes_a_line_number() {
     let (ok, _out, stderr) = run(&["--headless", "-"], "1 0 div\n");
     assert!(!ok);
     assert!(stderr.contains("Line: 1"), "stderr: {stderr}");
+}
+
+// --- issue #21: sweep / contact-sheet ---------------------------------
+
+/// The one test that catches "the override never fires": a script that
+/// hardcodes its own `N srand` still produces genuinely different
+/// pixels per swept seed, because `--sweep-seed` overrides `srand`'s
+/// operand rather than requiring the source to cooperate.
+#[test]
+fn sweep_seed_produces_different_frames_from_a_hardcoded_srand() {
+    let out = tmp("sweep-differ.png");
+    let source = "7 srand 1 1 1 setrgbcolor 0 0 20 20 rectfill \
+                  rand 255 mod 255 div rand 255 mod 255 div rand 255 mod 255 div setrgbcolor \
+                  0 0 20 20 rectfill";
+    let (ok, _out_text, stderr) = run(
+        &[
+            "--page",
+            "20x20",
+            "--sweep-seed",
+            "1,2",
+            "--png",
+            out.to_str().unwrap(),
+            "-",
+        ],
+        source,
+    );
+    assert!(ok, "stderr: {stderr}");
+    let a = std::fs::read(out.with_file_name("sweep-differ-001.png")).unwrap();
+    let b = std::fs::read(out.with_file_name("sweep-differ-002.png")).unwrap();
+    assert_ne!(a, b, "different seeds must render different pixels");
+}
+
+/// The reproducible-art doctrine, through a sweep: the same seed
+/// listed twice must render byte-identical frames.
+#[test]
+fn sweep_seed_repeated_value_is_byte_identical() {
+    let out = tmp("sweep-same.png");
+    let source = "7 srand rand 255 mod 255 div rand 255 mod 255 div rand 255 mod 255 div setrgbcolor \
+         0 0 20 20 rectfill";
+    let (ok, _out_text, stderr) = run(
+        &[
+            "--page",
+            "20x20",
+            "--sweep-seed",
+            "5,5",
+            "--png",
+            out.to_str().unwrap(),
+            "-",
+        ],
+        source,
+    );
+    assert!(ok, "stderr: {stderr}");
+    let a = std::fs::read(out.with_file_name("sweep-same-001.png")).unwrap();
+    let b = std::fs::read(out.with_file_name("sweep-same-002.png")).unwrap();
+    assert_eq!(a, b, "same seed twice must render byte-identical frames");
+}
+
+#[test]
+fn sweep_seed_warns_when_source_never_calls_srand() {
+    let out = tmp("sweep-no-srand.png");
+    let (ok, _out_text, stderr) = run(
+        &[
+            "--page",
+            "20x20",
+            "--sweep-seed",
+            "1,2",
+            "--png",
+            out.to_str().unwrap(),
+            "-",
+        ],
+        "0 0 20 20 rectfill",
+    );
+    assert!(ok, "a missing srand call isn't a program failure: {stderr}");
+    assert!(stderr.contains("never called srand"), "stderr: {stderr}");
+}
+
+/// The generic named-parameter sweep, and that a contact sheet lays
+/// cells out left-to-right in sweep order: three frames each painted
+/// a distinct solid color keyed off the swept value, probed at each
+/// cell's center after compositing.
+#[test]
+fn sweep_param_orders_contact_sheet_cells_left_to_right() {
+    let sheet = tmp("sweep-hue-sheet.png");
+    let source = "/Shade where { pop Shade } { 0 } ifelse dup dup setrgbcolor 0 0 10 10 rectfill";
+    let (ok, _out_text, stderr) = run(
+        &[
+            "--page",
+            "10x10",
+            "--sweep",
+            "Shade=0,0.5,1",
+            "--contact-sheet",
+            sheet.to_str().unwrap(),
+            "--grid",
+            "3x1",
+            "-",
+        ],
+        source,
+    );
+    assert!(ok, "stderr: {stderr}");
+    let pixmap = Pixmap::load_png(&sheet).expect("decode contact sheet");
+    // 3 cells of 10px + 2 gaps of 4px (contact_sheet::GAP) = 38.
+    assert_eq!(pixmap.width(), 38);
+    let sample = |x: u32, y: u32| -> [u8; 4] {
+        let i = ((y * pixmap.width() + x) * 4) as usize;
+        pixmap.data()[i..i + 4].try_into().unwrap()
+    };
+    let cell0 = sample(5, 5);
+    let cell1 = sample(19, 5); // 10 + 4(gap) + 5
+    let cell2 = sample(33, 5); // 20 + 8(gap) + 5
+    assert_eq!(cell0, [0, 0, 0, 255], "Shade=0 -> black");
+    assert_eq!(cell2, [255, 255, 255, 255], "Shade=1 -> white");
+    assert!(
+        cell1[0] == cell1[1] && cell1[1] == cell1[2] && cell1[0] > 0 && cell1[0] < 255,
+        "Shade=0.5 -> a mid gray strictly between black and white, got {cell1:?}"
+    );
+}
+
+/// No `--grid` given: the default layout is `ceil(sqrt(n))` columns.
+/// 3 frames -> 2 columns, 2 rows (one cell blank).
+#[test]
+fn contact_sheet_default_grid_layout_is_square_ish() {
+    let sheet = tmp("sweep-default-grid.png");
+    let (ok, _out, stderr) = run(
+        &[
+            "--page",
+            "10x10",
+            "--sweep-seed",
+            "1,2,3",
+            "--contact-sheet",
+            sheet.to_str().unwrap(),
+            "-",
+        ],
+        "0.4 0.4 0.4 setrgbcolor 0 0 10 10 rectfill",
+    );
+    assert!(ok, "stderr: {stderr}");
+    let pixmap = Pixmap::load_png(&sheet).expect("decode contact sheet");
+    // 2 cols x 2 rows of 10px cells + 1 gap (4px, contact_sheet::GAP).
+    assert_eq!(pixmap.width(), 24);
+    assert_eq!(pixmap.height(), 24);
+}
+
+#[test]
+fn sweep_requires_an_output_flag() {
+    let (ok, _out, stderr) = run(&["--sweep-seed", "1,2", "-"], "");
+    assert!(!ok);
+    assert!(stderr.contains("--png and/or --contact-sheet"), "{stderr}");
+}
+
+#[test]
+fn sweep_rejects_incompatible_flags() {
+    let (ok, _out, stderr) = run(&["--sweep-seed", "1,2", "--svg", "out.svg", "-"], "");
+    assert!(!ok);
+    assert!(stderr.contains("--svg"), "{stderr}");
+}
+
+#[test]
+fn sweep_rejects_both_axes_at_once() {
+    let (ok, _out, stderr) = run(
+        &[
+            "--sweep-seed",
+            "1,2",
+            "--sweep",
+            "Foo=1,2",
+            "--png",
+            "out.png",
+            "-",
+        ],
+        "",
+    );
+    assert!(!ok);
+    assert!(stderr.contains("mutually exclusive"), "{stderr}");
+}
+
+#[test]
+fn contact_sheet_grid_too_small_errors() {
+    let sheet = tmp("sweep-grid-too-small.png");
+    let (ok, _out, stderr) = run(
+        &[
+            "--sweep-seed",
+            "1,2,3",
+            "--contact-sheet",
+            sheet.to_str().unwrap(),
+            "--grid",
+            "1x1",
+            "-",
+        ],
+        "0 0 10 10 rectfill",
+    );
+    assert!(!ok);
+    assert!(stderr.contains("--grid 1x1"), "{stderr}");
+}
+
+/// A fat-fingered `--grid` must fail cleanly at parse time, not
+/// overflow the `cols * rows` multiply downstream (regression: an
+/// advisor pass caught this could panic in a debug build before the
+/// per-axis cap was added).
+#[test]
+fn contact_sheet_grid_over_the_cap_errors_at_parse_time() {
+    let (ok, _out, stderr) = run(
+        &[
+            "--sweep-seed",
+            "1,2",
+            "--png",
+            "out.png",
+            "--grid",
+            "70000x70000",
+            "-",
+        ],
+        "",
+    );
+    assert!(!ok);
+    assert!(stderr.contains("--grid dimensions must be"), "{stderr}");
+}
+
+/// Regression (cross-model review round 2, PR #66): `--grid` with a
+/// sweep active but no `--contact-sheet` used to validate cleanly and
+/// then silently do nothing -- nothing ever reads `--grid` without a
+/// sheet to lay out.
+#[test]
+fn grid_without_contact_sheet_errors() {
+    let (ok, _out, stderr) = run(
+        &[
+            "--sweep-seed",
+            "1,2",
+            "--png",
+            "out.png",
+            "--grid",
+            "2x1",
+            "-",
+        ],
+        "",
+    );
+    assert!(!ok);
+    assert!(stderr.contains("--grid needs --contact-sheet"), "{stderr}");
+}
+
+/// A frame that errors doesn't abort the sweep: later frames still
+/// render, and the partial canvas from the failed frame is still
+/// written (this CLI's existing partial-render-on-error philosophy),
+/// but the process exits nonzero so a caller knows something failed.
+#[test]
+fn sweep_frame_error_continues_the_sweep_and_reports_nonzero() {
+    let out = tmp("sweep-error.png");
+    let source = "/Div where { pop Div } { 1 } ifelse 10 exch div pop 0 0 10 10 rectfill";
+    let (ok, _out_text, stderr) = run(
+        &[
+            "--page",
+            "10x10",
+            "--sweep",
+            "Div=0,1",
+            "--png",
+            out.to_str().unwrap(),
+            "-",
+        ],
+        source,
+    );
+    assert!(!ok, "a failed frame must exit nonzero");
+    assert!(
+        stderr.contains("frame 1/2") && stderr.contains("undefinedresult"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        out.with_file_name("sweep-error-001.png").exists(),
+        "the failed frame's partial canvas is still written"
+    );
+    assert!(out.with_file_name("sweep-error-002.png").exists());
+}
+
+/// Regression (cross-model review, PR #66): `--pstack-on-error` was
+/// silently ignored for a failed sweep frame, even though the flag is
+/// accepted and works for a normal (non-sweep) headless run.
+#[test]
+fn sweep_frame_error_honors_pstack_on_error() {
+    let out = tmp("sweep-pstack.png");
+    let source = "/Div where { pop Div } { 1 } ifelse 10 exch div pop 0 0 10 10 rectfill";
+    let (ok, _out_text, stderr) = run(
+        &[
+            "--page",
+            "10x10",
+            "--pstack-on-error",
+            "--sweep",
+            "Div=0",
+            "--png",
+            out.to_str().unwrap(),
+            "-",
+        ],
+        source,
+    );
+    assert!(!ok);
+    assert!(
+        stderr.contains("Operand stack"),
+        "pstack printed for the failed frame: {stderr}"
+    );
+}
+
+/// Regression (cross-model review, PR #66): `--contact-sheet`/`--grid`
+/// with no sweep axis used to validate cleanly and then silently do
+/// nothing (no file written, since no code path ever consumed them).
+#[test]
+fn contact_sheet_without_a_sweep_axis_errors() {
+    let sheet = tmp("orphan-sheet.png");
+    let (ok, _out, stderr) = run(
+        &[
+            "--headless",
+            "--contact-sheet",
+            sheet.to_str().unwrap(),
+            "-",
+        ],
+        "0 0 10 10 rectfill",
+    );
+    assert!(!ok);
+    assert!(stderr.contains("--sweep-seed or --sweep"), "{stderr}");
+    assert!(!sheet.exists());
+}
+
+/// Regression (cross-model review, PR #66): an oversized contact
+/// sheet used to be rejected only *after* every frame had already
+/// rendered (and stayed resident in memory). It must now fail before
+/// the first frame renders -- no `pscat: sweep:` progress line at all.
+#[test]
+fn oversized_contact_sheet_fails_before_any_frame_renders() {
+    let sheet = tmp("oversized-sheet.png");
+    let (ok, stdout, stderr) = run(
+        &[
+            "--page",
+            "8000x8000",
+            "--sweep-seed",
+            "1:8",
+            "--contact-sheet",
+            sheet.to_str().unwrap(),
+            "-",
+        ],
+        "0 0 10 10 rectfill",
+    );
+    assert!(!ok);
+    assert!(stderr.contains("over the"), "stderr: {stderr}");
+    assert!(
+        !stdout.contains("pscat: sweep:"),
+        "no frame should have started rendering: {stdout}"
+    );
 }

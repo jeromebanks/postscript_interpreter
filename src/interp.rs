@@ -196,6 +196,15 @@ pub struct Interp {
     /// State for `rand`/`srand`/`rrand`. Deterministic by default —
     /// reproducible art is a feature here, not a bug.
     pub(crate) rand_state: i64,
+    /// When set, every `srand` call ignores its operand and reseeds
+    /// with this value instead (issue #21's `--sweep-seed`) — lets a
+    /// sweep drive the RNG on found art that hardcodes its own
+    /// `N srand` line, with no source edit needed. `seed_override_fired`
+    /// records whether an override actually intercepted a call, so a
+    /// sweep over a script that never calls `srand` can be flagged
+    /// instead of silently producing identical frames.
+    pub(crate) seed_override: Option<i64>,
+    pub(crate) seed_override_fired: bool,
     /// `setpacking` flag — tracked, but packed arrays are ordinary
     /// arrays here (ops/level2.rs).
     pub(crate) packing: bool,
@@ -269,6 +278,8 @@ impl Interp {
             last_name: None,
             last_line: None,
             rand_state: 1,
+            seed_override: None,
+            seed_override_fired: false,
             packing: false,
             clock: crate::clock::Clock::start(),
             resources: Default::default(),
@@ -1152,6 +1163,49 @@ impl Interp {
         self.quit_requested
     }
 
+    /// Force every `srand` call to reseed with `seed` instead of its
+    /// operand (issue #21's `--sweep-seed`). `None` (the default)
+    /// leaves `srand` alone. Also clears the fired flag, so a caller
+    /// re-arming this on a fresh `Interp` starts from a clean read of
+    /// [`seed_override_fired`](Self::seed_override_fired).
+    pub fn set_seed_override(&mut self, seed: Option<i64>) {
+        self.seed_override = seed;
+        self.seed_override_fired = false;
+    }
+
+    /// Whether [`set_seed_override`](Self::set_seed_override)'s
+    /// override has actually intercepted a `srand` call since it was
+    /// set. `false` means the source never called `srand`, so the
+    /// override had no effect on this run.
+    pub fn seed_override_fired(&self) -> bool {
+        self.seed_override_fired
+    }
+
+    /// Break systemdict's self-referential `Rc` cycle and consume this
+    /// `Interp`. systemdict holds a strong reference to itself and to
+    /// `userdict` (per the PLRM's "found code writes `systemdict
+    /// begin`" idiom); with plain `Rc` and no cycle collector, that
+    /// means neither dict — nor anything a program stored in
+    /// `userdict` — is ever freed by simply dropping the `Interp` (see
+    /// `HANDOFF.md`'s "systemdict self-reference" gotcha). Normally
+    /// that's one small, bounded, process-lifetime leak and genuinely
+    /// doesn't matter. It stops being bounded for a caller that
+    /// constructs many `Interp`s within one process run (issue #21's
+    /// `--sweep-seed`/`--sweep` loop, and `--spool`'s one-`Interp`-
+    /// per-job pattern) — call this once a given `Interp` is done
+    /// running, in place of dropping it directly. Taking `self` by
+    /// value (not `&mut self`) makes "nothing runs PostScript on it
+    /// again" a compile-time guarantee rather than a documented
+    /// promise: emptying systemdict here removes every built-in
+    /// operator, so a caller that kept the `Interp` around and tried
+    /// to use it afterward would otherwise hit `undefined` errors at
+    /// runtime instead of a compile error.
+    pub fn break_permanent_dict_cycle(self) {
+        if let Some(system) = self.dstack.first() {
+            system.borrow_mut().clear();
+        }
+    }
+
     pub fn last_executed_name(&self) -> Option<String> {
         self.last_name
             .map(|id| crate::name::resolve(id).to_string())
@@ -1255,6 +1309,23 @@ fn scan_procedure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `break_permanent_dict_cycle` must actually free `userdict`, not
+    /// just reduce its strong count — verified with a `Weak` handle
+    /// rather than trusting the cycle is broken (issue #21's sweep
+    /// loop creates many `Interp`s in one process run; a cross-model
+    /// review confirmed via this exact technique, before the fix
+    /// existed, that `userdict` — and anything a swept program stored
+    /// in it — otherwise outlives every dropped frame for the rest of
+    /// the run, since systemdict's self-reference and its `/userdict`
+    /// entry are both strong `Rc`s with no cycle collector).
+    #[test]
+    fn break_permanent_dict_cycle_frees_userdict() {
+        let interp = Interp::new();
+        let weak = std::rc::Rc::downgrade(&interp.dstack[1]);
+        interp.break_permanent_dict_cycle();
+        assert!(weak.upgrade().is_none(), "userdict must be freed");
+    }
 
     #[test]
     fn procedure_is_deferred_and_calls_work_via_names() {

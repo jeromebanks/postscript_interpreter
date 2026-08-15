@@ -92,6 +92,18 @@ colorspace machinery this exporter doesn't have). `lib/artkit.ps`'s
 from a plain array of `[r g b]` colors instead of requiring one by
 hand; `examples/gradients.ps` is the specimen sheet.
 
+`--sweep-seed`/`--sweep` (issue #21) render a file once per value in a
+sweep instead of once, so exploring seeds or a parameter is one
+invocation instead of N hand-edits: `--sweep-seed` overrides every
+`srand` call transparently (found art with a hardcoded `N srand` line
+sweeps unmodified), `--sweep NAME=` predefines `/NAME` in userdict for
+a source that opts in to read it. `--png` writes numbered per-frame
+files; `--contact-sheet PATH` composites every frame into one grid PNG
+instead (`--grid COLSxROWS` overrides the default layout) — either or
+both. `examples/sweep_demo.ps` is the specimen. CLI-only for now
+(`pscat-mcp` doesn't expose a sweep tool — a documented scope cut, not
+an oversight; see NOTES.md).
+
 **Stage 10 (the LaserWriter experience)**: `--spool DIR`
 turns the window into the printer in the corner of the lab — it
 idles, watches a directory, and renders each `.ps`/`.eps` that lands
@@ -140,6 +152,8 @@ cargo run -- --halftone file.ps           # classic 45° halftone dots, like a
                                           # mono laser printer (window/PNG)
 cargo run -- --lint --png out.png file.ps # self-check: blank page? unbalanced
                                           # gsave? stuff left on the stack?
+cargo run -- file.ps --sweep-seed 1:12 \  # render 12 seeds, one grid PNG
+    --contact-sheet grid.png
 cargo run                                 # terminal REPL (headless canvas)
 cargo run -- -i                           # REPL + live window: watch what you type draw
 cargo run -- -i lib/handscript.ps         # ...with a library preloaded

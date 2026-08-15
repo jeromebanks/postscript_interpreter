@@ -54,7 +54,17 @@ fn rand(it: &mut Interp) -> Result<(), PsError> {
 }
 
 fn srand(it: &mut Interp) -> Result<(), PsError> {
-    it.rand_state = it.pop_int()? & 0x7fff_ffff;
+    let requested = it.pop_int()?;
+    match it.seed_override {
+        // A sweep (issue #21) still consumes the operand per the PLRM,
+        // it just ignores its value -- the found script's own `N
+        // srand` line keeps working unmodified.
+        Some(forced) => {
+            it.rand_state = forced & 0x7fff_ffff;
+            it.seed_override_fired = true;
+        }
+        None => it.rand_state = requested & 0x7fff_ffff,
+    }
     Ok(())
 }
 

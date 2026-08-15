@@ -25,6 +25,31 @@ generate | pscat --png out.png -       # `-` reads the program from stdin
 Multi-page documents number their pages: `out.png` → `out-001.png`,
 `out-002.png`, … SVG does the same; PDF is naturally multi-page.
 
+## Sweep a seed or parameter (explore a design space in one run)
+
+```sh
+# Reseeds every `srand` call transparently -- works on found art
+# unmodified, no source edit needed.
+pscat file.ps --sweep-seed 1:12 --contact-sheet grid.png
+
+# Predefines /NAME to each value in turn before running; the source
+# opts in by reading it: `/NAME where { pop NAME } { default } ifelse`.
+pscat file.ps --sweep Density=10,20,40,80 --contact-sheet grid.png
+```
+
+One sweep axis per run (`--sweep-seed` and `--sweep` are mutually
+exclusive), `A:B` / `A:B:STEP` / `A,B,C` spec syntax, capped at 64
+frames. Needs `--png` (numbered per-frame files) and/or
+`--contact-sheet PATH` (one composited grid PNG; `--grid COLSxROWS`
+overrides the default square-ish layout) — at least one is required.
+A per-frame PostScript error doesn't abort the sweep (the failed
+frame's partial canvas is still written, same philosophy as a normal
+render's error handling); the process exits nonzero if any frame
+failed. `examples/sweep_demo.ps` is a runnable specimen for both
+mechanisms. This is the seed/parameter-exploration workflow — an
+agent comparing N attempts without re-invoking the renderer by hand
+per attempt, or hand-editing the source between tries.
+
 ## Debug a program
 
 ```sh

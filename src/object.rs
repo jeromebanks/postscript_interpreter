@@ -591,6 +591,15 @@ impl Dict {
         })
     }
 
+    /// Drop every entry. Not a PostScript-visible operation — used
+    /// only to break systemdict's self-referential `Rc` cycle right
+    /// before an `Interp` that's done running is discarded (see
+    /// `Interp::break_permanent_dict_cycle`).
+    pub(crate) fn clear(&mut self) {
+        self.names.clear();
+        self.exotic.clear();
+    }
+
     pub fn undef(&mut self, key: &Object) -> Result<(), PsError> {
         match classify_key(key)? {
             KeyClass::Name(n) => {

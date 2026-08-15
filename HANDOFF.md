@@ -173,6 +173,18 @@ reached a permanent test: `and 255` vs. `mod` for negative lattice
 coordinates, and a field proc that doesn't consume its `x y` silently
 leaking stack values instead of erroring — the same class of bug
 `--lint` also caught directly in `examples/noise.ps`'s first draft).
+Also done: issue #21, sweep/contact-sheet rendering — `--sweep-seed`
+(overrides every `srand` call transparently, via a new
+`Interp::set_seed_override`/`seed_override_fired` pair checked in
+`ops/arith.rs`'s `srand`, so found art with a hardcoded `N srand` line
+sweeps unmodified) and `--sweep NAME=` (predefines `/NAME` in userdict
+via a second `run_source` call before the real one, for a source that
+opts in to read it — no source-line-shift text-mangling); a new
+`src/contact_sheet.rs` composites same-sized frames into one grid PNG,
+capped at the same 8000px-per-side ceiling `--page` already enforces.
+`examples/sweep_demo.ps` demonstrates both mechanisms (NOTES.md's
+entry has the full story, including why a plain `pscat-mcp` tool
+wasn't added -- a documented scope cut, not an oversight).
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
@@ -180,7 +192,7 @@ touching code. `ROADMAP.md` has the task list with model routing;
 
 ## Where things stand
 
-**356 tests across 35 suites, clippy clean.** Stages 1–19 are done,
+**623 tests across 40 suites, clippy clean.** Stages 1–19 are done,
 including Stage 8's last sliver, the `--interactive` windowed REPL
 (`-i`; stdin reader thread → `EventLoopProxy` user events → chunks
 run on the frame budget; line accumulation shared with the terminal
@@ -345,7 +357,24 @@ renders eight examples in both and compares block-downsampled output).
 - `exit` must not cross Scanner/StopMark/Show/Image/PostOp frames
   (`invalidexit`) — extend that match if you add frame kinds.
 - The systemdict self-reference is an intentional Rc cycle (one leak
-  per Interp, process-lifetime object).
+  per Interp, process-lifetime object) — genuinely harmless for the
+  usual one-`Interp`-per-process pattern, but it also leaks `userdict`
+  (and everything a program stored there), since systemdict holds a
+  strong reference to it too. A caller that constructs many `Interp`s
+  in one process run must call `Interp::break_permanent_dict_cycle(self)`
+  on each one instead of just dropping it, or that stops being
+  bounded — confirmed empirically via `Rc::downgrade`/`strong_count`,
+  not just reasoned about (NOTES.md's issue #21 entry has the story).
+  It takes `self` by value specifically so a caller can't accidentally
+  keep using an `Interp` after its systemdict has been emptied — that
+  would be a compile error, not a silent `undefined` at runtime. Two
+  call sites do this today: issue #21's `--sweep-seed`/`--sweep` loop
+  (`main.rs::run_sweep`, one call per frame) and `--spool`'s per-job
+  loop (`window.rs::poll_spool`, via `mem::replace` to get the
+  outgoing job's `Interp` out of the struct field before the new one
+  overwrites it). Any future caller that constructs more than one
+  `Interp` in a long-running or high-iteration process should do the
+  same.
 - tiny-skia `Transform::from_row(sx, ky, kx, sy, tx, ty)` matches the
   PS matrix order `[a b c d tx ty]` — `ops/matrix.rs` documents it;
   don't rediscover this the hard way.

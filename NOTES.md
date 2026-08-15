@@ -3,6 +3,275 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Sweep / contact-sheet rendering (issue #21, 2026-08-14)
+
+Closes issue #21: render a file once per seed or parameter value in a
+single invocation, so exploring a design space is one command instead
+of an agent hand-editing the source and re-running N times. Two
+independent, mutually-exclusive sweep axes, one per invocation:
+
+- `--sweep-seed SPEC` overrides every `srand` call *transparently* —
+  `Interp::set_seed_override` (`src/interp.rs`) and a check in
+  `ops/arith.rs`'s `srand` make it ignore its operand and reseed with
+  the override instead, still popping the operand per the PLRM. This
+  was the deliberate design call: every generative-art script in this
+  repo already hardcodes its own `N srand` line (the reproducible-art
+  doctrine), so making the sweep *transparent* means it works on the
+  entire existing example/gallery corpus unmodified, rather than
+  requiring an opt-in convention. Checked before committing to this:
+  none of `examples/`/`gallery/`'s top-level pieces call `srand` more
+  than once per render (`lib/artkit.ps`'s multiple hits are all in
+  comments; `lib/handscript.ps`'s two real calls are two independent
+  entry points, not a single render deliberately re-seeding mid-run,
+  so collapsing both to one override value is fine).
+- `--sweep NAME=SPEC` predefines `/NAME` in userdict before each
+  frame, for a source that opts in by reading it (`/NAME where { pop
+  NAME } { default } ifelse`). Implemented as a second `run_source`
+  call on the same `Interp` before the real one (the same pattern
+  `repl()` already uses for line-by-line input) rather than textually
+  prepending `/NAME <v> def\n` to the source — a plan-review advisor
+  pass caught that the prepend would shift every line by one and
+  silently corrupt `error_report`'s `Line: N` attribution (issue #17).
+
+`SPEC` is `A:B` (inclusive range, step 1), `A:B:STEP`, or a comma
+list, capped at 64 values (same spirit as `--page`/`--dpi`'s existing
+clamps). Output: `--png PATH` writes numbered per-frame files (reusing
+the existing multi-page `numbered_path` convention); `--contact-sheet
+PATH` composites every frame into one grid PNG via a new
+`src/contact_sheet.rs` (`--grid COLSxROWS` overrides the default
+square-ish layout) — either or both, at least one required. The
+composite is capped at the same 8000px-per-side ceiling `--page`
+already enforces, erroring instead of attempting a multi-gigabyte
+allocation for a large sweep at high `--dpi`.
+
+Two failure modes an advisor pass specifically flagged and this
+implementation now handles: a source that never calls `srand` at all
+sweeps to N identical frames with no explanation otherwise — `--sweep
+-seed` now warns on stderr (`seed_override_fired`, checked across all
+frames) when the override never actually fired; and a per-frame
+PostScript error no longer aborts the whole sweep — later frames still
+render, the failed frame's partial canvas is still written (this
+CLI's existing partial-render-on-error philosophy), and the process
+exits nonzero only if the caller should know something failed.
+
+Scoped deliberately: no animation/GIF output (a contact sheet already
+satisfies "compare results side by side" without a new dependency; the
+issue left format open); no multi-axis (seed × param) cartesian sweep;
+no `--svg`/`--pdf`/`--lint`/`--interactive`/`--spool`/`-e` combined
+with a sweep (errors out clearly, same style as `--spool`'s existing
+mutual-exclusion checks); no `pscat-mcp` sweep tool (CLI-only for
+now — the MCP server shells out to the CLI per tool call, so a sweep
+tool would need to either shell out N times itself or grow direct
+library access; not built without a concrete agent workflow asking for
+it). `examples/sweep_demo.ps` is the specimen — an N-petaled rosette
+that demonstrates both mechanisms (a hardcoded `srand` for seed
+sweeping, a `/Petals where` lookup for parameter sweeping).
+
+A cross-model (Codex) review at the PR stage, which ran the binary
+empirically rather than only reading the diff, caught six real bugs in
+the first draft, all fixed before merge:
+
+- The first draft accumulated every rendered frame in one `Vec<Pixmap>`
+  before writing anything — at `--dpi 300` even the default page is
+  ~34MB/frame, so a 64-frame sweep held over 2GB in memory before the
+  first byte hit disk, and an oversized `--contact-sheet` was rejected
+  only *after* every frame had already rendered. Fixed by streaming:
+  `--png` now saves each frame as it renders; `src/contact_sheet.rs`
+  gained `new_sheet`/`blit_cell` primitives so the sheet is allocated
+  (and its size validated) *before* the loop starts, and each frame
+  blits straight in and is dropped, never accumulating a `Vec` at all.
+- A range spec like `--sweep X=0:1000000000` eagerly `collect()`ed the
+  whole (billion-element) `Vec<f64>` before the `MAX_SWEEP` cap check
+  ran afterward — a short string could still attempt a multi-gigabyte
+  allocation. Fixed by checking the computed count against the cap
+  *before* generating the range, in both `parse_sweep_spec` and the
+  new seed-specific parser below.
+- `--sweep-seed` parsed every value through `f64` on the way to `i64`,
+  which loses integer distinctness above 2^53 (`9007199254740992` and
+  `...993` collapsed to the same seed) and silently saturates an
+  out-of-range value on the `as i64` cast. Fixed with a dedicated
+  `parse_seed_spec` that stays in native `i64`/`i128` arithmetic
+  throughout, never touching `f64`.
+- `format_sweep_value`'s fixed 9-decimal rounding (added to hide
+  binary float drift from *range* generation, e.g. a `0.1` step
+  landing on `0.7000000000000001`) was applied uniformly, so a
+  literal list value like `--sweep X=0.0000000001` silently became
+  `/X 0 def`. Fixed by only rounding range-*computed* values; a
+  literal typed on the command line now prints via Rust's exact
+  shortest-round-trip `Display`, whatever its precision.
+- `--contact-sheet`/`--grid` with neither `--sweep-seed` nor `--sweep`
+  passed every validation check and then silently did nothing (no
+  file written) — nothing in the non-sweep code path ever consumed
+  those two options. Fixed with an explicit rejection.
+- A sweep frame's `--pstack-on-error` was silently dropped: the
+  per-frame error branch printed `error_report` but never called
+  `print_pstack`, even though the flag is honored for an ordinary
+  (non-sweep) headless run. Fixed to match.
+
+`--grid`'s own validation was already tightened once during
+plan-then-implementation review to bound both axes to `1..=MAX_SWEEP`
+(a `--grid 70000x70000` typo could otherwise overflow `u32` in the
+`cols * rows` multiply — a debug-build panic) before the Codex pass
+even started; that fix predates and is independent of the six above.
+
+A second Codex review round, on the fixed diff, again ran the binary
+rather than only reading the patch and found five more real defects:
+
+- The frame count was still precomputed via `((b-a)/step) as usize +
+  1` (or the `i128` seed equivalent) — `--sweep X=0:inf:1` or a seed
+  range spanning the full `i64` domain converts a non-finite or
+  maximally-wide quotient to `usize::MAX`, then panics on `+ 1`
+  overflowing before the `MAX_SWEEP` check ever runs.
+- The normal (non-sweep) code path's `Interp` — with its own canvas,
+  up to 256MB at max `--page` — was still constructed *before* `main`
+  branched to `run_sweep`, so it stayed alive (unused) for the sweep's
+  entire run: on top of the frame streaming round one's fixes already
+  added, an unrelated third canvas sat in memory the whole time.
+- `--sweep X=9007199254740993` silently became `/X 9007199254740992
+  def` — the *generic* parameter path had the same `f64`-precision
+  bug `--sweep-seed` was fixed for in round one, just not yet applied
+  there.
+- The fixed `1e-9` tolerance added to hide *legitimate* float drift
+  (e.g. `0:0.9:0.3` needing a nudge to include its true last value)
+  also let a value cross a *genuine* upper bound: `--sweep
+  X=0:0.9999999999:1` generated `X=1`, past the declared B.
+- `--contact-sheet`/`--grid` with no sweep axis at all was already
+  fixed in round one, but a sweep active with `--png`/`--grid` and no
+  `--contact-sheet` slipped through the same class of gap — `--grid`
+  validated cleanly and `run_sweep` never read it.
+
+Given the same root cause kept resurfacing, the fix wasn't another
+patch: `--sweep NAME=`'s value type became `SweepValue::Decimal(i128
+numerator, u32 scale)` — every plain decimal literal ("5", "-3.25",
+"9007199254740993", "0.0000000001") is parsed and generated with pure
+integer arithmetic (`parse_decimal_exact`/`format_decimal`), so a list
+value can't lose precision and a range can't drift *or* overshoot its
+bound: a range now generates values by iterating with a bounds check
+*inside* the loop (never precomputing a count that could itself
+overflow) and comparing exactly against the declared upper bound (no
+tolerance to get wrong). `SweepValue::Float(f64)` is now
+only a fallback for a literal that isn't a plain decimal (scientific
+notation), explicitly rejecting non-finite values. `checked_mul`/
+`checked_add` guard the one theoretical remaining overflow — rescaling
+two operands at very different decimal precisions to a common scale —
+so even that edge case errors instead of panicking. `--sweep-seed`
+already avoided `f64` from round one; its own count-overflow bug got
+the same iterate-with-inline-bounds-check fix.
+
+A third review round, on that rewrite, found the one class of value
+`parse_decimal_exact` still didn't read exactly: scientific notation
+("1e-20") still fell to the `Float`/`f64` fallback, which a fixed
+12-decimal-rounding then truncated to `0` on the way out — the exact
+same precision bug round two had just fixed for plain decimals and
+huge integers, one input form further out. `--sweep
+X=0e0:9.999999999e-1:1e0` (scientific notation for the round-two
+overshoot example) reproduced that bug too, for the same reason.
+Rather than special-case scientific notation's formatting or its range
+tolerance yet again, `parse_decimal_exact` itself now reads a
+mantissa+exponent literal into the same exact `(numerator, scale)`
+representation as a plain decimal (`1e-20` → `(1, 20)`, i.e. exactly
+`1 / 10^20`) — folding the entire scientific-notation case into the
+already-exact Decimal path instead of leaving it in the lossy
+fallback. With that, the `Float` fallback's range tolerance (still
+there to hide legitimate `f64` drift for a value past
+`parse_decimal_exact`'s own 30-digit-shift precision cap) was also
+simplified to a direct bound comparison — the tolerance's original
+job was entirely about plain-decimal literals, which no longer reach
+that code path at all.
+
+A fourth review round found four smaller, genuinely edge-case defects,
+all fixed rather than dismissed as unrealistic given the previous three
+rounds' hit rate on this exact area: an exponent near `i32::MIN`
+(`1.0e-2147483648`) underflowed the `exp - frac_len` subtraction in
+`parse_decimal_exact` (`checked_sub` now); a value past that function's
+own precision cap where `step` was smaller than an ULP at that
+magnitude (`1e31:1e31`) never advanced in the `f64` fallback loop, so
+it kept pushing the same value until wrongly erroring past `MAX_SWEEP`
+instead of yielding the one correct frame (the loop now detects no
+forward progress and stops); the comma-list `f64` fallback accepted
+"inf"/"nan"/an overflowing literal like "1e400" (which parses to
+infinity, not a parse error) instead of rejecting them the way the
+range path already did; and `contact_sheet::compose` — a public
+library function, not just `main.rs`'s own already-validated call
+site — didn't check `cols*rows >= pages.len()` before blitting,
+letting an undersized grid index past the sheet's own cell count and
+panic.
+
+A fifth round found the deepest issue of the five rounds: **each swept
+frame's `Interp` leaks its `userdict`, not just the small systemdict
+node HANDOFF.md's "one leak per Interp, process-lifetime object" gotcha
+already documents.** systemdict holds a strong `Rc` to itself *and* to
+`userdict` (`Interp::with_page_scaled`); with plain `Rc` and no cycle
+collector, dropping an `Interp` can never free either. For the usual
+one-`Interp`-per-process pattern that's genuinely inert — one bounded
+leak, and the OS reclaims everything at exit anyway — but the sweep
+loop is the first caller in this codebase to construct many `Interp`s
+within a single process run, so "doesn't matter" stopped holding: a
+program that stores meaningful data in `userdict` (a lookup table, a
+large string) would leak a full copy of it, on top of the canvas, per
+frame. Confirmed empirically before trusting the claim or dismissing
+it — the review itself ran the binary rather than only reading the
+diff, so the fix held to the same bar: a temporary diagnostic test
+using `Rc::downgrade`/`Weak::upgrade` around a real `Interp` drop
+showed `userdict` genuinely still alive afterward (a first RSS-based
+memory measurement had misleadingly suggested otherwise, most likely
+masked by zero-filled pages never actually being touched). The fix,
+`Interp::break_permanent_dict_cycle` (`src/interp.rs`) plus a small
+`Dict::clear` (`src/object.rs`), empties systemdict right before a
+sweep frame's `Interp` is dropped — safe because nothing runs
+PostScript on it again — breaking both the self-reference and the
+`userdict` reference in one step; `run_sweep` calls it once per frame.
+The diagnostic test became the permanent regression: assert `userdict`
+frees with the fix, not just that memory stayed low.
+
+Two smaller findings rounded out the fifth pass: `contact_sheet::
+new_sheet`'s own `u32` arithmetic could overflow for a caller passing
+large enough `cols`/`cell_w`/`gap` — `main.rs`'s own call site happens
+to stay under that, but it's a public function — now checked `u64`
+arithmetic, not just wider (two near-`u32::MAX` terms summed can still
+overflow `u64`, so `checked_mul`/`checked_add` closes it for real); and
+the `f64` fallback range's `a + i as f64 * step` form could overflow
+its intermediate product to infinity for an opposite-sign range near
+`f64`'s own limits (`-1e308:1e308:1e308`), silently dropping the
+inclusive upper-bound endpoint even though every real value along the
+way was finite — fixed by accumulating incrementally (`v += step`)
+instead of recomputing from an index each time.
+
+A sixth pass was considered but not run: by round five the findings had
+shifted from bugs in this issue's own diff to a pre-existing property
+of the interpreter (`Interp::with_page_scaled`, documented in
+`HANDOFF.md` well before issue #21) and to inputs no real caller would
+send (`--grid 70000x70000`, `1e400` seeds) — a signal to stop reviewing
+and instead act on what round five had already surfaced, rather than
+asking a reviewer that has run out of diff to review for one more
+round. Two things from round five's own findings still needed
+follow-up, both applied without a further review round:
+
+`break_permanent_dict_cycle` originally took `&mut self` with a doc
+comment saying "safe to call only once you're done with this
+`Interp`" — a real but purely-documented guarantee on a `pub fn` in a
+library crate. Changed it to take `self` by value instead: calling it
+now consumes the `Interp`, so a caller that mistakenly tried to keep
+using it afterward gets a compile error (use of moved value) rather
+than a runtime `undefined` once systemdict's operators are gone. This
+is a better fix than a stronger doc comment or a debug assertion
+because the compiler enforces it unconditionally, not just in debug
+builds or for a reader who read the comment.
+
+Re-reading the fix with "who else constructs many `Interp`s in one
+process run" in mind (the exact question round five's finding raised)
+turned up a second, live instance of the same leak that hadn't been
+touched: `--spool`'s watch loop (`window.rs::poll_spool`) constructs a
+fresh `Interp` per job and assigns it into a struct field
+(`self.interp = interp`), which drops the *previous* job's `Interp` in
+place — and unlike the sweep loop's bounded frame count, `--spool`
+runs indefinitely, so this leaked one systemdict/userdict cycle per
+completed job for the life of the process. Fixed with `mem::replace`
+to pull the outgoing job's `Interp` out of the field before the new
+one overwrites it, then `break_permanent_dict_cycle()` on the
+returned value. `HANDOFF.md`'s gotcha note now names both call sites
+so a future third one doesn't get missed the same way.
+
 ## Axial/radial gradient (shading) fill support (issue #20, 2026-08-14)
 
 Closes issue #20. The interpreter had no `shfill`/shading machinery at
