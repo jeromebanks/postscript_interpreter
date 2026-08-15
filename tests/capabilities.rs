@@ -85,7 +85,11 @@ fn style_pack_names_match_the_catalog_exactly() {
         // mutation of the existing dict), not `def`, so they never
         // land in userdict -- pack_specific is procedures/dials only,
         // checked against tests::palettes_match_the_catalog_exactly
-        // separately.
+        // separately. Set-difference also means a pack that *redefined*
+        // an artkit name (shadowing it with its own `def` of the same
+        // name) would be swallowed here rather than flagged -- no pack
+        // does that today, and it's an accepted gap in this reverse
+        // check, not a case this test is designed to catch.
         let pack_specific: BTreeSet<String> = all.difference(&artkit_baseline).cloned().collect();
 
         let expected = names_by(CapabilityKind::Procedure, source);
@@ -158,11 +162,21 @@ fn type3_faces_are_actually_defined_after_loading() {
         .filter(|c| c.kind == CapabilityKind::Type3Face)
         .map(|c| (c.name, c.source))
         .collect();
-    assert_eq!(
-        entries.len(),
-        7,
-        "expected all seven Type 3 program faces cataloged"
-    );
+
+    // Reverse direction: every `.ps` file under lib/fonts/ must be
+    // cataloged, not just every cataloged entry checked forward --
+    // otherwise a new face added to the directory and never
+    // registered in capabilities.rs would pass silently.
+    let cataloged_sources: BTreeSet<String> =
+        entries.iter().map(|(_, source)| source.clone()).collect();
+    let on_disk: BTreeSet<String> = std::fs::read_dir("lib/fonts")
+        .expect("lib/fonts present")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("ps"))
+        .map(|p| format!("lib/fonts/{}", p.file_name().unwrap().to_string_lossy()))
+        .collect();
+    assert_name_sets_match("lib/fonts/*.ps", &on_disk, &cataloged_sources);
 
     for (name, source) in entries {
         let mut it = Interp::with_page(200, 200).expect("page");
