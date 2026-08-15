@@ -197,6 +197,46 @@ site — didn't check `cols*rows >= pages.len()` before blitting,
 letting an undersized grid index past the sheet's own cell count and
 panic.
 
+A fifth round found the deepest issue of the five rounds: **each swept
+frame's `Interp` leaks its `userdict`, not just the small systemdict
+node HANDOFF.md's "one leak per Interp, process-lifetime object" gotcha
+already documents.** systemdict holds a strong `Rc` to itself *and* to
+`userdict` (`Interp::with_page_scaled`); with plain `Rc` and no cycle
+collector, dropping an `Interp` can never free either. For the usual
+one-`Interp`-per-process pattern that's genuinely inert — one bounded
+leak, and the OS reclaims everything at exit anyway — but the sweep
+loop is the first caller in this codebase to construct many `Interp`s
+within a single process run, so "doesn't matter" stopped holding: a
+program that stores meaningful data in `userdict` (a lookup table, a
+large string) would leak a full copy of it, on top of the canvas, per
+frame. Confirmed empirically before trusting the claim or dismissing
+it — the review itself ran the binary rather than only reading the
+diff, so the fix held to the same bar: a temporary diagnostic test
+using `Rc::downgrade`/`Weak::upgrade` around a real `Interp` drop
+showed `userdict` genuinely still alive afterward (a first RSS-based
+memory measurement had misleadingly suggested otherwise, most likely
+masked by zero-filled pages never actually being touched). The fix,
+`Interp::break_permanent_dict_cycle` (`src/interp.rs`) plus a small
+`Dict::clear` (`src/object.rs`), empties systemdict right before a
+sweep frame's `Interp` is dropped — safe because nothing runs
+PostScript on it again — breaking both the self-reference and the
+`userdict` reference in one step; `run_sweep` calls it once per frame.
+The diagnostic test became the permanent regression: assert `userdict`
+frees with the fix, not just that memory stayed low.
+
+Two smaller findings rounded out the fifth pass: `contact_sheet::
+new_sheet`'s own `u32` arithmetic could overflow for a caller passing
+large enough `cols`/`cell_w`/`gap` — `main.rs`'s own call site happens
+to stay under that, but it's a public function — now checked `u64`
+arithmetic, not just wider (two near-`u32::MAX` terms summed can still
+overflow `u64`, so `checked_mul`/`checked_add` closes it for real); and
+the `f64` fallback range's `a + i as f64 * step` form could overflow
+its intermediate product to infinity for an opposite-sign range near
+`f64`'s own limits (`-1e308:1e308:1e308`), silently dropping the
+inclusive upper-bound endpoint even though every real value along the
+way was finite — fixed by accumulating incrementally (`v += step`)
+instead of recomputing from an index each time.
+
 ## Axial/radial gradient (shading) fill support (issue #20, 2026-08-14)
 
 Closes issue #20. The interpreter had no `shfill`/shading machinery at

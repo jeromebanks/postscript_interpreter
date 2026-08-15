@@ -600,6 +600,14 @@ fn run_sweep(options: &Options, source: &[u8]) -> ExitCode {
                 last.clone()
             }
         };
+        // Done with this frame's Interp -- break systemdict's
+        // self-referential Rc cycle before it drops at the end of
+        // this iteration, or userdict (and anything this frame's
+        // program stored in it) outlives every dropped frame for the
+        // rest of the sweep instead of freeing with it (round-5
+        // cross-model review, PR #66; see break_permanent_dict_cycle's
+        // doc comment).
+        interp.break_permanent_dict_cycle();
 
         let status = if ok { "" } else { " (failed)" };
         match &options.png {
@@ -844,11 +852,18 @@ fn parse_sweep_spec(spec: &str) -> Result<Vec<SweepValue>, String> {
                 // range generate a value past its declared bound, and
                 // near f64::MAX could overflow `b + tol` to infinity
                 // (round-3 cross-model review, PR #66).
+                // Incremental (v += step), not v = a + i as f64 *
+                // step: for an opposite-sign range spanning close to
+                // f64's own limits (e.g. -1e308:1e308:1e308), the
+                // multiplied-out form's intermediate product can
+                // overflow to infinity even though every real value
+                // along the way, and the final inclusive endpoint,
+                // are all finite -- silently dropping that endpoint
+                // (round-5 cross-model review, PR #66).
                 let mut values = Vec::new();
-                let mut i: usize = 0;
+                let mut v = a;
                 let mut prev: Option<f64> = None;
                 loop {
-                    let v = a + i as f64 * step;
                     if v > b {
                         break;
                     }
@@ -864,7 +879,7 @@ fn parse_sweep_spec(spec: &str) -> Result<Vec<SweepValue>, String> {
                     }
                     bounded_push(&mut values, SweepValue::Float(v))?;
                     prev = Some(v);
-                    i += 1;
+                    v += step;
                 }
                 values
             }
@@ -1381,6 +1396,21 @@ mod sweep_tests {
     fn stalled_float_range_yields_exactly_one_value() {
         let values = parse_sweep_spec("1e31:1e31").unwrap();
         assert_eq!(values.len(), 1);
+    }
+
+    /// Regression (cross-model review round 5, PR #66): the
+    /// multiplied-out `a + i as f64 * step` form's intermediate
+    /// product could overflow to infinity for an opposite-sign range
+    /// spanning near f64's limits, silently dropping the inclusive
+    /// upper-bound endpoint even though every real value along the
+    /// way (and B itself) is finite.
+    #[test]
+    fn opposite_sign_extreme_range_includes_its_endpoint() {
+        let values = parse_sweep_spec("-1e308:1e308:1e308").unwrap();
+        let SweepValue::Float(last) = *values.last().unwrap() else {
+            panic!("expected a Float value");
+        };
+        assert_eq!(last, 1e308, "the declared upper bound must be included");
     }
 
     /// Regression (cross-model review round 4, PR #66): a comma list

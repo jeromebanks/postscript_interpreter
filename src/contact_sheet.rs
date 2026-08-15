@@ -29,15 +29,32 @@ pub fn new_sheet(
     cell_h: u32,
     gap: u32,
 ) -> Result<Pixmap, String> {
-    let sheet_w = cols * cell_w + gap * cols.saturating_sub(1);
-    let sheet_h = rows * cell_h + gap * rows.saturating_sub(1);
-    if sheet_w > MAX_SIDE_PX || sheet_h > MAX_SIDE_PX {
+    // u64 + checked arithmetic (not u32 `*`/`+`, which `main.rs`'s own
+    // caller happens to stay under but this is a public function): a
+    // caller passing large enough values could overflow u32 before
+    // the MAX_SIDE_PX check ever runs -- a debug-build panic, or
+    // release-mode wraparound silently accepting an oversized request
+    // as a small one. u64 alone pushes the same risk out rather than
+    // closing it (two near-u32::MAX terms summed can still overflow
+    // u64), so this checks for real, not just further away (round-5
+    // cross-model review, PR #66).
+    let too_large = || "contact sheet dimensions overflow".to_string();
+    let dim = |cells: u32, cell: u32| -> Result<u64, String> {
+        (cells as u64)
+            .checked_mul(cell as u64)
+            .and_then(|a| a.checked_add((gap as u64).checked_mul(cells.saturating_sub(1) as u64)?))
+            .ok_or_else(too_large)
+    };
+    let (sheet_w, sheet_h) = (dim(cols, cell_w)?, dim(rows, cell_h)?);
+    if sheet_w > MAX_SIDE_PX as u64 || sheet_h > MAX_SIDE_PX as u64 {
         return Err(format!(
             "contact sheet would be {sheet_w}x{sheet_h}px, over the {MAX_SIDE_PX}px-per-side \
              limit -- use fewer sweep values, a smaller --page/--dpi, or drop --contact-sheet \
              for individual --png frames"
         ));
     }
+    // Safe: just checked both are <= MAX_SIDE_PX, which fits u32.
+    let (sheet_w, sheet_h) = (sheet_w as u32, sheet_h as u32);
     let mut sheet = Pixmap::new(sheet_w, sheet_h)
         .ok_or_else(|| format!("cannot allocate a {sheet_w}x{sheet_h}px contact sheet"))?;
     sheet.fill(tiny_skia::Color::WHITE);
@@ -144,6 +161,16 @@ mod tests {
         let b = solid(2, 2, [0, 0, 0, 255]);
         let err = compose(&[a, b], 1, 1, 0).unwrap_err();
         assert!(err.contains("only 1 cells for 2 frames"), "{err}");
+    }
+
+    /// Regression (round-5 cross-model review, PR #66): `new_sheet`
+    /// is a public function, not just `main.rs`'s own already-bounded
+    /// caller -- large enough `cols`/`cell_w`/`gap` must error, not
+    /// overflow `u32` (a debug-build panic) or wrap around in release.
+    #[test]
+    fn extreme_dimensions_error_instead_of_overflowing() {
+        assert!(new_sheet(u32::MAX, 2, u32::MAX, 2, u32::MAX).is_err());
+        assert!(new_sheet(u32::MAX / 2, 1, 3, 1, 0).is_err());
     }
 
     #[test]

@@ -192,7 +192,7 @@ touching code. `ROADMAP.md` has the task list with model routing;
 
 ## Where things stand
 
-**620 tests across 40 suites, clippy clean.** Stages 1–19 are done,
+**623 tests across 40 suites, clippy clean.** Stages 1–19 are done,
 including Stage 8's last sliver, the `--interactive` windowed REPL
 (`-i`; stdin reader thread → `EventLoopProxy` user events → chunks
 run on the frame budget; line accumulation shared with the terminal
@@ -357,7 +357,15 @@ renders eight examples in both and compares block-downsampled output).
 - `exit` must not cross Scanner/StopMark/Show/Image/PostOp frames
   (`invalidexit`) — extend that match if you add frame kinds.
 - The systemdict self-reference is an intentional Rc cycle (one leak
-  per Interp, process-lifetime object).
+  per Interp, process-lifetime object) — genuinely harmless for the
+  usual one-`Interp`-per-process pattern, but it also leaks `userdict`
+  (and everything a program stored there), since systemdict holds a
+  strong reference to it too. A caller that constructs many `Interp`s
+  in one process run (issue #21's `--sweep-seed`/`--sweep`) must call
+  `Interp::break_permanent_dict_cycle()` on each one before dropping
+  it, or that stops being bounded — confirmed empirically via
+  `Rc::downgrade`/`strong_count`, not just reasoned about (NOTES.md's
+  issue #21 entry has the story).
 - tiny-skia `Transform::from_row(sx, ky, kx, sy, tx, ty)` matches the
   PS matrix order `[a b c d tx ty]` — `ops/matrix.rs` documents it;
   don't rediscover this the hard way.
