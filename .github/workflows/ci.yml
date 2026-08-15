@@ -26,9 +26,26 @@ permissions:
   pull-requests: write
   issues: write
 
+# A commit pushed while a prior run for the same ref is still going (or a
+# manual rerun of an old commit) must not let the older run finish last and
+# overwrite newer test evidence on the PR/issue comment via --edit-last —
+# cancel the superseded run instead of racing it.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: macos-latest
+    defaults:
+      run:
+        # Explicit `bash` (vs. the implicit default shell) runs with
+        # `-o pipefail`, so `cargo test | tee` below reports cargo test's
+        # real exit status instead of tee's — without this, a failing
+        # test run still shows steps.test.outcome == 'success' and both
+        # the required check and the "Fail job if tests failed" step
+        # below silently miss it.
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

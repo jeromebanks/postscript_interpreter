@@ -40,6 +40,21 @@ requires a trip into Actions to corroborate.
   already has human comments from other authors (`work-issue`'s
   "Opened <PR URL>" note, etc.) — it isn't fooled into thinking a
   comment already exists.
+- Cross-model (Codex) review caught a real bug: GitHub Actions' *implicit*
+  default shell (no `shell:` on a step) is `bash -e` **without**
+  `pipefail`, so `cargo test 2>&1 | tee test-output.log` reported
+  `tee`'s exit code (always 0), not cargo test's — `steps.test.outcome`
+  stayed `success` on a failing test run, silently defeating both the
+  required `test` check and the "Fail job if tests failed" step.
+  Confirmed empirically (`bash -e -c 'false | tee ...; echo $?'` → `0`
+  vs. `bash -eo pipefail -c '...'` → nonzero) before fixing by setting
+  `defaults: run: shell: bash` on the job, which gets `-eo pipefail`
+  from Actions' *explicit*-bash default. Also added a
+  `concurrency: {group: ci-<workflow>-<ref>, cancel-in-progress: true}`
+  per Codex's second finding — without it, an old run outliving a newer
+  one for the same ref/PR (superseded push, manual rerun) could finish
+  last and overwrite the PR/issue comment with stale results via
+  `--edit-last`.
 - Deferred: clippy/build/fmt results aren't surfaced the same way —
   the issue scoped this to test evidence specifically, and those three
   already fail the job outright with output in the existing status
