@@ -14,7 +14,9 @@ use std::collections::BTreeSet;
 use std::process::Command;
 
 use pscat::Interp;
-use pscat::capabilities::{self, ARTKIT_INTERNAL, CapabilityKind, PAGEKIT_INTERNAL};
+use pscat::capabilities::{
+    self, ARTKIT_INTERNAL, CapabilityKind, HANDSCRIPT_INTERNAL, HANGUL_INTERNAL, PAGEKIT_INTERNAL,
+};
 
 fn names_by(kind: CapabilityKind, source: &str) -> BTreeSet<String> {
     capabilities::catalog()
@@ -145,6 +147,30 @@ fn pagekit_names_match_the_catalog_exactly() {
     assert_name_sets_match("lib/pagekit.ps", &pagekit_specific, &expected);
 }
 
+/// `lib/handscript.ps`/`lib/hangul.ps` are standalone (no artkit
+/// dependency, unlike pagekit/the style packs), so each gets its own
+/// fresh `Interp` rather than an artkit-baseline diff.
+#[test]
+fn handscript_and_hangul_names_match_the_catalog_exactly() {
+    for (file, source, internal) in [
+        (
+            "lib/handscript.ps",
+            "lib/handscript.ps",
+            HANDSCRIPT_INTERNAL,
+        ),
+        ("lib/hangul.ps", "lib/hangul.ps", HANGUL_INTERNAL),
+    ] {
+        let mut it = Interp::new();
+        load(&mut it, file);
+        let got = userdict_names(&mut it);
+
+        let mut expected = names_by(CapabilityKind::Procedure, source);
+        expected.extend(internal.iter().map(|s| s.to_string()));
+
+        assert_name_sets_match(file, &got, &expected);
+    }
+}
+
 /// Type 3 faces don't go through `findfont`'s Rust-side registry
 /// (`--fonts`/`resolve`) -- they're defined by `definefont` straight
 /// into PostScript's own `FontDirectory`. `findfont` on an unknown name
@@ -166,17 +192,33 @@ fn type3_faces_are_actually_defined_after_loading() {
     // Reverse direction: every `.ps` file under lib/fonts/ must be
     // cataloged, not just every cataloged entry checked forward --
     // otherwise a new face added to the directory and never
-    // registered in capabilities.rs would pass silently.
+    // registered in capabilities.rs would pass silently. Two more
+    // Type 3 faces (HandScript, HangulScript) predate the lib/fonts/
+    // convention and live at lib/handscript.ps / lib/hangul.ps
+    // instead -- named explicitly here rather than widening the scan
+    // to all of lib/*.ps, which would also need to allowlist every
+    // non-Type3 sibling library (graph.ps, dataviz.ps, etching.ps,
+    // pagekit.ps, artkit.ps itself) as "not a face," muddying what
+    // this check is actually verifying. A cross-model review found
+    // HandScript missing here on the first PR (#74); it and
+    // HangulScript's Type3-family status were confirmed the same way
+    // -- FontDirectory holds their names after loading their file.
     let cataloged_sources: BTreeSet<String> =
         entries.iter().map(|(_, source)| source.clone()).collect();
-    let on_disk: BTreeSet<String> = std::fs::read_dir("lib/fonts")
+    let mut on_disk: BTreeSet<String> = std::fs::read_dir("lib/fonts")
         .expect("lib/fonts present")
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("ps"))
         .map(|p| format!("lib/fonts/{}", p.file_name().unwrap().to_string_lossy()))
         .collect();
-    assert_name_sets_match("lib/fonts/*.ps", &on_disk, &cataloged_sources);
+    on_disk.insert("lib/handscript.ps".to_string());
+    on_disk.insert("lib/hangul.ps".to_string());
+    assert_name_sets_match(
+        "lib/fonts/*.ps + named outliers",
+        &on_disk,
+        &cataloged_sources,
+    );
 
     for (name, source) in entries {
         let mut it = Interp::with_page(200, 200).expect("page");
@@ -238,6 +280,7 @@ fn cli_capabilities_flag_prints_valid_matching_json() {
             "description",
             "parameters",
             "source",
+            "load",
             "example",
             "availability",
         ] {

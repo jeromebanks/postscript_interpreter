@@ -16,11 +16,11 @@ skill's "toolkit" tour was last touched.
 
 - `src/capabilities.rs`: `--capabilities` (CLI) and
   `describe_art_capabilities` (`pscat-mcp`) both serialize one JSON
-  payload — 225 entries as of this build: 105 fonts, 86 procedures
-  (57 from `lib/artkit.ps`, 29 across the four style packs), 22
-  palettes, 7 Type 3 program faces, 5 page templates — plus a
-  `pscat_version` field so a caching agent can treat a version bump as
-  the re-fetch signal.
+  payload — 231 entries as of this build: 105 fonts, 90 procedures
+  (57 from `lib/artkit.ps`, 29 across the four style packs, and 4 more
+  from `lib/handscript.ps`/`lib/hangul.ps`), 22 palettes, 9 Type 3
+  program faces, 5 page templates — plus a `pscat_version` field so a
+  caching agent can treat a version bump as the re-fetch signal.
 - Fonts are the one section built *dynamically*: `font.rs` gained
   `catalog_entries()`/`FontOrigin` (Builtin/Catalog/Alias), and
   `available_fonts()` (the existing `--fonts` output) now derives from
@@ -52,12 +52,45 @@ skill's "toolkit" tour was last touched.
   lives in `example` instead: the stack-effect comment already written
   at its definition site.
 - Scope cut, stated rather than silent: `graph.ps`/`dataviz.ps`/
-  `etching.ps`/`hangul.ps` are not cataloged — the issue's "What"
-  section names fonts/Type-3/palettes/style-packs/templates/*artkit*
-  procedures specifically, and those four are independent sibling
-  libraries by design (graph.ps and dataviz.ps share nothing with
-  artkit on purpose, per their own NOTES.md entries). A reasonable
-  follow-up, not an oversight.
+  `etching.ps` are not cataloged — the issue's "What" section names
+  fonts/Type-3/palettes/style-packs/templates/*artkit* procedures
+  specifically, and those three are independent sibling libraries by
+  design (graph.ps and dataviz.ps share nothing with artkit on
+  purpose, per their own NOTES.md entries). A reasonable follow-up,
+  not an oversight.
+- A cross-model (Codex) review on PR #74 caught two real gaps before
+  merge, both fixed on the branch:
+  1. `--capabilities`/`--fonts` advertised every catalog-font alias
+     whenever `fonts/catalog/` existed, even when that specific
+     alias's target file was missing from an incomplete install —
+     `findfont` would substitute Helvetica for it while the catalog
+     claimed it resolved. `font::catalog_entries()` now filters
+     `ALIASES` against the same stem/`-Regular` fallback lookup
+     `catalog_fid` itself uses, so only aliases that would actually
+     load are listed (no behavior change for this repo's own complete
+     catalog install).
+  2. The Type 3 face list stopped at `lib/fonts/`'s seven files and
+     missed `lib/handscript.ps`'s `/HandScript` (the face behind the
+     `handwrite` tool) entirely — the review's exact finding — plus,
+     found while fixing it the same way, `lib/hangul.ps`'s
+     `/HangulScript` (issue #6's Unicode-mode jamo-composition face),
+     a second instance of the identical gap the review didn't happen
+     to name. Both are now cataloged, along with their `hs-write`/
+     `hs-linecount`/`hg-write`/`hg-linecount` options-dict procedures
+     (real `parameters`, not `example`-only, since an options dict is
+     genuinely `Param`-shaped the way a template's content dict is).
+     The Type 3 reverse check, which had been a hardcoded `len() == 7`
+     plus a forward-only `FontDirectory` lookup, is now a real
+     `lib/fonts/*.ps` directory scan (plus the two named historical
+     outliers) compared against the catalog's Type3Face sources —
+     closing the same forward/reverse gap the rest of the catalog
+     already guarded against.
+  A `load` field was also added to every entry (the exact `run`
+  sequence needed before `example` works — a template or style-pack
+  procedure errors `undefined: Palettes` without `lib/artkit.ps`
+  loaded first, invisible from `source` alone), derived from
+  `(kind, source)` in one `load_sequence` function rather than
+  hand-written per entry.
 - `CAPABILITIES.md` documents the payload shape and the
   register-a-new-capability workflow; `.claude/skills/psart/SKILL.md`
   now points at `--capabilities` as the source of truth over its own

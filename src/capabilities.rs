@@ -2,9 +2,12 @@
 //!
 //! `--capabilities` (CLI) and `describe_art_capabilities` (`pscat-mcp`)
 //! both serialize [`payload_json`] — a single list covering fonts, the
-//! Type 3 program faces (`lib/fonts/`), artkit's mood palettes, the
-//! page templates (`lib/pagekit.ps`), and artkit's/the style packs'
-//! major procedures. It exists so an agent can discover what's
+//! Type 3 program faces (`lib/fonts/`, plus `lib/handscript.ps`'s
+//! `/HandScript` and `lib/hangul.ps`'s `/HangulScript` — two historical
+//! outliers that predate the `lib/fonts/` convention), artkit's mood
+//! palettes, the page templates (`lib/pagekit.ps`), and artkit's/the
+//! style packs'/handscript's/hangul's major procedures. It exists so
+//! an agent can discover what's
 //! *actually installed* in the running `pscat` without embedding
 //! prose documentation (which drifts — `psart`'s `SKILL.md` had
 //! already fallen behind artkit's paragraph-flow, hyperbolic-geometry,
@@ -32,13 +35,24 @@
 //! newly added public name in `lib/artkit.ps`/`lib/styles/*`/
 //! `lib/pagekit.ps` can't ship silently uncataloged.
 //!
-//! Procedures take positional PostScript stack arguments, not named
-//! ones — there's nothing here as clean as a template's content-dict
-//! keys to model as [`Param`]s, so a procedure's calling convention is
-//! carried in `example` (the stack-effect comment already written at
-//! its definition site) instead, and `parameters` stays empty.
-//! Templates, whose content dict genuinely has named optional keys
-//! with defaults, use `parameters` for real.
+//! Most procedures take positional PostScript stack arguments, not
+//! named ones — there's nothing here as clean as a template's
+//! content-dict keys to model as [`Param`]s, so a procedure's calling
+//! convention is carried in `example` (the stack-effect comment
+//! already written at its definition site) instead, and `parameters`
+//! stays empty. Templates, and the two options-dict procedures
+//! `hs-write`/`hs-linecount`/`hg-write`/`hg-linecount` (whose calling
+//! convention genuinely *is* one dict with named, defaulted keys —
+//! same shape as a template's content dict), use `parameters` for
+//! real.
+//!
+//! `example` alone isn't enough to actually run something, though — a
+//! page template errors `undefined: Palettes` unless `lib/artkit.ps`
+//! is loaded first, and that dependency isn't visible from `source`
+//! alone (a gap a cross-model review caught on the first PR, #74). Each
+//! entry's `load` field carries the exact `run` sequence needed before
+//! `example` will work, derived from `(kind, source)` in
+//! [`load_sequence`] rather than duplicated per entry.
 
 use serde_json::{Value, json};
 
@@ -91,6 +105,13 @@ pub struct Capability {
     pub description: String,
     pub parameters: Vec<Param>,
     pub source: String,
+    /// The `run` sequence(s) needed to get `source` into scope before
+    /// `example` will work — e.g. `(lib/artkit.ps) run
+    /// (lib/pagekit.ps) run` for a page template, since loading
+    /// `pagekit.ps` alone errors `undefined: Palettes` (a real gap a
+    /// cross-model review caught: PR #74). Empty for fonts, which need
+    /// no `run` at all.
+    pub load: String,
     pub example: String,
     pub availability: String,
 }
@@ -103,9 +124,35 @@ impl Capability {
             "description": self.description,
             "parameters": self.parameters.iter().map(|p| p.to_json()).collect::<Vec<_>>(),
             "source": self.source,
+            "load": self.load,
             "example": self.example,
             "availability": self.availability,
         })
+    }
+}
+
+/// The `run` sequence needed to get `source` into scope, given `kind`.
+/// A page template or style-pack procedure needs `lib/artkit.ps`
+/// loaded first (it leans on `Palettes`/`pal`/`tfblock`/etc.); a Type 3
+/// face just needs its own file. Fonts and font aliases need no `run`
+/// at all (`findfont` resolves them directly).
+fn load_sequence(kind: CapabilityKind, source: &str) -> String {
+    match kind {
+        CapabilityKind::Font => String::new(),
+        CapabilityKind::Type3Face => format!("({source}) run"),
+        _ => match source {
+            s if s == ARTKIT => "(lib/artkit.ps) run".to_string(),
+            s if s == PAGEKIT => "(lib/artkit.ps) run (lib/pagekit.ps) run".to_string(),
+            s if s == STEAMPUNK => "(lib/artkit.ps) run (lib/styles/steampunk.ps) run".to_string(),
+            s if s == PSYCHEDELIC => {
+                "(lib/artkit.ps) run (lib/styles/psychedelic.ps) run".to_string()
+            }
+            s if s == SCIFI => "(lib/artkit.ps) run (lib/styles/scifi.ps) run".to_string(),
+            s if s == TOON => "(lib/artkit.ps) run (lib/styles/toon.ps) run".to_string(),
+            s if s == HANDSCRIPT => "(lib/handscript.ps) run".to_string(),
+            s if s == HANGUL => "(lib/hangul.ps) run".to_string(),
+            _ => String::new(),
+        },
     }
 }
 
@@ -130,6 +177,7 @@ impl Entry {
             description: self.description.to_string(),
             parameters: self.parameters.to_vec(),
             source: self.source.to_string(),
+            load: load_sequence(self.kind, self.source),
             example: self.example.to_string(),
             availability: self.availability.to_string(),
         }
@@ -142,6 +190,8 @@ const STEAMPUNK: &str = "lib/styles/steampunk.ps";
 const PSYCHEDELIC: &str = "lib/styles/psychedelic.ps";
 const SCIFI: &str = "lib/styles/scifi.ps";
 const TOON: &str = "lib/styles/toon.ps";
+const HANDSCRIPT: &str = "lib/handscript.ps";
+const HANGUL: &str = "lib/hangul.ps";
 const LIB: &str = "library"; // availability: always present once its source is loaded
 
 /// Every top-level name `lib/artkit.ps` defines that is *not* cataloged
@@ -173,6 +223,18 @@ pub const ARTKIT_INTERNAL: &[&str] = &[
 /// the three shared helpers (`pggetdef`/`pgzfitmax`/`pgframe`).
 pub const PAGEKIT_INTERNAL: &[&str] = &["pggetdef", "pgzfitmax", "pgframe"];
 
+/// Top-level names `lib/handscript.ps` defines beyond `hs-write`/
+/// `hs-linecount`: `HandScriptDict` (the `definefont` template dict —
+/// the face itself, `/HandScript`, lives in `FontDirectory`, not
+/// `userdict`) and `HSLayout` (internal line-wrap state).
+pub const HANDSCRIPT_INTERNAL: &[&str] = &["HandScriptDict", "HSLayout"];
+
+/// Top-level names `lib/hangul.ps` defines beyond `hg-write`/
+/// `hg-linecount`: `HangulDict` (the `definefont` template dict —
+/// `/HangulScript` itself lives in `FontDirectory`) and `HGLayout`
+/// (internal line-wrap state).
+pub const HANGUL_INTERNAL: &[&str] = &["HangulDict", "HGLayout"];
+
 macro_rules! entry {
     ($name:expr, $kind:expr, $desc:expr, $params:expr, $source:expr, $example:expr, $avail:expr) => {
         Entry {
@@ -195,7 +257,7 @@ static ENTRIES: &[Entry] = &[
         "Letters as bent glass tube: each stroke drawn five times, wide-and-dim to thin-and-overdriven, for a pure-overdraw glow. Best on a near-black ground.",
         &[],
         "lib/fonts/neon.ps",
-        "(lib/fonts/neon.ps) run /Neon findfont 90 scalefont setfont",
+        "/Neon findfont 90 scalefont setfont",
         LIB
     ),
     entry!(
@@ -204,7 +266,7 @@ static ENTRIES: &[Entry] = &[
         "Letters as a theater marquee sign: warm incandescent bulbs along every stroke, a few burnt out (rand-driven). Best on a dark ground.",
         &[],
         "lib/fonts/marquee.ps",
-        "(lib/fonts/marquee.ps) run /Marquee findfont 90 scalefont setfont",
+        "/Marquee findfont 90 scalefont setfont",
         LIB
     ),
     entry!(
@@ -213,7 +275,7 @@ static ENTRIES: &[Entry] = &[
         "Every letter is a constellation: named stars at the skeleton's anchor points, hairline asterism lines, a scatter of field stars (rand-driven). Meant for a midnight ground.",
         &[],
         "lib/fonts/constellation.ps",
-        "(lib/fonts/constellation.ps) run /Constellation findfont 110 scalefont setfont",
+        "/Constellation findfont 110 scalefont setfont",
         LIB
     ),
     entry!(
@@ -222,7 +284,7 @@ static ENTRIES: &[Entry] = &[
         "Capitals cut into stone: drop shadow, raised face, incised groove, sunlit arris. Deterministic, no rand. Meant for pale grounds.",
         &[],
         "lib/fonts/lapidary.ps",
-        "(lib/fonts/lapidary.ps) run /Lapidary findfont 90 scalefont setfont",
+        "/Lapidary findfont 90 scalefont setfont",
         LIB
     ),
     entry!(
@@ -231,7 +293,7 @@ static ENTRIES: &[Entry] = &[
         "Letters as copper PCB traces: solder-mask channel, copper trace, specular seam, through-hole pads at terminals, vias along long runs. Best on solder-mask green or midnight-blue.",
         &[],
         "lib/fonts/circuitry.ps",
-        "(lib/fonts/circuitry.ps) run /Circuitry findfont 90 scalefont setfont",
+        "/Circuitry findfont 90 scalefont setfont",
         LIB
     ),
     entry!(
@@ -240,7 +302,7 @@ static ENTRIES: &[Entry] = &[
         "Letters embroidered in cross-stitch: every stroke walked at even pitch, each stop an X on the +-45deg grid, three thread passes per leg. Lovely on linen, cream, or kraft.",
         &[],
         "lib/fonts/stitchwork.ps",
-        "(lib/fonts/stitchwork.ps) run /Stitchwork findfont 90 scalefont setfont",
+        "/Stitchwork findfont 90 scalefont setfont",
         LIB
     ),
     entry!(
@@ -249,7 +311,25 @@ static ENTRIES: &[Entry] = &[
         "Letters spelled by thrown confetti: tilted paper slips and round dots in party colors, dense at the letterform, feathering outward. Works on light or dark grounds.",
         &[],
         "lib/fonts/confetti.ps",
-        "(lib/fonts/confetti.ps) run /Confetti findfont 110 scalefont setfont",
+        "/Confetti findfont 110 scalefont setfont",
+        LIB
+    ),
+    entry!(
+        "HandScript",
+        CapabilityKind::Type3Face,
+        "Dynamic handwriting face: every glyph generated fresh with rand-driven jitter, so repeated characters never render identically. Lowercase Latin only (the font has no caps). Backs the `handwrite` tool/scripts/handwrite.sh; also directly callable via hs-write/hs-linecount below.",
+        &[],
+        HANDSCRIPT,
+        "/HandScript findfont 36 scalefont setfont",
+        LIB
+    ),
+    entry!(
+        "HangulScript",
+        CapabilityKind::Type3Face,
+        "Procedural jittered-stroke Hangul face: composes each syllable from ~14 atomic jamo stroke shapes at BuildChar time (Unicode-mode Type 3 -- pscat-only, see FONTS.md). Call via hg-write/hg-linecount below, not plain show, for correct word-wrapping.",
+        &[],
+        HANGUL,
+        "/HangulScript findfont 48 scalefont setfont",
         LIB
     ),
     // --- Palettes: artkit's eight moods -----------------------------
@@ -1426,6 +1506,271 @@ static ENTRIES: &[Entry] = &[
         "/tnink [0.20 0.12 0.30] def   (default near-black)",
         LIB
     ),
+    // --- Procedures: lib/handscript.ps (Stage 13) -----------------------
+    // Unlike everything above, these take one options dict with named,
+    // defaulted keys -- genuinely Param-shaped, same as a page
+    // template's content dict -- so parameters is populated for real.
+    entry!(
+        "hs-write",
+        CapabilityKind::Procedure,
+        "Draws HandScript text, word-wrapped to the column, top-down from the first baseline. Caller does showpage.",
+        &[
+            Param {
+                name: "Text",
+                description: "The note to write (lowercase; the font has no caps)",
+                default: None
+            },
+            Param {
+                name: "Size",
+                description: "Font size, points",
+                default: Some("36")
+            },
+            Param {
+                name: "Width",
+                description: "Page width the caller will render at, points",
+                default: Some("612")
+            },
+            Param {
+                name: "Height",
+                description: "Page height the caller will render at, points",
+                default: Some("792")
+            },
+            Param {
+                name: "Margin",
+                description: "Page margin, points",
+                default: Some("54")
+            },
+            Param {
+                name: "Leading",
+                description: "Baseline spacing, multiple of Size",
+                default: Some("1.5")
+            },
+            Param {
+                name: "Jitter",
+                description: "Ink wobble, glyph units (1000/em)",
+                default: Some("16")
+            },
+            Param {
+                name: "Pen",
+                description: "Stroke width, glyph units",
+                default: Some("22")
+            },
+            Param {
+                name: "Ink",
+                description: "RGB 0..1",
+                default: Some("[0.13 0.14 0.34]")
+            },
+            Param {
+                name: "Paper",
+                description: "/plain or /ruled",
+                default: Some("/plain")
+            },
+            Param {
+                name: "Seed",
+                description: "rand seed; same seed, same page",
+                default: Some("1985")
+            },
+            Param {
+                name: "StartWobble",
+                description: "Random per-line indent, points",
+                default: Some("10")
+            },
+        ],
+        HANDSCRIPT,
+        "opts hs-write -",
+        LIB
+    ),
+    entry!(
+        "hs-linecount",
+        CapabilityKind::Procedure,
+        "Pushes the number of lines the same options dict would wrap to under hs-write, drawing nothing -- run headlessly first to auto-size Height.",
+        &[
+            Param {
+                name: "Text",
+                description: "The note to write (lowercase; the font has no caps)",
+                default: None
+            },
+            Param {
+                name: "Size",
+                description: "Font size, points",
+                default: Some("36")
+            },
+            Param {
+                name: "Width",
+                description: "Page width the caller will render at, points",
+                default: Some("612")
+            },
+            Param {
+                name: "Height",
+                description: "Page height the caller will render at, points",
+                default: Some("792")
+            },
+            Param {
+                name: "Margin",
+                description: "Page margin, points",
+                default: Some("54")
+            },
+            Param {
+                name: "Leading",
+                description: "Baseline spacing, multiple of Size",
+                default: Some("1.5")
+            },
+            Param {
+                name: "Jitter",
+                description: "Ink wobble, glyph units (1000/em)",
+                default: Some("16")
+            },
+            Param {
+                name: "Pen",
+                description: "Stroke width, glyph units",
+                default: Some("22")
+            },
+            Param {
+                name: "Ink",
+                description: "RGB 0..1",
+                default: Some("[0.13 0.14 0.34]")
+            },
+            Param {
+                name: "Paper",
+                description: "/plain or /ruled",
+                default: Some("/plain")
+            },
+            Param {
+                name: "Seed",
+                description: "rand seed; same seed, same page",
+                default: Some("1985")
+            },
+            Param {
+                name: "StartWobble",
+                description: "Random per-line indent, points",
+                default: Some("10")
+            },
+        ],
+        HANDSCRIPT,
+        "opts hs-linecount -> n",
+        LIB
+    ),
+    // --- Procedures: lib/hangul.ps (issue #6) ----------------------------
+    entry!(
+        "hg-write",
+        CapabilityKind::Procedure,
+        "Draws HangulScript text (UTF-8 Korean, may mix in ASCII), word-wrapped to the column, top-down from the first baseline.",
+        &[
+            Param {
+                name: "Text",
+                description: "UTF-8 Korean text (may mix in ASCII)",
+                default: None
+            },
+            Param {
+                name: "Size",
+                description: "Font size, points",
+                default: Some("48")
+            },
+            Param {
+                name: "Width",
+                description: "Page width the caller will render at, points",
+                default: Some("612")
+            },
+            Param {
+                name: "Height",
+                description: "Page height the caller will render at, points",
+                default: Some("792")
+            },
+            Param {
+                name: "Margin",
+                description: "Page margin, points",
+                default: Some("54")
+            },
+            Param {
+                name: "Leading",
+                description: "Baseline spacing, multiple of Size",
+                default: Some("1.5")
+            },
+            Param {
+                name: "Jitter",
+                description: "Ink wobble, glyph units (1000/em)",
+                default: Some("12")
+            },
+            Param {
+                name: "Pen",
+                description: "Stroke width, glyph units",
+                default: Some("24")
+            },
+            Param {
+                name: "Ink",
+                description: "RGB 0..1",
+                default: Some("[0.1 0.1 0.1]")
+            },
+            Param {
+                name: "Seed",
+                description: "rand seed; same seed, same page",
+                default: Some("1985")
+            },
+        ],
+        HANGUL,
+        "opts hg-write -",
+        LIB
+    ),
+    entry!(
+        "hg-linecount",
+        CapabilityKind::Procedure,
+        "Pushes the line count the same options dict would wrap to under hg-write, drawing nothing.",
+        &[
+            Param {
+                name: "Text",
+                description: "UTF-8 Korean text (may mix in ASCII)",
+                default: None
+            },
+            Param {
+                name: "Size",
+                description: "Font size, points",
+                default: Some("48")
+            },
+            Param {
+                name: "Width",
+                description: "Page width the caller will render at, points",
+                default: Some("612")
+            },
+            Param {
+                name: "Height",
+                description: "Page height the caller will render at, points",
+                default: Some("792")
+            },
+            Param {
+                name: "Margin",
+                description: "Page margin, points",
+                default: Some("54")
+            },
+            Param {
+                name: "Leading",
+                description: "Baseline spacing, multiple of Size",
+                default: Some("1.5")
+            },
+            Param {
+                name: "Jitter",
+                description: "Ink wobble, glyph units (1000/em)",
+                default: Some("12")
+            },
+            Param {
+                name: "Pen",
+                description: "Stroke width, glyph units",
+                default: Some("24")
+            },
+            Param {
+                name: "Ink",
+                description: "RGB 0..1",
+                default: Some("[0.1 0.1 0.1]")
+            },
+            Param {
+                name: "Seed",
+                description: "rand seed; same seed, same page",
+                default: Some("1985")
+            },
+        ],
+        HANGUL,
+        "opts hg-linecount -> n",
+        LIB
+    ),
 ];
 
 /// Builds the full catalog: [`ENTRIES`] plus every font `findfont` can
@@ -1457,6 +1802,7 @@ pub fn catalog() -> Vec<Capability> {
             description,
             parameters: Vec::new(),
             source: "fonts/".to_string(),
+            load: String::new(),
             example: "/Name findfont 24 scalefont setfont".to_string(),
             availability: availability.to_string(),
         });
