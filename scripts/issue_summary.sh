@@ -46,12 +46,17 @@ PR_JSON=$(gh pr list --state open --limit 200 \
   --json number,url,title,body,updatedAt,reviewDecision,statusCheckRollup)
 
 # `gh issue list --state closed` has no "sort by closedAt" of its own,
-# so over-fetch and let jq pick the N most-recently-*closed* below —
-# sorting by anything else (e.g. last-updated) can let a stale issue
-# that merely got a late comment displace a genuinely recent closure.
+# so this fetches a window ordered by last-updated (the closest proxy
+# gh's search offers — a closed issue's own closedAt doesn't move, so
+# this window still contains genuinely-recent closures) and then jq
+# picks the true N most-recently-*closed* out of that window below.
+# Over-fetch relative to CLOSED_LIMIT so a closed issue with no
+# post-close activity isn't pushed out of the update-ordered window
+# before jq gets to re-sort it by closedAt.
 CLOSED_FETCH=$(( CLOSED_LIMIT > 60 ? CLOSED_LIMIT : 60 ))
 CLOSED_JSON=$(gh issue list --state closed --limit "$CLOSED_FETCH" \
-  --json number,title,url,closedAt,stateReason)
+  --json number,title,url,closedAt,stateReason \
+  --search "sort:updated-desc")
 
 echo "# Issue summary — ${REPO}"
 echo "_generated $(date -u +%Y-%m-%dT%H:%M:%SZ)_"
