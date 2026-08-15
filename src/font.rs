@@ -840,8 +840,12 @@ pub(crate) enum ShowStep {
 /// Whether the font live in `gfx`'s current graphics state is
 /// Unicode-mode: a `CatalogEncoding::Unicode` catalog face, or a Type 3
 /// dict with `/UnicodeBuildChar true`. Re-derived fresh every time it's
-/// needed — never cached across a glyph — since a kshow proc or a
-/// nested show inside BuildChar can change the font between glyphs.
+/// needed — never cached across a glyph — since a kshow proc can change
+/// the font between glyphs. (A `setfont` from *inside* BuildChar can't:
+/// `restore_glyph_snapshot` rolls the whole `GraphicsState`, font
+/// included, back to its pre-BuildChar snapshot when the glyph context
+/// closes, so kshow is the only way a font change persists into the
+/// next glyph of the same show.)
 fn current_unicode_mode(gfx: &Gfx) -> Result<bool, PsError> {
     let fs = gfx.state().font.as_ref().ok_or(PsError::InvalidFont)?;
     Ok(if fs.fid >= 0 {
@@ -902,12 +906,11 @@ pub(crate) struct ShowCtx {
     /// The string's raw bytes, untouched. Re-segmented into codes one
     /// glyph at a time (see `decode_one`) against whichever font is
     /// live *at that point* — not decoded up front under a single
-    /// decision — because a kshow proc (or a nested show inside
-    /// BuildChar) can switch between byte-oriented and Unicode-mode
-    /// fonts (see `CatalogEncoding`) mid-string, and only a live byte
-    /// cursor can recover the right UTF-8 boundaries for a mid-string
-    /// switch into Unicode mode: bytes already split apart under a
-    /// byte-mode decision can never be recombined later.
+    /// decision — because a kshow proc can switch between byte-oriented
+    /// and Unicode-mode fonts (see `CatalogEncoding`) mid-string, and
+    /// only a live byte cursor can recover the right UTF-8 boundaries
+    /// for a mid-string switch into Unicode mode: bytes already split
+    /// apart under a byte-mode decision can never be recombined later.
     text: Vec<u8>,
     /// Byte offset of the next undecoded code in `text`.
     pos: usize,
@@ -991,10 +994,10 @@ impl ShowCtx {
             }
         }
         // The font is read per glyph — and now so is the segmentation of
-        // the remaining text: a kshow proc (or a nested show inside
-        // BuildChar) may have changed the font, and `decode_one` re-reads
-        // the *raw bytes* against whichever font is live right now rather
-        // than trusting a decision made when the show began (issue #31).
+        // the remaining text: a kshow proc may have changed the font,
+        // and `decode_one` re-reads the *raw bytes* against whichever
+        // font is live right now rather than trusting a decision made
+        // when the show began (issue #31).
         let fs = gfx.state().font.clone().ok_or(PsError::InvalidFont)?;
         let unicode = if fs.fid >= 0 {
             is_unicode_font(fs.fid)
@@ -1077,6 +1080,9 @@ impl ShowCtx {
         let Some(proc) = self.kshow_proc.clone() else {
             return Ok(None);
         };
+        if self.pos >= self.text.len() {
+            return Ok(None);
+        }
         let unicode = current_unicode_mode(gfx)?;
         let Some((next, _)) = decode_one(&self.text, self.pos, unicode) else {
             return Ok(None);
