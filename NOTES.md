@@ -3,6 +3,32 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Fix mid-show font-switch Unicode segmentation (issue #31, 2026-08-15)
+
+Closes issue #31: `ShowCtx` decided `unicode_mode` once, from the font
+in effect when a show began, and pre-decoded the entire string into a
+`Vec<u32>` under that single decision — even though the font itself is
+legitimately re-read per glyph (a `kshow` proc, or a nested `show`
+inside `BuildChar`, can switch fonts mid-string). A kshow proc switching
+*into* a Unicode-mode font from a byte-mode one would find that
+codepoint's UTF-8 bytes already split apart, unrecoverable as one glyph.
+
+- `ShowCtx` now holds the raw `Vec<u8>` and a byte cursor instead of a
+  pre-decoded code vector; each glyph step decodes one code from the
+  *live* font's perspective and advances the cursor by however many
+  bytes that consumed — full architectural rewrite the issue called
+  for, not a patch on top of the old per-glyph resolution-function
+  recheck (which could route to the right function but never undo an
+  already-wrong segmentation).
+- No mid-string switch ⇒ byte-identical to the old eager decode — the
+  byte-mode regression gate and `tests/catalog.rs` pass unchanged.
+- The fix is deliberately asymmetric: switching *out* of Unicode mode
+  mid-codepoint now correctly yields one glyph per leftover raw byte
+  (a byte-mode font can't know 3 bytes were meant to be one codepoint),
+  where two `tests/type3.rs` tests had previously encoded the old bug's
+  incidental truncated-scalar behavior as their expected values. Full
+  writeup in `FONTS.md`'s new addendum.
+
 ## Gate merges on a perf/memory regression check (issue #25, 2026-08-15)
 
 Closes issue #25: `benches/perf.rs` and `benches/vs_gs.rs` existed as
