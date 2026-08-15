@@ -4,6 +4,7 @@
 //! `INIT.md` for the project vision and staged roadmap.
 
 pub(crate) mod clock;
+pub mod contact_sheet;
 pub mod encodings;
 pub mod error;
 pub mod file;

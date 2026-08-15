@@ -173,6 +173,18 @@ reached a permanent test: `and 255` vs. `mod` for negative lattice
 coordinates, and a field proc that doesn't consume its `x y` silently
 leaking stack values instead of erroring — the same class of bug
 `--lint` also caught directly in `examples/noise.ps`'s first draft).
+Also done: issue #21, sweep/contact-sheet rendering — `--sweep-seed`
+(overrides every `srand` call transparently, via a new
+`Interp::set_seed_override`/`seed_override_fired` pair checked in
+`ops/arith.rs`'s `srand`, so found art with a hardcoded `N srand` line
+sweeps unmodified) and `--sweep NAME=` (predefines `/NAME` in userdict
+via a second `run_source` call before the real one, for a source that
+opts in to read it — no source-line-shift text-mangling); a new
+`src/contact_sheet.rs` composites same-sized frames into one grid PNG,
+capped at the same 8000px-per-side ceiling `--page` already enforces.
+`examples/sweep_demo.ps` demonstrates both mechanisms (NOTES.md's
+entry has the full story, including why a plain `pscat-mcp` tool
+wasn't added -- a documented scope cut, not an oversight).
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;

@@ -3,6 +3,70 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Sweep / contact-sheet rendering (issue #21, 2026-08-14)
+
+Closes issue #21: render a file once per seed or parameter value in a
+single invocation, so exploring a design space is one command instead
+of an agent hand-editing the source and re-running N times. Two
+independent, mutually-exclusive sweep axes, one per invocation:
+
+- `--sweep-seed SPEC` overrides every `srand` call *transparently* —
+  `Interp::set_seed_override` (`src/interp.rs`) and a check in
+  `ops/arith.rs`'s `srand` make it ignore its operand and reseed with
+  the override instead, still popping the operand per the PLRM. This
+  was the deliberate design call: every generative-art script in this
+  repo already hardcodes its own `N srand` line (the reproducible-art
+  doctrine), so making the sweep *transparent* means it works on the
+  entire existing example/gallery corpus unmodified, rather than
+  requiring an opt-in convention. Checked before committing to this:
+  none of `examples/`/`gallery/`'s top-level pieces call `srand` more
+  than once per render (`lib/artkit.ps`'s multiple hits are all in
+  comments; `lib/handscript.ps`'s two real calls are two independent
+  entry points, not a single render deliberately re-seeding mid-run,
+  so collapsing both to one override value is fine).
+- `--sweep NAME=SPEC` predefines `/NAME` in userdict before each
+  frame, for a source that opts in by reading it (`/NAME where { pop
+  NAME } { default } ifelse`). Implemented as a second `run_source`
+  call on the same `Interp` before the real one (the same pattern
+  `repl()` already uses for line-by-line input) rather than textually
+  prepending `/NAME <v> def\n` to the source — a plan-review advisor
+  pass caught that the prepend would shift every line by one and
+  silently corrupt `error_report`'s `Line: N` attribution (issue #17).
+
+`SPEC` is `A:B` (inclusive range, step 1), `A:B:STEP`, or a comma
+list, capped at 64 values (same spirit as `--page`/`--dpi`'s existing
+clamps). Output: `--png PATH` writes numbered per-frame files (reusing
+the existing multi-page `numbered_path` convention); `--contact-sheet
+PATH` composites every frame into one grid PNG via a new
+`src/contact_sheet.rs` (`--grid COLSxROWS` overrides the default
+square-ish layout) — either or both, at least one required. The
+composite is capped at the same 8000px-per-side ceiling `--page`
+already enforces, erroring instead of attempting a multi-gigabyte
+allocation for a large sweep at high `--dpi`.
+
+Two failure modes an advisor pass specifically flagged and this
+implementation now handles: a source that never calls `srand` at all
+sweeps to N identical frames with no explanation otherwise — `--sweep
+-seed` now warns on stderr (`seed_override_fired`, checked across all
+frames) when the override never actually fired; and a per-frame
+PostScript error no longer aborts the whole sweep — later frames still
+render, the failed frame's partial canvas is still written (this
+CLI's existing partial-render-on-error philosophy), and the process
+exits nonzero only if the caller should know something failed.
+
+Scoped deliberately: no animation/GIF output (a contact sheet already
+satisfies "compare results side by side" without a new dependency; the
+issue left format open); no multi-axis (seed × param) cartesian sweep;
+no `--svg`/`--pdf`/`--lint`/`--interactive`/`--spool`/`-e` combined
+with a sweep (errors out clearly, same style as `--spool`'s existing
+mutual-exclusion checks); no `pscat-mcp` sweep tool (CLI-only for
+now — the MCP server shells out to the CLI per tool call, so a sweep
+tool would need to either shell out N times itself or grow direct
+library access; not built without a concrete agent workflow asking for
+it). `examples/sweep_demo.ps` is the specimen — an N-petaled rosette
+that demonstrates both mechanisms (a hardcoded `srand` for seed
+sweeping, a `/Petals where` lookup for parameter sweeping).
+
 ## Axial/radial gradient (shading) fill support (issue #20, 2026-08-14)
 
 Closes issue #20. The interpreter had no `shfill`/shading machinery at

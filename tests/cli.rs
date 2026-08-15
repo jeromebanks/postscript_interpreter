@@ -5,6 +5,8 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+use tiny_skia::Pixmap;
+
 const BIN: &str = env!("CARGO_BIN_EXE_pscat");
 
 fn tmp(name: &str) -> std::path::PathBuf {
@@ -204,4 +206,202 @@ fn error_report_includes_a_line_number() {
     let (ok, _out, stderr) = run(&["--headless", "-"], "1 0 div\n");
     assert!(!ok);
     assert!(stderr.contains("Line: 1"), "stderr: {stderr}");
+}
+
+// --- issue #21: sweep / contact-sheet ---------------------------------
+
+/// The one test that catches "the override never fires": a script that
+/// hardcodes its own `N srand` still produces genuinely different
+/// pixels per swept seed, because `--sweep-seed` overrides `srand`'s
+/// operand rather than requiring the source to cooperate.
+#[test]
+fn sweep_seed_produces_different_frames_from_a_hardcoded_srand() {
+    let out = tmp("sweep-differ.png");
+    let source = "7 srand 1 1 1 setrgbcolor 0 0 20 20 rectfill \
+                  rand 255 mod 255 div rand 255 mod 255 div rand 255 mod 255 div setrgbcolor \
+                  0 0 20 20 rectfill";
+    let (ok, _out_text, stderr) = run(
+        &[
+            "--page",
+            "20x20",
+            "--sweep-seed",
+            "1,2",
+            "--png",
+            out.to_str().unwrap(),
+            "-",
+        ],
+        source,
+    );
+    assert!(ok, "stderr: {stderr}");
+    let a = std::fs::read(out.with_file_name("sweep-differ-001.png")).unwrap();
+    let b = std::fs::read(out.with_file_name("sweep-differ-002.png")).unwrap();
+    assert_ne!(a, b, "different seeds must render different pixels");
+}
+
+/// The reproducible-art doctrine, through a sweep: the same seed
+/// listed twice must render byte-identical frames.
+#[test]
+fn sweep_seed_repeated_value_is_byte_identical() {
+    let out = tmp("sweep-same.png");
+    let source = "7 srand rand 255 mod 255 div rand 255 mod 255 div rand 255 mod 255 div setrgbcolor \
+         0 0 20 20 rectfill";
+    let (ok, _out_text, stderr) = run(
+        &[
+            "--page",
+            "20x20",
+            "--sweep-seed",
+            "5,5",
+            "--png",
+            out.to_str().unwrap(),
+            "-",
+        ],
+        source,
+    );
+    assert!(ok, "stderr: {stderr}");
+    let a = std::fs::read(out.with_file_name("sweep-same-001.png")).unwrap();
+    let b = std::fs::read(out.with_file_name("sweep-same-002.png")).unwrap();
+    assert_eq!(a, b, "same seed twice must render byte-identical frames");
+}
+
+#[test]
+fn sweep_seed_warns_when_source_never_calls_srand() {
+    let out = tmp("sweep-no-srand.png");
+    let (ok, _out_text, stderr) = run(
+        &[
+            "--page",
+            "20x20",
+            "--sweep-seed",
+            "1,2",
+            "--png",
+            out.to_str().unwrap(),
+            "-",
+        ],
+        "0 0 20 20 rectfill",
+    );
+    assert!(ok, "a missing srand call isn't a program failure: {stderr}");
+    assert!(stderr.contains("never called srand"), "stderr: {stderr}");
+}
+
+/// The generic named-parameter sweep, and that a contact sheet lays
+/// cells out left-to-right in sweep order: three frames each painted
+/// a distinct solid color keyed off the swept value, probed at each
+/// cell's center after compositing.
+#[test]
+fn sweep_param_orders_contact_sheet_cells_left_to_right() {
+    let sheet = tmp("sweep-hue-sheet.png");
+    let source = "/Shade where { pop Shade } { 0 } ifelse dup dup setrgbcolor 0 0 10 10 rectfill";
+    let (ok, _out_text, stderr) = run(
+        &[
+            "--page",
+            "10x10",
+            "--sweep",
+            "Shade=0,0.5,1",
+            "--contact-sheet",
+            sheet.to_str().unwrap(),
+            "--grid",
+            "3x1",
+            "-",
+        ],
+        source,
+    );
+    assert!(ok, "stderr: {stderr}");
+    let pixmap = Pixmap::load_png(&sheet).expect("decode contact sheet");
+    // 3 cells of 10px + 2 gaps of 4px (contact_sheet::GAP) = 38.
+    assert_eq!(pixmap.width(), 38);
+    let sample = |x: u32, y: u32| -> [u8; 4] {
+        let i = ((y * pixmap.width() + x) * 4) as usize;
+        pixmap.data()[i..i + 4].try_into().unwrap()
+    };
+    let cell0 = sample(5, 5);
+    let cell1 = sample(19, 5); // 10 + 4(gap) + 5
+    let cell2 = sample(33, 5); // 20 + 8(gap) + 5
+    assert_eq!(cell0, [0, 0, 0, 255], "Shade=0 -> black");
+    assert_eq!(cell2, [255, 255, 255, 255], "Shade=1 -> white");
+    assert!(
+        cell1[0] == cell1[1] && cell1[1] == cell1[2] && cell1[0] > 0 && cell1[0] < 255,
+        "Shade=0.5 -> a mid gray strictly between black and white, got {cell1:?}"
+    );
+}
+
+#[test]
+fn sweep_requires_an_output_flag() {
+    let (ok, _out, stderr) = run(&["--sweep-seed", "1,2", "-"], "");
+    assert!(!ok);
+    assert!(stderr.contains("--png and/or --contact-sheet"), "{stderr}");
+}
+
+#[test]
+fn sweep_rejects_incompatible_flags() {
+    let (ok, _out, stderr) = run(&["--sweep-seed", "1,2", "--svg", "out.svg", "-"], "");
+    assert!(!ok);
+    assert!(stderr.contains("--svg"), "{stderr}");
+}
+
+#[test]
+fn sweep_rejects_both_axes_at_once() {
+    let (ok, _out, stderr) = run(
+        &[
+            "--sweep-seed",
+            "1,2",
+            "--sweep",
+            "Foo=1,2",
+            "--png",
+            "out.png",
+            "-",
+        ],
+        "",
+    );
+    assert!(!ok);
+    assert!(stderr.contains("mutually exclusive"), "{stderr}");
+}
+
+#[test]
+fn contact_sheet_grid_too_small_errors() {
+    let sheet = tmp("sweep-grid-too-small.png");
+    let (ok, _out, stderr) = run(
+        &[
+            "--sweep-seed",
+            "1,2,3",
+            "--contact-sheet",
+            sheet.to_str().unwrap(),
+            "--grid",
+            "1x1",
+            "-",
+        ],
+        "0 0 10 10 rectfill",
+    );
+    assert!(!ok);
+    assert!(stderr.contains("--grid 1x1"), "{stderr}");
+}
+
+/// A frame that errors doesn't abort the sweep: later frames still
+/// render, and the partial canvas from the failed frame is still
+/// written (this CLI's existing partial-render-on-error philosophy),
+/// but the process exits nonzero so a caller knows something failed.
+#[test]
+fn sweep_frame_error_continues_the_sweep_and_reports_nonzero() {
+    let out = tmp("sweep-error.png");
+    let source = "/Div where { pop Div } { 1 } ifelse 10 exch div pop 0 0 10 10 rectfill";
+    let (ok, _out_text, stderr) = run(
+        &[
+            "--page",
+            "10x10",
+            "--sweep",
+            "Div=0,1",
+            "--png",
+            out.to_str().unwrap(),
+            "-",
+        ],
+        source,
+    );
+    assert!(!ok, "a failed frame must exit nonzero");
+    assert!(
+        stderr.contains("frame 1/2") && stderr.contains("undefinedresult"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        out.with_file_name("sweep-error-001.png").exists(),
+        "the failed frame's partial canvas is still written"
+    );
+    assert!(out.with_file_name("sweep-error-002.png").exists());
 }

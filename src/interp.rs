@@ -196,6 +196,15 @@ pub struct Interp {
     /// State for `rand`/`srand`/`rrand`. Deterministic by default —
     /// reproducible art is a feature here, not a bug.
     pub(crate) rand_state: i64,
+    /// When set, every `srand` call ignores its operand and reseeds
+    /// with this value instead (issue #21's `--sweep-seed`) — lets a
+    /// sweep drive the RNG on found art that hardcodes its own
+    /// `N srand` line, with no source edit needed. `seed_override_fired`
+    /// records whether an override actually intercepted a call, so a
+    /// sweep over a script that never calls `srand` can be flagged
+    /// instead of silently producing identical frames.
+    pub(crate) seed_override: Option<i64>,
+    pub(crate) seed_override_fired: bool,
     /// `setpacking` flag — tracked, but packed arrays are ordinary
     /// arrays here (ops/level2.rs).
     pub(crate) packing: bool,
@@ -269,6 +278,8 @@ impl Interp {
             last_name: None,
             last_line: None,
             rand_state: 1,
+            seed_override: None,
+            seed_override_fired: false,
             packing: false,
             clock: crate::clock::Clock::start(),
             resources: Default::default(),
@@ -1150,6 +1161,24 @@ impl Interp {
 
     pub fn quit_requested(&self) -> bool {
         self.quit_requested
+    }
+
+    /// Force every `srand` call to reseed with `seed` instead of its
+    /// operand (issue #21's `--sweep-seed`). `None` (the default)
+    /// leaves `srand` alone. Also clears the fired flag, so a caller
+    /// re-arming this on a fresh `Interp` starts from a clean read of
+    /// [`seed_override_fired`](Self::seed_override_fired).
+    pub fn set_seed_override(&mut self, seed: Option<i64>) {
+        self.seed_override = seed;
+        self.seed_override_fired = false;
+    }
+
+    /// Whether [`set_seed_override`](Self::set_seed_override)'s
+    /// override has actually intercepted a `srand` call since it was
+    /// set. `false` means the source never called `srand`, so the
+    /// override had no effect on this run.
+    pub fn seed_override_fired(&self) -> bool {
+        self.seed_override_fired
     }
 
     pub fn last_executed_name(&self) -> Option<String> {
