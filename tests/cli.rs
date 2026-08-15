@@ -189,6 +189,7 @@ fn lint_is_clean_on_real_example_and_gallery_pieces() {
     for path in [
         "examples/paragraph_layout.ps",
         "examples/etching_demo.ps",
+        "examples/sweep_demo.ps",
         "gallery/compositors_proof.ps",
     ] {
         let png = tmp(&format!("lint-corpus-{}.png", path.replace('/', "_")));
@@ -323,6 +324,30 @@ fn sweep_param_orders_contact_sheet_cells_left_to_right() {
     );
 }
 
+/// No `--grid` given: the default layout is `ceil(sqrt(n))` columns.
+/// 3 frames -> 2 columns, 2 rows (one cell blank).
+#[test]
+fn contact_sheet_default_grid_layout_is_square_ish() {
+    let sheet = tmp("sweep-default-grid.png");
+    let (ok, _out, stderr) = run(
+        &[
+            "--page",
+            "10x10",
+            "--sweep-seed",
+            "1,2,3",
+            "--contact-sheet",
+            sheet.to_str().unwrap(),
+            "-",
+        ],
+        "0.4 0.4 0.4 setrgbcolor 0 0 10 10 rectfill",
+    );
+    assert!(ok, "stderr: {stderr}");
+    let pixmap = Pixmap::load_png(&sheet).expect("decode contact sheet");
+    // 2 cols x 2 rows of 10px cells + 1 gap (4px, contact_sheet::GAP).
+    assert_eq!(pixmap.width(), 24);
+    assert_eq!(pixmap.height(), 24);
+}
+
 #[test]
 fn sweep_requires_an_output_flag() {
     let (ok, _out, stderr) = run(&["--sweep-seed", "1,2", "-"], "");
@@ -372,6 +397,28 @@ fn contact_sheet_grid_too_small_errors() {
     );
     assert!(!ok);
     assert!(stderr.contains("--grid 1x1"), "{stderr}");
+}
+
+/// A fat-fingered `--grid` must fail cleanly at parse time, not
+/// overflow the `cols * rows` multiply downstream (regression: an
+/// advisor pass caught this could panic in a debug build before the
+/// per-axis cap was added).
+#[test]
+fn contact_sheet_grid_over_the_cap_errors_at_parse_time() {
+    let (ok, _out, stderr) = run(
+        &[
+            "--sweep-seed",
+            "1,2",
+            "--png",
+            "out.png",
+            "--grid",
+            "70000x70000",
+            "-",
+        ],
+        "",
+    );
+    assert!(!ok);
+    assert!(stderr.contains("--grid dimensions must be"), "{stderr}");
 }
 
 /// A frame that errors doesn't abort the sweep: later frames still

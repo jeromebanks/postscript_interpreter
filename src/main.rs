@@ -745,8 +745,15 @@ fn parse_args() -> Result<Options, String> {
                     .split_once('x')
                     .and_then(|(c, r)| Some((c.parse().ok()?, r.parse().ok()?)))
                     .ok_or_else(|| format!("invalid --grid value: {spec} (expected COLSxROWS)"))?;
-                if c == 0 || r == 0 {
-                    return Err(format!("--grid dimensions must be >= 1, got {spec}"));
+                // Bounded by MAX_SWEEP on each axis, not just nonzero: a
+                // grid axis larger than the frame cap can never be
+                // useful, and this keeps `cols * rows` (checked against
+                // the frame count in run_sweep) from overflowing u32 on
+                // a fat-fingered `--grid 70000x70000`.
+                if !(1..=MAX_SWEEP as u32).contains(&c) || !(1..=MAX_SWEEP as u32).contains(&r) {
+                    return Err(format!(
+                        "--grid dimensions must be 1..{MAX_SWEEP}, got {spec}"
+                    ));
                 }
                 options.grid = Some((c, r));
             }

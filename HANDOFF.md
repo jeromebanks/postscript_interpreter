@@ -192,7 +192,7 @@ touching code. `ROADMAP.md` has the task list with model routing;
 
 ## Where things stand
 
-**356 tests across 35 suites, clippy clean.** Stages 1–19 are done,
+**597 tests across 40 suites, clippy clean.** Stages 1–19 are done,
 including Stage 8's last sliver, the `--interactive` windowed REPL
 (`-i`; stdin reader thread → `EventLoopProxy` user events → chunks
 run on the frame budget; line accumulation shared with the terminal
