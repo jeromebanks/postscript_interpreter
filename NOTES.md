@@ -3,6 +3,27 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Add `/issue-summary` dashboard skill (issue #36, 2026-08-15)
+
+Closes issue #36: seeing "what's been worked on, what's active, what's
+done" meant scrolling raw `gh issue list`/`gh pr list` output or
+re-deriving it ad hoc — `work-issue` already does exactly that
+derivation internally every run for its own picking/resuming logic
+(`.claude/skills/work-issue/SKILL.md` step 1).
+
+- `scripts/issue_summary.sh`: a `gh`/`jq`-only script (no model
+  reasoning) that groups open issues into in-progress/in-review/open
+  by label, matches each to an open PR via the same `Closes #N`/`Fixes
+  #N`/`Resolves #N` body-text convention `work-issue` writes into every
+  PR it opens, surfaces that PR's CI/review status, and lists the N
+  most-recently-updated closed issues (`--closed N`, default 10).
+- `.claude/skills/issue-summary/SKILL.md`: a thin wrapper per the
+  issue's hard requirement — its only job is "run the script, print
+  its output," not reasoning about the data on every invocation.
+- Left for later (per the issue's "left to the implementer" list):
+  richer CI/review surfacing beyond a one-word status, and any
+  time-window (vs. fixed-count) framing for "recently closed."
+
 ## Fix mid-show font-switch Unicode segmentation (issue #31, 2026-08-15)
 
 Closes issue #31: `ShowCtx` decided `unicode_mode` once, from the font
