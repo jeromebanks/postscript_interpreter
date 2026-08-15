@@ -39,7 +39,7 @@ struct Options {
     /// Predefine `/NAME <value> def` in userdict before each sweep
     /// frame (issue #21): opt-in, the source must look `/NAME` up
     /// itself (e.g. `/NAME where { pop NAME } { 0 } ifelse`).
-    sweep_param: Option<(String, Vec<f64>, bool)>,
+    sweep_param: Option<(String, Vec<SweepValue>)>,
     /// Composite every sweep frame into one grid PNG.
     contact_sheet: Option<String>,
     /// Explicit (cols, rows) for --contact-sheet; default is a
@@ -87,6 +87,23 @@ fn main() -> ExitCode {
             );
             return ExitCode::FAILURE;
         }
+        if options.grid.is_some() && options.contact_sheet.is_none() {
+            // --grid shapes the contact sheet; nothing reads it
+            // without one (cross-model review, PR #66: this used to
+            // validate cleanly and then silently do nothing).
+            eprintln!("pscat: --grid needs --contact-sheet");
+            return ExitCode::FAILURE;
+        }
+        // Read (and dispatch) before constructing the normal-path
+        // Interp below -- see read_source's doc comment for why.
+        let path = options.file.as_deref().expect("checked above");
+        return match read_source(path) {
+            Ok(source) => run_sweep(&options, &source),
+            Err(e) => {
+                eprintln!("pscat: {e}");
+                ExitCode::FAILURE
+            }
+        };
     } else if options.contact_sheet.is_some() || options.grid.is_some() {
         // Neither flag does anything without a sweep axis (cross-model
         // review, PR #66: `--contact-sheet` with no `--sweep-seed`/
@@ -195,28 +212,13 @@ fn main() -> ExitCode {
     let Some(path) = &options.file else {
         return repl(&mut interp, &options);
     };
-    // `pscat -` reads the program from stdin — pipe-friendly for
-    // scripts and agents: `generate | pscat --png out.png -`.
-    let source = if path == "-" {
-        let mut buf = Vec::new();
-        if let Err(e) = io::Read::read_to_end(&mut io::stdin().lock(), &mut buf) {
-            eprintln!("pscat: cannot read stdin: {e}");
+    let source = match read_source(path) {
+        Ok(source) => source,
+        Err(e) => {
+            eprintln!("pscat: {e}");
             return ExitCode::FAILURE;
         }
-        buf
-    } else {
-        match std::fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                eprintln!("pscat: cannot read {path}: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
     };
-
-    if options.sweep_seed.is_some() || options.sweep_param.is_some() {
-        return run_sweep(&options, &source);
-    }
 
     if options.pdf.is_some() {
         // %%Title:/%%For: DSC header comments -> the PDF's /Info dict
@@ -252,6 +254,25 @@ fn main() -> ExitCode {
             eprintln!("pscat: {msg}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// `path`'s program bytes: stdin for `-`, the file otherwise —
+/// pipe-friendly for scripts and agents (`generate | pscat --png
+/// out.png -`). Factored out so the sweep dispatch (`main`) can read
+/// the source *before* constructing the normal-path `Interp`, rather
+/// than after — cross-model review (PR #66) caught that constructing
+/// it first and only branching to `run_sweep` afterward kept an
+/// unused canvas (up to 256MB at max `--page`) alive for the sweep's
+/// entire run, on top of the frames it streams itself.
+fn read_source(path: &str) -> Result<Vec<u8>, String> {
+    if path == "-" {
+        let mut buf = Vec::new();
+        io::Read::read_to_end(&mut io::stdin().lock(), &mut buf)
+            .map_err(|e| format!("cannot read stdin: {e}"))?;
+        Ok(buf)
+    } else {
+        std::fs::read(path).map_err(|e| format!("cannot read {path}: {e}"))
     }
 }
 
@@ -405,15 +426,31 @@ fn numbered_path(path: &str, n: usize) -> String {
     }
 }
 
+/// A single swept `--sweep NAME=` value. `Decimal(n, scale)` means
+/// `n / 10^scale` and is how *every* plain decimal literal ("5",
+/// "-3.25", "9007199254740993", "0.0000000001") is represented —
+/// exact integer arithmetic end to end, both parsing a list and
+/// generating a range, so it can neither drift (a `0.1` step never
+/// lands on `0.7000000000000001`) nor lose precision (a huge integer
+/// literal never rounds to its nearest `f64`). Only a literal this
+/// scheme can't read as a plain decimal (scientific notation, "inf",
+/// "nan") falls back to `Float`, printed via Rust's own shortest-
+/// round-trip `Display`. This replaced an all-`f64` first draft after
+/// a cross-model review, empirically running the binary, found three
+/// distinct correctness bugs traceable to that single design choice
+/// (see NOTES.md's issue #21 entry) — worth fixing at the root rather
+/// than patching each symptom.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SweepValue {
+    Decimal(i128, u32),
+    Float(f64),
+}
+
 /// A `--sweep-seed`/`--sweep` axis: either a list of forced RNG seeds
-/// or a named PostScript value defined once per frame. The `bool` on
-/// `Param` is whether the values were range-*computed* (`A:B:STEP`)
-/// rather than typed literally (`A,B,C`) — only computed values get
-/// [`format_sweep_value`]'s drift-hiding rounding, so a literal like
-/// `0.0000000001` prints exactly instead of being truncated.
+/// or a named PostScript value defined once per frame.
 enum SweepAxis {
     Seed(Vec<i64>),
-    Param(String, Vec<f64>, bool),
+    Param(String, Vec<SweepValue>),
 }
 
 /// Render `source` once per sweep value (issue #21). Each frame gets
@@ -436,14 +473,14 @@ enum SweepAxis {
 fn run_sweep(options: &Options, source: &[u8]) -> ExitCode {
     let axis = if let Some(seeds) = &options.sweep_seed {
         SweepAxis::Seed(seeds.clone())
-    } else if let Some((name, values, computed)) = &options.sweep_param {
-        SweepAxis::Param(name.clone(), values.clone(), *computed)
+    } else if let Some((name, values)) = &options.sweep_param {
+        SweepAxis::Param(name.clone(), values.clone())
     } else {
         unreachable!("run_sweep is only called once a sweep axis is set")
     };
     let n = match &axis {
         SweepAxis::Seed(v) => v.len(),
-        SweepAxis::Param(_, v, _) => v.len(),
+        SweepAxis::Param(_, v) => v.len(),
     };
 
     // Every frame renders at this same pixel size (a probe Interp,
@@ -514,8 +551,8 @@ fn run_sweep(options: &Options, source: &[u8]) -> ExitCode {
                 interp.set_seed_override(Some(seeds[i]));
                 format!("seed={}", seeds[i])
             }
-            SweepAxis::Param(name, values, computed) => {
-                let text = format_sweep_value(values[i], *computed);
+            SweepAxis::Param(name, values) => {
+                let text = format_sweep_value(values[i]);
                 let preamble = format!("/{name} {text} def");
                 if let Err(e) = interp.run_source(preamble.as_bytes()) {
                     eprintln!(
@@ -604,59 +641,202 @@ fn run_sweep(options: &Options, source: &[u8]) -> ExitCode {
 
 const MAX_SWEEP: usize = 64;
 
+/// Read a plain decimal literal ("5", "-3.25", "9007199254740993",
+/// "0.0000000001" — but not scientific notation, "inf", or "nan") as
+/// an exact `(numerator, scale)` pair where the value is `numerator /
+/// 10^scale`. This is what lets [`parse_sweep_spec`] generate a range
+/// with pure integer arithmetic and format a value exactly, instead
+/// of accumulating binary floating-point error the way repeatedly
+/// computing `a + i as f64 * step` does. `frac_part` over 30 digits
+/// falls back to `None` (the caller's `f64` path) rather than
+/// `10u128.pow`-overflowing — no realistic CLI literal is that
+/// precise.
+fn parse_decimal_exact(s: &str) -> Option<(i128, u32)> {
+    let s = s.trim();
+    let (neg, s) = match s.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, s.strip_prefix('+').unwrap_or(s)),
+    };
+    let (int_part, frac_part) = s.split_once('.').unwrap_or((s, ""));
+    if int_part.is_empty() && frac_part.is_empty() {
+        return None;
+    }
+    if frac_part.len() > 30
+        || !int_part.bytes().all(|b| b.is_ascii_digit())
+        || !frac_part.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let scale = frac_part.len() as u32;
+    let digits = format!("{int_part}{frac_part}");
+    let magnitude: i128 = if digits.is_empty() {
+        0
+    } else {
+        digits.parse().ok()?
+    };
+    Some((if neg { -magnitude } else { magnitude }, scale))
+}
+
+/// The exact inverse of [`parse_decimal_exact`]: `n / 10^scale` as a
+/// decimal string, trailing zeros trimmed, no decimal point at all
+/// for an integer value.
+fn format_decimal(n: i128, scale: u32) -> String {
+    if scale == 0 {
+        return n.to_string();
+    }
+    let neg = n < 0;
+    let mag = n.unsigned_abs();
+    let divisor = 10u128.pow(scale);
+    let (int_part, frac_part) = (mag / divisor, mag % divisor);
+    let frac_str = format!("{frac_part:0width$}", width = scale as usize);
+    let frac_str = frac_str.trim_end_matches('0');
+    let sign = if neg && (int_part != 0 || frac_part != 0) {
+        "-"
+    } else {
+        ""
+    };
+    if frac_str.is_empty() {
+        format!("{sign}{int_part}")
+    } else {
+        format!("{sign}{int_part}.{frac_str}")
+    }
+}
+
 /// Parse `"A:B"` / `"A:B:STEP"` (inclusive range, STEP default 1,
 /// must be > 0, A <= B) or `"A,B,C,..."` (explicit list, sweep order
-/// as given) for `--sweep NAME=`. Capped at `MAX_SWEEP` values — the
-/// same spirit as `--page`/`--dpi`'s clamps, so a typo'd range can't
-/// drive an unbounded render; checked *before* generating the range
-/// (a `0:1000000000` spec must not try to collect a billion-element
-/// `Vec` first and hit the cap only afterward — cross-model review,
-/// PR #66). Returns `(values, computed)`: `computed` is `true` for a
-/// range (`format_sweep_value` rounds these to hide float drift from
-/// the generating arithmetic), `false` for a literal list (printed
-/// exactly, no rounding).
+/// as given) for `--sweep NAME=`. Every value that parses as a plain
+/// decimal literal ([`parse_decimal_exact`]) generates/prints exactly
+/// via integer arithmetic; anything else (scientific notation) falls
+/// back to `f64`, rejecting non-finite values ("inf"/"nan") so a spec
+/// like `0:inf:1` errors instead of looping forever, with a per-step
+/// tolerance so binary rounding can't push a value past `B`.
 ///
-/// `--sweep-seed` does *not* use this — see `parse_seed_spec`, which
-/// stays in native `i64` throughout rather than routing seeds through
-/// `f64` (which loses distinctness above 2^53 and silently saturates
-/// out-of-range values on the `as i64` cast).
-fn parse_sweep_spec(spec: &str) -> Result<(Vec<f64>, bool), String> {
-    let parse_one = |s: &str| -> Result<f64, String> {
-        s.trim()
-            .parse()
-            .map_err(|_| format!("invalid number in sweep spec {spec:?}: {s:?}"))
+/// The frame count is bounded *inside* the generating loop (checked
+/// before every push, both here and in the exact-integer path), never
+/// precomputed via division-then-cast — a `0:1000000000` spec, or a
+/// seed range spanning the full `i64` domain in [`parse_seed_spec`],
+/// used to compute that count as a `usize` first and could overflow
+/// it (`usize::MAX + 1` panics) or allocate a huge `Vec` before the
+/// `MAX_SWEEP` check ever ran (cross-model review, PR #66, on both
+/// counts).
+///
+/// `--sweep-seed` does not use this — see `parse_seed_spec`, which
+/// stays in native `i64`/`i128` throughout for the same reason this
+/// function prefers exact decimals: `f64` loses integer distinctness
+/// above 2^53 and silently saturates out-of-range values on an `as
+/// i64` cast.
+fn parse_sweep_spec(spec: &str) -> Result<Vec<SweepValue>, String> {
+    let bounded_push = |values: &mut Vec<SweepValue>, v: SweepValue| -> Result<(), String> {
+        if values.len() >= MAX_SWEEP {
+            return Err(format!(
+                "sweep produces more than {MAX_SWEEP} values, over the {MAX_SWEEP}-frame limit"
+            ));
+        }
+        values.push(v);
+        Ok(())
     };
-    let (values, computed) = if spec.contains(':') {
+    let values = if spec.contains(':') {
         let parts: Vec<&str> = spec.split(':').collect();
-        let (a, b, step) = match parts.as_slice() {
-            [a, b] => (parse_one(a)?, parse_one(b)?, 1.0),
-            [a, b, s] => (parse_one(a)?, parse_one(b)?, parse_one(s)?),
+        let (a_str, b_str, step_str) = match parts.as_slice() {
+            [a, b] => (*a, *b, "1"),
+            [a, b, s] => (*a, *b, *s),
             _ => {
                 return Err(format!(
                     "invalid range: {spec:?} (expected A:B or A:B:STEP)"
                 ));
             }
         };
-        if step <= 0.0 {
-            return Err(format!("invalid range: {spec:?} (STEP must be > 0)"));
+        match (
+            parse_decimal_exact(a_str),
+            parse_decimal_exact(b_str),
+            parse_decimal_exact(step_str),
+        ) {
+            (Some((a_n, a_s)), Some((b_n, b_s)), Some((step_n, step_s))) => {
+                let scale = a_s.max(b_s).max(step_s);
+                // checked_mul, not `*`: aligning very large magnitudes
+                // to a much finer scale (e.g. an 18-digit A next to a
+                // 30-decimal-place STEP) could in principle overflow
+                // i128 -- reject cleanly rather than panic on it.
+                let rescale = |n: i128, s: u32| n.checked_mul(10i128.pow(scale - s));
+                let (Some(a), Some(b), Some(step)) = (
+                    rescale(a_n, a_s),
+                    rescale(b_n, b_s),
+                    rescale(step_n, step_s),
+                ) else {
+                    return Err(format!(
+                        "invalid range: {spec:?} (values too large/precise to combine exactly)"
+                    ));
+                };
+                if step <= 0 {
+                    return Err(format!("invalid range: {spec:?} (STEP must be > 0)"));
+                }
+                if a > b {
+                    return Err(format!("invalid range: {spec:?} (A must be <= B)"));
+                }
+                let mut values = Vec::new();
+                let mut v = a;
+                while v <= b {
+                    bounded_push(&mut values, SweepValue::Decimal(v, scale))?;
+                    // checked_add: v is already within [a, b] (both
+                    // valid i128), and step > 0 was just validated, so
+                    // this can only fail by running off i128's own
+                    // top end -- stop instead of panicking; the values
+                    // collected so far still stand.
+                    match v.checked_add(step) {
+                        Some(next) => v = next,
+                        None => break,
+                    }
+                }
+                values
+            }
+            _ => {
+                let parse_finite = |s: &str| -> Result<f64, String> {
+                    s.trim()
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|v: &f64| v.is_finite())
+                        .ok_or_else(|| format!("invalid number in sweep spec {spec:?}: {s:?}"))
+                };
+                let (a, b, step) = (
+                    parse_finite(a_str)?,
+                    parse_finite(b_str)?,
+                    parse_finite(step_str)?,
+                );
+                if step <= 0.0 {
+                    return Err(format!("invalid range: {spec:?} (STEP must be > 0)"));
+                }
+                if a > b {
+                    return Err(format!("invalid range: {spec:?} (A must be <= B)"));
+                }
+                let tol = step * 1e-9;
+                let mut values = Vec::new();
+                let mut i: usize = 0;
+                loop {
+                    let v = a + i as f64 * step;
+                    if v > b + tol {
+                        break;
+                    }
+                    bounded_push(&mut values, SweepValue::Float(v))?;
+                    i += 1;
+                }
+                values
+            }
         }
-        if a > b {
-            return Err(format!("invalid range: {spec:?} (A must be <= B)"));
-        }
-        let count = ((b - a) / step + 1e-9).floor() as usize + 1;
-        if count > MAX_SWEEP {
-            return Err(format!(
-                "sweep produces {count} values, over the {MAX_SWEEP}-frame limit"
-            ));
-        }
-        ((0..count).map(|i| a + i as f64 * step).collect(), true)
     } else {
-        (
-            spec.split(',')
-                .map(parse_one)
-                .collect::<Result<Vec<f64>, String>>()?,
-            false,
-        )
+        let mut values = Vec::new();
+        for s in spec.split(',') {
+            let v = if let Some((n, scale)) = parse_decimal_exact(s) {
+                SweepValue::Decimal(n, scale)
+            } else {
+                SweepValue::Float(
+                    s.trim()
+                        .parse::<f64>()
+                        .map_err(|_| format!("invalid number in sweep spec {spec:?}: {s:?}"))?,
+                )
+            };
+            values.push(v);
+        }
+        values
     };
     if values.is_empty() {
         return Err(format!("empty sweep: {spec:?}"));
@@ -667,14 +847,13 @@ fn parse_sweep_spec(spec: &str) -> Result<(Vec<f64>, bool), String> {
             values.len()
         ));
     }
-    Ok((values, computed))
+    Ok(values)
 }
 
-/// Same grammar as [`parse_sweep_spec`] but native `i64` arithmetic
-/// throughout, for `--sweep-seed` (see that function's doc comment
-/// for why: `f64` loses seed distinctness above 2^53 and silently
-/// saturates out-of-range values). `i128` intermediates avoid
-/// overflow while generating a range near the `i64` edges.
+/// Same grammar as [`parse_sweep_spec`] but native `i64`/`i128`
+/// arithmetic throughout, for `--sweep-seed` (see that function's doc
+/// comment for why `f64` is avoided, and why the frame count is
+/// bounded inside the generating loop rather than precomputed).
 fn parse_seed_spec(spec: &str) -> Result<Vec<i64>, String> {
     let parse_one = |s: &str| -> Result<i64, String> {
         s.trim()
@@ -698,15 +877,21 @@ fn parse_seed_spec(spec: &str) -> Result<Vec<i64>, String> {
         if a > b {
             return Err(format!("invalid range: {spec:?} (A must be <= B)"));
         }
-        let count = ((b as i128 - a as i128) / step as i128) as usize + 1;
-        if count > MAX_SWEEP {
-            return Err(format!(
-                "sweep produces {count} values, over the {MAX_SWEEP}-frame limit"
-            ));
+        let mut values = Vec::new();
+        let mut v: i128 = a.into();
+        let (b128, step128): (i128, i128) = (b.into(), step.into());
+        while v <= b128 {
+            if values.len() >= MAX_SWEEP {
+                return Err(format!(
+                    "sweep produces more than {MAX_SWEEP} values, over the {MAX_SWEEP}-frame limit"
+                ));
+            }
+            // Safe: the loop invariant keeps v within [a, b], both
+            // valid i64 (checked above), so this never truncates.
+            values.push(v as i64);
+            v += step128;
         }
-        (0..count)
-            .map(|i| (a as i128 + i as i128 * step as i128) as i64)
-            .collect()
+        values
     } else {
         spec.split(',')
             .map(parse_one)
@@ -725,25 +910,21 @@ fn parse_seed_spec(spec: &str) -> Result<Vec<i64>, String> {
 }
 
 /// Format a swept `--sweep NAME=` value for both the `/NAME <v> def`
-/// preamble and the per-frame stdout line — an integer-valued float
-/// prints bare (`5`, not `5.0`). A literal list value (`computed`
-/// `false`) prints exactly via Rust's shortest-round-trip `Display`,
-/// preserving whatever precision was typed. A range-*computed* value
-/// (`computed` true) rounds to 12 decimals first, to hide binary
-/// floating-point noise from the generating arithmetic (e.g. a `0.1`
-/// step landing on `0.7000000000000001`) — a range spec with
-/// intentional sub-1e-12 precision is not a realistic use case this
-/// trades away.
-fn format_sweep_value(v: f64, computed: bool) -> String {
-    if v.fract() == 0.0 && v.abs() < 1e15 {
-        return format!("{}", v as i64);
+/// preamble and the per-frame stdout line. `Decimal` prints exactly
+/// via [`format_decimal`] (an integer-valued decimal, e.g. `5.00`,
+/// prints bare as `5`). `Float` (the scientific-notation fallback
+/// path only) rounds to 12 decimals to hide binary noise, same as
+/// `Decimal` never needs to.
+fn format_sweep_value(v: SweepValue) -> String {
+    match v {
+        SweepValue::Decimal(n, scale) => format_decimal(n, scale),
+        SweepValue::Float(v) if v.fract() == 0.0 && v.abs() < 1e15 => format!("{}", v as i64),
+        SweepValue::Float(v) => {
+            let s = format!("{v:.12}");
+            let s = s.trim_end_matches('0');
+            s.trim_end_matches('.').to_string()
+        }
     }
-    if !computed {
-        return format!("{v}");
-    }
-    let s = format!("{v:.12}");
-    let s = s.trim_end_matches('0');
-    s.trim_end_matches('.').to_string()
 }
 
 fn parse_args() -> Result<Options, String> {
@@ -845,8 +1026,8 @@ fn parse_args() -> Result<Options, String> {
                         "invalid --sweep name: {name:?} (expected an identifier)"
                     ));
                 }
-                let (values, computed) = parse_sweep_spec(rest)?;
-                options.sweep_param = Some((name.to_string(), values, computed));
+                let values = parse_sweep_spec(rest)?;
+                options.sweep_param = Some((name.to_string(), values));
             }
             "--contact-sheet" => {
                 options.contact_sheet =
@@ -975,24 +1156,63 @@ fn repl(interp: &mut Interp, options: &Options) -> ExitCode {
 mod sweep_tests {
     use super::*;
 
-    #[test]
-    fn comma_list_parses_in_order_and_is_not_marked_computed() {
-        let (values, computed) = parse_sweep_spec("4,1,9").unwrap();
-        assert_eq!(values, vec![4.0, 1.0, 9.0]);
-        assert!(!computed);
+    fn dec(v: SweepValue) -> String {
+        format_sweep_value(v)
     }
 
     #[test]
-    fn range_defaults_to_step_one_and_is_inclusive_and_marked_computed() {
-        let (values, computed) = parse_sweep_spec("1:4").unwrap();
-        assert_eq!(values, vec![1.0, 2.0, 3.0, 4.0]);
-        assert!(computed);
+    fn decimal_exact_reads_plain_literals() {
+        assert_eq!(parse_decimal_exact("5"), Some((5, 0)));
+        assert_eq!(parse_decimal_exact("-3.25"), Some((-325, 2)));
+        assert_eq!(parse_decimal_exact(".5"), Some((5, 1)));
+        assert_eq!(
+            parse_decimal_exact("9007199254740993"),
+            Some((9007199254740993, 0))
+        );
+        // Scientific notation and non-numeric text aren't plain
+        // decimals -- the caller falls back to f64 for these.
+        assert_eq!(parse_decimal_exact("1e10"), None);
+        assert_eq!(parse_decimal_exact("inf"), None);
+        assert_eq!(parse_decimal_exact("abc"), None);
     }
 
     #[test]
-    fn range_with_explicit_step() {
-        let (values, _) = parse_sweep_spec("0:1:0.25").unwrap();
-        assert_eq!(values, vec![0.0, 0.25, 0.5, 0.75, 1.0]);
+    fn decimal_formatting_round_trips_and_trims() {
+        assert_eq!(format_decimal(100, 2), "1"); // 1.00 -> bare integer
+        assert_eq!(format_decimal(25, 2), "0.25");
+        assert_eq!(format_decimal(-25, 2), "-0.25");
+        assert_eq!(format_decimal(1, 10), "0.0000000001");
+        assert_eq!(format_decimal(5, 0), "5");
+    }
+
+    #[test]
+    fn comma_list_parses_in_order() {
+        let values = parse_sweep_spec("4,1,9").unwrap();
+        assert_eq!(
+            values,
+            vec![
+                SweepValue::Decimal(4, 0),
+                SweepValue::Decimal(1, 0),
+                SweepValue::Decimal(9, 0)
+            ]
+        );
+    }
+
+    #[test]
+    fn range_defaults_to_step_one_and_is_inclusive() {
+        let values = parse_sweep_spec("1:4").unwrap();
+        let texts: Vec<String> = values.into_iter().map(dec).collect();
+        assert_eq!(texts, vec!["1", "2", "3", "4"]);
+    }
+
+    #[test]
+    fn range_with_explicit_step_is_exact_no_float_drift() {
+        // 0.1-style steps are exactly where the old f64 implementation
+        // drifted (e.g. landing on 0.7000000000000001); exact decimal
+        // arithmetic must not.
+        let values = parse_sweep_spec("0:1:0.25").unwrap();
+        let texts: Vec<String> = values.into_iter().map(dec).collect();
+        assert_eq!(texts, vec!["0", "0.25", "0.5", "0.75", "1"]);
     }
 
     #[test]
@@ -1012,14 +1232,47 @@ mod sweep_tests {
         assert!(parse_sweep_spec(&spec).is_err());
     }
 
-    /// Regression (cross-model review, PR #66): a huge range used to
-    /// eagerly `collect()` before the cap check ran, so a short spec
-    /// like this could try to allocate a billion-element `Vec` instead
-    /// of erroring immediately. This must return quickly.
+    /// Regression (cross-model review round 1, PR #66): a huge range
+    /// used to eagerly `collect()` before the cap check ran, so a
+    /// short spec like this could try to allocate a billion-element
+    /// `Vec` instead of erroring immediately. This must return quickly.
     #[test]
     fn a_huge_range_is_rejected_without_allocating_it() {
         assert!(parse_sweep_spec("0:1000000000").is_err());
         assert!(parse_seed_spec("0:1000000000").is_err());
+    }
+
+    /// Regression (cross-model review round 2, PR #66): the frame
+    /// count used to be precomputed via `((b-a)/step) as usize + 1`,
+    /// which panics on `usize::MAX + 1` for a non-finite or maximally
+    /// wide range instead of erroring. Must not panic.
+    #[test]
+    fn non_finite_and_extreme_ranges_error_instead_of_panicking() {
+        assert!(parse_sweep_spec("0:inf:1").is_err());
+        assert!(parse_sweep_spec("0:nan:1").is_err());
+        assert!(parse_seed_spec("-9223372036854775808:9223372036854775807").is_err());
+    }
+
+    /// Regression (cross-model review round 2, PR #66): a fixed 1e-9
+    /// tolerance on the old float-count formula could include a value
+    /// past the declared upper bound (e.g. this spec used to also
+    /// generate `X=1`, past the documented inclusive B=0.9999999999).
+    /// Exact decimal arithmetic has no tolerance to get wrong.
+    #[test]
+    fn range_never_generates_past_its_upper_bound() {
+        let values = parse_sweep_spec("0:0.9999999999:1").unwrap();
+        assert_eq!(values, vec![SweepValue::Decimal(0, 10)]);
+    }
+
+    /// Regression (cross-model review round 2, PR #66): combining
+    /// very large magnitudes at very different decimal scales could
+    /// overflow `i128` during rescale -- must error, not panic.
+    #[test]
+    fn extreme_scale_mismatch_errors_instead_of_overflowing() {
+        assert!(
+            parse_sweep_spec("100000000000000000000000000000:1:0.000000000000000000000000000001")
+                .is_err()
+        );
     }
 
     #[test]
@@ -1029,27 +1282,30 @@ mod sweep_tests {
     }
 
     #[test]
-    fn integer_valued_floats_format_bare() {
-        assert_eq!(format_sweep_value(5.0, false), "5");
-        assert_eq!(format_sweep_value(-3.0, true), "-3");
+    fn integer_valued_decimals_format_bare() {
+        assert_eq!(dec(SweepValue::Decimal(5, 0)), "5");
+        assert_eq!(dec(SweepValue::Decimal(-3, 0)), "-3");
     }
 
+    /// Regression (cross-model review round 2, PR #66): every
+    /// parameter value -- list *or* range -- used to route through
+    /// `f64`, so an integer above 2^53 silently changed value
+    /// (`9007199254740993` became `9007199254740992`). Decimal values
+    /// never touch `f64` at all now.
     #[test]
-    fn fractional_computed_values_are_rounded_to_hide_float_drift() {
-        assert_eq!(format_sweep_value(0.5, true), "0.5");
-        // 7 * 0.1 lands on 0.7000000000000001 in f64 -- must not leak
-        // that noise into the generated PostScript or the stdout line.
-        let noisy = 7.0 * 0.1;
-        assert_eq!(format_sweep_value(noisy, true), "0.7");
+    fn huge_integer_literal_preserves_exact_value() {
+        let values = parse_sweep_spec("9007199254740993").unwrap();
+        assert_eq!(values, vec![SweepValue::Decimal(9007199254740993, 0)]);
+        assert_eq!(dec(values[0]), "9007199254740993");
     }
 
-    /// Regression (cross-model review, PR #66): a literal list value
-    /// used to go through the same 9-decimal rounding as a computed
+    /// Regression (cross-model review round 1, PR #66): a literal
+    /// value used to go through the same rounding as a computed
     /// range, so `--sweep X=0.0000000001` silently became `/X 0 def`.
-    /// A non-computed value must print exactly, whatever its precision.
     #[test]
     fn fractional_literal_values_print_exactly() {
-        assert_eq!(format_sweep_value(0.0000000001, false), "0.0000000001");
+        let values = parse_sweep_spec("0.0000000001").unwrap();
+        assert_eq!(dec(values[0]), "0.0000000001");
     }
 
     #[test]
@@ -1062,9 +1318,9 @@ mod sweep_tests {
         assert_eq!(parse_seed_spec("1:4").unwrap(), vec![1, 2, 3, 4]);
     }
 
-    /// Regression (cross-model review, PR #66): seeds used to route
-    /// through `f64`, which loses integer distinctness above 2^53 --
-    /// these two adjacent seeds used to collapse to the same value.
+    /// Regression (cross-model review round 1, PR #66): seeds used to
+    /// route through `f64`, which loses integer distinctness above
+    /// 2^53 -- these two adjacent seeds used to collapse to one value.
     #[test]
     fn seed_spec_preserves_distinctness_above_2_pow_53() {
         let seeds = parse_seed_spec("9007199254740992,9007199254740993").unwrap();

@@ -421,6 +421,28 @@ fn contact_sheet_grid_over_the_cap_errors_at_parse_time() {
     assert!(stderr.contains("--grid dimensions must be"), "{stderr}");
 }
 
+/// Regression (cross-model review round 2, PR #66): `--grid` with a
+/// sweep active but no `--contact-sheet` used to validate cleanly and
+/// then silently do nothing -- nothing ever reads `--grid` without a
+/// sheet to lay out.
+#[test]
+fn grid_without_contact_sheet_errors() {
+    let (ok, _out, stderr) = run(
+        &[
+            "--sweep-seed",
+            "1,2",
+            "--png",
+            "out.png",
+            "--grid",
+            "2x1",
+            "-",
+        ],
+        "",
+    );
+    assert!(!ok);
+    assert!(stderr.contains("--grid needs --contact-sheet"), "{stderr}");
+}
+
 /// A frame that errors doesn't abort the sweep: later frames still
 /// render, and the partial canvas from the failed frame is still
 /// written (this CLI's existing partial-render-on-error philosophy),

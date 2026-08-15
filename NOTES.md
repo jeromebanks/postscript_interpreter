@@ -114,6 +114,50 @@ plan-then-implementation review to bound both axes to `1..=MAX_SWEEP`
 `cols * rows` multiply — a debug-build panic) before the Codex pass
 even started; that fix predates and is independent of the six above.
 
+A second Codex review round, on the fixed diff, again ran the binary
+rather than only reading the patch and found five more real defects:
+
+- The frame count was still precomputed via `((b-a)/step) as usize +
+  1` (or the `i128` seed equivalent) — `--sweep X=0:inf:1` or a seed
+  range spanning the full `i64` domain converts a non-finite or
+  maximally-wide quotient to `usize::MAX`, then panics on `+ 1`
+  overflowing before the `MAX_SWEEP` check ever runs.
+- The normal (non-sweep) code path's `Interp` — with its own canvas,
+  up to 256MB at max `--page` — was still constructed *before* `main`
+  branched to `run_sweep`, so it stayed alive (unused) for the sweep's
+  entire run: on top of the frame streaming round one's fixes already
+  added, an unrelated third canvas sat in memory the whole time.
+- `--sweep X=9007199254740993` silently became `/X 9007199254740992
+  def` — the *generic* parameter path had the same `f64`-precision
+  bug `--sweep-seed` was fixed for in round one, just not yet applied
+  there.
+- The fixed `1e-9` tolerance added to hide *legitimate* float drift
+  (e.g. `0:0.9:0.3` needing a nudge to include its true last value)
+  also let a value cross a *genuine* upper bound: `--sweep
+  X=0:0.9999999999:1` generated `X=1`, past the declared B.
+- `--contact-sheet`/`--grid` with no sweep axis at all was already
+  fixed in round one, but a sweep active with `--png`/`--grid` and no
+  `--contact-sheet` slipped through the same class of gap — `--grid`
+  validated cleanly and `run_sweep` never read it.
+
+Given the same root cause kept resurfacing, the fix wasn't another
+patch: `--sweep NAME=`'s value type became `SweepValue::Decimal(i128
+numerator, u32 scale)` — every plain decimal literal ("5", "-3.25",
+"9007199254740993", "0.0000000001") is parsed and generated with pure
+integer arithmetic (`parse_decimal_exact`/`format_decimal`), so a list
+value can't lose precision and a range can't drift *or* overshoot its
+bound: a range now generates values by iterating with a bounds check
+*inside* the loop (never precomputing a count that could itself
+overflow) and comparing exactly against the declared upper bound (no
+tolerance to get wrong). `SweepValue::Float(f64)` is now
+only a fallback for a literal that isn't a plain decimal (scientific
+notation), explicitly rejecting non-finite values. `checked_mul`/
+`checked_add` guard the one theoretical remaining overflow — rescaling
+two operands at very different decimal precisions to a common scale —
+so even that edge case errors instead of panicking. `--sweep-seed`
+already avoided `f64` from round one; its own count-overflow bug got
+the same iterate-with-inline-bounds-check fix.
+
 ## Axial/radial gradient (shading) fill support (issue #20, 2026-08-14)
 
 Closes issue #20. The interpreter had no `shfill`/shading machinery at
