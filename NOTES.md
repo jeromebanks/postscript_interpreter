@@ -3,6 +3,73 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Gate merges on a perf/memory regression check (issue #25, 2026-08-15)
+
+Closes issue #25: `benches/perf.rs` and `benches/vs_gs.rs` existed as
+regression tripwires nobody pulled — `cargo bench` wasn't part of CI,
+and memory wasn't measured at all. A new `benches/regression.rs` plus
+a `perf-regression` job in `.github/workflows/ci.yml` close that gap.
+
+- **Same-job A/B, not a stored baseline.** The job checks out both the
+  PR's HEAD and its merge base (`github.event.pull_request.base.sha`)
+  into `head/`/`base/`, builds a release `pscat` binary from each, then
+  runs `benches/regression.rs` — compiled from `head/` only — pointed
+  at both binaries by path. Comparing on the *same runner in the same
+  job* cancels out GitHub-hosted macOS runner-to-runner hardware/
+  thermal noise, which the issue flagged as a real risk, rather than
+  inheriting it the way a baseline stored from a separate prior run
+  would. `benches/regression.rs` only exists on HEAD, so this also
+  sidesteps a bootstrap problem: running two different bench-harness
+  versions against each other would be an apples-to-oranges
+  comparison, and a `main` checkout that predates this PR doesn't have
+  the harness at all. One harness, two binaries.
+- Workload `.ps` files (`examples/sierpinski.ps`, `gallery/fern.ps`)
+  always come from the HEAD checkout for both sides (the bench's cwd
+  is `head/`) — a PR that only edits a gallery file can't misreport as
+  an interpreter regression.
+- Reuses the same peak-RSS measurement this repo already proved out in
+  `vs_gs.rs`: subprocess launch under `/usr/bin/time -l` (macOS). No
+  new tool (`valgrind`/massif/heaptrack/dhat) — those are Linux-first
+  and this repo's CI is macOS-hosted.
+- Four workloads (fib 27, defloop 200k, sierpinski, fern — mirroring
+  `perf.rs`'s set), 5 interleaved runs each (A/B/A/B..., alternating
+  which side goes first per run to avoid loop-drift landing on one
+  side), best-of-5 wall time, median-of-5 peak RSS.
+- Two named thresholds (`WARN_PCT` = 20%, `FAIL_PCT` = 50%) at the top
+  of `regression.rs`. Unvalidated against the actual GitHub-hosted
+  runner at merge time — this PR's own run (touches no `src/`, so its
+  expected delta is ~0) is the first real noise-floor sample; retune
+  if that run's deltas sit close to `WARN_PCT`. Locally (M-series), an
+  identical-binary smoke test showed -2.1%..+3.1% on wall time, well
+  inside the current band.
+- **Missing RSS is a hard failure, not a silent `-`.** If
+  `/usr/bin/time -l` doesn't yield a reading for every sample of a
+  workload/side, the bench panics rather than reporting "no
+  regression" — an `-` here would have meant the memory half of the
+  check silently stopped checking anything.
+- Delivery mirrors issue #24's `ci_test_summary.sh` pattern exactly:
+  the bench's own stdout *is* the markdown (table of workload × metric
+  × base/head/Δ/status, tiered ✅/⚠️/❌), written to
+  `$GITHUB_STEP_SUMMARY` and posted via `gh pr comment --edit-last
+  --create-if-none` (and echoed to the linked issue), all under
+  `continue-on-error: true` so a comment-posting failure can't obscure
+  a real result already visible in the job summary.
+- **Deliberately not blocking merge.** `perf-regression` is *not* added
+  to `SDLC.md`'s `required_status_checks` — that frontmatter is
+  `sdlcify`-owned branch-protection config (shared GitHub state), not
+  something to hand-edit mid-issue without confirming the policy
+  change separately. The job still exits non-zero (visible red ❌) on
+  a `>=FAIL_PCT` regression, so it's a strong signal even though
+  `agent-full` merge policy can currently proceed past it. Follow-up:
+  issue #68 tracks the decision to promote it to required once real
+  GitHub-runner threshold data exists.
+- `perf.rs`/`vs_gs.rs` untouched — they keep serving their existing
+  purposes (dev-loop tripwire, gs comparison); `regression.rs` is
+  purpose-built for the CI A/B and doesn't reuse their code (each is a
+  handful of lines; not worth a shared module for two call sites, and
+  the file-provenance requirement above means it *can't* just call
+  `vs_gs.rs`'s `measure()`, which hardcodes `CARGO_BIN_EXE_pscat`).
+
 ## Surface CI test results on the PR (issue #24, 2026-08-14)
 
 Closes issue #24: `cargo test`'s real pass/fail counts and failure
