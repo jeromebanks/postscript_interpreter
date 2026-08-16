@@ -1,0 +1,75 @@
+%!PS-Adobe-3.0
+%%Title: Walkpath — the centerline path sampler (issue #40)
+%%BoundingBox: 0 0 600 220
+%%EndComments
+
+% Specimen for artkit's walkpath (lib/artkit.ps): the reusable
+% centerline sampler that painterly brushes (issue #41+) build on.
+% Three panels, one per path shape the acceptance criteria call out:
+% a straight line, a Bezier curve, and a closed polygon. Each panel
+% draws the path in light gray, then walks it with walkpath, painting
+% a dot at every stop -- small and dark-to-light by normalized
+% progress t for interior stops, large and colored for the start/end
+% stops (atend's bits 1 and 2). The guaranteed end stop is what
+% distinguishes walkpath from plain alongpath: watch it land exactly
+% on the path's true end even when that isn't a pitch multiple away
+% from the last regular stop.
+%
+%   pscat --page 600x220 examples/walkpath_demo.ps --png walkpath.png
+
+(lib/artkit.ps) run
+
+1 1 1 setrgbcolor clippath fill
+
+% x y ang t sp atend -> -   (walkpath's stamp proc)
+/wddot {
+    /wdatend exch def /wdsp exch def /wdt exch def
+    /wdang exch def /wdy exch def /wdx exch def
+    gsave
+        newpath
+        wdatend 0 ne {
+            wdatend 1 eq { 0.85 0.2 0.2 } { 0.2 0.45 0.85 } ifelse setrgbcolor
+            wdx wdy 4.5 0 360 arc fill
+        } {
+            1 wdt sub dup dup setrgbcolor
+            wdx wdy 2.2 0 360 arc fill
+        } ifelse
+    grestore
+} def
+
+% x y label -
+/wdlabel {
+    /wdllabel exch def /wdly exch def /wdlx exch def
+    gsave
+        0.55 0.55 0.55 setrgbcolor
+        /Helvetica findfont 11 scalefont setfont
+        wdlx wdly moveto wdllabel show
+    grestore
+} def
+
+30 20 (straight line) wdlabel
+gsave
+    30 130 translate
+    0.75 setgray 1.5 setlinewidth
+    newpath 0 0 moveto 160 0 lineto stroke
+    newpath 0 0 moveto 160 0 lineto
+    14 { wddot } walkpath
+grestore
+
+230 20 (bezier curve) wdlabel
+gsave
+    230 70 translate
+    0.75 setgray 1.5 setlinewidth
+    newpath 0 0 moveto 20 60 140 60 160 0 curveto stroke
+    newpath 0 0 moveto 20 60 140 60 160 0 curveto
+    12 { wddot } walkpath
+grestore
+
+430 20 (closed path) wdlabel
+gsave
+    430 60 translate
+    0.75 setgray 1.5 setlinewidth
+    newpath 0 0 moveto 60 0 lineto 80 50 lineto 20 50 lineto closepath stroke
+    newpath 0 0 moveto 60 0 lineto 80 50 lineto 20 50 lineto closepath
+    12 { wddot } walkpath
+grestore

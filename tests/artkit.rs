@@ -4,7 +4,7 @@
 //! by arithmetic (turtle positions, L-system growth), rendering by
 //! ink counts — the corpus policy for rand-driven art.
 
-use pscat::Interp;
+use pscat::{Interp, PsError};
 
 fn load(it: &mut Interp) {
     let src = std::fs::read("lib/artkit.ps").expect("artkit present");
@@ -124,6 +124,194 @@ fn alongpath_stamps_at_pitch() {
         eval("newpath 0 0 moveto 0 50 lineto /a null def 60 { /a exch def pop pop } alongpath a"),
         ["90.0"]
     );
+}
+
+#[test]
+fn walkpath_regular_stops_match_alongpath_exactly() {
+    // The compatibility claim this file's header and NOTES.md make:
+    // walkpath's regular (non-end-flagged) stops land exactly where
+    // alongpath's would, on the same path. Mixes line and closepath
+    // segments across a closed subpath so the walk crosses several
+    // segment boundaries, not just one straight run.
+    let path = "newpath 0 0 moveto 40 0 lineto 40 40 lineto 0 40 lineto closepath ";
+    let along = eval(&format!(
+        "{path} 7 {{ /a exch def /y exch def /x exch def x y }} alongpath"
+    ));
+    let walk = eval(&format!(
+        "{path} 7 {{ /at exch def /sp exch def /t exch def /ang exch def \
+              /y exch def /x exch def at 2 and 0 eq {{ x y }} if }} walkpath"
+    ));
+    assert_eq!(along, walk);
+}
+
+#[test]
+fn walkpath_on_an_empty_path_is_a_silent_no_op() {
+    let got = eval("newpath /n 0 def 10 { pop pop pop pop pop pop /n n 1 add def } walkpath n");
+    assert_eq!(got, ["0"]);
+}
+
+#[test]
+fn walkpath_rejects_non_positive_pitch_instead_of_hanging() {
+    // A zero or negative pitch would otherwise never advance wkt2 past
+    // wkseglen, looping forever (Codex review, round 1) -- caught up
+    // front with the file's existing malformed-input idiom (a guarded
+    // call to a self-documenting undefined name, see
+    // et-spacing-must-be-positive in lib/etching.ps).
+    let mut it = Interp::new();
+    load(&mut it);
+    for pitch in ["0", "-5"] {
+        let err = it
+            .run_str(&format!(
+                "newpath 0 0 moveto 100 0 lineto {pitch} {{ }} walkpath"
+            ))
+            .unwrap_err();
+        assert!(
+            matches!(err, PsError::Undefined(ref name) if name == "walkpath-pitch-must-be-positive"),
+            "pitch {pitch}: got {err}"
+        );
+    }
+}
+
+#[test]
+fn walkpath_does_not_misclassify_short_positive_segments_under_a_large_scale() {
+    // A 0.00005-unit line under a 1,000,000x scale is a real, visible
+    // 50-device-unit mark, not a degenerate point -- but the old guard
+    // used an absolute 0.0001 (user-space) epsilon, so every segment
+    // in it looked "zero-length" and the whole subpath was
+    // misclassified as degenerate (Codex review, round 2). pathforall
+    // reports pre-CTM user-space coordinates, so this is a real risk
+    // for any path drawn in a small/normalized coordinate space and
+    // scaled up at render time, not just a contrived value.
+    let got = eval(
+        "1000000 1000000 scale \
+         newpath 0 0 moveto 0.00005 0 lineto \
+         /n 0 def /firstat null def /lastat null def \
+         5e-06 { /at exch def pop pop pop pop pop \
+              n 0 eq { /firstat at def } if /lastat at def \
+              /n n 1 add def } walkpath \
+         n firstat lastat",
+    );
+    assert_eq!(
+        got,
+        ["11", "1", "2"],
+        "regular start/end stops, not one atend=3 call"
+    );
+}
+
+#[test]
+fn walkpath_short_nonzero_subpath_gets_distinct_start_and_end_stops() {
+    // A subpath shorter than one pitch step but with nonzero length
+    // (unlike a true single-point subpath) still gets two distinct
+    // calls -- start and guaranteed end -- not coalesced into one
+    // atend=3 call (Codex review, round 1: the header previously
+    // claimed otherwise).
+    let got = eval(
+        "newpath 0 0 moveto 1 0 lineto /n 0 def /firstat null def /lastat null def \
+         10 { /at exch def pop pop pop pop pop \
+              n 0 eq { /firstat at def } if /lastat at def \
+              /n n 1 add def } walkpath \
+         n firstat lastat",
+    );
+    assert_eq!(got, ["2", "1", "2"]);
+}
+
+#[test]
+fn walkpath_adds_a_guaranteed_end_stop_alongpath_cannot_promise() {
+    // Same 100-unit line, pitch 30: interior stops land at 0,30,60,90
+    // (4, matching alongpath exactly), plus one guaranteed extra call
+    // at the literal end (100) that isn't a pitch multiple -- flagged
+    // atend=2 (end bit), with sp reporting the 10-unit leftover.
+    let got = eval(
+        "newpath 0 0 moveto 100 0 lineto /n 0 def /lastatend 0 def /lastsp 0 def /lastt 0 def \
+         30 { /at exch def /sp exch def /t exch def pop pop pop \
+              /lastatend at def /lastsp sp def /lastt t def \
+              /n n 1 add def } walkpath \
+         n lastatend lastsp lastt",
+    );
+    assert_eq!(got, ["5", "2", "10.0", "1.0"]);
+}
+
+#[test]
+fn walkpath_first_stop_is_the_start_with_its_tangent() {
+    // Unlike a bare pitch-stepper, the very first call always carries
+    // the true start point's tangent (not an undefined/zero angle).
+    let got = eval(
+        "newpath 0 0 moveto 0 50 lineto \
+         /firstang null def /firstt null def /firstatend null def /n 0 def \
+         60 { /at exch def /sp exch def /t exch def /ang exch def pop pop \
+              n 0 eq { /firstang ang def /firstt t def /firstatend at def } if \
+              /n n 1 add def } walkpath \
+         firstang firstt firstatend",
+    );
+    assert_eq!(
+        got,
+        ["90.0", "0.0", "1"],
+        "start bit set, t=0, correct tangent"
+    );
+}
+
+#[test]
+fn walkpath_closed_subpath_start_and_guaranteed_end_coincide() {
+    // A 20x20 square's 80-unit perimeter at pitch 10: the guaranteed
+    // end stop lands exactly back on the literal start point.
+    let got = eval(
+        "newpath 0 0 moveto 20 0 lineto 20 20 lineto 0 20 lineto closepath \
+         /firstx null def /firsty null def /lastx null def /lasty null def /n 0 def \
+         10 { /at exch def /sp exch def /t exch def /ang exch def /y exch def /x exch def \
+              n 0 eq { /firstx x def /firsty y def } if \
+              /lastx x def /lasty y def /n n 1 add def } walkpath \
+         firstx firsty lastx lasty",
+    );
+    assert_eq!(got, ["0.0", "0.0", "0.0", "0.0"]);
+}
+
+#[test]
+fn walkpath_degenerate_point_subpath_gets_one_call() {
+    // A moveto with no following segment: sublen is 0, so walkpath
+    // fires exactly once, both start and end bits set (atend=3).
+    let got = eval(
+        "newpath 5 5 moveto /n 0 def /a null def /t null def /sp null def \
+         10 { /at exch def /sp1 exch def /t1 exch def pop pop pop \
+              /a at def /t t1 def /sp sp1 def /n n 1 add def } walkpath \
+         n a t sp",
+    );
+    assert_eq!(got, ["1", "3", "0", "0"]);
+}
+
+#[test]
+fn walkpath_resets_progress_per_subpath() {
+    // Two disjoint 10-unit lines walked at pitch 5: each is its own
+    // centerline -- t restarts at 0 for the second one instead of
+    // continuing from the first's cumulative length.
+    let got = eval(
+        "newpath 0 0 moveto 10 0 lineto 100 100 moveto 100 110 lineto \
+         /n 0 def /secondfirstt null def /seen 0 def \
+         5 { /at exch def /sp exch def /t exch def /ang exch def /y exch def /x exch def \
+             x 100 ge seen 0 eq and { /secondfirstt t def /seen 1 def } if \
+             /n n 1 add def } walkpath \
+         n secondfirstt",
+    );
+    assert_eq!(
+        got,
+        ["8", "0.0"],
+        "4 stops per subpath (0,5,10 + guaranteed end); second starts at t=0"
+    );
+}
+
+#[test]
+fn walkpath_handles_a_curve() {
+    // Flattened like alongpath's path: curveto segments become chords
+    // pathforall walks like any other, so t still runs 0..1 smoothly.
+    let got = eval(
+        "newpath 10 100 moveto 10 20 190 20 190 100 curveto \
+         /n 0 def /lastt 0 def \
+         5 { /at exch def /sp exch def /t exch def pop pop pop \
+             /lastt t def /n n 1 add def } walkpath \
+         n lastt",
+    );
+    assert_eq!(got[1], "1.0", "progress reaches 1.0 at the curve's end");
+    let n: i64 = got[0].parse().unwrap();
+    assert!(n > 5, "expected several stops along a flattened curve: {n}");
 }
 
 #[test]
@@ -443,6 +631,12 @@ fn ghostscript_accepts_artkit() {
         newpath 200 50 90 thome (F) << (F) 0 get (F[+F]F) >> 3 lsys 3 20 ldraw stroke \
         newpath 50 300 40 6 ngon fill \
         newpath 20 200 moveto 380 200 lineto 25 { pop pop pop } alongpath \
+        newpath 20 220 moveto 380 220 lineto \
+            25 { pop pop pop pop pop pop } walkpath \
+        newpath 100 5 moveto 100 55 300 55 300 5 curveto \
+            20 { pop pop pop pop pop pop } walkpath \
+        newpath 340 5 moveto 380 5 lineto 380 45 lineto 340 45 lineto closepath \
+            10 { pop pop pop pop pop pop } walkpath \
         /Helvetica findfont 20 scalefont setfont \
         newpath 20 350 moveto 380 380 lineto (gs runs artkit) pathtext \
         150 250 40 (ring of type) ctextctr \

@@ -290,7 +290,13 @@ arc-length along any path (`charpath` text included), and `pathtext`
 sets type along a curve, each glyph rotated to the tangent — `ctext`
 and `ctextctr` build on `pathtext` for the circular case specifically
 (seals, coins, "ring of type" compositions), the latter centering the
-string on the circle automatically. A tiling section adds a general
+string on the circle automatically. `walkpath` is a richer centerline
+sampler for the same brush use case: alongside the stamp's position
+and tangent it reports normalized progress along the current subpath,
+the arc-length spacing since the last stop, and start/end flags —
+including a guaranteed call at each subpath's literal endpoint, which
+`alongpath`'s plain pitch-stepping can't promise — the foundation
+painterly brushes (variable-width ribbons, tapered ends) build on. A tiling section adds a general
 `lattice` walk, `hex`/`tri` shape primitives, `hexgrid`/`trigrid`
 drivers for the two other regular tessellations, and `truchet` — a
 single motif at a random quarter-turn per cell, the classic trick that

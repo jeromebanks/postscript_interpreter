@@ -213,6 +213,9 @@ const LIB: &str = "library"; // availability: always present once its source is 
 pub const ARTKIT_INTERNAL: &[&str] = &[
     "alintern",
     "apseg",
+    "wkmeasure",
+    "wkseg",
+    "wkend",
     "gethash",
     "grad2",
     "Grad2",
@@ -887,6 +890,15 @@ static ENTRIES: &[Entry] = &[
         &[],
         ARTKIT,
         "pitch proc alongpath -",
+        LIB
+    ),
+    entry!(
+        "walkpath",
+        CapabilityKind::Procedure,
+        "Centerline path sampler: like alongpath, but also hands the proc normalized progress, spacing, and start/end flags per stop -- the foundation for pressure-ribbon and other painterly brushes.",
+        &[],
+        ARTKIT,
+        "pitch proc walkpath -",
         LIB
     ),
     entry!(
