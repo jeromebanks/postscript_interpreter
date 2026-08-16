@@ -306,6 +306,50 @@ Round 5 found two more, one of them P1:
 Both have regression tests. Full quality gate re-run clean (671 tests)
 before pushing and re-running Codex review a fifth time.
 
+Round 6 found two more, one of them a real bug in `pscat` itself, not
+paintkit:
+
+- **`atan` on a zero-length chord.** The round-3 short-pointed-stroke
+  fix synthesizes a midpoint between an open run's two stops, using
+  their chord direction -- but an open subpath that returns to its own
+  exact starting coordinates (an unclosed full-circle `arc`, an
+  explicit `lineto` back to the start) and is also shorter than
+  `/Pitch` has that chord collapse to zero length, and `atan` on
+  `(0,0)` is undefined in both pscat and Ghostscript (confirmed
+  directly against both). No chord direction exists to synthesize from
+  in that case; falls back to a dot instead, same as any other
+  genuinely degenerate short run.
+- **`pathforall` didn't insert the PLRM's implicit moveto after
+  `closepath`.** Not a paintkit bug at all -- a real, previously
+  undiscovered gap in `pscat`'s own `pathforall` (`src/ops/
+  graphics.rs`), exposed by `walkpath`'s reliance on `pathforall`
+  correctly reporting subpath boundaries. Per the PLRM, a `lineto`/
+  `curveto` immediately following `closepath` with no intervening
+  `moveto` behaves as though a `moveto` to the current point
+  (`closepath`'s own return-to-start point) had been inserted first --
+  Ghostscript honors this, `pscat` didn't, merging a closed subpath
+  with whatever open drawing followed it into one run instead of two.
+  Confirmed the divergence directly: the same path reports 1 `moveto`
+  under `pscat`, 2 under real `gs`. Fixed in `pathforall`'s own element-
+  building loop (not the underlying path/segment model, which every
+  other consumer -- rendering, SVG/PDF export -- walks unchanged and
+  doesn't need this for), tracking the last `moveto` point and
+  synthesizing one right before a `Line`/`Curve` that immediately
+  follows a `Close`. gs-pinned test added to `tests/pathforall.rs`,
+  the existing home for this operator's tests, not folded into
+  paintkit's own suite -- this is core interpreter behavior any future
+  `pathforall` consumer benefits from, not something specific to
+  ribbons.
+
+Both have regression tests; the `pathforall` fix's test lives with the
+operator's own suite rather than paintkit's, and the full test suite
+(not just paintkit's) was re-run to confirm the core-interpreter change
+didn't regress anything else that walks paths -- golden-image
+comparison against real gs included, since that's exactly the kind of
+divergence it would have caught. Quality gate re-run clean (673 tests,
+clippy clean, fmt clean) before pushing and re-running Codex review a
+sixth time.
+
 ## A reusable centerline path sampler for procedural brushes (issue #40, 2026-08-15)
 
 Closes issue #40, the foundation for the painterly-brush series

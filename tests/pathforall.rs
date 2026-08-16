@@ -42,6 +42,30 @@ fn pathforall_dispatches_all_four_procs() {
 }
 
 #[test]
+fn implicit_moveto_after_closepath_without_explicit_moveto() {
+    // gs-pinned: per the PLRM, a lineto/curveto immediately following
+    // closepath with no intervening moveto behaves as though a moveto
+    // to the current point (closepath's own return-to-start point) had
+    // been inserted first, starting a fresh subpath there rather than
+    // silently continuing the just-closed one. Confirmed against real
+    // Ghostscript: 2 movetos for this path, not 1 (a cross-model review
+    // finding on the paintkit PR, #76 -- walkpath relies on pathforall
+    // reporting subpath boundaries correctly to split a source path
+    // into independent runs, and this pattern was silently merging a
+    // closed run with whatever open drawing followed it).
+    assert_eq!(
+        eval(
+            "newpath 0 0 moveto 10 0 lineto 10 10 lineto closepath \
+             50 50 lineto \
+             /m 0 def \
+             { pop pop /m m 1 add def } { pop pop } { pop pop pop pop pop pop } { } \
+             pathforall m"
+        ),
+        ["2"]
+    );
+}
+
+#[test]
 fn pathforall_procs_must_be_procedures() {
     let mut it = Interp::new();
     let err = it

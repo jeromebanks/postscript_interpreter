@@ -552,6 +552,31 @@ fn open_path_returning_to_its_start_without_closepath_keeps_its_caps() {
 }
 
 #[test]
+fn open_path_coincident_with_its_own_start_falls_back_to_a_dot() {
+    // Regression test for a Codex-round-6 finding: an open subpath
+    // that returns exactly to its own starting coordinates (an
+    // unclosed full-circle arc, no closepath) and is also shorter than
+    // /Pitch has pkox0==pkoxe and pkoy0==pkoye -- the round-3 midpoint-
+    // synthesis fix computed a chord direction via `atan` on that
+    // (now-zero) delta, which is undefined in both pscat and
+    // Ghostscript (confirmed directly against both). No chord exists
+    // to synthesize a midpoint from in that case, so it falls back to
+    // a dot instead, same as any other genuinely degenerate short run.
+    let mut it = fresh(80, 80);
+    it.run_str(
+        "0 0 0 setrgbcolor 1 srand \
+         newpath 40 40 30 0 360 arc \
+         << /Width 100 /Pitch 200 /StartCap /pointed /EndCap /pointed >> pkribbon",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 50,
+        "expected a filled dot for a coincident-endpoint short open path, got {}",
+        ink_count(&it)
+    );
+}
+
+#[test]
 fn seeded_jitter_is_deterministic_and_actually_perturbs_the_edge() {
     fn render(jitter: f64, seed: i64) -> Vec<u8> {
         let mut it = fresh(320, 40);

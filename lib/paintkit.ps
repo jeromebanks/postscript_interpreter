@@ -271,15 +271,30 @@
     % known points to look at) and averaged progress -- so it renders
     % as a lens instead (Codex review, round 3).
     pkostartpointed pkoendpointed and pkorightlast pkostart le and {
-        /pkomidx pkox0 pkoxe add 2 div def
-        /pkomidy pkoy0 pkoye add 2 div def
-        /pkomidang pkoye pkoy0 sub pkoxe pkox0 sub atan def
-        /pkomidt pkot0 pkotend add 2 div def
-        pkox0 pkoy0 moveto
-        pkomidx pkomidy pkomidang pkomidt pkhalfwat -1 pkedge lineto
-        pkoxe pkoye lineto
-        pkomidx pkomidy pkomidang pkomidt pkhalfwat 1 pkedge lineto
-        closepath
+        % The chord itself can be zero-length here -- an open subpath
+        % that returns exactly to its own start (an unclosed full-circle
+        % arc, a lineto back to the exact starting point) and is also
+        % shorter than /Pitch has pkox0==pkoxe/pkoy0==pkoye, and `atan`
+        % on (0,0) is undefined in both pscat and Ghostscript (Codex
+        % review, round 6). No chord direction exists to synthesize a
+        % midpoint from in that case; fall back to a dot, same as any
+        % other genuinely degenerate short run.
+        /pkomdx pkoxe pkox0 sub def
+        /pkomdy pkoye pkoy0 sub def
+        pkomdx 0 eq pkomdy 0 eq and
+        {
+            pkraw pkostart get pkdot
+        } {
+            /pkomidx pkox0 pkoxe add 2 div def
+            /pkomidy pkoy0 pkoye add 2 div def
+            /pkomidang pkomdy pkomdx atan def
+            /pkomidt pkot0 pkotend add 2 div def
+            pkox0 pkoy0 moveto
+            pkomidx pkomidy pkomidang pkomidt pkhalfwat -1 pkedge lineto
+            pkoxe pkoye lineto
+            pkomidx pkomidy pkomidang pkomidt pkhalfwat 1 pkedge lineto
+            closepath
+        } ifelse
     } {
         pkostartpointed
             { pkox0 pkoy0 moveto }

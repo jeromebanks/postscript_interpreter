@@ -163,7 +163,35 @@ fn pathforall(it: &mut Interp) -> Result<(), PsError> {
     use crate::gfx::PathElement;
     use crate::interp::PathForallEl;
     let mut elems = Vec::new();
+    // Per the PLRM: a lineto/curveto that immediately follows closepath
+    // with no intervening moveto behaves as though a moveto to the
+    // current point (which closepath resets to the subpath's own
+    // start) had been inserted first -- Ghostscript honors this
+    // (confirmed directly), starting a fresh subpath there rather than
+    // silently extending the just-closed one. `PsPath`'s own segment
+    // list doesn't carry that implicit moveto, so it's synthesized here
+    // rather than in the path model itself -- this is the one consumer
+    // that cares about subpath *boundaries*; renderers and exporters
+    // walk the same segments unchanged and don't need it (a cross-model
+    // review finding, PR #76).
+    let mut last_move = None;
+    let mut just_closed = false;
     for el in it.gfx.state().path.elements() {
+        match el {
+            PathElement::Move(p) => {
+                last_move = Some(p);
+                just_closed = false;
+            }
+            PathElement::Line(_) | PathElement::Curve(..) if just_closed => {
+                if let Some(p) = last_move {
+                    let (x, y) = it.gfx.device_to_user(p)?;
+                    elems.push(PathForallEl::Move(x, y));
+                }
+                just_closed = false;
+            }
+            PathElement::Close => just_closed = true,
+            _ => {}
+        }
         elems.push(match el {
             PathElement::Move(p) => {
                 let (x, y) = it.gfx.device_to_user(p)?;
