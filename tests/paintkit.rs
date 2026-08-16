@@ -137,6 +137,45 @@ fn width_and_pitch_guards_reject_non_positive_values() {
             "newpath 0 0 moveto 100 0 lineto << /Width 10 /EndTaper 1.5 >> pkribbon",
             "pkribbon-endtaper-must-be-0-to-1",
         ),
+        // Regression tests for a Codex-round-7 finding: binding a
+        // value option straight to its own name (pkgetdef's normal
+        // result) makes every later bare reference to that name
+        // auto-execute it if the supplied value happens to be an
+        // executable array -- e.g. a zero-push /Width { } silently
+        // corrupts the stack instead of erroring, since these fields
+        // are documented as plain values, not callbacks.
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Width { 10 } >> pkribbon",
+            "pkribbon-width-must-not-be-a-procedure",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Width { } >> pkribbon",
+            "pkribbon-width-must-not-be-a-procedure",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Width 10 /Pitch { 5 } >> pkribbon",
+            "pkribbon-pitch-must-not-be-a-procedure",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Width 10 /StartTaper { 0.1 } >> pkribbon",
+            "pkribbon-starttaper-must-not-be-a-procedure",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Width 10 /EndTaper { 0.1 } >> pkribbon",
+            "pkribbon-endtaper-must-not-be-a-procedure",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Width 10 /StartCap { /round } >> pkribbon",
+            "pkribbon-startcap-must-not-be-a-procedure",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Width 10 /EndCap { /round } >> pkribbon",
+            "pkribbon-endcap-must-not-be-a-procedure",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Width 10 /Jitter { 1 } >> pkribbon",
+            "pkribbon-jitter-must-not-be-a-procedure",
+        ),
     ];
     for (src, name) in cases {
         let err = it.run_str(src).unwrap_err();

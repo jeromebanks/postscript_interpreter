@@ -350,6 +350,27 @@ divergence it would have caught. Quality gate re-run clean (673 tests,
 clippy clean, fmt clean) before pushing and re-running Codex review a
 sixth time.
 
+Round 7 found one more: **every plain value option (`/Width`,
+`/Pitch`, `/StartTaper`, `/EndTaper`, `/Jitter`, `/StartCap`,
+`/EndCap`) had the same exposure `/Pressure` was fixed for back in
+round 2, just not yet applied to fields that are documented as plain
+values rather than callbacks.** Binding one of these straight to its
+own name -- `pkgetdef`'s normal result -- makes every later *bare*
+reference to that name auto-execute it if the caller happened to
+supply an executable array, e.g. `<< /Width { } >>` (a zero-push
+procedure): `pkwidth 0 le` would then run against whatever was on the
+stack *before* that reference instead of the intended width, silently
+corrupting downstream computation rather than erroring. Confirmed the
+zero-push case is exactly this real, not hypothetical (a non-zero-push
+procedure like `{ 10 }` happens to net the same effect as the number
+it produces, which is why a smaller example wouldn't have caught it).
+Every affected field now gets the same `load`+`xcheck` guard
+`/Pressure` already had, checked immediately after binding, before any
+other bare reference to that name -- error names follow the same
+self-documenting `pkribbon-<field>-must-not-be-a-procedure` pattern.
+Regression tests added for all seven fields. Quality gate re-run clean
+(673 tests) before pushing and re-running Codex review a seventh time.
+
 ## A reusable centerline path sampler for procedural brushes (issue #40, 2026-08-15)
 
 Closes issue #40, the foundation for the painterly-brush series

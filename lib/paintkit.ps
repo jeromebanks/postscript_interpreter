@@ -393,13 +393,27 @@
 % opts pkribbon -
 /pkribbon {
     /pkopts exch def
+    % Value options (/Width here, and /Pitch/StartTaper/EndTaper/Jitter/
+    % StartCap/EndCap below) must not themselves be executable: binding
+    % one straight to its own name the way pkgetdef's result normally
+    % is makes every later *bare* reference to that name auto-execute
+    % it instead of yielding the value, since a name bound to something
+    % executable always runs on reference -- the same trap /Pressure's
+    % own guard exists for (see below), but these fields are documented
+    % as plain values, not callbacks, so an executable one (e.g.
+    % `<< /Width { 10 } >>`) is malformed input, not something to
+    % support (Codex review, round 7). Checked with `load`, same
+    % reason as /Pressure: a bare `pkwidth xcheck` would itself
+    % auto-execute pkwidth before xcheck ever saw it.
     /pkwidth pkopts /Width 6 pkgetdef def
+    /pkwidth load xcheck { pkribbon-width-must-not-be-a-procedure } if
     pkwidth 0 le { pkribbon-width-must-be-positive } if
     /pkpitch
         pkopts /Pitch
         pkwidth 0.5 mul dup 6 gt { pop 6 } if
         pkgetdef
     def
+    /pkpitch load xcheck { pkribbon-pitch-must-not-be-a-procedure } if
     pkpitch 0 le { pkribbon-pitch-must-be-positive } if
     % /Pressure must actually be a procedure: pkhalfwat calls it as
     % `t pkpressure`, expecting it to consume t and leave one number.
@@ -442,21 +456,29 @@
     % style choice, so it's validated the same as every other documented
     % constraint here (Codex review, round 5).
     /pkstarttaper pkopts /StartTaper 0 pkgetdef def
+    /pkstarttaper load xcheck { pkribbon-starttaper-must-not-be-a-procedure } if
     pkstarttaper 0 lt pkstarttaper 1 gt or
         { pkribbon-starttaper-must-be-0-to-1 } if
     /pkendtaper pkopts /EndTaper 0 pkgetdef def
+    /pkendtaper load xcheck { pkribbon-endtaper-must-not-be-a-procedure } if
     pkendtaper 0 lt pkendtaper 1 gt or
         { pkribbon-endtaper-must-be-0-to-1 } if
     % /StartCap//EndCap: anything other than the three documented
     % values used to fall through to /flat silently (Codex review,
-    % round 2) -- validated explicitly instead.
+    % round 2) -- validated explicitly instead. Checked for executable-
+    % ness first, same reason as /Width above: an executable value
+    % (even one that happens to push a valid cap name when run) isn't
+    % itself one of the three documented literal values.
     /pkstartcap pkopts /StartCap /round pkgetdef def
+    /pkstartcap load xcheck { pkribbon-startcap-must-not-be-a-procedure } if
     pkstartcap /round eq pkstartcap /flat eq or pkstartcap /pointed eq or not
         { pkribbon-startcap-must-be-round-flat-or-pointed } if
     /pkendcap pkopts /EndCap /round pkgetdef def
+    /pkendcap load xcheck { pkribbon-endcap-must-not-be-a-procedure } if
     pkendcap /round eq pkendcap /flat eq or pkendcap /pointed eq or not
         { pkribbon-endcap-must-be-round-flat-or-pointed } if
     /pkjitter pkopts /Jitter 0 pkgetdef def
+    /pkjitter load xcheck { pkribbon-jitter-must-not-be-a-procedure } if
 
     /pkclosedflags pkscanclosed def
 
