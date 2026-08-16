@@ -4,10 +4,11 @@ Issue #39. `pscat --capabilities` (CLI) and `describe_art_capabilities`
 (the `pscat-mcp` tool) both print the same JSON payload: a structured
 inventory of what this build's creative toolkit actually has installed
 — fonts, the Type 3 program faces, artkit's mood palettes, the page
-templates, and artkit's/the style packs'/handscript's/hangul's major
-procedures — so an agent can discover real capabilities instead of
-guessing names from prose documentation, which drifts. (It already
-had: `psart`'s `SKILL.md` was behind artkit's paragraph-flow,
+templates, and artkit's/the style packs'/handscript's/hangul's/
+paintkit's major procedures — so an agent can discover real
+capabilities instead of guessing names from prose documentation,
+which drifts. (It already had: `psart`'s `SKILL.md` was behind
+artkit's paragraph-flow,
 hyperbolic-geometry, noise/flow, and gradient sections by the time
 this catalog was built, and the first draft of this very catalog
 omitted the `HandScript`/`HangulScript` Type 3 faces — see NOTES.md's

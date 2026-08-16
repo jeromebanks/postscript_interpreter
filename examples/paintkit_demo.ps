@@ -1,0 +1,109 @@
+%!PS-Adobe-3.0
+%%Title: Paintkit — pressure-sensitive ribbon strokes (issue #41)
+%%BoundingBox: 0 0 620 620
+%%EndComments
+
+% Specimen for paintkit's pkribbon (lib/paintkit.ps): the reusable
+% filled ribbon primitive later painterly brushes (issue #42+) build
+% on. Row 1 shows /StartTaper//EndTaper ramping width independently of
+% /Pressure; row 2 shows the three centerline shapes the acceptance
+% criteria call out (straight, Bezier, closed polygon); row 3 shows
+% the three required pressure profiles (constant, tapered, non-linear
+% bell); row 4 shows the three cap styles and seeded jitter.
+%
+%   pscat --page 620x620 examples/paintkit_demo.ps --png paintkit.png
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+
+3 srand
+
+1 1 1 setrgbcolor clippath fill
+
+% x y label -
+/pklabel {
+    /pkllabel exch def /pkly exch def /pklx exch def
+    gsave
+        0.55 0.55 0.55 setrgbcolor
+        /Helvetica findfont 11 scalefont setfont
+        pklx pkly moveto pkllabel show
+    grestore
+} def
+
+/stone pal 2 get aload pop setrgbcolor
+
+% --- row 1: start/end taper, independent of pressure ------------------
+
+20 580 (start taper 0.4) pklabel
+newpath 20 520 moveto 180 520 lineto
+<< /Width 20 /StartTaper 0.4 >> pkribbon
+
+220 580 (end taper 0.4) pklabel
+newpath 220 520 moveto 380 520 lineto
+<< /Width 20 /EndTaper 0.4 >> pkribbon
+
+420 580 (both, taper 0.4) pklabel
+newpath 420 520 moveto 580 520 lineto
+<< /Width 20 /StartTaper 0.4 /EndTaper 0.4 >> pkribbon
+
+/dusk pal 2 get aload pop setrgbcolor
+
+% --- row 2: the three centerline shapes ------------------------------
+
+20 420 (straight line) pklabel
+newpath 20 360 moveto 180 360 lineto
+<< /Width 14 >> pkribbon
+
+220 420 (bezier curve) pklabel
+newpath 220 360 moveto 240 410 400 410 420 360 curveto
+<< /Width 14 >> pkribbon
+
+420 420 (closed polygon) pklabel
+newpath 460 350 moveto 590 350 lineto 610 410 lineto 440 410 lineto closepath
+<< /Width 10 >> pkribbon
+
+% --- row 3: the three required pressure profiles ---------------------
+
+/ember pal 2 get aload pop setrgbcolor
+
+20 300 (constant pressure) pklabel
+newpath 20 260 moveto 180 260 lineto
+<< /Width 16 /Pressure { pkflat } >> pkribbon
+
+220 300 (linear taper) pklabel
+newpath 220 260 moveto 380 260 lineto
+<< /Width 16 /Pressure { pktaper } >> pkribbon
+
+420 300 (bell \(non-linear\)) pklabel
+newpath 420 260 moveto 580 260 lineto
+<< /Width 16 /Pressure { pkbell } /StartCap /pointed /EndCap /pointed >> pkribbon
+
+% --- row 4: cap styles + seeded jitter --------------------------------
+
+/tide pal 2 get aload pop setrgbcolor
+
+20 180 (round caps) pklabel
+newpath 20 140 moveto 180 140 lineto
+<< /Width 18 /StartCap /round /EndCap /round >> pkribbon
+
+220 180 (flat caps) pklabel
+newpath 220 140 moveto 380 140 lineto
+<< /Width 18 /StartCap /flat /EndCap /flat >> pkribbon
+
+420 180 (pointed caps) pklabel
+newpath 420 140 moveto 580 140 lineto
+<< /Width 18 /StartCap /pointed /EndCap /pointed >> pkribbon
+
+/meadow pal 2 get aload pop setrgbcolor
+
+20 60 (seeded jitter, Jitter 5) pklabel
+newpath 20 20 moveto 300 20 lineto
+<< /Width 12 /Jitter 5 >> pkribbon
+
+% A degenerate single-point subpath falls back to a dot -- no crash,
+% no special-casing needed by the caller.
+newpath 340 20 moveto
+<< /Width 16 >> pkribbon
+360 30 (degenerate point -> dot) pklabel
+
+showpage

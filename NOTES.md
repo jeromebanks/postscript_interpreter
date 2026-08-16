@@ -3,6 +3,374 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Pressure-sensitive ribbon strokes, a new paintkit library (issue #41, 2026-08-15)
+
+Closes issue #41, the first of the painterly-brush series (#42-#53)
+built on #40's `walkpath`: `lib/paintkit.ps`'s `pkribbon`, a single
+dict-driven entry point that treats the current path as a centerline
+and fills a variable-width ribbon along it. Options: `/Width`,
+`/Pitch`, a `{t -> mult}` `/Pressure` proc (three presets ship --
+`pkflat` constant, `pktaper` linear, `pkbell` non-linear via `sin` --
+covering the acceptance criteria's three required profiles),
+`/StartTaper`/`/EndTaper`, `/StartCap`/`/EndCap`
+(`/round`/`/flat`/`/pointed`), and `/Jitter`. Color is deliberately not
+a key -- fills with whatever the caller already set, same as any other
+artkit shape helper. Multiple subpaths each become an independent
+ribbon; a closed subpath (walkpath's start and guaranteed-end
+coincide) is filled as two concentric closed loops with no caps, not
+capped-and-notched; a degenerate single point, or a closed loop too
+short to leave two distinct offset points, falls back to a filled dot
+rather than erroring; an empty source path is a no-op.
+
+Two real bugs surfaced only through actually running the code, not
+through review alone:
+
+1. `pkgetdef` (the dict-with-default reader, one per sparse-options
+   library following `pagekit.ps`'s `pggetdef`) initially bound the
+   default value to a name and returned it via a bare `{ pkgdef }`
+   reference. That's fine for the plain-value defaults every other
+   dict-driven library here has ever used -- but `/Pressure`'s default
+   is itself a procedure (`pkflat`), and a name bound to a procedure
+   auto-executes on bare reference, same as calling any other proc by
+   name. So resolving an *absent* `/Pressure` key silently *called*
+   the default with no argument instead of returning it, underflowing
+   inside `pkflat`'s own `pop`. Fixed by wrapping the default in a
+   1-element array and reading it back with `get` -- a data fetch,
+   which never auto-executes regardless of what it holds.
+
+2. The stop-collection loop first tried the obvious one-liner,
+   `[ pitch { 6 array astore } walkpath ]` -- leave each stop's six
+   values on the operand stack for the enclosing `[ ... ]` to collect,
+   since `walkpath`'s own state lives entirely in named scratch vars,
+   not the stack, so nothing *should* care what's sitting underneath.
+   That's true within a single segment, but wrong across a subpath
+   boundary: `walkpath`'s `moveto` handler calls `wkend` (emitting the
+   previous subpath's guaranteed end stop through the proc) *before*
+   consuming the x/y `pathforall` already pushed it for the *new*
+   subpath's start -- so a proc that leaves an array on the stack
+   instead of consuming it steals that x/y out from under the very
+   code that was about to read it, corrupting `wkx`/`wky` and
+   cascading into a `typecheck` a few operators later. Confirmed
+   against plain `walkpath` directly, no paintkit involved -- a latent
+   trap in the walkpath contract itself, not something specific to
+   this library, worth flagging for anyone else writing a `walkpath`
+   proc. Fixed with the two-pass shape `wkmeasure`/`wkseg` already
+   established: count first, then fill a preallocated array, so the
+   proc's net stack effect is always zero.
+
+(A suspected corner-notch limitation from unmitered per-vertex
+offsetting on a closed polygon turned out, on closer look, to be a
+symptom of the closed-loop winding bug below, not an independent
+issue -- gone once that was fixed, confirmed at ribbon widths several
+times the polygon's own size. `fill` vs `eofill`'s self-intersection
+tradeoff on a tight Bezier at a generous width is the real, still-true
+limitation, documented in the header.)
+
+`examples/paintkit_demo.ps` demonstrates all three centerline shapes,
+independent start/end taper, all three pressure profiles, all three
+cap styles, and seeded jitter. Like `walkpath_demo.ps`, it can't join
+`tests/golden.rs`: both load `(lib/artkit.ps) run` at runtime, which
+trips Ghostscript's `SAFER` sandboxing on the file read -- confirmed
+that's the *only* blocker, not an unsupported operator, by running the
+demo again with `gs -dNOSAFER` (renders clean). `tests/paintkit.rs`'s
+own `ghostscript_accepts_paintkit` covers gs compatibility under the
+default sandboxed mode instead, the same way `tests/pagekit.rs` does
+-- artkit's and paintkit's *source* embedded directly into a combined
+driver file, no runtime `run` calls.
+
+Two gaps an `advisor` pass over the initial implementation caught,
+both fixed before opening the PR: `/StartTaper`/`/EndTaper` had zero
+coverage anywhere (header, demo, tests, gs driver) despite being one
+of the issue's explicit bullets; and the degenerate-single-point dot
+fallback silently drew *nothing* under a nonzero `/StartTaper` (its
+radius went through the same `pkhalfwat` a real ribbon segment uses,
+which multiplies in the taper ramp -- meaningless for a lone point,
+and zero at t=0 for any nonzero `/StartTaper`). Fixed by giving the
+dot its own width computation (`Width*Pressure` only, matching what
+the header already promised) and adding both a taper demo row and
+taper-specific tests, including one that forces the degenerate-radius
+path (`/StartTaper 1` collapsing a `/round` cap to a point) rather than
+leaving it exercised only by coincidence.
+
+Cross-model review (Codex, round 1 on PR #76) found four more real
+defects, none caught locally:
+
+- **Closed loops filled solid, no hole.** Both `pkloop` calls (right
+  and left offset of the same closed centerline) traversed forward,
+  giving them the same winding sign under nonzero fill -- confirmed
+  visually beforehand (a closed square rendered as a solid filled
+  square) and misattributed at the time to the ring simply being too
+  thick to show a hole. Fixed by traversing one side in reverse index
+  order (`pkloop` gained a `reverse` argument); a real annulus needs
+  opposite winding between its two offset loops, not just opposite
+  sides.
+- **`/StartTaper`+`/EndTaper` past 1 jumped discontinuously.**
+  `pktaperf`'s mutually exclusive branch (ramp from the start *or* the
+  end, based on which side of the midpoint `t` fell on) only applied
+  one ramp once the two regions overlapped, jumping sharply at the
+  branch boundary instead of blending. Fixed by computing both ramps
+  unconditionally (each already defaults to 1.0 outside its own
+  region) and taking the minimum.
+- **Closed-path detection used a scale-fragile epsilon.** The same
+  category of bug already fixed once in `walkpath` itself (round 2 of
+  #40's review): a fixed `0.0001` user-space distance decided whether
+  a subpath's start/end coincided, which breaks under a large CTM
+  where a user-space-tiny gap is visually enormous. Switched to exact
+  equality -- correct because walkpath's own closepath handler feeds
+  the closing segment the *stored* start coordinates verbatim, never
+  recomputed through curve-flattening math, so a genuinely closed
+  subpath's guaranteed-end stop always lands bit-for-bit on its start.
+- **Cap-degeneracy check had the same scale-fragility.** The
+  round-to-pointed threshold (half-width <= 0.001) was also a fixed
+  user-space epsilon, silently collapsing a real, visibly-wide-once-
+  scaled cap (e.g. `/Width 0.0015` under a 10000x CTM) to a point.
+  Verified directly that a zero-radius `arc` is safe in both pscat and
+  Ghostscript, so there was nothing to guard against by treating a
+  merely-small-in-user-space width as zero -- narrowed the check to a
+  truly zero (or negative) half-width.
+
+All four came with regression tests (`closed_polygon_leaves_a_hole_*`,
+`overlapping_start_and_end_taper_ramps_stay_continuous`,
+`small_width_cap_survives_a_large_scale_*`), two of them specifically
+constructed under a large `scale` to pin the CTM-fragility class of bug
+rather than just the 1x-scale symptom. Full quality gate re-run clean
+(664 tests) before pushing the fix and re-running Codex review.
+
+Round 2 found four more, all fixed:
+
+- **Malformed `/Pressure`/`/StartCap`/`/EndCap` weren't validated.** A
+  non-procedure `/Pressure` (e.g. `1`) was never auto-executed by
+  `pkhalfwat`'s `t pkpressure` call -- it just got pushed, leaking
+  extra operands into every downstream computation instead of raising
+  a clean error. An unrecognized cap value silently fell through to
+  `/flat`. Both are validated now (`xcheck` for the procedure check,
+  an explicit three-way `eq`/`or` chain for caps), each with its own
+  self-documenting guard name and regression tests. Writing the
+  `/Pressure` guard itself hit the *exact* auto-execute trap its own
+  fix is protecting against: the first attempt, `pkpressure xcheck`,
+  bare-referenced `pkpressure` -- which auto-runs it, since it's
+  already bound to a procedure in the common case -- calling the
+  default pressure proc with nothing on the stack before `xcheck` ever
+  saw it, `stackunderflow`. Fixed with `/pkpressure load xcheck`:
+  `load` fetches a bound value without executing it, regardless of
+  type. Two run-ins with the same PostScript gotcha in one library is
+  worth over-explaining in the comment for whoever touches this next.
+- **`pkribbon` was undiscoverable via the capability catalog.**
+  `CAPABILITIES.md`/`pscat --capabilities`/MCP's
+  `describe_art_capabilities` are the documented source of truth for
+  what an agent can find installed (issue #39) -- paintkit shipped
+  absent from all three. Registered `pkribbon` (its eight options-dict
+  keys as real `Param`s, same treatment templates and
+  `hs-write`/`hg-write` get) and the three `/Pressure` presets
+  (`pkflat`/`pktaper`/`pkbell`) in `src/capabilities.rs`'s `ENTRIES`,
+  added `PAINTKIT_INTERNAL` for the remaining scratch helpers, and a
+  `paintkit_names_match_the_catalog_exactly` test mirroring
+  `pagekit_names_match_the_catalog_exactly` -- the reverse-coverage
+  check that fails if a future public name in `lib/paintkit.ps` ships
+  uncataloged.
+- **The demo lacked `showpage`.** Reaching EOF without it emits no
+  page under a standard PostScript consumer (Ghostscript, a real
+  printer) -- masked locally because `pscat --png` snapshots the final
+  canvas regardless. Added; re-verified under both pscat and
+  `gs -dNOSAFER`.
+
+Full quality gate re-run clean (665 tests) before pushing and
+re-running Codex review a second time.
+
+Round 3 found two more, both fixed:
+
+- **A short pointed stroke rendered nothing.** `walkpath` emits only
+  start+end stops for a subpath shorter than `/Pitch` (no interior).
+  With both ends pointed, `pkopenrun`'s forward and reverse edge loops
+  were *both* empty -- the polygon it built was the raw start-tip to
+  end-tip line, zero area under `fill`. A generously wide, genuinely
+  short stroke with `/StartCap /pointed /EndCap /pointed` (or a full
+  taper collapsing both ends) silently produced a blank page instead
+  of the lens shape a longer version of the same stroke renders fine.
+  Fixed by detecting exactly that condition (both ends pointed, no
+  interior stops) and synthesizing one interior sample at the run's
+  midpoint -- chord direction (exact regardless of the underlying
+  curve shape, since there's nothing else to look at over such a short
+  span) and averaged progress for pressure/taper -- so it builds a
+  proper 4-point lens instead.
+- **`xcheck` alone doesn't prove something is callable.** The
+  round-2 `/Pressure` guard used `xcheck`, which only tests the
+  executable attribute -- an executable non-procedure like `2 cvx`
+  passes it, but `pkht pkpressure` still just pushes the number instead
+  of running anything, the identical corruption the guard exists to
+  catch. Added a `type` check (`arraytype` for a user proc,
+  `operatortype` for a bound built-in) alongside `xcheck`.
+
+Both came with regression tests. Full quality gate re-run clean (666
+tests) before pushing and re-running Codex review a third time. (The
+second `--wait` review invocation was itself killed with no output and
+no job ever registered with `codex-companion`'s tracker -- confirmed
+via `status --all --json` showing nothing running, nothing finished,
+nothing recent, not even a dead PID to `cancel`. Treated as transient
+rather than genuine runtime unavailability, since the identical command
+had already succeeded twice in a row on this same PR; a bare retry
+registered and completed normally.)
+
+Round 4 found three more real defects, subtler than any prior round --
+all three about walkpath's own edge cases (the exact-multiple-of-pitch
+coincidence, the too-short-to-sample case, coordinate-only closure
+inference) that hadn't come up until Codex specifically went looking
+for them:
+
+- **A stroke exactly one pitch long could still render blank.** Round
+  3's fix only handled a subpath *shorter* than `/Pitch` (walkpath's
+  guaranteed 2-stop minimum). When a subpath's length is an exact
+  multiple of `/Pitch`, walkpath's regular stepping already lands
+  exactly on the endpoint, and the guaranteed-end stop then duplicates
+  it (`sp == 0`) -- three stops total, not two, so round 3's "index
+  distinct from start" check for whether a real interior sample exists
+  passed even though the "interior" stop is really just an echo of the
+  endpoint at the same position. Combined with a pressure profile
+  that's genuinely zero right at the edge (`pkbell` at `t=1`), the only
+  candidate sample available also carried zero width. Fixed by
+  coalescing the trailing `sp==0` duplicate *before* deciding whether a
+  real bulge is possible, not after.
+- **A closed subpath shorter than `/Pitch` rendered blank instead of a
+  dot.** The mirror image of the above for closed paths: walkpath
+  returns only start and a guaranteed end at the same coordinates, but
+  the end's `sp` is the subpath's own positive length, not 0 -- the
+  duplicate-coalescing check alone doesn't catch it, since there's no
+  duplicate to coalesce here, just two stops that both happen to be the
+  same physical point. `pkloop` built two literally coincident-point
+  "loops," zero area, instead of the documented dot fallback. Needed a
+  check for whether a genuinely distinct sample exists, not just
+  whether the dedup left two array indices.
+- **Coordinate coincidence can't distinguish real closure from an open
+  path that merely returns to its own start.** The round-1 exact-
+  equality fix correctly stopped comparing coordinates under a
+  tolerance, but never questioned whether comparing coordinates *at
+  all* was the right test -- an open subpath ending with an explicit
+  `lineto` back to its exact starting point (no `closepath`) gives
+  bit-for-bit identical endpoint coordinates to a real closed one,
+  silently dropping its requested caps and building a ring instead.
+  Fixed properly rather than patched further: `pkscanclosed`, a new
+  helper mirroring `wkmeasure`'s own two-pass shape, does a `pathforall`
+  pass that tracks whether each subpath's close proc actually fired --
+  authoritative, since `pathforall` only calls it for a real
+  `closepath` segment -- and `pkribbon`'s dispatch now threads that
+  per-subpath flag into `pkbuildrun` instead of it inferring closure
+  itself.
+
+Implementing the second fix's first attempt introduced its own bug,
+caught only by looking at the actual render rather than trusting the
+logic: "does a real interior sample exist for a closed run" was
+written as a *position* comparison between the run's last stop and its
+first -- but a closed subpath's guaranteed-end stop always returns to
+the start's coordinates *by definition*, whether the loop has real
+content or not, so that comparison is comparing a closed loop's end to
+itself and is always true regardless of what's actually being asked.
+Every closed ribbon in the whole demo collapsed to a single dot at the
+seam instead of following its perimeter -- confirmed by re-rendering
+the same closed-square fixture from round 1's own fix and seeing a dot
+where a ring used to be. None of the existing hole-in-the-middle tests
+caught it (a dot at the seam still leaves the center unpainted and the
+one edge pixel they happened to sample still inked), which is exactly
+why the fix this time samples all four sides of the perimeter, not
+one. Corrected to an index-based check (is there a real *interior*
+array index between start and end, not whether the endpoint coincides
+with itself) -- the thing round 3's short-stroke fix already needed to
+get right for open paths, misapplied here to a case where it doesn't
+mean the same thing.
+
+All fixes came with regression tests, including one for the
+self-caught bug. Full quality gate re-run clean (670 tests) before
+pushing and re-running Codex review a fourth time.
+
+Round 5 found two more, one of them P1:
+
+- **A packed procedure literal failed `/Pressure` validation --
+  including `pkribbon`'s own default.** Under a Level 2 interpreter
+  with packing enabled (`true setpacking`), a plain procedure literal
+  like `{ pkflat }` can have type `packedarraytype` instead of
+  `arraytype` -- confirmed directly against real Ghostscript (pscat
+  itself doesn't actually pack, so `type` stays `arraytype` there
+  regardless of `setpacking`). The round-3 type-check only accepted
+  `arraytype`/`operatortype`, so `pkribbon` would fail on its own
+  documented default the moment a caller's environment had packing on.
+  Added `packedarraytype` to the accepted set, and pushed
+  `true setpacking` to the front of `ghostscript_accepts_paintkit`'s
+  driver so the whole test actually exercises the branch under real
+  gs, not just calls `pkribbon` under packing's (irrelevant, for
+  pscat) default-off state.
+- **`/StartTaper`/`/EndTaper` outside their documented 0..1 range
+  weren't validated.** Doesn't crash -- a negative value just silently
+  disables that ramp, above 1 keeps the whole stroke short of full
+  width -- but it's a real contract violation, same category as every
+  other documented constraint here, so validated the same way.
+
+Both have regression tests. Full quality gate re-run clean (671 tests)
+before pushing and re-running Codex review a fifth time.
+
+Round 6 found two more, one of them a real bug in `pscat` itself, not
+paintkit:
+
+- **`atan` on a zero-length chord.** The round-3 short-pointed-stroke
+  fix synthesizes a midpoint between an open run's two stops, using
+  their chord direction -- but an open subpath that returns to its own
+  exact starting coordinates (an unclosed full-circle `arc`, an
+  explicit `lineto` back to the start) and is also shorter than
+  `/Pitch` has that chord collapse to zero length, and `atan` on
+  `(0,0)` is undefined in both pscat and Ghostscript (confirmed
+  directly against both). No chord direction exists to synthesize from
+  in that case; falls back to a dot instead, same as any other
+  genuinely degenerate short run.
+- **`pathforall` didn't insert the PLRM's implicit moveto after
+  `closepath`.** Not a paintkit bug at all -- a real, previously
+  undiscovered gap in `pscat`'s own `pathforall` (`src/ops/
+  graphics.rs`), exposed by `walkpath`'s reliance on `pathforall`
+  correctly reporting subpath boundaries. Per the PLRM, a `lineto`/
+  `curveto` immediately following `closepath` with no intervening
+  `moveto` behaves as though a `moveto` to the current point
+  (`closepath`'s own return-to-start point) had been inserted first --
+  Ghostscript honors this, `pscat` didn't, merging a closed subpath
+  with whatever open drawing followed it into one run instead of two.
+  Confirmed the divergence directly: the same path reports 1 `moveto`
+  under `pscat`, 2 under real `gs`. Fixed in `pathforall`'s own element-
+  building loop (not the underlying path/segment model, which every
+  other consumer -- rendering, SVG/PDF export -- walks unchanged and
+  doesn't need this for), tracking the last `moveto` point and
+  synthesizing one right before a `Line`/`Curve` that immediately
+  follows a `Close`. gs-pinned test added to `tests/pathforall.rs`,
+  the existing home for this operator's tests, not folded into
+  paintkit's own suite -- this is core interpreter behavior any future
+  `pathforall` consumer benefits from, not something specific to
+  ribbons.
+
+Both have regression tests; the `pathforall` fix's test lives with the
+operator's own suite rather than paintkit's, and the full test suite
+(not just paintkit's) was re-run to confirm the core-interpreter change
+didn't regress anything else that walks paths -- golden-image
+comparison against real gs included, since that's exactly the kind of
+divergence it would have caught. Quality gate re-run clean (673 tests,
+clippy clean, fmt clean) before pushing and re-running Codex review a
+sixth time.
+
+Round 7 found one more: **every plain value option (`/Width`,
+`/Pitch`, `/StartTaper`, `/EndTaper`, `/Jitter`, `/StartCap`,
+`/EndCap`) had the same exposure `/Pressure` was fixed for back in
+round 2, just not yet applied to fields that are documented as plain
+values rather than callbacks.** Binding one of these straight to its
+own name -- `pkgetdef`'s normal result -- makes every later *bare*
+reference to that name auto-execute it if the caller happened to
+supply an executable array, e.g. `<< /Width { } >>` (a zero-push
+procedure): `pkwidth 0 le` would then run against whatever was on the
+stack *before* that reference instead of the intended width, silently
+corrupting downstream computation rather than erroring. Confirmed the
+zero-push case is exactly this real, not hypothetical (a non-zero-push
+procedure like `{ 10 }` happens to net the same effect as the number
+it produces, which is why a smaller example wouldn't have caught it).
+Every affected field now gets the same `load`+`xcheck` guard
+`/Pressure` already had, checked immediately after binding, before any
+other bare reference to that name -- error names follow the same
+self-documenting `pkribbon-<field>-must-not-be-a-procedure` pattern.
+Regression tests added for all seven fields. Quality gate re-run clean
+(673 tests) before pushing and re-running Codex review a seventh time.
+
 ## A reusable centerline path sampler for procedural brushes (issue #40, 2026-08-15)
 
 Closes issue #40, the foundation for the painterly-brush series

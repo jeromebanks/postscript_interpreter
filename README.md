@@ -445,6 +445,28 @@ every one of artkit's mood palettes actually runs dark to light.
 pgcertificate pop showpage
 ```
 
+A fifth sibling, `lib/paintkit.ps` (issue #41), is the foundation for a
+painterly-brush series: `pkribbon` treats the current path as a
+centerline and fills a variable-width ribbon along it, built on
+artkit's `walkpath` centerline sampler (issue #40). One dict-driven
+entry point -- base width, a `{t -> mult}` pressure profile over
+normalized path progress (three presets ship: constant, linear taper,
+and a non-linear bell curve), start/end taper, round/flat/pointed
+caps, and seeded edge jitter -- with color left to the caller, same as
+any other artkit shape helper. Multiple subpaths each become their own
+ribbon; closed subpaths fill as two concentric loops with no caps;
+degenerate paths fall back to a dot or a no-op rather than erroring.
+`examples/paintkit_demo.ps` is a specimen sheet of all three
+centerline shapes, all three pressure profiles, all three cap styles,
+and jitter.
+
+```postscript
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+newpath 40 40 moveto 60 120 260 120 280 40 curveto
+<< /Width 24 /Pressure { pktaper } >> pkribbon showpage
+```
+
 ## The website
 
 **[jeromebanks.github.io/postscript_interpreter](https://jeromebanks.github.io/postscript_interpreter/)**

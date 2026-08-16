@@ -300,6 +300,18 @@ end
 % before every stamp (pathtext relies on this to vary the pitch by
 % each glyph's advance), which walkpath's scalar pitch can't express.
 % The current path survives (flattened), same contract as alongpath.
+% The proc's `-> -` really means it: it must consume all six operands
+% every call, leaving the stack exactly as it found it. walkpath's own
+% moveto handler calls a subpath-closing proc invocation (for the
+% guaranteed end stop) *before* consuming the x/y pathforall already
+% pushed for the *next* subpath's start, so a proc that leaves anything
+% behind -- even something that looks harmless, like collecting stops
+% by wrapping each call's six values in an array instead of popping
+% them -- steals that x/y out from under walkpath's own bookkeeping the
+% moment the source path has more than one subpath. Confirmed the hard
+% way building paintkit.ps (issue #41); store results by index into a
+% preallocated array (count first, then fill -- same shape as this
+% file's own wkmeasure/wkseg split) instead.
 
 /wkmeasure {                                     % - [len0 len1 ...]
     % One flattened-path traversal, mark-collecting each subpath's

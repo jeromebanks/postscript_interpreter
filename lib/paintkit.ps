@@ -1,0 +1,529 @@
+%!PS-Adobe-3.0
+%%Title: paintkit.ps — pressure-sensitive ribbon strokes for artkit
+%%Creator: pscat — issue #41, the painterly-brush series' foundation
+%%EndComments
+
+% A fifth sibling to graph.ps/dataviz.ps/etching.ps/pagekit.ps, but --
+% like pagekit -- it depends on lib/artkit.ps, specifically walkpath
+% (issue #40, the centerline sampler). Load artkit first:
+%
+%   (lib/artkit.ps) run  (lib/paintkit.ps) run
+%
+% What's inside: one entry point, `pkribbon`, that treats the current
+% path as a centerline and fills a variable-width ribbon along it --
+% the minimum useful abstraction for a PostScript path as the motion
+% of a physical tool rather than a uniform geometric stroke.
+%
+%   opts pkribbon -
+%
+% `opts` is a dict of optional keys (a sparse or empty dict still
+% renders -- a plain constant-width band):
+%
+%   /Width       base width (default 6). Must be > 0.
+%   /Pitch       walkpath sampling pitch (default Width*0.5, capped at
+%                6 so wide ribbons don't facet). Must be > 0.
+%   /Pressure    {t -> mult} proc, t = walkpath's normalized progress
+%                through the current subpath. Default `pkflat`
+%                (constant 1.0). Two more presets ship: `pktaper`
+%                (linear, t itself is the multiplier) and `pkbell`
+%                (non-linear, a 0->1->0 hump via `sin`). Reference a
+%                preset as `{ pktaper }`, or write an inline proc. Must
+%                actually be a procedure, checked with `xcheck`.
+%   /StartTaper  /EndTaper   0..1 fraction of progress over which
+%                width additionally ramps 0->1 at the very start/end,
+%                independent of and multiplicative with /Pressure --
+%                needed for a clean taper regardless of the pressure
+%                curve's own shape. Default 0 (no extra ramp).
+%   /StartCap    /EndCap     /round (default), /flat, or /pointed --
+%                any other value is rejected rather than silently
+%                falling through to /flat. A cap whose computed
+%                half-width is exactly 0 (taper or a zero-pressure
+%                endpoint) degrades to /pointed automatically rather
+%                than emitting a zero-radius arc (safe in both pscat
+%                and Ghostscript, but pointless).
+%   /Jitter      amount (default 0): each edge point is displaced
+%                along the local perpendicular by up to +/-amount,
+%                drawn from artkit's seeded `frnd` -- reproducible
+%                under the caller's own `N srand`, same doctrine as
+%                the rest of artkit (no library-owned seed). Skipped
+%                entirely at /pointed (or degenerate) tips, and not
+%                drawn at all when amount is 0 (so an unjittered call
+%                doesn't perturb the caller's rand sequence). An
+%                amount past Width/2 can push a point across the
+%                centerline to the far side; `fill`'s nonzero winding
+%                absorbs the resulting local self-crossing without
+%                error, but past that point "jitter" is closer to
+%                "noise" -- keep it well under Width/2 for a ribbon
+%                that still reads as one continuous band.
+%
+% Color is deliberately not a key: `pkribbon` fills with whatever
+% color the caller already set (`setrgbcolor` et al.), same as any
+% other artkit shape helper.
+%
+% Same contract as walkpath: the caller's current path survives,
+% flattened, since `pkribbon`'s own drawing happens inside its own
+% `gsave`/`newpath`/`grestore`, never touching the path it just walked.
+%
+% Multiple subpaths in the source path each become an independent
+% ribbon. A subpath actually closed with `closepath` -- tracked
+% directly from the path itself (`pkscanclosed`), not inferred from
+% its endpoints merely coinciding, since an open subpath can
+% legitimately end exactly where it started too -- is filled as two
+% concentric closed loops with no caps at all -- /StartCap//EndCap
+% only apply to open paths. A degenerate single-point subpath, or a
+% closed subpath too short to leave a genuinely distinct interior
+% sample, falls
+% back to a single filled dot (diameter Width*Pressure at that point)
+% rather than erroring. An entirely empty source path is a no-op.
+%
+% Built with plain `fill` (nonzero winding), not `eofill`: a
+% self-intersecting offset -- unavoidable wherever the centerline's
+% curvature radius drops below half the ribbon's width, e.g. a tight
+% Bezier at a generous /Width -- still paints the whole ribbon rather
+% than punching a hole in it. That's a real, documented limitation of
+% simple offset-curve stroking, not a bug. (A closed polygon's sharp
+% corners might look like the same problem -- no miter/bevel joint
+% between consecutive segments -- but empirically don't show it even
+% at a ribbon width several times the polygon's own size: nonzero
+% fill's overlap tolerance absorbs the unmitered per-vertex offset
+% cleanly for the shapes this library actually renders.)
+%
+% Scratch prefixes: pk- (pkribbon/dispatch), pkbr- (pkbuildrun),
+% pko- (pkopenrun), pkl- (pkloop), pke- (pkedge), pkh- (pkhalfwat),
+% pktf- (pktaperf), pkd- (pkdot), pkg- (pkgetdef), pksc- (pkscanclosed).
+
+% - [bool0 bool1 ...]   (one flag per subpath, in path order: was it
+% closed with an explicit closepath?)
+% A subpath whose open endpoint merely happens to coincide with its
+% start (a `lineto` back to the exact starting coordinate, a full-circle
+% `arc`, no `closepath`) is not the same thing as a subpath actually
+% closed with `closepath` -- comparing walkpath's start/end stop
+% coordinates can't tell the two apart, so the ribbon has to ask the
+% path itself. `pathforall`'s close proc fires only for a real
+% `closepath` segment, never for coordinates merely matching, so this
+% is authoritative where a coordinate comparison is only a heuristic
+% (Codex review, round 4). Same two-pass shape as artkit's own
+% wkmeasure: emit the previous subpath's flag on each new moveto
+% (skipped on the very first), then once more after the loop for the
+% last subpath.
+/pkscanclosed {
+    /pkscclosed false def /pkscfirst true def
+    [
+        { pop pop
+          pkscfirst { /pkscfirst false def } { pkscclosed } ifelse
+          /pkscclosed false def }
+        { pop pop }
+        { pop pop pop pop pop pop }
+        { /pkscclosed true def }
+        pathforall
+        pkscfirst not { pkscclosed } if
+    ]
+} def
+
+% opts key default pkgetdef  value -
+% The default is wrapped in a 1-element array rather than bound
+% straight to a name -- a name bound directly to a procedure (e.g. a
+% /Pressure default) auto-executes on bare reference, same as calling
+% any other proc by name in this file, so returning it as `pkgdef`
+% would silently invoke the default instead of yielding it. Reading it
+% back with `get` sidesteps that regardless of the default's type.
+/pkgetdef {                                      % dict key default -
+    /pkgdef exch 1 array astore def
+    /pkgkey exch def
+    /pkgdict exch def
+    pkgdict pkgkey known
+        { pkgdict pkgkey get }
+        { pkgdef 0 get }
+    ifelse
+} def
+
+% --- pressure presets: t -> mult -------------------------------------
+/pkflat  { pop 1.0 } def                          % constant
+/pktaper { } def                                  % linear (t is the mult)
+/pkbell  { 180 mul sin } def                      % non-linear 0->1->0 hump
+
+% t -> mult   (StartTaper/EndTaper ramp; reads pkstarttaper/pkendtaper)
+% Both ramps are computed unconditionally and combined with the
+% minimum, not picked by a mutually exclusive branch on which side of
+% the midpoint t falls -- if /StartTaper and /EndTaper sum past 1
+% their ramp regions overlap, and a branch that applies only one would
+% jump discontinuously right at the branch boundary (Codex review,
+% round 1). Each ramp already evaluates to 1.0 (no constraint) outside
+% its own region, so the minimum is exactly "whichever ramp constrains
+% more here," continuous everywhere including the overlap.
+/pktaperf {
+    /pktft exch def
+    /pktfs
+        pktft pkstarttaper lt pkstarttaper 0 gt and
+            { pktft pkstarttaper div }
+            { 1.0 }
+        ifelse
+    def
+    /pktfe
+        pktft 1 pkendtaper sub gt pkendtaper 0 gt and
+            { 1 pktft sub pkendtaper div }
+            { 1.0 }
+        ifelse
+    def
+    pktfs pktfe lt { pktfs } { pktfe } ifelse
+} def
+
+% t -> halfwidth   (reads pkwidth/pkpressure/pktaperf's globals)
+/pkhalfwat {
+    /pkht exch def
+    pkwidth
+    pkht pkpressure
+    pkht pktaperf
+    mul mul 2 div
+} def
+
+% amount -> offset in -amount..amount, deterministic under srand
+/pkjit { frnd 2 mul 1 sub mul } def
+
+% x y ang halfw side -> ex ey   (side: -1 right / +1 left of travel;
+% applies /Jitter along the perpendicular, skipped entirely at 0)
+/pkedge {
+    /pkeside exch def /pkehw exch def /pkeang exch def
+    /pkey exch def /pkex exch def
+    /pkeoff pkjitter 0 eq { pkehw } { pkehw pkjitter pkjit add } ifelse def
+    /pkepa pkeang 90 pkeside mul add def
+    pkex pkepa cos pkeoff mul add
+    pkey pkepa sin pkeoff mul add
+} def
+
+% [x y ang t sp atend] pkdot -   (degenerate single-point fallback)
+% Diameter is Width*Pressure only -- not pkhalfwat's full
+% Width*Pressure*taper. /StartTaper//EndTaper ramp width in from the
+% *ends of a path*; a lone point has no path to ramp along, and
+% applying them anyway could zero out the dot entirely (e.g. any
+% nonzero /StartTaper at t=0) for a caller who never asked for that.
+/pkdot {
+    dup 0 get /pkdx exch def
+    dup 1 get /pkdy exch def
+    3 get /pkdt exch def
+    /pkdhw pkwidth pkdt pkpressure mul 2 div def
+    pkdhw 0 gt { pkdx pkdy pkdhw 0 360 arc closepath } if
+} def
+
+% start end side reverse pkloop -   (one closed offset loop, no caps)
+% `reverse` must be opposite between the two loops of a ring (right
+% and left side of the same closed centerline): offsetting doesn't
+% change the underlying curve's own traversal direction, so building
+% both loops start-to-end gives them the *same* winding sign under
+% nonzero fill and they add instead of one punching a hole in the
+% other -- confirmed empirically (a closed square rendered solid, no
+% ring) before this fix (Codex review, round 1).
+/pkloop {
+    /pklrev exch def /pklside exch def /pklend exch def /pklstart exch def
+    /pklfrom pklrev { pklend } { pklstart } ifelse def
+    /pklto pklrev { pklstart } { pklend } ifelse def
+    /pklstep pklrev { -1 } { 1 } ifelse def
+    pkraw pklfrom get
+    dup 0 get /pklx exch def dup 1 get /pkly exch def
+    dup 2 get /pklang exch def 3 get /pklt exch def
+    pklx pkly pklang pklt pkhalfwat pklside pkedge moveto
+    pklfrom pklstep add pklstep pklto {
+        /pkli exch def
+        pkraw pkli get
+        dup 0 get /pklx exch def dup 1 get /pkly exch def
+        dup 2 get /pklang exch def 3 get /pklt exch def
+        pklx pkly pklang pklt pkhalfwat pklside pkedge lineto
+    } for
+    closepath
+} def
+
+% start end pkopenrun -   (one open ribbon polygon with caps)
+% A cap degrades to /pointed automatically only when its half-width is
+% truly <= 0, not some small-but-scale-fragile epsilon: a zero-radius
+% `arc` is well-defined and safe in both pscat and Ghostscript
+% (verified directly), so there's nothing to guard against by treating
+% a merely-small-in-*user-space* width as zero -- that would wrongly
+% collapse a real cap to a point under a large CTM, where a user-space
+% width like 0.002 can still be many device pixels wide (Codex review,
+% round 1).
+/pkopenrun {
+    /pkoend exch def /pkostart exch def
+
+    pkraw pkostart get
+    dup 0 get /pkox0 exch def dup 1 get /pkoy0 exch def
+    dup 2 get /pkoang0 exch def 3 get /pkot0 exch def
+    /pkohw0 pkot0 pkhalfwat def
+    /pkostartpointed
+        pkstartcap /pointed eq pkohw0 0 le or
+    def
+
+    pkraw pkoend get
+    dup 0 get /pkoxe exch def dup 1 get /pkoye exch def
+    dup 2 get /pkoange exch def 3 get /pkotend exch def
+    /pkohwe pkotend pkhalfwat def
+    /pkoendpointed
+        pkendcap /pointed eq pkohwe 0 le or
+    def
+    /pkorightlast pkoendpointed { pkoend 1 sub } { pkoend } ifelse def
+
+    % Both ends pointed with no interior stops between them (walkpath
+    % emits only start+end for a subpath shorter than /Pitch): the
+    % straight start-tip-to-end-tip line this would otherwise build has
+    % zero area under `fill`, silently rendering nothing for a valid
+    % short pointed (or fully-tapered) stroke. Synthesize one interior
+    % sample at the run's midpoint -- chord direction (exact regardless
+    % of the underlying curve, since there's nothing between the two
+    % known points to look at) and averaged progress -- so it renders
+    % as a lens instead (Codex review, round 3).
+    pkostartpointed pkoendpointed and pkorightlast pkostart le and {
+        % The chord itself can be zero-length here -- an open subpath
+        % that returns exactly to its own start (an unclosed full-circle
+        % arc, a lineto back to the exact starting point) and is also
+        % shorter than /Pitch has pkox0==pkoxe/pkoy0==pkoye, and `atan`
+        % on (0,0) is undefined in both pscat and Ghostscript (Codex
+        % review, round 6). No chord direction exists to synthesize a
+        % midpoint from in that case; fall back to a dot, same as any
+        % other genuinely degenerate short run.
+        /pkomdx pkoxe pkox0 sub def
+        /pkomdy pkoye pkoy0 sub def
+        pkomdx 0 eq pkomdy 0 eq and
+        {
+            pkraw pkostart get pkdot
+        } {
+            /pkomidx pkox0 pkoxe add 2 div def
+            /pkomidy pkoy0 pkoye add 2 div def
+            /pkomidang pkomdy pkomdx atan def
+            /pkomidt pkot0 pkotend add 2 div def
+            pkox0 pkoy0 moveto
+            pkomidx pkomidy pkomidang pkomidt pkhalfwat -1 pkedge lineto
+            pkoxe pkoye lineto
+            pkomidx pkomidy pkomidang pkomidt pkhalfwat 1 pkedge lineto
+            closepath
+        } ifelse
+    } {
+        pkostartpointed
+            { pkox0 pkoy0 moveto }
+            { pkox0 pkoy0 pkoang0 pkohw0 -1 pkedge moveto }
+        ifelse
+
+        pkostart 1 add 1 pkorightlast {
+            /pkoi exch def
+            pkraw pkoi get
+            dup 0 get /pkoix exch def dup 1 get /pkoiy exch def
+            dup 2 get /pkoiang exch def 3 get /pkoit exch def
+            pkoix pkoiy pkoiang pkoit pkhalfwat -1 pkedge lineto
+        } for
+
+        pkoendpointed {
+            pkoxe pkoye lineto
+        } {
+            pkendcap /round eq {
+                pkoxe pkoye pkohwe pkoange 90 sub pkoange 90 add arc
+            } {
+                pkoxe pkoye pkoange pkohwe 1 pkedge lineto
+            } ifelse
+        } ifelse
+
+        /pkoleftfirst pkostartpointed { pkostart 1 add } { pkostart } ifelse def
+        pkoend 1 sub -1 pkoleftfirst {
+            /pkoi exch def
+            pkraw pkoi get
+            dup 0 get /pkoix exch def dup 1 get /pkoiy exch def
+            dup 2 get /pkoiang exch def 3 get /pkoit exch def
+            pkoix pkoiy pkoiang pkoit pkhalfwat 1 pkedge lineto
+        } for
+
+        pkostartpointed { } {
+            pkstartcap /round eq {
+                pkox0 pkoy0 pkohw0 pkoang0 90 add pkoang0 270 add arc
+            } if
+        } ifelse
+        closepath
+    } ifelse
+} def
+
+% start end closed pkbuildrun -   (one subpath's worth of walkpath stops;
+% closed comes from pkscanclosed, not inferred from coordinates)
+/pkbuildrun {
+    /pkbrclosed exch def /pkbrend exch def /pkbrstart exch def
+    % Coalesce a trailing sp==0 duplicate (the guaranteed end stop
+    % landing exactly on the last regular pitch-multiple stop, per
+    % walkpath's own documented behavior) up front, before anything
+    % below decides whether a genuine interior sample exists -- a
+    % stroke whose length happens to be an exact multiple of /Pitch
+    % would otherwise look like it has one real sample past the start
+    % when both remaining candidates actually sit at the same position
+    % (Codex review, round 4). Always safe: the only way to reach a
+    % 2-stop run (pkbrend == pkbrstart+1) is a subpath shorter than one
+    % pitch step, whose second stop's sp is the subpath's positive
+    % length, not 0, so this never collapses a run down past pkbrend's
+    % immediate predecessor.
+    pkbrend pkbrstart gt pkraw pkbrend get 4 get 0 eq and {
+        /pkbrend pkbrend 1 sub def
+    } if
+    pkbrstart pkbrend eq pkraw pkbrstart get 5 get 3 eq and {
+        pkraw pkbrstart get pkdot
+    } {
+        pkraw pkbrstart get 0 get /pkbrx0 exch def
+        pkraw pkbrstart get 1 get /pkbry0 exch def
+        pkbrclosed {
+            % Even after the dedup above, a closed run whose *total*
+            % length is under one pitch step never gets a genuine
+            % intermediate sample -- walkpath emits only its start and
+            % the guaranteed end, and for a closed subpath the end
+            % *always* returns to the start's own coordinates (that's
+            % what closed means), so pkbrend's position is never a
+            % useful signal here -- comparing it against pkbrstart is
+            % comparing a closed loop's end to itself, always equal by
+            % construction, regardless of whether real content exists
+            % in between. What actually matters is whether at least one
+            % *index* strictly between pkbrstart and pkbrend exists
+            % (pkbrend >= pkbrstart+2) -- a real regular stop from
+            % walkpath's own arc-length stepping, which can only differ
+            % from the start position if genuine path length separates
+            % them.
+            /pkbrhasinterior pkbrend pkbrstart 1 add gt def
+            pkbrhasinterior {
+                pkbrstart pkbrend -1 false pkloop
+                pkbrstart pkbrend 1 true pkloop
+            } {
+                pkraw pkbrstart get pkdot
+            } ifelse
+        } {
+            pkbrstart pkbrend pkopenrun
+        } ifelse
+    } ifelse
+} def
+
+% opts pkribbon -
+/pkribbon {
+    /pkopts exch def
+    % Value options (/Width here, and /Pitch/StartTaper/EndTaper/Jitter/
+    % StartCap/EndCap below) must not themselves be executable: binding
+    % one straight to its own name the way pkgetdef's result normally
+    % is makes every later *bare* reference to that name auto-execute
+    % it instead of yielding the value, since a name bound to something
+    % executable always runs on reference -- the same trap /Pressure's
+    % own guard exists for (see below), but these fields are documented
+    % as plain values, not callbacks, so an executable one (e.g.
+    % `<< /Width { 10 } >>`) is malformed input, not something to
+    % support (Codex review, round 7). Checked with `load`, same
+    % reason as /Pressure: a bare `pkwidth xcheck` would itself
+    % auto-execute pkwidth before xcheck ever saw it.
+    /pkwidth pkopts /Width 6 pkgetdef def
+    /pkwidth load xcheck { pkribbon-width-must-not-be-a-procedure } if
+    pkwidth 0 le { pkribbon-width-must-be-positive } if
+    /pkpitch
+        pkopts /Pitch
+        pkwidth 0.5 mul dup 6 gt { pop 6 } if
+        pkgetdef
+    def
+    /pkpitch load xcheck { pkribbon-pitch-must-not-be-a-procedure } if
+    pkpitch 0 le { pkribbon-pitch-must-be-positive } if
+    % /Pressure must actually be a procedure: pkhalfwat calls it as
+    % `t pkpressure`, expecting it to consume t and leave one number.
+    % A non-procedure value (e.g. a bare number) is never auto-executed
+    % -- it just gets pushed instead of run -- leaking extra operands
+    % into every downstream computation instead of raising a clean
+    % error (Codex review, round 2). Checked with `/pkpressure load
+    % xcheck`, not a bare `pkpressure xcheck`: pkpressure is *already*
+    % bound to a procedure in the common case, and a bare reference to
+    % a name bound to an executable auto-runs it -- the exact trap
+    % `pkgetdef`'s own header comment documents -- which would call the
+    % default pressure proc with nothing to operate on before `xcheck`
+    % ever saw it. `load` fetches the bound value without executing it,
+    % regardless of its type. `xcheck` alone isn't sufficient either
+    % (Codex review, round 3): it only tests the executable attribute,
+    % and an executable non-procedure (e.g. `2 cvx`) passes it despite
+    % `pkht pkpressure` just pushing the number instead of running
+    % anything, same corruption as an unvalidated plain number -- so
+    % `type` must also be an actually-callable kind: `arraytype` for a
+    % user proc, `operatortype` for a bound built-in, or (Codex review,
+    % round 5) `packedarraytype` -- under a Level 2 interpreter with
+    % packing enabled (`true setpacking`; confirmed against real
+    % Ghostscript, though pscat itself doesn't actually pack), a plain
+    % procedure literal like the /Pressure default itself, `{ pkflat }`,
+    % can legitimately have this type instead of `arraytype`, and
+    % rejecting it would make `pkribbon` fail even on its own default.
+    /pkpressure pkopts /Pressure { pkflat } pkgetdef def
+    /pkpressure load xcheck
+    /pkpressure load type
+    dup /arraytype eq
+    exch dup /operatortype eq
+    exch /packedarraytype eq
+    or or
+    and
+    not { pkribbon-pressure-must-be-a-procedure } if
+    % /StartTaper//EndTaper: the documented range is 0..1 -- outside it
+    % doesn't crash (pktaperf's guard conditions just degrade: negative
+    % silently disables the ramp, above 1 keeps the whole stroke short
+    % of full width) but that's a real contract violation, not merely a
+    % style choice, so it's validated the same as every other documented
+    % constraint here (Codex review, round 5).
+    /pkstarttaper pkopts /StartTaper 0 pkgetdef def
+    /pkstarttaper load xcheck { pkribbon-starttaper-must-not-be-a-procedure } if
+    pkstarttaper 0 lt pkstarttaper 1 gt or
+        { pkribbon-starttaper-must-be-0-to-1 } if
+    /pkendtaper pkopts /EndTaper 0 pkgetdef def
+    /pkendtaper load xcheck { pkribbon-endtaper-must-not-be-a-procedure } if
+    pkendtaper 0 lt pkendtaper 1 gt or
+        { pkribbon-endtaper-must-be-0-to-1 } if
+    % /StartCap//EndCap: anything other than the three documented
+    % values used to fall through to /flat silently (Codex review,
+    % round 2) -- validated explicitly instead. Checked for executable-
+    % ness first, same reason as /Width above: an executable value
+    % (even one that happens to push a valid cap name when run) isn't
+    % itself one of the three documented literal values.
+    /pkstartcap pkopts /StartCap /round pkgetdef def
+    /pkstartcap load xcheck { pkribbon-startcap-must-not-be-a-procedure } if
+    pkstartcap /round eq pkstartcap /flat eq or pkstartcap /pointed eq or not
+        { pkribbon-startcap-must-be-round-flat-or-pointed } if
+    /pkendcap pkopts /EndCap /round pkgetdef def
+    /pkendcap load xcheck { pkribbon-endcap-must-not-be-a-procedure } if
+    pkendcap /round eq pkendcap /flat eq or pkendcap /pointed eq or not
+        { pkribbon-endcap-must-be-round-flat-or-pointed } if
+    /pkjitter pkopts /Jitter 0 pkgetdef def
+    /pkjitter load xcheck { pkribbon-jitter-must-not-be-a-procedure } if
+
+    /pkclosedflags pkscanclosed def
+
+    % Two walkpath passes over the same (surviving, per its own
+    % contract) flattened path -- count, then fill a preallocated
+    % array -- same shape as artkit's own wkmeasure/wkseg split.
+    % Tried a one-pass `[ pitch { 6 array astore } walkpath ]` first:
+    % it looks like it should work (walkpath's own state lives in
+    % named vars, not the stack), and it does for a single-segment
+    % path, but it breaks on a second subpath. walkpath's own moveto
+    % handler calls `wkend` (emitting the previous subpath's guaranteed
+    % end stop through wkproc) *before* consuming the x/y pathforall
+    % just pushed it for the new subpath -- so a wkproc that leaves an
+    % array sitting on the stack instead of consuming it steals that
+    % x/y out from under it. Confirmed empirically against plain
+    % walkpath, no paintkit involved. A proc that fully consumes its 6
+    % inputs every call (store-by-index, net stack effect zero) sidesteps
+    % it regardless of how deep it's nested in someone else's callback.
+    /pkcount 0 def
+    pkpitch { pop pop pop pop pop pop /pkcount pkcount 1 add def } walkpath
+    /pkraw pkcount array def
+    /pkci 0 def
+    pkpitch {
+        6 array astore pkraw pkci 3 -1 roll put
+        /pkci pkci 1 add def
+    } walkpath
+    /pkn pkraw length def
+
+    pkn 0 gt {
+        gsave
+        newpath
+        /pki 0 def
+        /pkrunstart 0 def
+        /pksubidx 0 def
+        {
+            pki pkn ge { exit } if
+            pkraw pki get 5 get /pkae exch def
+            pkae 1 and 1 eq { /pkrunstart pki def } if
+            pkae 2 and 2 eq {
+                pkrunstart pki pkclosedflags pksubidx get pkbuildrun
+                /pksubidx pksubidx 1 add def
+            } if
+            /pki pki 1 add def
+        } loop
+        fill
+        grestore
+    } if
+} def
