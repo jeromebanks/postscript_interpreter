@@ -3,6 +3,78 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Pressure-sensitive ribbon strokes, a new paintkit library (issue #41, 2026-08-15)
+
+Closes issue #41, the first of the painterly-brush series (#42-#53)
+built on #40's `walkpath`: `lib/paintkit.ps`'s `pkribbon`, a single
+dict-driven entry point that treats the current path as a centerline
+and fills a variable-width ribbon along it. Options: `/Width`,
+`/Pitch`, a `{t -> mult}` `/Pressure` proc (three presets ship --
+`pkflat` constant, `pktaper` linear, `pkbell` non-linear via `sin` --
+covering the acceptance criteria's three required profiles),
+`/StartTaper`/`/EndTaper`, `/StartCap`/`/EndCap`
+(`/round`/`/flat`/`/pointed`), and `/Jitter`. Color is deliberately not
+a key -- fills with whatever the caller already set, same as any other
+artkit shape helper. Multiple subpaths each become an independent
+ribbon; a closed subpath (walkpath's start and guaranteed-end
+coincide) is filled as two concentric closed loops with no caps, not
+capped-and-notched; a degenerate single point, or a closed loop too
+short to leave two distinct offset points, falls back to a filled dot
+rather than erroring; an empty source path is a no-op.
+
+Two real bugs surfaced only through actually running the code, not
+through review alone:
+
+1. `pkgetdef` (the dict-with-default reader, one per sparse-options
+   library following `pagekit.ps`'s `pggetdef`) initially bound the
+   default value to a name and returned it via a bare `{ pkgdef }`
+   reference. That's fine for the plain-value defaults every other
+   dict-driven library here has ever used -- but `/Pressure`'s default
+   is itself a procedure (`pkflat`), and a name bound to a procedure
+   auto-executes on bare reference, same as calling any other proc by
+   name. So resolving an *absent* `/Pressure` key silently *called*
+   the default with no argument instead of returning it, underflowing
+   inside `pkflat`'s own `pop`. Fixed by wrapping the default in a
+   1-element array and reading it back with `get` -- a data fetch,
+   which never auto-executes regardless of what it holds.
+
+2. The stop-collection loop first tried the obvious one-liner,
+   `[ pitch { 6 array astore } walkpath ]` -- leave each stop's six
+   values on the operand stack for the enclosing `[ ... ]` to collect,
+   since `walkpath`'s own state lives entirely in named scratch vars,
+   not the stack, so nothing *should* care what's sitting underneath.
+   That's true within a single segment, but wrong across a subpath
+   boundary: `walkpath`'s `moveto` handler calls `wkend` (emitting the
+   previous subpath's guaranteed end stop through the proc) *before*
+   consuming the x/y `pathforall` already pushed it for the *new*
+   subpath's start -- so a proc that leaves an array on the stack
+   instead of consuming it steals that x/y out from under the very
+   code that was about to read it, corrupting `wkx`/`wky` and
+   cascading into a `typecheck` a few operators later. Confirmed
+   against plain `walkpath` directly, no paintkit involved -- a latent
+   trap in the walkpath contract itself, not something specific to
+   this library, worth flagging for anyone else writing a `walkpath`
+   proc. Fixed with the two-pass shape `wkmeasure`/`wkseg` already
+   established: count first, then fill a preallocated array, so the
+   proc's net stack effect is always zero.
+
+Per-vertex offsetting with no miter/bevel joint between segments
+notches a closed polygon's sharp corners visibly at generous widths --
+the discontinuous-tangent limit of the same self-intersection-at-tight-
+curvature tradeoff `fill` (not `eofill`) already accepts for a
+wide ribbon on a tight Bezier. Documented in the header as a known
+limitation of simple offset-curve stroking, not fixed -- a joint style
+is its own feature, out of this issue's "ribbon core" scope.
+
+`examples/paintkit_demo.ps` demonstrates all three centerline shapes,
+all three pressure profiles, all three cap styles, and seeded jitter.
+Like `walkpath_demo.ps`, it can't join `tests/golden.rs`: both load
+`(lib/artkit.ps) run` at runtime, which trips Ghostscript's `SAFER`
+sandboxing on the file read. `tests/paintkit.rs`'s own
+`ghostscript_accepts_paintkit` covers gs compatibility instead, the
+same way `tests/pagekit.rs` does -- artkit's and paintkit's *source*
+embedded directly into a combined driver file, no runtime `run` calls.
+
 ## A reusable centerline path sampler for procedural brushes (issue #40, 2026-08-15)
 
 Closes issue #40, the foundation for the painterly-brush series

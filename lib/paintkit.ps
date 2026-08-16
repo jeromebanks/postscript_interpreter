@@ -1,0 +1,314 @@
+%!PS-Adobe-3.0
+%%Title: paintkit.ps — pressure-sensitive ribbon strokes for artkit
+%%Creator: pscat — issue #41, the painterly-brush series' foundation
+%%EndComments
+
+% A fifth sibling to graph.ps/dataviz.ps/etching.ps/pagekit.ps, but --
+% like pagekit -- it depends on lib/artkit.ps, specifically walkpath
+% (issue #40, the centerline sampler). Load artkit first:
+%
+%   (lib/artkit.ps) run  (lib/paintkit.ps) run
+%
+% What's inside: one entry point, `pkribbon`, that treats the current
+% path as a centerline and fills a variable-width ribbon along it --
+% the minimum useful abstraction for a PostScript path as the motion
+% of a physical tool rather than a uniform geometric stroke.
+%
+%   opts pkribbon -
+%
+% `opts` is a dict of optional keys (a sparse or empty dict still
+% renders -- a plain constant-width band):
+%
+%   /Width       base width (default 6). Must be > 0.
+%   /Pitch       walkpath sampling pitch (default Width*0.5, capped at
+%                6 so wide ribbons don't facet). Must be > 0.
+%   /Pressure    {t -> mult} proc, t = walkpath's normalized progress
+%                through the current subpath. Default `pkflat`
+%                (constant 1.0). Two more presets ship: `pktaper`
+%                (linear, t itself is the multiplier) and `pkbell`
+%                (non-linear, a 0->1->0 hump via `sin`). Reference a
+%                preset as `{ pktaper }`, or write an inline proc.
+%   /StartTaper  /EndTaper   0..1 fraction of progress over which
+%                width additionally ramps 0->1 at the very start/end,
+%                independent of and multiplicative with /Pressure --
+%                needed for a clean taper regardless of the pressure
+%                curve's own shape. Default 0 (no extra ramp).
+%   /StartCap    /EndCap     /round (default), /flat, or /pointed.
+%                A cap whose computed half-width rounds to ~0 (taper
+%                or a zero-pressure endpoint) degrades to /pointed
+%                automatically rather than emitting a zero-radius arc.
+%   /Jitter      amount (default 0): each edge point is displaced
+%                along the local perpendicular by up to +/-amount,
+%                drawn from artkit's seeded `frnd` -- reproducible
+%                under the caller's own `N srand`, same doctrine as
+%                the rest of artkit (no library-owned seed). Skipped
+%                entirely at /pointed (or degenerate) tips, and not
+%                drawn at all when amount is 0 (so an unjittered call
+%                doesn't perturb the caller's rand sequence).
+%
+% Color is deliberately not a key: `pkribbon` fills with whatever
+% color the caller already set (`setrgbcolor` et al.), same as any
+% other artkit shape helper.
+%
+% Multiple subpaths in the source path each become an independent
+% ribbon. A closed subpath (its walkpath start and guaranteed end
+% coincide) is filled as two concentric closed loops with no caps at
+% all -- /StartCap//EndCap only apply to open paths. A degenerate
+% single-point subpath, or a closed subpath too short to leave two
+% distinct offset points after that coincidence is resolved, falls
+% back to a single filled dot (diameter Width*Pressure at that point)
+% rather than erroring. An entirely empty source path is a no-op.
+%
+% Built with plain `fill` (nonzero winding), not `eofill`: a
+% self-intersecting offset -- unavoidable wherever the centerline's
+% curvature radius drops below half the ribbon's width, e.g. a tight
+% Bezier at a generous /Width -- still paints the whole ribbon rather
+% than punching a hole in it. That's a real, documented limitation of
+% simple offset-curve stroking, not a bug. The same limitation shows
+% up as a small notch at a polygon's sharp corners (the discontinuous-
+% tangent limit of the same problem): each walkpath stop is offset
+% along its own segment's tangent, with no miter/bevel joint between
+% consecutive segments, so a corner sharper than the ribbon is wide
+% pinches rather than mitering cleanly. Acceptable for the ribbon core
+% this issue scopes; a joint style would be its own feature.
+%
+% Scratch prefixes: pk- (pkribbon/dispatch), pkbr- (pkbuildrun),
+% pko- (pkopenrun), pkl- (pkloop), pke- (pkedge), pkh- (pkhalfwat),
+% pktf- (pktaperf), pkd- (pkdot), pkg- (pkgetdef).
+
+% opts key default pkgetdef  value -
+% The default is wrapped in a 1-element array rather than bound
+% straight to a name -- a name bound directly to a procedure (e.g. a
+% /Pressure default) auto-executes on bare reference, same as calling
+% any other proc by name in this file, so returning it as `pkgdef`
+% would silently invoke the default instead of yielding it. Reading it
+% back with `get` sidesteps that regardless of the default's type.
+/pkgetdef {                                      % dict key default -
+    /pkgdef exch 1 array astore def
+    /pkgkey exch def
+    /pkgdict exch def
+    pkgdict pkgkey known
+        { pkgdict pkgkey get }
+        { pkgdef 0 get }
+    ifelse
+} def
+
+% --- pressure presets: t -> mult -------------------------------------
+/pkflat  { pop 1.0 } def                          % constant
+/pktaper { } def                                  % linear (t is the mult)
+/pkbell  { 180 mul sin } def                      % non-linear 0->1->0 hump
+
+% t -> mult   (StartTaper/EndTaper ramp; reads pkstarttaper/pkendtaper)
+/pktaperf {
+    /pktft exch def
+    pktft pkstarttaper lt pkstarttaper 0 gt and {
+        pktft pkstarttaper div
+    } {
+        pktft 1 pkendtaper sub gt pkendtaper 0 gt and {
+            1 pktft sub pkendtaper div
+        } {
+            1.0
+        } ifelse
+    } ifelse
+} def
+
+% t -> halfwidth   (reads pkwidth/pkpressure/pktaperf's globals)
+/pkhalfwat {
+    /pkht exch def
+    pkwidth
+    pkht pkpressure
+    pkht pktaperf
+    mul mul 2 div
+} def
+
+% amount -> offset in -amount..amount, deterministic under srand
+/pkjit { frnd 2 mul 1 sub mul } def
+
+% x y ang halfw side -> ex ey   (side: -1 right / +1 left of travel;
+% applies /Jitter along the perpendicular, skipped entirely at 0)
+/pkedge {
+    /pkeside exch def /pkehw exch def /pkeang exch def
+    /pkey exch def /pkex exch def
+    /pkeoff pkjitter 0 eq { pkehw } { pkehw pkjitter pkjit add } ifelse def
+    /pkepa pkeang 90 pkeside mul add def
+    pkex pkepa cos pkeoff mul add
+    pkey pkepa sin pkeoff mul add
+} def
+
+% [x y ang t sp atend] pkdot -   (degenerate single-point fallback)
+/pkdot {
+    dup 0 get /pkdx exch def
+    dup 1 get /pkdy exch def
+    3 get /pkdt exch def
+    /pkdhw pkdt pkhalfwat def
+    pkdhw 0 gt { pkdx pkdy pkdhw 0 360 arc closepath } if
+} def
+
+% start end side pkloop -   (one closed offset loop, no caps)
+/pkloop {
+    /pklside exch def /pklend exch def /pklstart exch def
+    pkraw pklstart get
+    dup 0 get /pklx exch def dup 1 get /pkly exch def
+    dup 2 get /pklang exch def 3 get /pklt exch def
+    pklx pkly pklang pklt pkhalfwat pklside pkedge moveto
+    pklstart 1 add 1 pklend {
+        /pkli exch def
+        pkraw pkli get
+        dup 0 get /pklx exch def dup 1 get /pkly exch def
+        dup 2 get /pklang exch def 3 get /pklt exch def
+        pklx pkly pklang pklt pkhalfwat pklside pkedge lineto
+    } for
+    closepath
+} def
+
+% start end pkopenrun -   (one open ribbon polygon with caps)
+/pkopenrun {
+    /pkoend exch def /pkostart exch def
+
+    pkraw pkostart get
+    dup 0 get /pkox0 exch def dup 1 get /pkoy0 exch def
+    dup 2 get /pkoang0 exch def 3 get /pkot0 exch def
+    /pkohw0 pkot0 pkhalfwat def
+    /pkostartpointed
+        pkstartcap /pointed eq pkohw0 0.001 le or
+    def
+    pkostartpointed
+        { pkox0 pkoy0 moveto }
+        { pkox0 pkoy0 pkoang0 pkohw0 -1 pkedge moveto }
+    ifelse
+
+    pkraw pkoend get 3 get /pkotend exch def
+    /pkohwe pkotend pkhalfwat def
+    /pkoendpointed
+        pkendcap /pointed eq pkohwe 0.001 le or
+    def
+    /pkorightlast pkoendpointed { pkoend 1 sub } { pkoend } ifelse def
+
+    pkostart 1 add 1 pkorightlast {
+        /pkoi exch def
+        pkraw pkoi get
+        dup 0 get /pkoix exch def dup 1 get /pkoiy exch def
+        dup 2 get /pkoiang exch def 3 get /pkoit exch def
+        pkoix pkoiy pkoiang pkoit pkhalfwat -1 pkedge lineto
+    } for
+
+    pkraw pkoend get
+    dup 0 get /pkoxe exch def dup 1 get /pkoye exch def
+    dup 2 get /pkoange exch def pop
+    pkoendpointed {
+        pkoxe pkoye lineto
+    } {
+        pkendcap /round eq {
+            pkoxe pkoye pkohwe pkoange 90 sub pkoange 90 add arc
+        } {
+            pkoxe pkoye pkoange pkohwe 1 pkedge lineto
+        } ifelse
+    } ifelse
+
+    /pkoleftfirst pkostartpointed { pkostart 1 add } { pkostart } ifelse def
+    pkoend 1 sub -1 pkoleftfirst {
+        /pkoi exch def
+        pkraw pkoi get
+        dup 0 get /pkoix exch def dup 1 get /pkoiy exch def
+        dup 2 get /pkoiang exch def 3 get /pkoit exch def
+        pkoix pkoiy pkoiang pkoit pkhalfwat 1 pkedge lineto
+    } for
+
+    pkostartpointed { } {
+        pkstartcap /round eq {
+            pkox0 pkoy0 pkohw0 pkoang0 90 add pkoang0 270 add arc
+        } if
+    } ifelse
+    closepath
+} def
+
+% start end pkbuildrun -   (one subpath's worth of walkpath stops)
+/pkbuildrun {
+    /pkbrend exch def /pkbrstart exch def
+    pkbrstart pkbrend eq pkraw pkbrstart get 5 get 3 eq and {
+        pkraw pkbrstart get pkdot
+    } {
+        pkraw pkbrstart get 0 get /pkbrx0 exch def
+        pkraw pkbrstart get 1 get /pkbry0 exch def
+        pkraw pkbrend get 0 get /pkbrxl exch def
+        pkraw pkbrend get 1 get /pkbryl exch def
+        /pkbrclosed
+            pkbrxl pkbrx0 sub abs 0.0001 lt
+            pkbryl pkbry0 sub abs 0.0001 lt and
+        def
+        pkbrclosed {
+            /pkbrend2
+                pkraw pkbrend get 4 get 0 eq pkbrend pkbrstart gt and
+                { pkbrend 1 sub } { pkbrend } ifelse
+            def
+            pkbrend2 pkbrstart gt {
+                pkbrstart pkbrend2 -1 pkloop
+                pkbrstart pkbrend2 1 pkloop
+            } {
+                pkraw pkbrstart get pkdot
+            } ifelse
+        } {
+            pkbrstart pkbrend pkopenrun
+        } ifelse
+    } ifelse
+} def
+
+% opts pkribbon -
+/pkribbon {
+    /pkopts exch def
+    /pkwidth pkopts /Width 6 pkgetdef def
+    pkwidth 0 le { pkribbon-width-must-be-positive } if
+    /pkpitch
+        pkopts /Pitch
+        pkwidth 0.5 mul dup 6 gt { pop 6 } if
+        pkgetdef
+    def
+    pkpitch 0 le { pkribbon-pitch-must-be-positive } if
+    /pkpressure pkopts /Pressure { pkflat } pkgetdef def
+    /pkstarttaper pkopts /StartTaper 0 pkgetdef def
+    /pkendtaper pkopts /EndTaper 0 pkgetdef def
+    /pkstartcap pkopts /StartCap /round pkgetdef def
+    /pkendcap pkopts /EndCap /round pkgetdef def
+    /pkjitter pkopts /Jitter 0 pkgetdef def
+
+    % Two walkpath passes over the same (surviving, per its own
+    % contract) flattened path -- count, then fill a preallocated
+    % array -- same shape as artkit's own wkmeasure/wkseg split.
+    % Tried a one-pass `[ pitch { 6 array astore } walkpath ]` first:
+    % it looks like it should work (walkpath's own state lives in
+    % named vars, not the stack), and it does for a single-segment
+    % path, but it breaks on a second subpath. walkpath's own moveto
+    % handler calls `wkend` (emitting the previous subpath's guaranteed
+    % end stop through wkproc) *before* consuming the x/y pathforall
+    % just pushed it for the new subpath -- so a wkproc that leaves an
+    % array sitting on the stack instead of consuming it steals that
+    % x/y out from under it. Confirmed empirically against plain
+    % walkpath, no paintkit involved. A proc that fully consumes its 6
+    % inputs every call (store-by-index, net stack effect zero) sidesteps
+    % it regardless of how deep it's nested in someone else's callback.
+    /pkcount 0 def
+    pkpitch { pop pop pop pop pop pop /pkcount pkcount 1 add def } walkpath
+    /pkraw pkcount array def
+    /pkci 0 def
+    pkpitch {
+        6 array astore pkraw pkci 3 -1 roll put
+        /pkci pkci 1 add def
+    } walkpath
+    /pkn pkraw length def
+
+    pkn 0 gt {
+        gsave
+        newpath
+        /pki 0 def
+        /pkrunstart 0 def
+        {
+            pki pkn ge { exit } if
+            pkraw pki get 5 get /pkae exch def
+            pkae 1 and 1 eq { /pkrunstart pki def } if
+            pkae 2 and 2 eq { pkrunstart pki pkbuildrun } if
+            /pki pki 1 add def
+        } loop
+        fill
+        grestore
+    } if
+} def
