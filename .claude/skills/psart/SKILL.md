@@ -49,6 +49,12 @@ prefer it over guessing a name from prose below.
   including text via `charpath`. `(string) pathtext` sets type along
   any path, glyph by glyph, rotated to the tangent. Wrap stamps in
   `gsave newpath ... grestore` so the walked path survives.
+  `pitch {x y ang t sp atend ...} walkpath` is the same walk with more
+  to build a mark from: normalized progress `t` (0..1 per subpath),
+  spacing `sp` since the last stop, and an `atend` bitmask (1 = start,
+  2 = end — a subpath always gets one guaranteed call at its literal
+  end, even off-pitch). This is what a variable-width/tapered brush
+  wants instead of plain `alongpath`.
 - **Shapes/text/layout**: `ngon`, `star`, `rrect`; `(s) cx y
   showctr`, `(s) w fitfont`; `x y w h cols rows {x y w h ...} grid`.
 - **Tiling**: `x0 y0 v1 v2 n1 n2 {x y ...} lattice` (the general point

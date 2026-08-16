@@ -127,6 +127,30 @@ fn alongpath_stamps_at_pitch() {
 }
 
 #[test]
+fn walkpath_regular_stops_match_alongpath_exactly() {
+    // The compatibility claim this file's header and NOTES.md make:
+    // walkpath's regular (non-end-flagged) stops land exactly where
+    // alongpath's would, on the same path. Mixes line and closepath
+    // segments across a closed subpath so the walk crosses several
+    // segment boundaries, not just one straight run.
+    let path = "newpath 0 0 moveto 40 0 lineto 40 40 lineto 0 40 lineto closepath ";
+    let along = eval(&format!(
+        "{path} 7 {{ /a exch def /y exch def /x exch def x y }} alongpath"
+    ));
+    let walk = eval(&format!(
+        "{path} 7 {{ /at exch def /sp exch def /t exch def /ang exch def \
+              /y exch def /x exch def at 2 and 0 eq {{ x y }} if }} walkpath"
+    ));
+    assert_eq!(along, walk);
+}
+
+#[test]
+fn walkpath_on_an_empty_path_is_a_silent_no_op() {
+    let got = eval("newpath /n 0 def 10 { pop pop pop pop pop pop /n n 1 add def } walkpath n");
+    assert_eq!(got, ["0"]);
+}
+
+#[test]
 fn walkpath_adds_a_guaranteed_end_stop_alongpath_cannot_promise() {
     // Same 100-unit line, pitch 30: interior stops land at 0,30,60,90
     // (4, matching alongpath exactly), plus one guaranteed extra call
