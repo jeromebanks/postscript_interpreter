@@ -440,23 +440,34 @@ pub fn catalog_entries() -> Vec<FontEntry> {
         // whenever the file behind it is literally "<name>-Regular" —
         // e.g. a catalog holding only Bangers-Regular.ttf makes both
         // `/Bangers-Regular findfont` (the stem above) and
-        // `/Bangers findfont` (this implicit alias) succeed. Omitted
-        // without this: 37 such reachable names on this repo's own
-        // catalog, confirmed empirically before writing the fix. `seen`
-        // is built from `entries` as they stand now (builtins, stems,
-        // and curated ALIASES all already added) so an implicit alias
-        // never shadows any of those.
+        // `/Bangers findfont` (this implicit alias) succeed. Case-
+        // insensitively, matching catalog_fid's own
+        // `eq_ignore_ascii_case` lookup — the bundled TeX Gyre files
+        // are named e.g. `texgyreadventor-regular.otf` (lowercase),
+        // and an exact-case strip_suffix("-Regular") missed every one
+        // of them (a fourth cross-model review finding). Omitted
+        // without this: 37+ such reachable names on this repo's own
+        // catalog, confirmed empirically before writing the fix.
+        // `seen` is built from `entries` as they stand now (builtins,
+        // stems, and curated ALIASES all already added) so an implicit
+        // alias never shadows any of those.
         let mut seen: std::collections::HashSet<String> =
             entries.iter().map(|e| e.name.clone()).collect();
         for stem in &stems {
-            if let Some(short) = stem.strip_suffix("-Regular")
-                && seen.insert(short.to_string())
-            {
-                entries.push(FontEntry {
-                    name: short.to_string(),
-                    origin: FontOrigin::Alias,
-                    alias_target: Some(stem.clone()),
-                });
+            // Lowercasing preserves byte length and every char boundary
+            // (ASCII case-folding never changes which bytes are UTF-8
+            // continuation bytes), so `short_len` below is guaranteed a
+            // valid boundary in `stem` too -- safe to slice directly,
+            // unlike computing `stem.len() - 8` and indexing by hand.
+            if let Some(short_lower) = stem.to_ascii_lowercase().strip_suffix("-regular") {
+                let short = &stem[..short_lower.len()];
+                if seen.insert(short.to_string()) {
+                    entries.push(FontEntry {
+                        name: short.to_string(),
+                        origin: FontOrigin::Alias,
+                        alias_target: Some(stem.clone()),
+                    });
+                }
             }
         }
     }

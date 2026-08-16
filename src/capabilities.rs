@@ -65,6 +65,13 @@ pub enum CapabilityKind {
     Palette,
     Template,
     Procedure,
+    /// A mutable global config variable (e.g. `/spmetal`) — not
+    /// executable, just a name bound to a value that other procedures
+    /// in the same source read. Distinct from `Procedure` (a fourth
+    /// cross-model review finding, PR #74): a consumer enumerating
+    /// `kind == "procedure"` and calling every entry would find `/name
+    /// exec` on a dial only pushes its value, not runs anything.
+    Dial,
 }
 
 impl CapabilityKind {
@@ -75,6 +82,7 @@ impl CapabilityKind {
             CapabilityKind::Palette => "palette",
             CapabilityKind::Template => "template",
             CapabilityKind::Procedure => "procedure",
+            CapabilityKind::Dial => "dial",
         }
     }
 }
@@ -1009,13 +1017,13 @@ static ENTRIES: &[Entry] = &[
         "Walks a 2D point lattice from two basis vectors, calling a proc at each point.",
         &[],
         ARTKIT,
-        "x0 y0 v1 v2 n1 n2 {x y ...} lattice -",
+        "x0 y0 v1x v1y v2x v2y n1 n2 {x y ...} lattice -",
         LIB
     ),
     entry!(
         "hex",
         CapabilityKind::Procedure,
-        "Appends a flat-top regular hexagon to the current path.",
+        "Appends a pointy-top regular hexagon to the current path.",
         &[],
         ARTKIT,
         "cx cy r hex -",
@@ -1289,8 +1297,8 @@ static ENTRIES: &[Entry] = &[
     ),
     entry!(
         "spmetal",
-        CapabilityKind::Procedure,
-        "Dial (global variable, not a call): the palette name steampunk's painted stamps draw with.",
+        CapabilityKind::Dial,
+        "The palette name steampunk's painted stamps draw with.",
         &[],
         STEAMPUNK,
         "/spmetal /verdigris def   (default /brass)",
@@ -1426,8 +1434,8 @@ static ENTRIES: &[Entry] = &[
     ),
     entry!(
         "sfworld",
-        CapabilityKind::Procedure,
-        "Dial (global variable, not a call): the palette name the painted planet draws with.",
+        CapabilityKind::Dial,
+        "The palette name the painted planet draws with.",
         &[],
         SCIFI,
         "/sfworld /hologram def   (default /void)",
@@ -1499,8 +1507,8 @@ static ENTRIES: &[Entry] = &[
     ),
     entry!(
         "tnink",
-        CapabilityKind::Procedure,
-        "Dial (global variable, not a call): the outline color celfill and friends ink with.",
+        CapabilityKind::Dial,
+        "The outline color celfill and friends ink with.",
         &[],
         TOON,
         "/tnink [0.20 0.12 0.30] def   (default near-black)",

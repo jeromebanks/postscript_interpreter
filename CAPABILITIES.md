@@ -49,22 +49,32 @@ byte-for-byte regardless of directory-scan or hashmap iteration order
 upstream.
 
 `kind` is one of `font`, `type3_face`, `palette`, `template`,
-`procedure`. `availability` says how durable an entry is:
+`procedure`, `dial`. `dial` is a mutable global config variable (e.g.
+`lib/styles/steampunk.ps`'s `/spmetal`, read by `gear`/`rivet`/etc.
+for which mood palette to draw with) — not executable, so it's split
+out from `procedure` rather than counted as one: a consumer that
+enumerated `kind == "procedure"` and called every entry would find
+`/spmetal exec` just pushes its current value, not runs anything (a
+fourth cross-model review finding, PR #74).
+
+`availability` says how durable an entry is:
 - `builtin` — compiled into the binary, resolves identically
   everywhere (wasm included).
 - `catalog (desktop/bundle only; ...)` — a font-catalog face or an
   alias to one; depends on `fonts/catalog/` being present, so absent
-  on wasm and possibly absent on an incomplete install. Three
+  on wasm and possibly absent on an incomplete install. Several
   cross-model review findings (PR #74) sharpened what counts as
   "installed" here: a stem is listed only if its file is actually
   readable and parses (not merely present with a matching extension —
   a corrupt file doesn't get advertised); a curated `ALIASES` entry is
   listed only if its target file is actually present; and every
-  catalog file literally named `<Name>-Regular.<ext>` also gets an
-  *implicit* alias for the bare `<Name>` (`catalog_fid`'s own
-  `-Regular` fallback makes that name resolve too, even when it's not
-  in `ALIASES` — 37 such names on this repo's own catalog, previously
-  missing from `--capabilities` entirely).
+  catalog file literally named `<Name>-Regular.<ext>` (matched
+  case-insensitively — the bundled TeX Gyre files use a lowercase
+  `-regular` suffix) also gets an *implicit* alias for the bare
+  `<Name>`, since `catalog_fid`'s own `-Regular` fallback makes that
+  name resolve too, even when it's not in `ALIASES` — 40+ such names
+  on this repo's own catalog, previously missing from
+  `--capabilities` entirely.
 - `library` — defined in a `.ps` file loaded via `run`; always
   available once that source is loaded, no runtime filesystem
   negotiation the way catalog fonts need.

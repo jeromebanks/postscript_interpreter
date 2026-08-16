@@ -94,7 +94,8 @@ fn style_pack_names_match_the_catalog_exactly() {
         // check, not a case this test is designed to catch.
         let pack_specific: BTreeSet<String> = all.difference(&artkit_baseline).cloned().collect();
 
-        let expected = names_by(CapabilityKind::Procedure, source);
+        let mut expected = names_by(CapabilityKind::Procedure, source);
+        expected.extend(names_by(CapabilityKind::Dial, source));
         assert_name_sets_match(file, &pack_specific, &expected);
     }
 }

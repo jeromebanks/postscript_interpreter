@@ -16,12 +16,12 @@ skill's "toolkit" tour was last touched.
 
 - `src/capabilities.rs`: `--capabilities` (CLI) and
   `describe_art_capabilities` (`pscat-mcp`) both serialize one JSON
-  payload — 268 entries as of this build: 142 fonts (105 builtin/
-  catalog-stem, plus 37 implicit `-Regular`-stripped aliases a
-  cross-model review found missing — see below), 90 procedures
-  (57 from `lib/artkit.ps`, 29 across the four style packs, and 4 more
+  payload — 273 entries as of this build: 147 fonts (105 builtin/
+  catalog-stem, plus 40+ implicit `-Regular`-stripped aliases two
+  cross-model review rounds found missing — see below), 87 procedures
+  (57 from `lib/artkit.ps`, 26 across the four style packs, and 4 more
   from `lib/handscript.ps`/`lib/hangul.ps`), 22 palettes, 9 Type 3
-  program faces, 5 page templates — plus `pscat_version` and
+  program faces, 5 page templates, 3 dials — plus `pscat_version` and
   `catalog_signature` fields so a caching agent can treat either
   changing as the re-fetch signal.
 - Fonts are the one section built *dynamically*: `font.rs` gained
@@ -126,6 +126,33 @@ skill's "toolkit" tour was last touched.
   it against the codebase's own leak discipline — `'static` leaks here
   are supposed to be bounded per unique font file, process-lifetime,
   not per catalog listing).
+- A fourth review round caught four more real gaps, all fixed:
+  1. The implicit `-Regular`-alias fix from round three used an
+     exact-case `strip_suffix("-Regular")`, but the bundled TeX Gyre
+     files are named e.g. `texgyreadventor-regular.otf` — lowercase.
+     `catalog_fid` itself resolves case-insensitively
+     (`eq_ignore_ascii_case`), so `/texgyreadventor findfont` already
+     worked; the catalog just didn't know it. Fixed by lowercasing a
+     copy and using `strip_suffix` on that (boundary-safe — manual
+     byte-index slicing on the original string risked a panic on a
+     hypothetical non-ASCII stem, caught while writing the fix, not by
+     the review).
+  2. `lattice`'s cataloged calling convention, `x0 y0 v1 v2 n1 n2
+     ... lattice`, was copied faithfully from `lib/artkit.ps`'s own
+     top-of-file API index — which itself compresses two 2D vectors
+     into `v1 v2`. The proc actually pops four separate numbers
+     (`v1x v1y v2x v2y`); an agent following the catalog literally
+     would come up two operands short. Corrected to match the
+     definition, not the header's shorthand.
+  3. `hex`'s description said "flat-top"; `lib/artkit.ps`'s own
+     comment at its definition says "pointy-top" (hex starts its walk
+     at 90 degrees). Corrected.
+  4. `spmetal`/`sfworld`/`tnink` (the three style packs' dial
+     variables) were cataloged as `kind: procedure`, despite not being
+     callable — invoking one just pushes its current value. Split into
+     a new `CapabilityKind::Dial`; `tests/capabilities.rs`'s style-pack
+     reverse check now unions `Procedure` and `Dial` names for its
+     expected set, since both still land in `userdict`.
 - `CAPABILITIES.md` documents the payload shape and the
   register-a-new-capability workflow; `.claude/skills/psart/SKILL.md`
   now points at `--capabilities` as the source of truth over its own
