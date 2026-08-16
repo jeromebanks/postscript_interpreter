@@ -227,6 +227,44 @@ fn closed_polygon_leaves_a_hole_under_a_large_scale() {
 }
 
 #[test]
+fn closed_polygon_ring_covers_its_whole_perimeter_not_just_a_dot_at_the_seam() {
+    // Regression test for a bug in this round's own first attempt at
+    // fixing a Codex-round-4 finding: a closed run's "does a real
+    // interior sample exist" check compared pkbrend's *position*
+    // against pkbrstart's -- but a closed subpath's guaranteed-end
+    // stop *always* returns to the start's coordinates by definition,
+    // regardless of how much real interior content the loop has. That
+    // made every closed ribbon, at any size, look "degenerate" and
+    // collapse to a single dot at the start/seam point instead of
+    // following the whole perimeter -- caught visually before this
+    // test was written, not by the existing hole-in-the-middle checks
+    // (which happened to still pass against the collapsed dot). Fixed
+    // by checking index separation instead of position. Sample all
+    // four sides, not just one, so a dot-at-the-seam collapse (ink
+    // only near start) can't slip past a single-point check either.
+    let mut it = fresh(80, 60);
+    it.run_str(
+        "0 0 0 setrgbcolor 1 srand \
+         newpath 20 10 moveto 60 10 lineto 60 50 lineto 20 50 lineto closepath \
+         << /Width 16 >> pkribbon",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    for (x, y, side) in [
+        (40, 10, "bottom"),
+        (40, 50, "top"),
+        (20, 30, "left"),
+        (60, 30, "right"),
+    ] {
+        let p = it.gfx().pixmap.pixel(x, y).expect("in bounds");
+        assert!(
+            luma(p) < 100.0,
+            "expected ink on the ring's {side} side ({x},{y}), got luma {}",
+            luma(p)
+        );
+    }
+}
+
+#[test]
 fn overlapping_start_and_end_taper_ramps_stay_continuous() {
     // Regression test for a Codex-round-1 finding: StartTaper/EndTaper
     // summing past 1 (so their ramp regions overlap) used to pick one
@@ -373,6 +411,99 @@ fn short_pointed_stroke_renders_a_lens_not_a_blank_page() {
         ink_count(&it) > 10,
         "expected a visible lens for a short pointed stroke, got {}",
         ink_count(&it)
+    );
+}
+
+#[test]
+fn stroke_exactly_one_pitch_long_still_bulges_with_a_zero_edge_pressure() {
+    // Regression test for a Codex-round-4 finding: when a subpath's
+    // length is an exact multiple of /Pitch, walkpath's regular
+    // stepping already lands exactly on the endpoint, and the
+    // guaranteed-end stop then duplicates it (sp == 0) -- so a naive
+    // "is there an interior stop" check sees a distinct *index* that
+    // isn't actually a distinct *position*, missing the case in
+    // short_pointed_stroke_renders_a_lens_not_a_blank_page (which uses
+    // a length well under /Pitch, no duplicate involved). Combined
+    // with a pressure profile that's genuinely zero at the very edge
+    // (pkbell at t=1), the only "interior" sample available also has
+    // zero width, so the fix has to actually drop the duplicate before
+    // deciding whether a real bulge is possible.
+    let mut it = fresh(40, 60);
+    it.run_str(
+        "0 0 0 setrgbcolor 1 srand \
+         newpath 10 30 moveto 20 30 lineto \
+         << /Width 20 /Pitch 10 /Pressure { pkbell } \
+            /StartCap /pointed /EndCap /pointed >> pkribbon",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 10,
+        "expected a visible lens even at exactly one pitch step, got {}",
+        ink_count(&it)
+    );
+}
+
+#[test]
+fn tiny_closed_path_falls_back_to_a_dot_not_a_blank_page() {
+    // Regression test for a Codex-round-4 finding: a closed subpath
+    // shorter than /Pitch gets only walkpath's start and guaranteed
+    // end, both at the same position -- but the end's sp is the
+    // subpath's own positive length, not 0, so the sp==0 duplicate
+    // check alone doesn't catch it. Without a position-aware check,
+    // pkloop built two coincident-point "loops" that fill painted as
+    // nothing instead of the documented dot fallback.
+    let mut it = fresh(40, 60);
+    it.run_str(
+        "0 0 0 setrgbcolor 1 srand \
+         newpath 20 30 moveto 22 30 lineto 21 32 lineto closepath \
+         << /Width 20 /Pitch 50 >> pkribbon",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 20,
+        "expected a filled dot for a closed path shorter than Pitch, got {}",
+        ink_count(&it)
+    );
+}
+
+#[test]
+fn open_path_returning_to_its_start_without_closepath_keeps_its_caps() {
+    // Regression test for a Codex-round-4 finding: comparing walkpath's
+    // start/end stop coordinates for equality can't distinguish a real
+    // closepath from an open path that merely ends exactly where it
+    // began (an explicit lineto back to the start, no closepath) --
+    // both give bit-for-bit identical endpoint coordinates. Closure is
+    // now tracked directly from the path via pkscanclosed (whether
+    // pathforall actually reported a close segment), not inferred from
+    // coordinates. Both the open (pointed-tip) and closed (smooth ring)
+    // versions of this rectangle are hollow in the middle either way --
+    // pointed caps still trace the same outline, they don't fill it --
+    // so the real signature of "caps got applied" is at the seam
+    // corner itself, not the center: comparing rendered ink counts
+    // against the same path with a real closepath (where /StartCap//
+    // EndCap must be ignored per the documented ring contract) should
+    // show a real difference if this one kept its pointed corner.
+    fn render(src: &str) -> usize {
+        let mut it = fresh(80, 60);
+        it.run_str(src)
+            .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        ink_count(&it)
+    }
+    let open_pointed = render(
+        "0 0 0 setrgbcolor 1 srand \
+         newpath 20 10 moveto 60 10 lineto 60 50 lineto 20 50 lineto 20 10 lineto \
+         << /Width 16 /StartCap /pointed /EndCap /pointed >> pkribbon",
+    );
+    let truly_closed = render(
+        "0 0 0 setrgbcolor 1 srand \
+         newpath 20 10 moveto 60 10 lineto 60 50 lineto 20 50 lineto closepath \
+         << /Width 16 /StartCap /pointed /EndCap /pointed >> pkribbon",
+    );
+    assert_ne!(
+        open_pointed, truly_closed,
+        "an explicit-lineto-back-to-start path and a real closepath \
+         path should render differently (caps kept vs ignored), not \
+         both get treated as closed"
     );
 }
 

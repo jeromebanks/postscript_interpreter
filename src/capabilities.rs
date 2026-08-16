@@ -251,6 +251,7 @@ pub const PAINTKIT_INTERNAL: &[&str] = &[
     "pkloop",
     "pkopenrun",
     "pkbuildrun",
+    "pkscanclosed",
 ];
 
 /// Top-level names `lib/handscript.ps` defines beyond `hs-write`/

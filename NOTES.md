@@ -211,6 +211,76 @@ rather than genuine runtime unavailability, since the identical command
 had already succeeded twice in a row on this same PR; a bare retry
 registered and completed normally.)
 
+Round 4 found three more real defects, subtler than any prior round --
+all three about walkpath's own edge cases (the exact-multiple-of-pitch
+coincidence, the too-short-to-sample case, coordinate-only closure
+inference) that hadn't come up until Codex specifically went looking
+for them:
+
+- **A stroke exactly one pitch long could still render blank.** Round
+  3's fix only handled a subpath *shorter* than `/Pitch` (walkpath's
+  guaranteed 2-stop minimum). When a subpath's length is an exact
+  multiple of `/Pitch`, walkpath's regular stepping already lands
+  exactly on the endpoint, and the guaranteed-end stop then duplicates
+  it (`sp == 0`) -- three stops total, not two, so round 3's "index
+  distinct from start" check for whether a real interior sample exists
+  passed even though the "interior" stop is really just an echo of the
+  endpoint at the same position. Combined with a pressure profile
+  that's genuinely zero right at the edge (`pkbell` at `t=1`), the only
+  candidate sample available also carried zero width. Fixed by
+  coalescing the trailing `sp==0` duplicate *before* deciding whether a
+  real bulge is possible, not after.
+- **A closed subpath shorter than `/Pitch` rendered blank instead of a
+  dot.** The mirror image of the above for closed paths: walkpath
+  returns only start and a guaranteed end at the same coordinates, but
+  the end's `sp` is the subpath's own positive length, not 0 -- the
+  duplicate-coalescing check alone doesn't catch it, since there's no
+  duplicate to coalesce here, just two stops that both happen to be the
+  same physical point. `pkloop` built two literally coincident-point
+  "loops," zero area, instead of the documented dot fallback. Needed a
+  check for whether a genuinely distinct sample exists, not just
+  whether the dedup left two array indices.
+- **Coordinate coincidence can't distinguish real closure from an open
+  path that merely returns to its own start.** The round-1 exact-
+  equality fix correctly stopped comparing coordinates under a
+  tolerance, but never questioned whether comparing coordinates *at
+  all* was the right test -- an open subpath ending with an explicit
+  `lineto` back to its exact starting point (no `closepath`) gives
+  bit-for-bit identical endpoint coordinates to a real closed one,
+  silently dropping its requested caps and building a ring instead.
+  Fixed properly rather than patched further: `pkscanclosed`, a new
+  helper mirroring `wkmeasure`'s own two-pass shape, does a `pathforall`
+  pass that tracks whether each subpath's close proc actually fired --
+  authoritative, since `pathforall` only calls it for a real
+  `closepath` segment -- and `pkribbon`'s dispatch now threads that
+  per-subpath flag into `pkbuildrun` instead of it inferring closure
+  itself.
+
+Implementing the second fix's first attempt introduced its own bug,
+caught only by looking at the actual render rather than trusting the
+logic: "does a real interior sample exist for a closed run" was
+written as a *position* comparison between the run's last stop and its
+first -- but a closed subpath's guaranteed-end stop always returns to
+the start's coordinates *by definition*, whether the loop has real
+content or not, so that comparison is comparing a closed loop's end to
+itself and is always true regardless of what's actually being asked.
+Every closed ribbon in the whole demo collapsed to a single dot at the
+seam instead of following its perimeter -- confirmed by re-rendering
+the same closed-square fixture from round 1's own fix and seeing a dot
+where a ring used to be. None of the existing hole-in-the-middle tests
+caught it (a dot at the seam still leaves the center unpainted and the
+one edge pixel they happened to sample still inked), which is exactly
+why the fix this time samples all four sides of the perimeter, not
+one. Corrected to an index-based check (is there a real *interior*
+array index between start and end, not whether the endpoint coincides
+with itself) -- the thing round 3's short-stroke fix already needed to
+get right for open paths, misapplied here to a case where it doesn't
+mean the same thing.
+
+All fixes came with regression tests, including one for the
+self-caught bug. Full quality gate re-run clean (670 tests) before
+pushing and re-running Codex review a fourth time.
+
 ## A reusable centerline path sampler for procedural brushes (issue #40, 2026-08-15)
 
 Closes issue #40, the foundation for the painterly-brush series

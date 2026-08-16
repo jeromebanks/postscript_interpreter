@@ -65,11 +65,14 @@
 % `gsave`/`newpath`/`grestore`, never touching the path it just walked.
 %
 % Multiple subpaths in the source path each become an independent
-% ribbon. A closed subpath (its walkpath start and guaranteed end
-% coincide) is filled as two concentric closed loops with no caps at
-% all -- /StartCap//EndCap only apply to open paths. A degenerate
-% single-point subpath, or a closed subpath too short to leave two
-% distinct offset points after that coincidence is resolved, falls
+% ribbon. A subpath actually closed with `closepath` -- tracked
+% directly from the path itself (`pkscanclosed`), not inferred from
+% its endpoints merely coinciding, since an open subpath can
+% legitimately end exactly where it started too -- is filled as two
+% concentric closed loops with no caps at all -- /StartCap//EndCap
+% only apply to open paths. A degenerate single-point subpath, or a
+% closed subpath too short to leave a genuinely distinct interior
+% sample, falls
 % back to a single filled dot (diameter Width*Pressure at that point)
 % rather than erroring. An entirely empty source path is a no-op.
 %
@@ -87,7 +90,35 @@
 %
 % Scratch prefixes: pk- (pkribbon/dispatch), pkbr- (pkbuildrun),
 % pko- (pkopenrun), pkl- (pkloop), pke- (pkedge), pkh- (pkhalfwat),
-% pktf- (pktaperf), pkd- (pkdot), pkg- (pkgetdef).
+% pktf- (pktaperf), pkd- (pkdot), pkg- (pkgetdef), pksc- (pkscanclosed).
+
+% - [bool0 bool1 ...]   (one flag per subpath, in path order: was it
+% closed with an explicit closepath?)
+% A subpath whose open endpoint merely happens to coincide with its
+% start (a `lineto` back to the exact starting coordinate, a full-circle
+% `arc`, no `closepath`) is not the same thing as a subpath actually
+% closed with `closepath` -- comparing walkpath's start/end stop
+% coordinates can't tell the two apart, so the ribbon has to ask the
+% path itself. `pathforall`'s close proc fires only for a real
+% `closepath` segment, never for coordinates merely matching, so this
+% is authoritative where a coordinate comparison is only a heuristic
+% (Codex review, round 4). Same two-pass shape as artkit's own
+% wkmeasure: emit the previous subpath's flag on each new moveto
+% (skipped on the very first), then once more after the loop for the
+% last subpath.
+/pkscanclosed {
+    /pkscclosed false def /pkscfirst true def
+    [
+        { pop pop
+          pkscfirst { /pkscfirst false def } { pkscclosed } ifelse
+          /pkscclosed false def }
+        { pop pop }
+        { pop pop pop pop pop pop }
+        { /pkscclosed true def }
+        pathforall
+        pkscfirst not { pkscclosed } if
+    ]
+} def
 
 % opts key default pkgetdef  value -
 % The default is wrapped in a 1-element array rather than bound
@@ -291,34 +322,50 @@
     } ifelse
 } def
 
-% start end pkbuildrun -   (one subpath's worth of walkpath stops)
+% start end closed pkbuildrun -   (one subpath's worth of walkpath stops;
+% closed comes from pkscanclosed, not inferred from coordinates)
 /pkbuildrun {
-    /pkbrend exch def /pkbrstart exch def
+    /pkbrclosed exch def /pkbrend exch def /pkbrstart exch def
+    % Coalesce a trailing sp==0 duplicate (the guaranteed end stop
+    % landing exactly on the last regular pitch-multiple stop, per
+    % walkpath's own documented behavior) up front, before anything
+    % below decides whether a genuine interior sample exists -- a
+    % stroke whose length happens to be an exact multiple of /Pitch
+    % would otherwise look like it has one real sample past the start
+    % when both remaining candidates actually sit at the same position
+    % (Codex review, round 4). Always safe: the only way to reach a
+    % 2-stop run (pkbrend == pkbrstart+1) is a subpath shorter than one
+    % pitch step, whose second stop's sp is the subpath's positive
+    % length, not 0, so this never collapses a run down past pkbrend's
+    % immediate predecessor.
+    pkbrend pkbrstart gt pkraw pkbrend get 4 get 0 eq and {
+        /pkbrend pkbrend 1 sub def
+    } if
     pkbrstart pkbrend eq pkraw pkbrstart get 5 get 3 eq and {
         pkraw pkbrstart get pkdot
     } {
         pkraw pkbrstart get 0 get /pkbrx0 exch def
         pkraw pkbrstart get 1 get /pkbry0 exch def
-        pkraw pkbrend get 0 get /pkbrxl exch def
-        pkraw pkbrend get 1 get /pkbryl exch def
-        % Exact equality, not a distance tolerance: walkpath's
-        % closepath handler feeds wkseg the *stored* start coordinates
-        % (wksx/wksy) as the closing segment's endpoint, never
-        % recomputed through curve-flattening math, so a genuinely
-        % closed subpath's guaranteed-end stop always lands bit-for-bit
-        % on its start -- and only a genuinely closed one does. A fixed
-        % user-space tolerance broke under a large CTM, where a merely
-        % nearby-but-open endpoint can be user-space-close yet
-        % device-space far apart (Codex review, round 1).
-        /pkbrclosed pkbrxl pkbrx0 eq pkbryl pkbry0 eq and def
         pkbrclosed {
-            /pkbrend2
-                pkraw pkbrend get 4 get 0 eq pkbrend pkbrstart gt and
-                { pkbrend 1 sub } { pkbrend } ifelse
-            def
-            pkbrend2 pkbrstart gt {
-                pkbrstart pkbrend2 -1 false pkloop
-                pkbrstart pkbrend2 1 true pkloop
+            % Even after the dedup above, a closed run whose *total*
+            % length is under one pitch step never gets a genuine
+            % intermediate sample -- walkpath emits only its start and
+            % the guaranteed end, and for a closed subpath the end
+            % *always* returns to the start's own coordinates (that's
+            % what closed means), so pkbrend's position is never a
+            % useful signal here -- comparing it against pkbrstart is
+            % comparing a closed loop's end to itself, always equal by
+            % construction, regardless of whether real content exists
+            % in between. What actually matters is whether at least one
+            % *index* strictly between pkbrstart and pkbrend exists
+            % (pkbrend >= pkbrstart+2) -- a real regular stop from
+            % walkpath's own arc-length stepping, which can only differ
+            % from the start position if genuine path length separates
+            % them.
+            /pkbrhasinterior pkbrend pkbrstart 1 add gt def
+            pkbrhasinterior {
+                pkbrstart pkbrend -1 false pkloop
+                pkbrstart pkbrend 1 true pkloop
             } {
                 pkraw pkbrstart get pkdot
             } ifelse
@@ -376,6 +423,8 @@
         { pkribbon-endcap-must-be-round-flat-or-pointed } if
     /pkjitter pkopts /Jitter 0 pkgetdef def
 
+    /pkclosedflags pkscanclosed def
+
     % Two walkpath passes over the same (surviving, per its own
     % contract) flattened path -- count, then fill a preallocated
     % array -- same shape as artkit's own wkmeasure/wkseg split.
@@ -406,11 +455,15 @@
         newpath
         /pki 0 def
         /pkrunstart 0 def
+        /pksubidx 0 def
         {
             pki pkn ge { exit } if
             pkraw pki get 5 get /pkae exch def
             pkae 1 and 1 eq { /pkrunstart pki def } if
-            pkae 2 and 2 eq { pkrunstart pki pkbuildrun } if
+            pkae 2 and 2 eq {
+                pkrunstart pki pkclosedflags pksubidx get pkbuildrun
+                /pksubidx pksubidx 1 add def
+            } if
             /pki pki 1 add def
         } loop
         fill
