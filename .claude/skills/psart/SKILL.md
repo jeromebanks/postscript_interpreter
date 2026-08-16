@@ -23,6 +23,12 @@ here is *written*, rendered, looked at, and refined.
 4. When it's done, check it in Ghostscript too:
    `gs -dBATCH -dNOPAUSE -sDEVICE=png16m -g<W>x<H> -o gs.png piece.ps`
 
+This file is a hand-written tour, not the source of truth — it can and
+does drift (see CAPABILITIES.md). `pscat --capabilities` prints the
+real, structured inventory of every font, Type 3 face, palette,
+template, and major procedure this build actually has installed;
+prefer it over guessing a name from prose below.
+
 ## The toolkit (`(lib/artkit.ps) run` from the repo root)
 
 - **Random**: `n chance` (0..n-1), `j jit` (-j..j), `frnd` (0..1),

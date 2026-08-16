@@ -1,7 +1,7 @@
 # HANDOFF.md — state of the interpreter and how to continue
 
 Written 2026-07-13 at the completion of Stages 6–7; last updated
-2026-07-24. Stages 8–20 are all complete: spool/halftone/Gallery II
+2026-08-15. Stages 8–20 are all complete: spool/halftone/Gallery II
 (10), perf parity (11), handwriting (12), the handwrite tool (13),
 agent integration — skill, `pscat-mcp`, `pscat -` (14), the
 font library `lib/fonts/` — /Neon, /Marquee, /Constellation,
@@ -184,7 +184,23 @@ opts in to read it — no source-line-shift text-mangling); a new
 capped at the same 8000px-per-side ceiling `--page` already enforces.
 `examples/sweep_demo.ps` demonstrates both mechanisms (NOTES.md's
 entry has the full story, including why a plain `pscat-mcp` tool
-wasn't added -- a documented scope cut, not an oversight).
+wasn't added -- a documented scope cut, not an oversight). Also done:
+issue #39, a machine-readable catalog of agent-usable art
+capabilities -- `--capabilities` on the CLI and `describe_art_
+capabilities` on `pscat-mcp` both print one JSON payload covering
+fonts, the Type 3 program faces, artkit's mood palettes, the
+`pagekit.ps` templates, and artkit's/the style packs' major
+procedures (`src/capabilities.rs`). Fonts are the one section built
+dynamically, off the same `font::catalog_entries()` `--fonts` and
+`findfont` resolution already use, so that section can't drift from
+what's actually installed; everything else is hand-maintained (no
+docstring convention in PostScript for this module to parse) but kept
+honest by `tests/capabilities.rs`, which loads each `.ps` source into
+a real `Interp` and checks the name set both ways -- every cataloged
+name still exists, and every name a source file actually defines is
+either cataloged or on an explicit internal-helper allowlist. See
+CAPABILITIES.md for the payload shape and how to register a new
+capability (NOTES.md's entry has the full story).
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;

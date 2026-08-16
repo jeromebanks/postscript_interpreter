@@ -336,11 +336,74 @@ pub(crate) fn is_unicode_type3(dict: &Rc<RefCell<Dict>>) -> bool {
         .is_some_and(|o| matches!(o.value, Value::Boolean(true)))
 }
 
-/// Names of every face findfont can currently reach without
-/// substitution: builtins, loadable catalog files, and aliases (for
-/// `--fonts`).
-pub fn available_fonts() -> Vec<String> {
-    let mut names: Vec<String> = BUILTINS.iter().map(|b| b.ps_name.to_string()).collect();
+/// How a face named by [`catalog_entries`] is actually reached —
+/// distinguishes what's baked into the binary from what depends on the
+/// font-catalog directory being present at runtime (absent entirely on
+/// wasm, and possibly absent even on desktop if the bundle/checkout is
+/// incomplete). Surfaced to `--capabilities` (issue #39) so a catalog
+/// consumer can tell a permanently-available face from an
+/// environment-dependent one instead of assuming every listed name
+/// resolves everywhere `pscat` runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FontOrigin {
+    /// Compiled into the binary; resolves identically everywhere,
+    /// wasm included.
+    Builtin,
+    /// A file found under the catalog directory at findfont time —
+    /// desktop/bundle only (`#[cfg(not(target_arch = "wasm32"))]`).
+    Catalog,
+    /// A `findfont` name in [`ALIASES`] that resolves to a catalog
+    /// stem; same environment dependency as `Catalog`.
+    Alias,
+}
+
+/// One name `findfont` can currently reach without substitution, with
+/// enough provenance to explain *how* (see [`FontOrigin`]). The single
+/// source both `available_fonts` (plain-text `--fonts`) and
+/// `crate::capabilities` (structured `--capabilities`) build from, so
+/// the two can't independently drift about what's actually installed.
+pub struct FontEntry {
+    pub name: String,
+    pub origin: FontOrigin,
+    /// Set only for `FontOrigin::Alias`: the catalog stem the alias
+    /// resolves to. Owned (not `&'static str`) because an implicit
+    /// `-Regular`-stripped alias's target is a stem discovered at
+    /// call time, not one of the fixed [`ALIASES`] entries.
+    pub alias_target: Option<String>,
+}
+
+/// Every face findfont can currently reach without substitution:
+/// builtins, then loadable catalog files (sorted), then aliases — same
+/// order `--fonts` has always printed in.
+///
+/// Two known-and-accepted gaps against `catalog_fid`'s exact
+/// resolution behavior (both raised in cross-model review, PR #74,
+/// neither fixed — real installs don't hit either):
+/// - Two catalog files differing *only* by case (e.g. `foo.ttf` and
+///   `Foo-Regular.ttf` in the same family dir) would make an implicit
+///   alias here and `catalog_fid`'s fully case-insensitive stem match
+///   disagree about which file a name resolves to. No shipped catalog
+///   family does this; modeling it generally would mean making every
+///   name comparison in this function case-insensitive-aware, a much
+///   larger change for a scenario no real catalog produces.
+/// - An unreadable family subdirectory: `catalog_fid` (via `.ok()?`)
+///   aborts resolution entirely the instant it hits one, while this
+///   scan (via `.into_iter().flatten()`) just skips it and keeps
+///   listing everything else — a discrepancy that predates this
+///   catalog (`available_fonts`'s original directory scan already
+///   had it, before `catalog_entries` existed). Reconciling it means
+///   changing `catalog_fid`'s own error handling, which is font
+///   resolution proper, not this catalog — out of scope for issue
+///   #39; worth a dedicated follow-up if it ever matters in practice.
+pub fn catalog_entries() -> Vec<FontEntry> {
+    let mut entries: Vec<FontEntry> = BUILTINS
+        .iter()
+        .map(|b| FontEntry {
+            name: b.ps_name.to_string(),
+            origin: FontOrigin::Builtin,
+            alias_target: None,
+        })
+        .collect();
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(root) = catalog_root() {
         let mut stems = Vec::new();
@@ -355,16 +418,138 @@ pub fn available_fonts() -> Vec<String> {
                     path.extension().and_then(|e| e.to_str()),
                     Some("ttf" | "otf" | "ttc")
                 ) && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                    // A stem only actually resolves if the file behind it
+                    // is readable and parses — an unreadable or corrupt
+                    // file in an otherwise-present catalog dir would
+                    // otherwise get listed as installed while findfont
+                    // silently substitutes Helvetica for it.
+                    && parses_as_font(&path)
                 {
                     stems.push(stem.to_string());
                 }
             }
         }
         stems.sort();
-        names.extend(stems);
-        names.extend(ALIASES.iter().map(|(k, v)| format!("{k} -> {v}")));
+        // An alias only actually resolves (see catalog_fid's own stem/
+        // -Regular-fallback lookup) when its target file is present —
+        // an incomplete catalog install can have the directory but be
+        // missing individual files, and listing an alias that would
+        // really substitute Helvetica misreports it as installed. This
+        // is deliberately built from *every* scanned stem (regardless
+        // of the shadowing filter just below): a stem can be a valid
+        // alias *target* even if it's unreachable under its own name.
+        let stem_set: std::collections::HashSet<String> =
+            stems.iter().map(|s| s.to_ascii_lowercase()).collect();
+        // resolve() checks builtins, then ALIASES-key remapping,
+        // before ever reaching a catalog stem directly — so a stem
+        // whose own name exactly matches a builtin's ps_name or an
+        // ALIASES key is permanently unreachable by that name (a
+        // fifth cross-model review finding, PR #74: e.g. a catalog
+        // file literally named "Helvetica.ttf" would never actually
+        // be selected, since `/Helvetica findfont` always resolves to
+        // the builtin first). Not listing it as its own directly-
+        // reachable Catalog-origin entry avoids advertising a name
+        // that findfont can never actually select this way.
+        let builtin_names: std::collections::HashSet<&str> =
+            BUILTINS.iter().map(|b| b.ps_name).collect();
+        let alias_keys: std::collections::HashSet<&str> = ALIASES.iter().map(|(k, _)| *k).collect();
+        entries.extend(
+            stems
+                .iter()
+                .filter(|name| {
+                    !builtin_names.contains(name.as_str()) && !alias_keys.contains(name.as_str())
+                })
+                .map(|name| FontEntry {
+                    name: name.clone(),
+                    origin: FontOrigin::Catalog,
+                    alias_target: None,
+                }),
+        );
+        entries.extend(
+            ALIASES
+                .iter()
+                .filter(|(_, target)| {
+                    stem_set.contains(&target.to_ascii_lowercase())
+                        || stem_set.contains(&format!("{target}-Regular").to_ascii_lowercase())
+                })
+                .map(|(k, v)| FontEntry {
+                    name: k.to_string(),
+                    origin: FontOrigin::Alias,
+                    alias_target: Some(v.to_string()),
+                }),
+        );
+        // catalog_fid's own -Regular fallback means a bare family name
+        // (not just names explicitly listed in ALIASES) resolves too,
+        // whenever the file behind it is literally "<name>-Regular" —
+        // e.g. a catalog holding only Bangers-Regular.ttf makes both
+        // `/Bangers-Regular findfont` (the stem above) and
+        // `/Bangers findfont` (this implicit alias) succeed. Case-
+        // insensitively, matching catalog_fid's own
+        // `eq_ignore_ascii_case` lookup — the bundled TeX Gyre files
+        // are named e.g. `texgyreadventor-regular.otf` (lowercase),
+        // and an exact-case strip_suffix("-Regular") missed every one
+        // of them (a fourth cross-model review finding). Omitted
+        // without this: 37+ such reachable names on this repo's own
+        // catalog, confirmed empirically before writing the fix.
+        // `seen` is built from `entries` as they stand now (builtins,
+        // stems, and curated ALIASES all already added) so an implicit
+        // alias never shadows any of those.
+        //
+        // A short name that's also a curated ALIASES *key* is excluded
+        // outright (not just guarded by `seen`), regardless of whether
+        // that curated entry actually got added above: catalog_fid
+        // checks ALIASES before ever trying a bare stem/-Regular
+        // fallback, unconditionally -- so `/Palatino findfont` always
+        // routes through ALIASES's remapping (to texgyrepagella-
+        // regular, substituting Helvetica if that's missing) and would
+        // never actually reach a same-named "Palatino-Regular" file
+        // even in an install where the curated target is absent (a
+        // sixth cross-model review finding, PR #74: `seen` alone only
+        // catches the case where the curated entry *was* added).
+        let mut seen: std::collections::HashSet<String> =
+            entries.iter().map(|e| e.name.clone()).collect();
+        for stem in &stems {
+            // Lowercasing preserves byte length and every char boundary
+            // (ASCII case-folding never changes which bytes are UTF-8
+            // continuation bytes), so `short_len` below is guaranteed a
+            // valid boundary in `stem` too -- safe to slice directly,
+            // unlike computing `stem.len() - 8` and indexing by hand.
+            if let Some(short_lower) = stem.to_ascii_lowercase().strip_suffix("-regular") {
+                let short = &stem[..short_lower.len()];
+                let shadowed_by_alias_key = ALIASES.iter().any(|(k, _)| *k == short);
+                if !shadowed_by_alias_key && seen.insert(short.to_string()) {
+                    entries.push(FontEntry {
+                        name: short.to_string(),
+                        origin: FontOrigin::Alias,
+                        alias_target: Some(stem.clone()),
+                    });
+                }
+            }
+        }
     }
-    names
+    entries
+}
+
+/// Whether `path` is actually readable and parses as a font — the
+/// gate `catalog_entries()` applies before advertising a stem/alias as
+/// installed. `.ttc` collections always resolve face index 0, matching
+/// `load_catalog_face`'s own convention.
+#[cfg(not(target_arch = "wasm32"))]
+fn parses_as_font(path: &std::path::Path) -> bool {
+    std::fs::read(path).is_ok_and(|data| Face::parse(&data, 0).is_ok())
+}
+
+/// Names of every face findfont can currently reach without
+/// substitution: builtins, loadable catalog files, and aliases (for
+/// `--fonts`).
+pub fn available_fonts() -> Vec<String> {
+    catalog_entries()
+        .into_iter()
+        .map(|e| match e.alias_target {
+            Some(target) => format!("{} -> {target}", e.name),
+            None => e.name,
+        })
+        .collect()
 }
 
 /// Parsed faces, once per process — the bundled data is `'static`, so

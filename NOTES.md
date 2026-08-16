@@ -3,6 +3,220 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## A machine-readable catalog of agent-usable art capabilities (issue #39, 2026-08-15)
+
+Closes issue #39: an autonomous artist agent needs a dependable way to
+discover which fonts/palettes/templates/procedures a given `pscat`
+build actually has, rather than trusting names remembered from prose
+documentation — which drifts. Confirmed while scoping this issue:
+`psart`'s `SKILL.md` had already fallen behind artkit's
+paragraph-flow, hyperbolic-geometry, noise/flow, and gradient
+sections (issues #16/#10/#19/#20), several of which shipped after the
+skill's "toolkit" tour was last touched.
+
+- `src/capabilities.rs`: `--capabilities` (CLI) and
+  `describe_art_capabilities` (`pscat-mcp`) both serialize one JSON
+  payload — 273 entries as of this build: 147 fonts (105 builtin/
+  catalog-stem, plus 40+ implicit `-Regular`-stripped aliases two
+  cross-model review rounds found missing — see below), 87 procedures
+  (57 from `lib/artkit.ps`, 26 across the four style packs, and 4 more
+  from `lib/handscript.ps`/`lib/hangul.ps`), 22 palettes, 9 Type 3
+  program faces, 5 page templates, 3 dials — plus `pscat_version` and
+  `catalog_signature` fields so a caching agent can treat either
+  changing as the re-fetch signal.
+- Fonts are the one section built *dynamically*: `font.rs` gained
+  `catalog_entries()`/`FontOrigin` (Builtin/Catalog/Alias), and
+  `available_fonts()` (the existing `--fonts` output) now derives from
+  it instead of duplicating the directory scan — so the catalog's font
+  section and `--fonts`/`findfont` resolution can't independently
+  disagree about what's installed, which is exactly the failure mode
+  the issue is about.
+- Palettes/templates/procedures have no PostScript docstring
+  convention to parse, so their metadata is hand-maintained in
+  `capabilities.rs`'s `ENTRIES` table — but `tests/capabilities.rs`
+  loads each `.ps` source into a real `Interp` and checks the name set
+  in *both* directions: every cataloged name still resolves where
+  claimed (`Palettes`/`userdict`/`FontDirectory`, via
+  `{ pop } forall` collecting every dict key onto the operand stack in
+  one call — no printing/parsing needed), and every name a source file
+  actually defines is either cataloged or on one of two explicit
+  internal-helper allowlists (`ARTKIT_INTERNAL`, `PAGEKIT_INTERNAL` —
+  scratch names like `apseg`/`tfdrawline`, and the `Palettes`/
+  `TurtleState` dicts themselves, not part of the public API). The
+  reverse direction is the one a naively forward-only test would miss:
+  nothing stops a future style pack from registering a new palette or
+  procedure and forgetting to catalog it: with this test, that fails
+  CI instead of silently missing from `--capabilities`.
+- Procedures deliberately get no structured `parameters` — PostScript
+  stack arguments are positional, not named/defaulted, so forcing them
+  into the same `Param` shape templates use (whose content dicts
+  *do* have real optional keys with defaults) would mean inventing
+  names the source doesn't have. A procedure's calling convention
+  lives in `example` instead: the stack-effect comment already written
+  at its definition site.
+- Scope cut, stated rather than silent: `graph.ps`/`dataviz.ps`/
+  `etching.ps` are not cataloged — the issue's "What" section names
+  fonts/Type-3/palettes/style-packs/templates/*artkit* procedures
+  specifically, and those three are independent sibling libraries by
+  design (graph.ps and dataviz.ps share nothing with artkit on
+  purpose, per their own NOTES.md entries). A reasonable follow-up,
+  not an oversight.
+- A cross-model (Codex) review on PR #74 caught two real gaps before
+  merge, both fixed on the branch:
+  1. `--capabilities`/`--fonts` advertised every catalog-font alias
+     whenever `fonts/catalog/` existed, even when that specific
+     alias's target file was missing from an incomplete install —
+     `findfont` would substitute Helvetica for it while the catalog
+     claimed it resolved. `font::catalog_entries()` now filters
+     `ALIASES` against the same stem/`-Regular` fallback lookup
+     `catalog_fid` itself uses, so only aliases that would actually
+     load are listed (no behavior change for this repo's own complete
+     catalog install).
+  2. The Type 3 face list stopped at `lib/fonts/`'s seven files and
+     missed `lib/handscript.ps`'s `/HandScript` (the face behind the
+     `handwrite` tool) entirely — the review's exact finding — plus,
+     found while fixing it the same way, `lib/hangul.ps`'s
+     `/HangulScript` (issue #6's Unicode-mode jamo-composition face),
+     a second instance of the identical gap the review didn't happen
+     to name. Both are now cataloged, along with their `hs-write`/
+     `hs-linecount`/`hg-write`/`hg-linecount` options-dict procedures
+     (real `parameters`, not `example`-only, since an options dict is
+     genuinely `Param`-shaped the way a template's content dict is).
+     The Type 3 reverse check, which had been a hardcoded `len() == 7`
+     plus a forward-only `FontDirectory` lookup, is now a real
+     `lib/fonts/*.ps` directory scan (plus the two named historical
+     outliers) compared against the catalog's Type3Face sources —
+     closing the same forward/reverse gap the rest of the catalog
+     already guarded against.
+  A `load` field was also added to every entry (the exact `run`
+  sequence needed before `example` works — a template or style-pack
+  procedure errors `undefined: Palettes` without `lib/artkit.ps`
+  loaded first, invisible from `source` alone), derived from
+  `(kind, source)` in one `load_sequence` function rather than
+  hand-written per entry.
+- A third review round on the same PR caught three more real gaps,
+  all in the dynamic font section, all fixed:
+  1. A catalog stem was listed whenever a file matched the
+     `.ttf`/`.otf`/`.ttc` extension filter, without confirming the
+     file actually reads and parses — a corrupt or unreadable file in
+     an otherwise-present catalog directory got advertised as
+     installed while `findfont` would silently substitute Helvetica
+     for it. `catalog_entries()` now calls a new `parses_as_font`
+     (read + `Face::parse`) before including a stem.
+  2. `catalog_fid`'s own resolution logic tries a bare requested name
+     *and* a `-Regular` fallback against catalog files for *any* name,
+     not just ones in the curated `ALIASES` table — so a file named
+     exactly `<Name>-Regular.ttf` makes the bare `<Name>` resolve too,
+     entirely independent of `ALIASES`. This repo's own catalog has 37
+     such reachable names (confirmed by testing one, `/Bangers
+     findfont`, directly) that `--capabilities`/`--fonts` had never
+     listed at all. `catalog_entries()` now synthesizes an implicit
+     alias for every stem ending `-Regular`, guarded against
+     colliding with an existing name.
+  3. `pscat_version` alone under-signals drift for a filesystem-backed
+     section: the font catalog can change (a different `PSCAT_ROOT`,
+     an install updated in place) without the binary version changing
+     at all. `payload_json()` now also emits `catalog_signature`, a
+     hash over every entry's (name, kind, availability) — either
+     field changing is the re-fetch signal.
+  `FontEntry.alias_target` changed from `Option<&'static str>` to
+  `Option<String>` to carry the second fix's call-time-discovered
+  target without leaking memory per `catalog_entries()` call (the
+  first draft of the fix did leak; caught before commit by checking
+  it against the codebase's own leak discipline — `'static` leaks here
+  are supposed to be bounded per unique font file, process-lifetime,
+  not per catalog listing).
+- A fourth review round caught four more real gaps, all fixed:
+  1. The implicit `-Regular`-alias fix from round three used an
+     exact-case `strip_suffix("-Regular")`, but the bundled TeX Gyre
+     files are named e.g. `texgyreadventor-regular.otf` — lowercase.
+     `catalog_fid` itself resolves case-insensitively
+     (`eq_ignore_ascii_case`), so `/texgyreadventor findfont` already
+     worked; the catalog just didn't know it. Fixed by lowercasing a
+     copy and using `strip_suffix` on that (boundary-safe — manual
+     byte-index slicing on the original string risked a panic on a
+     hypothetical non-ASCII stem, caught while writing the fix, not by
+     the review).
+  2. `lattice`'s cataloged calling convention, `x0 y0 v1 v2 n1 n2
+     ... lattice`, was copied faithfully from `lib/artkit.ps`'s own
+     top-of-file API index — which itself compresses two 2D vectors
+     into `v1 v2`. The proc actually pops four separate numbers
+     (`v1x v1y v2x v2y`); an agent following the catalog literally
+     would come up two operands short. Corrected to match the
+     definition, not the header's shorthand.
+  3. `hex`'s description said "flat-top"; `lib/artkit.ps`'s own
+     comment at its definition says "pointy-top" (hex starts its walk
+     at 90 degrees). Corrected.
+  4. `spmetal`/`sfworld`/`tnink` (the three style packs' dial
+     variables) were cataloged as `kind: procedure`, despite not being
+     callable — invoking one just pushes its current value. Split into
+     a new `CapabilityKind::Dial`; `tests/capabilities.rs`'s style-pack
+     reverse check now unions `Procedure` and `Dial` names for its
+     expected set, since both still land in `userdict`.
+- A fifth review round caught four more real gaps, all fixed:
+  1. `noise2`'s example omitted the `noiseinit` call its own
+     permutation table read depends on — run from a fresh interpreter,
+     `(lib/artkit.ps) run 0 0 noise2` errors `undefined: Perm`. Added
+     to the example.
+  2. `ldraw`'s example likewise omitted `thome` — `fd`'s first
+     `lineto` has no current point without it, `nocurrentpoint`.
+  3. `HangulScript`/`hg-write`/`hg-linecount` described `Text` as
+     "UTF-8 Korean text (may mix in ASCII)" — true of what the source
+     *accepts*, but misleading about what *renders*: `lib/hangul.ps`'s
+     own header says non-Hangul codepoints (ASCII, spaces,
+     punctuation) get a half-width advance and draw nothing. An agent
+     mixing English into `Text` expecting it to show would get
+     invisible gaps instead. Corrected in all three entries.
+  4. A catalog stem whose own name exactly matches a builtin's
+     `ps_name` or an `ALIASES` key is permanently unreachable under
+     that name — `resolve()` checks builtins, then `ALIASES`-key
+     remapping, before ever trying a catalog stem directly, so e.g. a
+     hypothetical `Helvetica.ttf` in a custom `PSCAT_ROOT` catalog
+     would never actually be selected. `catalog_entries()` now filters
+     such shadowed stems out of the directly-listed Catalog names
+     (inert for this repo's own catalog — no such collisions exist in
+     it today, confirmed by an unchanged font count after the fix; the
+     precedent for the *fully* general filtering rule, though, is
+     already the same `seen`-set mechanism the implicit `-Regular`
+     alias derivation added in round three uses).
+- A sixth review round found one more real gap (fixed) and two that
+  are deliberate, documented scope cuts (not fixed — accepted, per
+  `font.rs::catalog_entries`'s own doc comment):
+  1. **Fixed.** The implicit `-Regular` alias derivation (round three)
+     guarded against a short name colliding with a curated `ALIASES`
+     entry only via the `seen` set — which only catches the collision
+     if that curated entry actually got *added* (i.e. its target
+     exists). But `catalog_fid` checks `ALIASES` unconditionally
+     before ever trying a bare stem, regardless of whether the
+     `ALIASES` target resolves — so in an install missing a curated
+     target but happening to also hold a same-named `-Regular` file
+     under a *different* underlying name, the implicit alias would
+     claim a resolution `findfont` would never actually reach (it'd
+     substitute Helvetica via the `ALIASES` redirect instead). Fixed
+     by excluding any short name that's an `ALIASES` key outright, not
+     just guarding by `seen`.
+  2. **Not fixed, scope cut.** Two catalog files differing only by
+     case (`foo.ttf` and `Foo-Regular.ttf` in the same family
+     directory) would make this catalog and `catalog_fid`'s fully
+     case-insensitive stem match disagree about which file a name
+     resolves to. No shipped catalog family does this; a general fix
+     would mean making every name comparison in `catalog_entries()`
+     case-insensitive-aware, disproportionate to a scenario no real
+     catalog produces.
+  3. **Not fixed, scope cut.** `catalog_fid` aborts font resolution
+     entirely the instant it hits an unreadable family subdirectory
+     (`.ok()?`); this scan just skips it and keeps listing everything
+     else (`.into_iter().flatten()`). A real discrepancy, but one that
+     predates this catalog — the original `available_fonts()`'s own
+     directory scan already had it, before `capabilities.rs` existed.
+     Reconciling it means changing `catalog_fid`'s own error handling
+     (font resolution proper), out of scope for a capabilities-catalog
+     issue; a dedicated follow-up if it ever matters in practice.
+- `CAPABILITIES.md` documents the payload shape and the
+  register-a-new-capability workflow; `.claude/skills/psart/SKILL.md`
+  now points at `--capabilities` as the source of truth over its own
+  prose.
+
 ## Add `/issue-summary` dashboard skill (issue #36, 2026-08-15)
 
 Closes issue #36: seeing "what's been worked on, what's active, what's

@@ -131,6 +131,18 @@ fn tool_list() -> Value {
             }
         },
         {
+            "name": "describe_art_capabilities",
+            "description": "List the creative capabilities this pscat build actually has installed: fonts, \
+                Type 3 program faces, mood palettes, page templates, and artkit/style-pack procedures. \
+                Structured JSON, safe to call instead of assuming names from documentation, which can \
+                drift from what's really loadable.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        },
+        {
             "name": "eval_postscript",
             "description": "Run a PostScript program headlessly and return what it printed \
                 (=, print, pstack). On error: the standard PostScript error name plus a \
@@ -151,6 +163,7 @@ fn tool_call(params: &Value) -> Result<Value, String> {
     match params["name"].as_str().unwrap_or_default() {
         "render_postscript" => render_postscript(args),
         "handwrite" => handwrite(args),
+        "describe_art_capabilities" => describe_art_capabilities(),
         "eval_postscript" => eval_postscript(args),
         other => Err(format!("unknown tool: {other}")),
     }
@@ -279,6 +292,16 @@ fn handwrite(args: &Value) -> Result<Value, String> {
         content.push(text_content(&format!("wrote {}", out.display())));
     }
     Ok(Value::Array(content))
+}
+
+fn describe_art_capabilities() -> Result<Value, String> {
+    let mut cmd = Command::new(pscat_bin()?);
+    cmd.arg("--capabilities");
+    let run = pipe_through(&mut cmd, b"")?;
+    if !run.success {
+        return Err(format!("--capabilities failed:\n{}", run.stderr));
+    }
+    Ok(Value::Array(vec![text_content(&run.stdout)]))
 }
 
 fn eval_postscript(args: &Value) -> Result<Value, String> {

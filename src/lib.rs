@@ -3,6 +3,7 @@
 //! See `ARCHITECTURE.md` at the repo root for the design writeup and
 //! `INIT.md` for the project vision and staged roadmap.
 
+pub mod capabilities;
 pub(crate) mod clock;
 pub mod contact_sheet;
 pub mod encodings;

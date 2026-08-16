@@ -1034,6 +1034,10 @@ fn parse_args() -> Result<Options, String> {
                 }
                 std::process::exit(0);
             }
+            "--capabilities" => {
+                println!("{}", pscat::capabilities::payload_json());
+                std::process::exit(0);
+            }
             "-e" | "--eval" => {
                 options.eval = Some(args.next().ok_or("missing expression after -e")?);
             }
@@ -1163,6 +1167,9 @@ fn print_usage() {
     println!("                      left on the stack — printed to stderr, doesn't affect");
     println!("                      the exit code");
     println!("      --fonts         list every findfont-reachable face and alias, then exit");
+    println!(
+        "      --capabilities  print the agent-usable art catalog (fonts, palettes, templates, procedures) as JSON, then exit"
+    );
     println!();
     println!("Sweeps (render file.ps once per value, needing --png and/or --contact-sheet):");
     println!("      --sweep-seed SPEC   reseed with each value in turn (A:B, A:B:STEP, or");

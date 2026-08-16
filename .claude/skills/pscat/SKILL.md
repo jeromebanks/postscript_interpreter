@@ -109,6 +109,20 @@ program-faces — /Neon, /Marquee, /Constellation, /Lapidary,
 substitute Helvetica rather than erroring;
 `examples/font_catalog.ps` renders the specimen sheets.
 
+## Capabilities (structured, for agents)
+
+```sh
+pscat --capabilities                   # fonts, palettes, templates, procedures as JSON
+```
+
+The machine-readable inventory of everything this build actually has
+installed — fonts, Type 3 faces, artkit's mood palettes,
+`lib/pagekit.ps`'s templates, and artkit's/the style packs' major
+procedures — with a `pscat_version` field for drift detection. Prefer
+this over guessing a name from prose (this file included; see
+CAPABILITIES.md). Same catalog is exposed to MCP clients as the
+`describe_art_capabilities` tool.
+
 ## Making art
 
 For generative pieces — palettes, turtle graphics, L-systems,
