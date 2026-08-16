@@ -179,6 +179,39 @@ skill's "toolkit" tour was last touched.
      precedent for the *fully* general filtering rule, though, is
      already the same `seen`-set mechanism the implicit `-Regular`
      alias derivation added in round three uses).
+- A sixth review round found one more real gap (fixed) and two that
+  are deliberate, documented scope cuts (not fixed — accepted, per
+  `font.rs::catalog_entries`'s own doc comment):
+  1. **Fixed.** The implicit `-Regular` alias derivation (round three)
+     guarded against a short name colliding with a curated `ALIASES`
+     entry only via the `seen` set — which only catches the collision
+     if that curated entry actually got *added* (i.e. its target
+     exists). But `catalog_fid` checks `ALIASES` unconditionally
+     before ever trying a bare stem, regardless of whether the
+     `ALIASES` target resolves — so in an install missing a curated
+     target but happening to also hold a same-named `-Regular` file
+     under a *different* underlying name, the implicit alias would
+     claim a resolution `findfont` would never actually reach (it'd
+     substitute Helvetica via the `ALIASES` redirect instead). Fixed
+     by excluding any short name that's an `ALIASES` key outright, not
+     just guarding by `seen`.
+  2. **Not fixed, scope cut.** Two catalog files differing only by
+     case (`foo.ttf` and `Foo-Regular.ttf` in the same family
+     directory) would make this catalog and `catalog_fid`'s fully
+     case-insensitive stem match disagree about which file a name
+     resolves to. No shipped catalog family does this; a general fix
+     would mean making every name comparison in `catalog_entries()`
+     case-insensitive-aware, disproportionate to a scenario no real
+     catalog produces.
+  3. **Not fixed, scope cut.** `catalog_fid` aborts font resolution
+     entirely the instant it hits an unreadable family subdirectory
+     (`.ok()?`); this scan just skips it and keeps listing everything
+     else (`.into_iter().flatten()`). A real discrepancy, but one that
+     predates this catalog — the original `available_fonts()`'s own
+     directory scan already had it, before `capabilities.rs` existed.
+     Reconciling it means changing `catalog_fid`'s own error handling
+     (font resolution proper), out of scope for a capabilities-catalog
+     issue; a dedicated follow-up if it ever matters in practice.
 - `CAPABILITIES.md` documents the payload shape and the
   register-a-new-capability workflow; `.claude/skills/psart/SKILL.md`
   now points at `--capabilities` as the source of truth over its own

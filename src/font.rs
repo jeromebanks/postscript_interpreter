@@ -375,6 +375,26 @@ pub struct FontEntry {
 /// Every face findfont can currently reach without substitution:
 /// builtins, then loadable catalog files (sorted), then aliases — same
 /// order `--fonts` has always printed in.
+///
+/// Two known-and-accepted gaps against `catalog_fid`'s exact
+/// resolution behavior (both raised in cross-model review, PR #74,
+/// neither fixed — real installs don't hit either):
+/// - Two catalog files differing *only* by case (e.g. `foo.ttf` and
+///   `Foo-Regular.ttf` in the same family dir) would make an implicit
+///   alias here and `catalog_fid`'s fully case-insensitive stem match
+///   disagree about which file a name resolves to. No shipped catalog
+///   family does this; modeling it generally would mean making every
+///   name comparison in this function case-insensitive-aware, a much
+///   larger change for a scenario no real catalog produces.
+/// - An unreadable family subdirectory: `catalog_fid` (via `.ok()?`)
+///   aborts resolution entirely the instant it hits one, while this
+///   scan (via `.into_iter().flatten()`) just skips it and keeps
+///   listing everything else — a discrepancy that predates this
+///   catalog (`available_fonts`'s original directory scan already
+///   had it, before `catalog_entries` existed). Reconciling it means
+///   changing `catalog_fid`'s own error handling, which is font
+///   resolution proper, not this catalog — out of scope for issue
+///   #39; worth a dedicated follow-up if it ever matters in practice.
 pub fn catalog_entries() -> Vec<FontEntry> {
     let mut entries: Vec<FontEntry> = BUILTINS
         .iter()
@@ -474,6 +494,18 @@ pub fn catalog_entries() -> Vec<FontEntry> {
         // `seen` is built from `entries` as they stand now (builtins,
         // stems, and curated ALIASES all already added) so an implicit
         // alias never shadows any of those.
+        //
+        // A short name that's also a curated ALIASES *key* is excluded
+        // outright (not just guarded by `seen`), regardless of whether
+        // that curated entry actually got added above: catalog_fid
+        // checks ALIASES before ever trying a bare stem/-Regular
+        // fallback, unconditionally -- so `/Palatino findfont` always
+        // routes through ALIASES's remapping (to texgyrepagella-
+        // regular, substituting Helvetica if that's missing) and would
+        // never actually reach a same-named "Palatino-Regular" file
+        // even in an install where the curated target is absent (a
+        // sixth cross-model review finding, PR #74: `seen` alone only
+        // catches the case where the curated entry *was* added).
         let mut seen: std::collections::HashSet<String> =
             entries.iter().map(|e| e.name.clone()).collect();
         for stem in &stems {
@@ -484,7 +516,8 @@ pub fn catalog_entries() -> Vec<FontEntry> {
             // unlike computing `stem.len() - 8` and indexing by hand.
             if let Some(short_lower) = stem.to_ascii_lowercase().strip_suffix("-regular") {
                 let short = &stem[..short_lower.len()];
-                if seen.insert(short.to_string()) {
+                let shadowed_by_alias_key = ALIASES.iter().any(|(k, _)| *k == short);
+                if !shadowed_by_alias_key && seen.insert(short.to_string()) {
                     entries.push(FontEntry {
                         name: short.to_string(),
                         origin: FontOrigin::Alias,
