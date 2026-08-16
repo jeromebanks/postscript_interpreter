@@ -153,6 +153,32 @@ skill's "toolkit" tour was last touched.
      a new `CapabilityKind::Dial`; `tests/capabilities.rs`'s style-pack
      reverse check now unions `Procedure` and `Dial` names for its
      expected set, since both still land in `userdict`.
+- A fifth review round caught four more real gaps, all fixed:
+  1. `noise2`'s example omitted the `noiseinit` call its own
+     permutation table read depends on — run from a fresh interpreter,
+     `(lib/artkit.ps) run 0 0 noise2` errors `undefined: Perm`. Added
+     to the example.
+  2. `ldraw`'s example likewise omitted `thome` — `fd`'s first
+     `lineto` has no current point without it, `nocurrentpoint`.
+  3. `HangulScript`/`hg-write`/`hg-linecount` described `Text` as
+     "UTF-8 Korean text (may mix in ASCII)" — true of what the source
+     *accepts*, but misleading about what *renders*: `lib/hangul.ps`'s
+     own header says non-Hangul codepoints (ASCII, spaces,
+     punctuation) get a half-width advance and draw nothing. An agent
+     mixing English into `Text` expecting it to show would get
+     invisible gaps instead. Corrected in all three entries.
+  4. A catalog stem whose own name exactly matches a builtin's
+     `ps_name` or an `ALIASES` key is permanently unreachable under
+     that name — `resolve()` checks builtins, then `ALIASES`-key
+     remapping, before ever trying a catalog stem directly, so e.g. a
+     hypothetical `Helvetica.ttf` in a custom `PSCAT_ROOT` catalog
+     would never actually be selected. `catalog_entries()` now filters
+     such shadowed stems out of the directly-listed Catalog names
+     (inert for this repo's own catalog — no such collisions exist in
+     it today, confirmed by an unchanged font count after the fix; the
+     precedent for the *fully* general filtering rule, though, is
+     already the same `seen`-set mechanism the implicit `-Regular`
+     alias derivation added in round three uses).
 - `CAPABILITIES.md` documents the payload shape and the
   register-a-new-capability workflow; `.claude/skills/psart/SKILL.md`
   now points at `--capabilities` as the source of truth over its own

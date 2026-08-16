@@ -334,7 +334,7 @@ static ENTRIES: &[Entry] = &[
     entry!(
         "HangulScript",
         CapabilityKind::Type3Face,
-        "Procedural jittered-stroke Hangul face: composes each syllable from ~14 atomic jamo stroke shapes at BuildChar time (Unicode-mode Type 3 -- pscat-only, see FONTS.md). Call via hg-write/hg-linecount below, not plain show, for correct word-wrapping.",
+        "Procedural jittered-stroke Hangul face: composes each syllable from ~14 atomic jamo stroke shapes at BuildChar time (Unicode-mode Type 3 -- pscat-only, see FONTS.md). Modern Hangul only (U+AC00-U+D7A3); any other codepoint (ASCII letters, spaces, punctuation) gets a half-width advance and draws nothing -- a dedicated Hangul face, not mixed-script. Call via hg-write/hg-linecount below, not plain show, for correct word-wrapping.",
         &[],
         HANGUL,
         "/HangulScript findfont 48 scalefont setfont",
@@ -873,10 +873,10 @@ static ENTRIES: &[Entry] = &[
     entry!(
         "ldraw",
         CapabilityKind::Procedure,
-        "Drives the turtle along an expanded L-system string (F draw, f hop, +/- turn, []  push/pop).",
+        "Drives the turtle along an expanded L-system string (F draw, f hop, +/- turn, []  push/pop). Needs a prior thome (fd's first lineto has no current point otherwise).",
         &[],
         ARTKIT,
-        "(str) step angle ldraw -",
+        "x y heading thome  (str) step angle ldraw -",
         LIB
     ),
     // --- Procedures: brushes -------------------------------------------
@@ -1188,10 +1188,10 @@ static ENTRIES: &[Entry] = &[
     entry!(
         "noise2",
         CapabilityKind::Procedure,
-        "2D coherent (Perlin-style) gradient noise, continuous, 0 at integer lattice points.",
+        "2D coherent (Perlin-style) gradient noise, continuous, 0 at integer lattice points. Needs a prior noiseinit (reads its permutation table).",
         &[],
         ARTKIT,
-        "x y noise2 -> n  (~[-0.66, 0.66])",
+        "noiseinit  x y noise2 -> n  (~[-0.66, 0.66])",
         LIB
     ),
     entry!(
@@ -1662,11 +1662,11 @@ static ENTRIES: &[Entry] = &[
     entry!(
         "hg-write",
         CapabilityKind::Procedure,
-        "Draws HangulScript text (UTF-8 Korean, may mix in ASCII), word-wrapped to the column, top-down from the first baseline.",
+        "Draws HangulScript text, word-wrapped to the column, top-down from the first baseline. Only modern Hangul syllables render; any ASCII/space/punctuation mixed in advances the cursor but draws nothing (see HangulScript's own description).",
         &[
             Param {
                 name: "Text",
-                description: "UTF-8 Korean text (may mix in ASCII)",
+                description: "UTF-8 text; only Hangul syllables (U+AC00-U+D7A3) render -- ASCII/spaces/punctuation advance but stay invisible",
                 default: None
             },
             Param {
@@ -1726,7 +1726,7 @@ static ENTRIES: &[Entry] = &[
         &[
             Param {
                 name: "Text",
-                description: "UTF-8 Korean text (may mix in ASCII)",
+                description: "UTF-8 text; only Hangul syllables (U+AC00-U+D7A3) render under hg-write -- ASCII/spaces/punctuation advance but stay invisible",
                 default: None
             },
             Param {

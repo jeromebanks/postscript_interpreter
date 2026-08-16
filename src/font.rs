@@ -414,14 +414,37 @@ pub fn catalog_entries() -> Vec<FontEntry> {
         // -Regular-fallback lookup) when its target file is present —
         // an incomplete catalog install can have the directory but be
         // missing individual files, and listing an alias that would
-        // really substitute Helvetica misreports it as installed.
+        // really substitute Helvetica misreports it as installed. This
+        // is deliberately built from *every* scanned stem (regardless
+        // of the shadowing filter just below): a stem can be a valid
+        // alias *target* even if it's unreachable under its own name.
         let stem_set: std::collections::HashSet<String> =
             stems.iter().map(|s| s.to_ascii_lowercase()).collect();
-        entries.extend(stems.iter().map(|name| FontEntry {
-            name: name.clone(),
-            origin: FontOrigin::Catalog,
-            alias_target: None,
-        }));
+        // resolve() checks builtins, then ALIASES-key remapping,
+        // before ever reaching a catalog stem directly — so a stem
+        // whose own name exactly matches a builtin's ps_name or an
+        // ALIASES key is permanently unreachable by that name (a
+        // fifth cross-model review finding, PR #74: e.g. a catalog
+        // file literally named "Helvetica.ttf" would never actually
+        // be selected, since `/Helvetica findfont` always resolves to
+        // the builtin first). Not listing it as its own directly-
+        // reachable Catalog-origin entry avoids advertising a name
+        // that findfont can never actually select this way.
+        let builtin_names: std::collections::HashSet<&str> =
+            BUILTINS.iter().map(|b| b.ps_name).collect();
+        let alias_keys: std::collections::HashSet<&str> = ALIASES.iter().map(|(k, _)| *k).collect();
+        entries.extend(
+            stems
+                .iter()
+                .filter(|name| {
+                    !builtin_names.contains(name.as_str()) && !alias_keys.contains(name.as_str())
+                })
+                .map(|name| FontEntry {
+                    name: name.clone(),
+                    origin: FontOrigin::Catalog,
+                    alias_target: None,
+                }),
+        );
         entries.extend(
             ALIASES
                 .iter()
