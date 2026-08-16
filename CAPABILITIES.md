@@ -18,6 +18,7 @@ issue #39 entry, cross-model review on PR #74.)
 ```json
 {
   "pscat_version": "0.5.1",
+  "catalog_signature": "217ad22059b2c0b2",
   "capabilities": [
     {
       "name": "pgcertificate",
@@ -35,11 +36,17 @@ issue #39 entry, cross-model review on PR #74.)
 }
 ```
 
-`pscat_version` is the drift signal: an agent that caches a catalog
-dump can treat a version change as "re-fetch," without needing to diff
-the whole payload itself. `capabilities` is sorted by (name, kind) so
-two dumps of the same release compare byte-for-byte regardless of
-directory-scan or hashmap iteration order upstream.
+`pscat_version` and `catalog_signature` are both drift signals; an
+agent caching a dump should re-fetch when *either* changes.
+`pscat_version` only moves on a new binary release. `catalog_signature`
+is a hash over every entry's (name, kind, availability) — it also
+moves when the *filesystem-backed* font section changes without a
+version bump (a different `PSCAT_ROOT`, or a catalog install updated
+in place; a cross-model review's finding, PR #74 — `pscat_version`
+alone under-signals exactly that case). `capabilities` is sorted by
+(name, kind) so two dumps of the same release/install compare
+byte-for-byte regardless of directory-scan or hashmap iteration order
+upstream.
 
 `kind` is one of `font`, `type3_face`, `palette`, `template`,
 `procedure`. `availability` says how durable an entry is:
@@ -47,11 +54,17 @@ directory-scan or hashmap iteration order upstream.
   everywhere (wasm included).
 - `catalog (desktop/bundle only; ...)` — a font-catalog face or an
   alias to one; depends on `fonts/catalog/` being present, so absent
-  on wasm and possibly absent on an incomplete install. Only an alias
-  whose target file is actually present on disk is listed at all — an
-  incomplete catalog install doesn't get a phantom alias that would
-  really substitute Helvetica (a gap a cross-model review caught: PR
-  #74).
+  on wasm and possibly absent on an incomplete install. Three
+  cross-model review findings (PR #74) sharpened what counts as
+  "installed" here: a stem is listed only if its file is actually
+  readable and parses (not merely present with a matching extension —
+  a corrupt file doesn't get advertised); a curated `ALIASES` entry is
+  listed only if its target file is actually present; and every
+  catalog file literally named `<Name>-Regular.<ext>` also gets an
+  *implicit* alias for the bare `<Name>` (`catalog_fid`'s own
+  `-Regular` fallback makes that name resolve too, even when it's not
+  in `ALIASES` — 37 such names on this repo's own catalog, previously
+  missing from `--capabilities` entirely).
 - `library` — defined in a `.ps` file loaded via `run`; always
   available once that source is loaded, no runtime filesystem
   negotiation the way catalog fonts need.

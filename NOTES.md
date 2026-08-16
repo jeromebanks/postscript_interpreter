@@ -16,11 +16,14 @@ skill's "toolkit" tour was last touched.
 
 - `src/capabilities.rs`: `--capabilities` (CLI) and
   `describe_art_capabilities` (`pscat-mcp`) both serialize one JSON
-  payload — 231 entries as of this build: 105 fonts, 90 procedures
+  payload — 268 entries as of this build: 142 fonts (105 builtin/
+  catalog-stem, plus 37 implicit `-Regular`-stripped aliases a
+  cross-model review found missing — see below), 90 procedures
   (57 from `lib/artkit.ps`, 29 across the four style packs, and 4 more
   from `lib/handscript.ps`/`lib/hangul.ps`), 22 palettes, 9 Type 3
-  program faces, 5 page templates — plus a `pscat_version` field so a
-  caching agent can treat a version bump as the re-fetch signal.
+  program faces, 5 page templates — plus `pscat_version` and
+  `catalog_signature` fields so a caching agent can treat either
+  changing as the re-fetch signal.
 - Fonts are the one section built *dynamically*: `font.rs` gained
   `catalog_entries()`/`FontOrigin` (Builtin/Catalog/Alias), and
   `available_fonts()` (the existing `--fonts` output) now derives from
@@ -91,6 +94,38 @@ skill's "toolkit" tour was last touched.
   loaded first, invisible from `source` alone), derived from
   `(kind, source)` in one `load_sequence` function rather than
   hand-written per entry.
+- A third review round on the same PR caught three more real gaps,
+  all in the dynamic font section, all fixed:
+  1. A catalog stem was listed whenever a file matched the
+     `.ttf`/`.otf`/`.ttc` extension filter, without confirming the
+     file actually reads and parses — a corrupt or unreadable file in
+     an otherwise-present catalog directory got advertised as
+     installed while `findfont` would silently substitute Helvetica
+     for it. `catalog_entries()` now calls a new `parses_as_font`
+     (read + `Face::parse`) before including a stem.
+  2. `catalog_fid`'s own resolution logic tries a bare requested name
+     *and* a `-Regular` fallback against catalog files for *any* name,
+     not just ones in the curated `ALIASES` table — so a file named
+     exactly `<Name>-Regular.ttf` makes the bare `<Name>` resolve too,
+     entirely independent of `ALIASES`. This repo's own catalog has 37
+     such reachable names (confirmed by testing one, `/Bangers
+     findfont`, directly) that `--capabilities`/`--fonts` had never
+     listed at all. `catalog_entries()` now synthesizes an implicit
+     alias for every stem ending `-Regular`, guarded against
+     colliding with an existing name.
+  3. `pscat_version` alone under-signals drift for a filesystem-backed
+     section: the font catalog can change (a different `PSCAT_ROOT`,
+     an install updated in place) without the binary version changing
+     at all. `payload_json()` now also emits `catalog_signature`, a
+     hash over every entry's (name, kind, availability) — either
+     field changing is the re-fetch signal.
+  `FontEntry.alias_target` changed from `Option<&'static str>` to
+  `Option<String>` to carry the second fix's call-time-discovered
+  target without leaking memory per `catalog_entries()` call (the
+  first draft of the fix did leak; caught before commit by checking
+  it against the codebase's own leak discipline — `'static` leaks here
+  are supposed to be bounded per unique font file, process-lifetime,
+  not per catalog listing).
 - `CAPABILITIES.md` documents the payload shape and the
   register-a-new-capability workflow; `.claude/skills/psart/SKILL.md`
   now points at `--capabilities` as the source of truth over its own

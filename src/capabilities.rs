@@ -1791,7 +1791,7 @@ pub fn catalog() -> Vec<Capability> {
             font::FontOrigin::Alias => (
                 format!(
                     "findfont alias for the catalog face {}.",
-                    f.alias_target.unwrap_or("?")
+                    f.alias_target.as_deref().unwrap_or("?")
                 ),
                 "catalog (desktop/bundle only; absent on wasm or an incomplete install)",
             ),
@@ -1810,16 +1810,38 @@ pub fn catalog() -> Vec<Capability> {
     caps
 }
 
-/// The full catalog as one JSON payload: `pscat_version` (drift
-/// detection — a version bump means the catalog may have changed) plus
-/// the deterministically name-then-kind-sorted capability list (so two
-/// dumps of the same release diff cleanly regardless of hashmap/
-/// readdir iteration order upstream).
+/// A short, deterministic fingerprint of exactly which capabilities
+/// are available (name/kind/availability triples — not their prose,
+/// which can change without anything actually becoming reachable or
+/// unreachable). `pscat_version` alone under-signals drift for the one
+/// section built from the filesystem: a font catalog can gain or lose
+/// files (a different `PSCAT_ROOT`, or an install updated in place)
+/// without the binary's own version changing at all (a cross-model
+/// review finding, PR #74). Callers should treat `pscat_version` as a
+/// change **or** `catalog_signature` as a change as the re-fetch
+/// signal — either one moving means something did.
+fn catalog_signature(caps: &[Capability]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for c in caps {
+        c.name.hash(&mut hasher);
+        c.kind.as_str().hash(&mut hasher);
+        c.availability.hash(&mut hasher);
+    }
+    format!("{:016x}", hasher.finish())
+}
+
+/// The full catalog as one JSON payload: `pscat_version` and
+/// `catalog_signature` (drift detection — see [`catalog_signature`])
+/// plus the deterministically name-then-kind-sorted capability list
+/// (so two dumps of the same release/install diff cleanly regardless
+/// of hashmap/readdir iteration order upstream).
 pub fn payload_json() -> Value {
     let mut caps = catalog();
     caps.sort_by(|a, b| (&a.name, a.kind.as_str()).cmp(&(&b.name, b.kind.as_str())));
     json!({
         "pscat_version": env!("CARGO_PKG_VERSION"),
+        "catalog_signature": catalog_signature(&caps),
         "capabilities": caps.iter().map(Capability::to_json).collect::<Vec<_>>(),
     })
 }
