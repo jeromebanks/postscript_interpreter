@@ -98,6 +98,14 @@ fn width_and_pitch_guards_reject_non_positive_values() {
             "newpath 0 0 moveto 100 0 lineto << /Width 10 /Pressure (nope) >> pkribbon",
             "pkribbon-pressure-must-be-a-procedure",
         ),
+        // Regression test for a Codex-round-3 finding: xcheck alone
+        // isn't sufficient -- an executable non-procedure (`2 cvx`)
+        // passes xcheck but still isn't callable the way pkhalfwat
+        // needs, corrupting the same way an unvalidated number did.
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Width 10 /Pressure 2 cvx >> pkribbon",
+            "pkribbon-pressure-must-be-a-procedure",
+        ),
         // Regression tests for a Codex-round-2 finding: any /StartCap//
         // EndCap value other than the three documented ones used to
         // fall through to /flat silently instead of erroring.
@@ -343,6 +351,28 @@ fn full_taper_degrades_the_cap_to_a_point_without_a_zero_radius_arc() {
     assert!(
         ink_count(&it) > 500,
         "expected the tapered ribbon to still render"
+    );
+}
+
+#[test]
+fn short_pointed_stroke_renders_a_lens_not_a_blank_page() {
+    // Regression test for a Codex-round-3 finding: a subpath shorter
+    // than /Pitch gets only walkpath's start+end stops (no interior),
+    // so both ends pointed used to collapse straight from tip to tip
+    // with zero area -- a valid, generously-wide short stroke rendered
+    // nothing. pkopenrun now synthesizes one interior sample at the
+    // run's midpoint in exactly this case.
+    let mut it = fresh(90, 60);
+    it.run_str(
+        "0 0 0 setrgbcolor 1 srand \
+         newpath 40 30 moveto 44 30 lineto \
+         << /Width 20 /StartCap /pointed /EndCap /pointed >> pkribbon",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 10,
+        "expected a visible lens for a short pointed stroke, got {}",
+        ink_count(&it)
     );
 }
 

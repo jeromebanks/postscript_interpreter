@@ -177,6 +177,40 @@ Round 2 found four more, all fixed:
 Full quality gate re-run clean (665 tests) before pushing and
 re-running Codex review a second time.
 
+Round 3 found two more, both fixed:
+
+- **A short pointed stroke rendered nothing.** `walkpath` emits only
+  start+end stops for a subpath shorter than `/Pitch` (no interior).
+  With both ends pointed, `pkopenrun`'s forward and reverse edge loops
+  were *both* empty -- the polygon it built was the raw start-tip to
+  end-tip line, zero area under `fill`. A generously wide, genuinely
+  short stroke with `/StartCap /pointed /EndCap /pointed` (or a full
+  taper collapsing both ends) silently produced a blank page instead
+  of the lens shape a longer version of the same stroke renders fine.
+  Fixed by detecting exactly that condition (both ends pointed, no
+  interior stops) and synthesizing one interior sample at the run's
+  midpoint -- chord direction (exact regardless of the underlying
+  curve shape, since there's nothing else to look at over such a short
+  span) and averaged progress for pressure/taper -- so it builds a
+  proper 4-point lens instead.
+- **`xcheck` alone doesn't prove something is callable.** The
+  round-2 `/Pressure` guard used `xcheck`, which only tests the
+  executable attribute -- an executable non-procedure like `2 cvx`
+  passes it, but `pkht pkpressure` still just pushes the number instead
+  of running anything, the identical corruption the guard exists to
+  catch. Added a `type` check (`arraytype` for a user proc,
+  `operatortype` for a bound built-in) alongside `xcheck`.
+
+Both came with regression tests. Full quality gate re-run clean (666
+tests) before pushing and re-running Codex review a third time. (The
+second `--wait` review invocation was itself killed with no output and
+no job ever registered with `codex-companion`'s tracker -- confirmed
+via `status --all --json` showing nothing running, nothing finished,
+nothing recent, not even a dead PID to `cancel`. Treated as transient
+rather than genuine runtime unavailability, since the identical command
+had already succeeded twice in a row on this same PR; a bare retry
+registered and completed normally.)
+
 ## A reusable centerline path sampler for procedural brushes (issue #40, 2026-08-15)
 
 Closes issue #40, the foundation for the painterly-brush series
