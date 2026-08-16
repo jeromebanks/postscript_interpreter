@@ -4,7 +4,7 @@
 //! by arithmetic (turtle positions, L-system growth), rendering by
 //! ink counts — the corpus policy for rand-driven art.
 
-use pscat::Interp;
+use pscat::{Interp, PsError};
 
 fn load(it: &mut Interp) {
     let src = std::fs::read("lib/artkit.ps").expect("artkit present");
@@ -148,6 +148,45 @@ fn walkpath_regular_stops_match_alongpath_exactly() {
 fn walkpath_on_an_empty_path_is_a_silent_no_op() {
     let got = eval("newpath /n 0 def 10 { pop pop pop pop pop pop /n n 1 add def } walkpath n");
     assert_eq!(got, ["0"]);
+}
+
+#[test]
+fn walkpath_rejects_non_positive_pitch_instead_of_hanging() {
+    // A zero or negative pitch would otherwise never advance wkt2 past
+    // wkseglen, looping forever (Codex review, round 1) -- caught up
+    // front with the file's existing malformed-input idiom (a guarded
+    // call to a self-documenting undefined name, see
+    // et-spacing-must-be-positive in lib/etching.ps).
+    let mut it = Interp::new();
+    load(&mut it);
+    for pitch in ["0", "-5"] {
+        let err = it
+            .run_str(&format!(
+                "newpath 0 0 moveto 100 0 lineto {pitch} {{ }} walkpath"
+            ))
+            .unwrap_err();
+        assert!(
+            matches!(err, PsError::Undefined(ref name) if name == "walkpath-pitch-must-be-positive"),
+            "pitch {pitch}: got {err}"
+        );
+    }
+}
+
+#[test]
+fn walkpath_short_nonzero_subpath_gets_distinct_start_and_end_stops() {
+    // A subpath shorter than one pitch step but with nonzero length
+    // (unlike a true single-point subpath) still gets two distinct
+    // calls -- start and guaranteed end -- not coalesced into one
+    // atend=3 call (Codex review, round 1: the header previously
+    // claimed otherwise).
+    let got = eval(
+        "newpath 0 0 moveto 1 0 lineto /n 0 def /firstat null def /lastat null def \
+         10 { /at exch def pop pop pop pop pop \
+              n 0 eq { /firstat at def } if /lastat at def \
+              /n n 1 add def } walkpath \
+         n firstat lastat",
+    );
+    assert_eq!(got, ["2", "1", "2"]);
 }
 
 #[test]

@@ -48,6 +48,19 @@ default `SAFER` sandboxing on that file read, the same reason
 `paragraph_layout.ps` and friends are absent from `tests/golden.rs`'s
 list.
 
+Cross-model review (Codex, round 1 on PR #75) caught two real defects
+the local quality gate couldn't: a zero or negative `pitch` left
+`wkt2` never advancing past `wkseglen`, hanging the interpreter
+instead of erroring — fixed with the file's existing malformed-input
+idiom, a guarded call to a self-documenting undefined name
+(`walkpath-pitch-must-be-positive`, same pattern as `et-spacing-must-
+be-positive` in `lib/etching.ps`). And the header's claim that a
+subpath too short for one pitch step gets a single `atend=3` call was
+simply wrong for any subpath with nonzero length (only a true
+single-point subpath does) — the actual behavior (a distinct start
+and guaranteed-end call) is the more useful contract for a brush to
+build on, so the fix was correcting the documentation, not the code.
+
 ## A machine-readable catalog of agent-usable art capabilities (issue #39, 2026-08-15)
 
 Closes issue #39: an autonomous artist agent needs a dependable way to

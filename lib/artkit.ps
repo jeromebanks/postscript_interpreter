@@ -274,10 +274,18 @@ end
 %          always == pitch: 0 for the very first stop of a subpath,
 %          and whatever's left over for the guaranteed final stop).
 %   atend  a bitmask: bit 0 (1) set at the first stop of a subpath,
-%          bit 1 (2) set at the last. A subpath too short for even one
-%          full pitch step still gets exactly one stop, with both bits
-%          set (3) and t=0, sp=0, ang=0 (no direction is defined for a
-%          single point).
+%          bit 1 (2) set at the last. A degenerate subpath (zero
+%          length -- a moveto with no following segment) gets exactly
+%          one stop, both bits set (3), t=0, sp=0, ang=0 (no direction
+%          is defined for a single point). A short *nonzero* subpath
+%          (shorter than one pitch step) still gets two: the start
+%          (atend=1) and the guaranteed end (atend=2) -- distinct
+%          points, not coalesced, so a brush can still draw a mark
+%          between them.
+% pitch must be positive; the file's malformed-input convention
+% (self-documenting undefined-name guard, see et-spacing-must-be-
+% positive in lib/etching.ps) raises an error rather than looping
+% forever on pitch <= 0.
 % Every subpath's regular pitch-spaced stops (0, pitch, 2*pitch, ...)
 % land exactly where alongpath's would. walkpath additionally
 % *guarantees* one more call at the literal end of each subpath (the
@@ -352,6 +360,7 @@ end
 
 /walkpath {                                      % pitch proc -
     /wkproc exch def /wkpitch exch def
+    wkpitch 0 le { walkpath-pitch-must-be-positive } if
     flattenpath
     wkmeasure /wklens exch def
     /wksi 0 def /wkx 0 def /wky 0 def /wksx 0 def /wksy 0 def
