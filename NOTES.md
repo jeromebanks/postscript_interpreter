@@ -136,6 +136,47 @@ constructed under a large `scale` to pin the CTM-fragility class of bug
 rather than just the 1x-scale symptom. Full quality gate re-run clean
 (664 tests) before pushing the fix and re-running Codex review.
 
+Round 2 found four more, all fixed:
+
+- **Malformed `/Pressure`/`/StartCap`/`/EndCap` weren't validated.** A
+  non-procedure `/Pressure` (e.g. `1`) was never auto-executed by
+  `pkhalfwat`'s `t pkpressure` call -- it just got pushed, leaking
+  extra operands into every downstream computation instead of raising
+  a clean error. An unrecognized cap value silently fell through to
+  `/flat`. Both are validated now (`xcheck` for the procedure check,
+  an explicit three-way `eq`/`or` chain for caps), each with its own
+  self-documenting guard name and regression tests. Writing the
+  `/Pressure` guard itself hit the *exact* auto-execute trap its own
+  fix is protecting against: the first attempt, `pkpressure xcheck`,
+  bare-referenced `pkpressure` -- which auto-runs it, since it's
+  already bound to a procedure in the common case -- calling the
+  default pressure proc with nothing on the stack before `xcheck` ever
+  saw it, `stackunderflow`. Fixed with `/pkpressure load xcheck`:
+  `load` fetches a bound value without executing it, regardless of
+  type. Two run-ins with the same PostScript gotcha in one library is
+  worth over-explaining in the comment for whoever touches this next.
+- **`pkribbon` was undiscoverable via the capability catalog.**
+  `CAPABILITIES.md`/`pscat --capabilities`/MCP's
+  `describe_art_capabilities` are the documented source of truth for
+  what an agent can find installed (issue #39) -- paintkit shipped
+  absent from all three. Registered `pkribbon` (its eight options-dict
+  keys as real `Param`s, same treatment templates and
+  `hs-write`/`hg-write` get) and the three `/Pressure` presets
+  (`pkflat`/`pktaper`/`pkbell`) in `src/capabilities.rs`'s `ENTRIES`,
+  added `PAINTKIT_INTERNAL` for the remaining scratch helpers, and a
+  `paintkit_names_match_the_catalog_exactly` test mirroring
+  `pagekit_names_match_the_catalog_exactly` -- the reverse-coverage
+  check that fails if a future public name in `lib/paintkit.ps` ships
+  uncataloged.
+- **The demo lacked `showpage`.** Reaching EOF without it emits no
+  page under a standard PostScript consumer (Ghostscript, a real
+  printer) -- masked locally because `pscat --png` snapshots the final
+  canvas regardless. Added; re-verified under both pscat and
+  `gs -dNOSAFER`.
+
+Full quality gate re-run clean (665 tests) before pushing and
+re-running Codex review a second time.
+
 ## A reusable centerline path sampler for procedural brushes (issue #40, 2026-08-15)
 
 Closes issue #40, the foundation for the painterly-brush series

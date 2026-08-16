@@ -27,16 +27,20 @@
 %                (constant 1.0). Two more presets ship: `pktaper`
 %                (linear, t itself is the multiplier) and `pkbell`
 %                (non-linear, a 0->1->0 hump via `sin`). Reference a
-%                preset as `{ pktaper }`, or write an inline proc.
+%                preset as `{ pktaper }`, or write an inline proc. Must
+%                actually be a procedure, checked with `xcheck`.
 %   /StartTaper  /EndTaper   0..1 fraction of progress over which
 %                width additionally ramps 0->1 at the very start/end,
 %                independent of and multiplicative with /Pressure --
 %                needed for a clean taper regardless of the pressure
 %                curve's own shape. Default 0 (no extra ramp).
-%   /StartCap    /EndCap     /round (default), /flat, or /pointed.
-%                A cap whose computed half-width rounds to ~0 (taper
-%                or a zero-pressure endpoint) degrades to /pointed
-%                automatically rather than emitting a zero-radius arc.
+%   /StartCap    /EndCap     /round (default), /flat, or /pointed --
+%                any other value is rejected rather than silently
+%                falling through to /flat. A cap whose computed
+%                half-width is exactly 0 (taper or a zero-pressure
+%                endpoint) degrades to /pointed automatically rather
+%                than emitting a zero-radius arc (safe in both pscat
+%                and Ghostscript, but pointless).
 %   /Jitter      amount (default 0): each edge point is displaced
 %                along the local perpendicular by up to +/-amount,
 %                drawn from artkit's seeded `frnd` -- reproducible
@@ -314,11 +318,32 @@
         pkgetdef
     def
     pkpitch 0 le { pkribbon-pitch-must-be-positive } if
+    % /Pressure must actually be a procedure: pkhalfwat calls it as
+    % `t pkpressure`, expecting it to consume t and leave one number.
+    % A non-procedure value (e.g. a bare number) is never auto-executed
+    % -- it just gets pushed instead of run -- leaking extra operands
+    % into every downstream computation instead of raising a clean
+    % error (Codex review, round 2). Checked with `/pkpressure load
+    % xcheck`, not a bare `pkpressure xcheck`: pkpressure is *already*
+    % bound to a procedure in the common case, and a bare reference to
+    % a name bound to an executable auto-runs it -- the exact trap
+    % `pkgetdef`'s own header comment documents -- which would call the
+    % default pressure proc with nothing to operate on before `xcheck`
+    % ever saw it. `load` fetches the bound value without executing it,
+    % regardless of its type.
     /pkpressure pkopts /Pressure { pkflat } pkgetdef def
+    /pkpressure load xcheck not { pkribbon-pressure-must-be-a-procedure } if
     /pkstarttaper pkopts /StartTaper 0 pkgetdef def
     /pkendtaper pkopts /EndTaper 0 pkgetdef def
+    % /StartCap//EndCap: anything other than the three documented
+    % values used to fall through to /flat silently (Codex review,
+    % round 2) -- validated explicitly instead.
     /pkstartcap pkopts /StartCap /round pkgetdef def
+    pkstartcap /round eq pkstartcap /flat eq or pkstartcap /pointed eq or not
+        { pkribbon-startcap-must-be-round-flat-or-pointed } if
     /pkendcap pkopts /EndCap /round pkgetdef def
+    pkendcap /round eq pkendcap /flat eq or pkendcap /pointed eq or not
+        { pkribbon-endcap-must-be-round-flat-or-pointed } if
     /pkjitter pkopts /Jitter 0 pkgetdef def
 
     % Two walkpath passes over the same (surviving, per its own

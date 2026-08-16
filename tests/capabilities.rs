@@ -16,6 +16,7 @@ use std::process::Command;
 use pscat::Interp;
 use pscat::capabilities::{
     self, ARTKIT_INTERNAL, CapabilityKind, HANDSCRIPT_INTERNAL, HANGUL_INTERNAL, PAGEKIT_INTERNAL,
+    PAINTKIT_INTERNAL,
 };
 
 fn names_by(kind: CapabilityKind, source: &str) -> BTreeSet<String> {
@@ -146,6 +147,24 @@ fn pagekit_names_match_the_catalog_exactly() {
     expected.extend(PAGEKIT_INTERNAL.iter().map(|s| s.to_string()));
 
     assert_name_sets_match("lib/pagekit.ps", &pagekit_specific, &expected);
+}
+
+#[test]
+fn paintkit_names_match_the_catalog_exactly() {
+    let mut base_it = Interp::new();
+    load(&mut base_it, "lib/artkit.ps");
+    let artkit_baseline = userdict_names(&mut base_it);
+
+    let mut it = Interp::new();
+    load(&mut it, "lib/artkit.ps");
+    load(&mut it, "lib/paintkit.ps");
+    let all = userdict_names(&mut it);
+    let paintkit_specific: BTreeSet<String> = all.difference(&artkit_baseline).cloned().collect();
+
+    let mut expected = names_by(CapabilityKind::Procedure, "lib/paintkit.ps");
+    expected.extend(PAINTKIT_INTERNAL.iter().map(|s| s.to_string()));
+
+    assert_name_sets_match("lib/paintkit.ps", &paintkit_specific, &expected);
 }
 
 /// `lib/handscript.ps`/`lib/hangul.ps` are standalone (no artkit

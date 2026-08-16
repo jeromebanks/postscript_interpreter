@@ -6,8 +6,8 @@
 //! `/HandScript` and `lib/hangul.ps`'s `/HangulScript` — two historical
 //! outliers that predate the `lib/fonts/` convention), artkit's mood
 //! palettes, the page templates (`lib/pagekit.ps`), and artkit's/the
-//! style packs'/handscript's/hangul's major procedures. It exists so
-//! an agent can discover what's
+//! style packs'/handscript's/hangul's/paintkit's major procedures. It
+//! exists so an agent can discover what's
 //! *actually installed* in the running `pscat` without embedding
 //! prose documentation (which drifts — `psart`'s `SKILL.md` had
 //! already fallen behind artkit's paragraph-flow, hyperbolic-geometry,
@@ -151,6 +151,7 @@ fn load_sequence(kind: CapabilityKind, source: &str) -> String {
         _ => match source {
             s if s == ARTKIT => "(lib/artkit.ps) run".to_string(),
             s if s == PAGEKIT => "(lib/artkit.ps) run (lib/pagekit.ps) run".to_string(),
+            s if s == PAINTKIT => "(lib/artkit.ps) run (lib/paintkit.ps) run".to_string(),
             s if s == STEAMPUNK => "(lib/artkit.ps) run (lib/styles/steampunk.ps) run".to_string(),
             s if s == PSYCHEDELIC => {
                 "(lib/artkit.ps) run (lib/styles/psychedelic.ps) run".to_string()
@@ -194,6 +195,7 @@ impl Entry {
 
 const ARTKIT: &str = "lib/artkit.ps";
 const PAGEKIT: &str = "lib/pagekit.ps";
+const PAINTKIT: &str = "lib/paintkit.ps";
 const STEAMPUNK: &str = "lib/styles/steampunk.ps";
 const PSYCHEDELIC: &str = "lib/styles/psychedelic.ps";
 const SCIFI: &str = "lib/styles/scifi.ps";
@@ -233,6 +235,23 @@ pub const ARTKIT_INTERNAL: &[&str] = &[
 /// Top-level names `lib/pagekit.ps` defines beyond its five templates:
 /// the three shared helpers (`pggetdef`/`pgzfitmax`/`pgframe`).
 pub const PAGEKIT_INTERNAL: &[&str] = &["pggetdef", "pgzfitmax", "pgframe"];
+
+/// Top-level names `lib/paintkit.ps` defines beyond `pkribbon` and the
+/// three `/Pressure` presets (`pkflat`/`pktaper`/`pkbell`, cataloged
+/// separately since they're documented, directly referenceable by
+/// name): the dict-default reader and the internal ribbon-construction
+/// helpers (edge offsetting, cap/loop building, taper/half-width math).
+pub const PAINTKIT_INTERNAL: &[&str] = &[
+    "pkgetdef",
+    "pktaperf",
+    "pkhalfwat",
+    "pkjit",
+    "pkedge",
+    "pkdot",
+    "pkloop",
+    "pkopenrun",
+    "pkbuildrun",
+];
 
 /// Top-level names `lib/handscript.ps` defines beyond `hs-write`/
 /// `hs-linecount`: `HandScriptDict` (the `definefont` template dict —
@@ -926,6 +945,87 @@ static ENTRIES: &[Entry] = &[
         &[],
         ARTKIT,
         "cx cy r (str) ctextctr -",
+        LIB
+    ),
+    // --- Procedures: lib/paintkit.ps (issue #41) ------------------------
+    // Unlike everything above, pkribbon takes one options dict with
+    // named, defaulted keys -- genuinely Param-shaped, same as a page
+    // template's content dict -- so parameters is populated for real.
+    entry!(
+        "pkribbon",
+        CapabilityKind::Procedure,
+        "Treats the current path as a centerline and fills a variable-width ribbon along it, built on walkpath. Color comes from whatever the caller already set.",
+        &[
+            Param {
+                name: "Width",
+                description: "Base width",
+                default: Some("6")
+            },
+            Param {
+                name: "Pitch",
+                description: "walkpath sampling pitch",
+                default: Some("Width*0.5, capped at 6")
+            },
+            Param {
+                name: "Pressure",
+                description: "{t -> mult} proc over normalized path progress (pkflat/pktaper/pkbell presets ship)",
+                default: Some("{ pkflat }")
+            },
+            Param {
+                name: "StartTaper",
+                description: "0..1 fraction of progress to ramp width in from the start, independent of Pressure",
+                default: Some("0")
+            },
+            Param {
+                name: "EndTaper",
+                description: "0..1 fraction of progress to ramp width out at the end, independent of Pressure",
+                default: Some("0")
+            },
+            Param {
+                name: "StartCap",
+                description: "/round, /flat, or /pointed",
+                default: Some("/round")
+            },
+            Param {
+                name: "EndCap",
+                description: "/round, /flat, or /pointed",
+                default: Some("/round")
+            },
+            Param {
+                name: "Jitter",
+                description: "Seeded edge displacement amount, deterministic under the caller's N srand",
+                default: Some("0")
+            },
+        ],
+        PAINTKIT,
+        "newpath ... << /Width 10 /Pressure { pktaper } >> pkribbon",
+        LIB
+    ),
+    entry!(
+        "pkflat",
+        CapabilityKind::Procedure,
+        "pkribbon's default /Pressure preset: constant width (t -> 1.0).",
+        &[],
+        PAINTKIT,
+        "t pkflat mult",
+        LIB
+    ),
+    entry!(
+        "pktaper",
+        CapabilityKind::Procedure,
+        "A pkribbon /Pressure preset: linear taper across the whole stroke (t -> t).",
+        &[],
+        PAINTKIT,
+        "t pktaper mult",
+        LIB
+    ),
+    entry!(
+        "pkbell",
+        CapabilityKind::Procedure,
+        "A pkribbon /Pressure preset: non-linear 0->1->0 hump, widest at the middle of the stroke.",
+        &[],
+        PAINTKIT,
+        "t pkbell mult",
         LIB
     ),
     // --- Procedures: shapes ----------------------------------------------

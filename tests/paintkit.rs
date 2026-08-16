@@ -86,6 +86,29 @@ fn width_and_pitch_guards_reject_non_positive_values() {
             "newpath 0 0 moveto 100 0 lineto << /Width 10 /Pitch -1 >> pkribbon",
             "pkribbon-pitch-must-be-positive",
         ),
+        // Regression tests for a Codex-round-2 finding: a non-procedure
+        // /Pressure used to be silently accepted (never auto-executed,
+        // just pushed) and corrupt every downstream computation instead
+        // of raising a clean error.
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Width 10 /Pressure 1 >> pkribbon",
+            "pkribbon-pressure-must-be-a-procedure",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Width 10 /Pressure (nope) >> pkribbon",
+            "pkribbon-pressure-must-be-a-procedure",
+        ),
+        // Regression tests for a Codex-round-2 finding: any /StartCap//
+        // EndCap value other than the three documented ones used to
+        // fall through to /flat silently instead of erroring.
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Width 10 /StartCap /roudn >> pkribbon",
+            "pkribbon-startcap-must-be-round-flat-or-pointed",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Width 10 /EndCap /squared >> pkribbon",
+            "pkribbon-endcap-must-be-round-flat-or-pointed",
+        ),
     ];
     for (src, name) in cases {
         let err = it.run_str(src).unwrap_err();
