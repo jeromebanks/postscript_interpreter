@@ -403,15 +403,35 @@
     % and an executable non-procedure (e.g. `2 cvx`) passes it despite
     % `pkht pkpressure` just pushing the number instead of running
     % anything, same corruption as an unvalidated plain number -- so
-    % `type` must also be an actually-callable kind (`arraytype` for a
-    % user proc, `operatortype` for a bound built-in).
+    % `type` must also be an actually-callable kind: `arraytype` for a
+    % user proc, `operatortype` for a bound built-in, or (Codex review,
+    % round 5) `packedarraytype` -- under a Level 2 interpreter with
+    % packing enabled (`true setpacking`; confirmed against real
+    % Ghostscript, though pscat itself doesn't actually pack), a plain
+    % procedure literal like the /Pressure default itself, `{ pkflat }`,
+    % can legitimately have this type instead of `arraytype`, and
+    % rejecting it would make `pkribbon` fail even on its own default.
     /pkpressure pkopts /Pressure { pkflat } pkgetdef def
     /pkpressure load xcheck
-    /pkpressure load type dup /arraytype eq exch /operatortype eq or
+    /pkpressure load type
+    dup /arraytype eq
+    exch dup /operatortype eq
+    exch /packedarraytype eq
+    or or
     and
     not { pkribbon-pressure-must-be-a-procedure } if
+    % /StartTaper//EndTaper: the documented range is 0..1 -- outside it
+    % doesn't crash (pktaperf's guard conditions just degrade: negative
+    % silently disables the ramp, above 1 keeps the whole stroke short
+    % of full width) but that's a real contract violation, not merely a
+    % style choice, so it's validated the same as every other documented
+    % constraint here (Codex review, round 5).
     /pkstarttaper pkopts /StartTaper 0 pkgetdef def
+    pkstarttaper 0 lt pkstarttaper 1 gt or
+        { pkribbon-starttaper-must-be-0-to-1 } if
     /pkendtaper pkopts /EndTaper 0 pkgetdef def
+    pkendtaper 0 lt pkendtaper 1 gt or
+        { pkribbon-endtaper-must-be-0-to-1 } if
     % /StartCap//EndCap: anything other than the three documented
     % values used to fall through to /flat silently (Codex review,
     % round 2) -- validated explicitly instead.

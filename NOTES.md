@@ -281,6 +281,31 @@ All fixes came with regression tests, including one for the
 self-caught bug. Full quality gate re-run clean (670 tests) before
 pushing and re-running Codex review a fourth time.
 
+Round 5 found two more, one of them P1:
+
+- **A packed procedure literal failed `/Pressure` validation --
+  including `pkribbon`'s own default.** Under a Level 2 interpreter
+  with packing enabled (`true setpacking`), a plain procedure literal
+  like `{ pkflat }` can have type `packedarraytype` instead of
+  `arraytype` -- confirmed directly against real Ghostscript (pscat
+  itself doesn't actually pack, so `type` stays `arraytype` there
+  regardless of `setpacking`). The round-3 type-check only accepted
+  `arraytype`/`operatortype`, so `pkribbon` would fail on its own
+  documented default the moment a caller's environment had packing on.
+  Added `packedarraytype` to the accepted set, and pushed
+  `true setpacking` to the front of `ghostscript_accepts_paintkit`'s
+  driver so the whole test actually exercises the branch under real
+  gs, not just calls `pkribbon` under packing's (irrelevant, for
+  pscat) default-off state.
+- **`/StartTaper`/`/EndTaper` outside their documented 0..1 range
+  weren't validated.** Doesn't crash -- a negative value just silently
+  disables that ramp, above 1 keeps the whole stroke short of full
+  width -- but it's a real contract violation, same category as every
+  other documented constraint here, so validated the same way.
+
+Both have regression tests. Full quality gate re-run clean (671 tests)
+before pushing and re-running Codex review a fifth time.
+
 ## A reusable centerline path sampler for procedural brushes (issue #40, 2026-08-15)
 
 Closes issue #40, the foundation for the painterly-brush series

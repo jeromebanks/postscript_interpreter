@@ -117,6 +117,26 @@ fn width_and_pitch_guards_reject_non_positive_values() {
             "newpath 0 0 moveto 100 0 lineto << /Width 10 /EndCap /squared >> pkribbon",
             "pkribbon-endcap-must-be-round-flat-or-pointed",
         ),
+        // Regression tests for a Codex-round-5 finding: /StartTaper//
+        // EndTaper outside the documented 0..1 range didn't error --
+        // negative silently disabled the ramp, above 1 kept the whole
+        // stroke short of full width.
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Width 10 /StartTaper -0.1 >> pkribbon",
+            "pkribbon-starttaper-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Width 10 /StartTaper 1.5 >> pkribbon",
+            "pkribbon-starttaper-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Width 10 /EndTaper -0.1 >> pkribbon",
+            "pkribbon-endtaper-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Width 10 /EndTaper 1.5 >> pkribbon",
+            "pkribbon-endtaper-must-be-0-to-1",
+        ),
     ];
     for (src, name) in cases {
         let err = it.run_str(src).unwrap_err();
@@ -125,6 +145,30 @@ fn width_and_pitch_guards_reject_non_positive_values() {
             "{src}: got {err}"
         );
     }
+}
+
+#[test]
+fn setpacking_true_does_not_break_pressure_validation() {
+    // Partial regression coverage for a Codex-round-5 finding: under a
+    // Level 2 interpreter with packing enabled, a plain procedure
+    // literal like the /Pressure default itself has type
+    // packedarraytype, not arraytype -- the original xcheck+type guard
+    // rejected even pkribbon's own default under packing. pscat itself
+    // doesn't actually produce packedarraytype under `setpacking`
+    // (confirmed directly: `true setpacking { } type` is still
+    // arraytype here), so this can only assert the call still works
+    // with packing toggled on, not exercise the packedarraytype branch
+    // itself -- ghostscript_accepts_paintkit's driver below does that
+    // part, against real Ghostscript, where packing actually changes
+    // the type.
+    let mut it = fresh(220, 40);
+    it.run_str(
+        "0 0 0 setrgbcolor 1 srand true setpacking \
+         newpath 10 20 moveto 210 20 lineto \
+         << /Width 10 /Pressure { pktaper } >> pkribbon",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(ink_count(&it) > 500, "expected the ribbon to still render");
 }
 
 #[test]
@@ -582,7 +626,14 @@ fn ghostscript_accepts_paintkit() {
     }
     let artkit = std::fs::read_to_string("lib/artkit.ps").expect("artkit");
     let paintkit = std::fs::read_to_string("lib/paintkit.ps").expect("paintkit");
-    let driver = "3 srand \
+    // `true setpacking`: real Ghostscript packs subsequently-parsed
+    // procedure literals into packedarraytype under packing mode
+    // (confirmed directly; pscat itself doesn't), so running the whole
+    // driver -- including pkribbon's own `{ pkflat }` default and every
+    // explicit /Pressure literal below -- with packing on is what
+    // actually exercises the packedarraytype branch of the /Pressure
+    // guard (Codex review, round 5), not just calling `pkribbon` at all.
+    let driver = "true setpacking 3 srand \
         0 0 0 setrgbcolor \
         newpath 10 10 moveto 100 10 lineto << /Width 8 >> pkribbon \
         newpath 10 40 moveto 30 80 90 80 110 40 curveto \
