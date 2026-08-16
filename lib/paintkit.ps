@@ -44,11 +44,21 @@
 %                the rest of artkit (no library-owned seed). Skipped
 %                entirely at /pointed (or degenerate) tips, and not
 %                drawn at all when amount is 0 (so an unjittered call
-%                doesn't perturb the caller's rand sequence).
+%                doesn't perturb the caller's rand sequence). An
+%                amount past Width/2 can push a point across the
+%                centerline to the far side; `fill`'s nonzero winding
+%                absorbs the resulting local self-crossing without
+%                error, but past that point "jitter" is closer to
+%                "noise" -- keep it well under Width/2 for a ribbon
+%                that still reads as one continuous band.
 %
 % Color is deliberately not a key: `pkribbon` fills with whatever
 % color the caller already set (`setrgbcolor` et al.), same as any
 % other artkit shape helper.
+%
+% Same contract as walkpath: the caller's current path survives,
+% flattened, since `pkribbon`'s own drawing happens inside its own
+% `gsave`/`newpath`/`grestore`, never touching the path it just walked.
 %
 % Multiple subpaths in the source path each become an independent
 % ribbon. A closed subpath (its walkpath start and guaranteed end
@@ -136,11 +146,16 @@
 } def
 
 % [x y ang t sp atend] pkdot -   (degenerate single-point fallback)
+% Diameter is Width*Pressure only -- not pkhalfwat's full
+% Width*Pressure*taper. /StartTaper//EndTaper ramp width in from the
+% *ends of a path*; a lone point has no path to ramp along, and
+% applying them anyway could zero out the dot entirely (e.g. any
+% nonzero /StartTaper at t=0) for a caller who never asked for that.
 /pkdot {
     dup 0 get /pkdx exch def
     dup 1 get /pkdy exch def
     3 get /pkdt exch def
-    /pkdhw pkdt pkhalfwat def
+    /pkdhw pkwidth pkdt pkpressure mul 2 div def
     pkdhw 0 gt { pkdx pkdy pkdhw 0 360 arc closepath } if
 } def
 

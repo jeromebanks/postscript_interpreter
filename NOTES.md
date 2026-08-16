@@ -67,13 +67,30 @@ limitation of simple offset-curve stroking, not fixed -- a joint style
 is its own feature, out of this issue's "ribbon core" scope.
 
 `examples/paintkit_demo.ps` demonstrates all three centerline shapes,
-all three pressure profiles, all three cap styles, and seeded jitter.
-Like `walkpath_demo.ps`, it can't join `tests/golden.rs`: both load
-`(lib/artkit.ps) run` at runtime, which trips Ghostscript's `SAFER`
-sandboxing on the file read. `tests/paintkit.rs`'s own
-`ghostscript_accepts_paintkit` covers gs compatibility instead, the
-same way `tests/pagekit.rs` does -- artkit's and paintkit's *source*
-embedded directly into a combined driver file, no runtime `run` calls.
+independent start/end taper, all three pressure profiles, all three
+cap styles, and seeded jitter. Like `walkpath_demo.ps`, it can't join
+`tests/golden.rs`: both load `(lib/artkit.ps) run` at runtime, which
+trips Ghostscript's `SAFER` sandboxing on the file read -- confirmed
+that's the *only* blocker, not an unsupported operator, by running the
+demo again with `gs -dNOSAFER` (renders clean). `tests/paintkit.rs`'s
+own `ghostscript_accepts_paintkit` covers gs compatibility under the
+default sandboxed mode instead, the same way `tests/pagekit.rs` does
+-- artkit's and paintkit's *source* embedded directly into a combined
+driver file, no runtime `run` calls.
+
+Two gaps an `advisor` pass over the initial implementation caught,
+both fixed before opening the PR: `/StartTaper`/`/EndTaper` had zero
+coverage anywhere (header, demo, tests, gs driver) despite being one
+of the issue's explicit bullets; and the degenerate-single-point dot
+fallback silently drew *nothing* under a nonzero `/StartTaper` (its
+radius went through the same `pkhalfwat` a real ribbon segment uses,
+which multiplies in the taper ramp -- meaningless for a lone point,
+and zero at t=0 for any nonzero `/StartTaper`). Fixed by giving the
+dot its own width computation (`Width*Pressure` only, matching what
+the header already promised) and adding both a taper demo row and
+taper-specific tests, including one that forces the degenerate-radius
+path (`/StartTaper 1` collapsing a `/round` cap to a point) rather than
+leaving it exercised only by coincidence.
 
 ## A reusable centerline path sampler for procedural brushes (issue #40, 2026-08-15)
 

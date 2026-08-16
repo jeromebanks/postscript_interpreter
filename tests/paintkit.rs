@@ -188,6 +188,41 @@ fn pressure_profiles_change_the_measured_width() {
 }
 
 #[test]
+fn start_and_end_taper_ramp_width_down_independently_of_pressure() {
+    let mut it = fresh(220, 60);
+    it.run_str(
+        "0 0 0 setrgbcolor 1 srand newpath 10 30 moveto 210 30 lineto \
+         << /Width 20 /StartTaper 0.3 /EndTaper 0.3 >> pkribbon",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let start = column_height(&it, 15, 60);
+    let mid = column_height(&it, 110, 60);
+    let end = column_height(&it, 205, 60);
+    assert!(
+        start < mid && end < mid,
+        "StartTaper/EndTaper should thin both ends relative to the middle: \
+         start {start} mid {mid} end {end}"
+    );
+}
+
+#[test]
+fn full_taper_degrades_the_cap_to_a_point_without_a_zero_radius_arc() {
+    // /StartTaper 1 makes the computed half-width at t=0 exactly 0 --
+    // /StartCap /round must degrade to a point rather than emit (or
+    // crash on) a zero-radius arc.
+    let mut it = fresh(220, 60);
+    it.run_str(
+        "0 0 0 setrgbcolor 1 srand newpath 10 30 moveto 210 30 lineto \
+         << /Width 20 /StartTaper 1 /StartCap /round >> pkribbon",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 500,
+        "expected the tapered ribbon to still render"
+    );
+}
+
+#[test]
 fn seeded_jitter_is_deterministic_and_actually_perturbs_the_edge() {
     fn render(jitter: f64, seed: i64) -> Vec<u8> {
         let mut it = fresh(320, 40);
@@ -222,6 +257,24 @@ fn degenerate_single_point_falls_back_to_a_dot() {
     it.run_str("0 0 0 setrgbcolor newpath 30 30 moveto << /Width 12 >> pkribbon")
         .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
     assert!(ink_count(&it) > 20, "expected a filled dot at the point");
+}
+
+#[test]
+fn degenerate_single_point_ignores_taper_and_still_draws_a_dot() {
+    // pkdot's diameter is Width*Pressure only -- StartTaper/EndTaper
+    // are meaningless for a lone point (no path to ramp along), and
+    // applying them anyway (pkhalfwat does, for a real path) would
+    // zero the dot out for any nonzero /StartTaper at t=0.
+    let mut it = fresh(60, 60);
+    it.run_str(
+        "0 0 0 setrgbcolor newpath 30 30 moveto \
+         << /Width 12 /StartTaper 0.5 /EndTaper 0.5 >> pkribbon",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 20,
+        "expected a filled dot despite StartTaper/EndTaper"
+    );
 }
 
 #[test]

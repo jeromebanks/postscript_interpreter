@@ -1,16 +1,17 @@
 %!PS-Adobe-3.0
 %%Title: Paintkit — pressure-sensitive ribbon strokes (issue #41)
-%%BoundingBox: 0 0 620 460
+%%BoundingBox: 0 0 620 620
 %%EndComments
 
 % Specimen for paintkit's pkribbon (lib/paintkit.ps): the reusable
 % filled ribbon primitive later painterly brushes (issue #42+) build
-% on. Row 1 shows the three centerline shapes the acceptance criteria
-% call out (straight, Bezier, closed polygon); row 2 shows the three
-% required pressure profiles (constant, tapered, non-linear bell);
-% row 3 shows the three cap styles and seeded jitter.
+% on. Row 1 shows /StartTaper//EndTaper ramping width independently of
+% /Pressure; row 2 shows the three centerline shapes the acceptance
+% criteria call out (straight, Bezier, closed polygon); row 3 shows
+% the three required pressure profiles (constant, tapered, non-linear
+% bell); row 4 shows the three cap styles and seeded jitter.
 %
-%   pscat --page 620x460 examples/paintkit_demo.ps --png paintkit.png
+%   pscat --page 620x620 examples/paintkit_demo.ps --png paintkit.png
 
 (lib/artkit.ps) run
 (lib/paintkit.ps) run
@@ -29,9 +30,25 @@
     grestore
 } def
 
+/stone pal 2 get aload pop setrgbcolor
+
+% --- row 1: start/end taper, independent of pressure ------------------
+
+20 580 (start taper 0.4) pklabel
+newpath 20 520 moveto 180 520 lineto
+<< /Width 20 /StartTaper 0.4 >> pkribbon
+
+220 580 (end taper 0.4) pklabel
+newpath 220 520 moveto 380 520 lineto
+<< /Width 20 /EndTaper 0.4 >> pkribbon
+
+420 580 (both, taper 0.4) pklabel
+newpath 420 520 moveto 580 520 lineto
+<< /Width 20 /StartTaper 0.4 /EndTaper 0.4 >> pkribbon
+
 /dusk pal 2 get aload pop setrgbcolor
 
-% --- row 1: the three centerline shapes ------------------------------
+% --- row 2: the three centerline shapes ------------------------------
 
 20 420 (straight line) pklabel
 newpath 20 360 moveto 180 360 lineto
@@ -45,7 +62,7 @@ newpath 220 360 moveto 240 410 400 410 420 360 curveto
 newpath 460 350 moveto 590 350 lineto 610 410 lineto 440 410 lineto closepath
 << /Width 10 >> pkribbon
 
-% --- row 2: the three required pressure profiles ---------------------
+% --- row 3: the three required pressure profiles ---------------------
 
 /ember pal 2 get aload pop setrgbcolor
 
@@ -61,7 +78,7 @@ newpath 220 260 moveto 380 260 lineto
 newpath 420 260 moveto 580 260 lineto
 << /Width 16 /Pressure { pkbell } /StartCap /pointed /EndCap /pointed >> pkribbon
 
-% --- row 3: cap styles + seeded jitter --------------------------------
+% --- row 4: cap styles + seeded jitter --------------------------------
 
 /tide pal 2 get aload pop setrgbcolor
 
