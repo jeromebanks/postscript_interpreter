@@ -18,6 +18,7 @@
 %   L-systems (axiom) <<rules>> depth lsys | (str) step angle ldraw
 %   brushes   pitch {x y ang ...} alongpath | (str) pathtext
 %             cx cy r ang (str) ctext | cx cy r (str) ctextctr
+%             pitch {x y ang t sp atend ...} walkpath (centerline sampler)
 %   shapes    cx cy r n ngon | cx cy r1 r2 n star | x y w h r rrect
 %   text      (s) cx y showctr | (s) w fitfont
 %   layout    x y w h cols rows {x y w h ...} grid
@@ -40,7 +41,7 @@
 % Convention: helper names are lowercase and short; internal scratch
 % names carry two-letter prefixes (ad-, ap-, c2-, cp-, ct-, ef-, ep-,
 % g2-, gd-, gh-, gk-, ha-, hg-, ho-, hp-, hr-, ht-, hy-, ld-, ls-, n2-,
-% nf-, ni-, nl-, pt-, tg-, tk-) — avoid redefining those inside
+% nf-, ni-, nl-, pt-, tg-, tk-, wk-) — avoid redefining those inside
 % brush/draw procs.
 
 % --- random ----------------------------------------------------------
@@ -258,6 +259,119 @@ end
 /alongpath {                                     % pitch proc -
     exch /aponepitch exch def
     { aponepitch } exch alintern
+} def
+
+% --- brushes: centerline sampler (foundation for painterly brushes) --
+% pitch {x y ang t sp atend -> -} walkpath -
+% A richer alongpath: walks the current path (flattened, any mix of
+% line/curve/closepath segments, any number of subpaths) at even
+% arc-length stops, same as alongpath, but hands the proc four extra
+% numbers per stop:
+%   t      normalized progress through the *current subpath*, 0.0 at
+%          its first point to 1.0 at its last — each subpath restarts
+%          at 0 (matching alongpath's existing per-subpath reset).
+%   sp     arc-length distance from the previously emitted stop (not
+%          always == pitch: 0 for the very first stop of a subpath,
+%          and whatever's left over for the guaranteed final stop).
+%   atend  a bitmask: bit 0 (1) set at the first stop of a subpath,
+%          bit 1 (2) set at the last. A subpath too short for even one
+%          full pitch step still gets exactly one stop, with both bits
+%          set (3) and t=0, sp=0, ang=0 (no direction is defined for a
+%          single point).
+% Every subpath's regular pitch-spaced stops (0, pitch, 2*pitch, ...)
+% land exactly where alongpath's would. walkpath additionally
+% *guarantees* one more call at the literal end of each subpath (the
+% true last point pathforall reports, atend bit 1 set) even when that
+% doesn't fall on a pitch multiple — painterly brushes need an exact
+% endpoint to place tapers/caps, which alongpath's stepping alone
+% can't promise. When pitch evenly divides the subpath length, that
+% guaranteed call coincides with the last regular stop (sp==0 there);
+% callers that care can treat sp==0 on an atend-bit-1 call as "already
+% covered." alongpath is left untouched rather than rebuilt on top of
+% walkpath: alintern's pitch is itself a *procedure*, called fresh
+% before every stamp (pathtext relies on this to vary the pitch by
+% each glyph's advance), which walkpath's scalar pitch can't express.
+% The current path survives (flattened), same contract as alongpath.
+
+/wkmeasure {                                     % - [len0 len1 ...]
+    % One flattened-path traversal, mark-collecting each subpath's
+    % total arc length in path order (handles any number of subpaths
+    % without a fixed bound). Read a second time by walkpath itself.
+    /wkmx 0 def /wkmy 0 def /wkmsx 0 def /wkmsy 0 def
+    /wkmsum 0 def /wkmfirst true def
+    [
+        { /wkmy exch def /wkmx exch def
+          wkmfirst { /wkmfirst false def } { wkmsum } ifelse
+          /wkmsx wkmx def /wkmsy wkmy def /wkmsum 0 def }
+        { /wkmpy exch def /wkmpx exch def
+          /wkmsum wkmsum wkmpx wkmx sub dup mul wkmpy wkmy sub dup mul add sqrt add def
+          /wkmx wkmpx def /wkmy wkmpy def }
+        { pop pop pop pop pop pop }
+        { /wkmsum wkmsum wkmsx wkmx sub dup mul wkmsy wkmy sub dup mul add sqrt add def
+          /wkmx wkmsx def /wkmy wkmsy def }
+        pathforall
+        wkmfirst not { wkmsum } if
+    ]
+} def
+
+/wkseg {                                         % x1 y1 -  (segment end)
+    /wky1 exch def /wkx1 exch def
+    /wkdx wkx1 wkx sub def /wkdy wky1 wky sub def
+    /wkseglen wkdx dup mul wkdy dup mul add sqrt def
+    wkseglen 0.0001 gt {
+        /wkang wkdy wkdx atan def
+        /wkt2 wkrem def
+        {
+            wkt2 wkseglen gt { exit } if
+            /wkpx wkx wkdx wkt2 mul wkseglen div add def
+            /wkpy wky wkdy wkt2 mul wkseglen div add def
+            /wkc wkcum wkt2 add def
+            wkpx wkpy wkang
+            wksub 0 gt { wkc wksub div } { 0 } ifelse
+            wkc wklast sub
+            wkfirst { 1 } { 0 } ifelse
+            wkproc
+            /wklast wkc def
+            /wkfirst false def
+            /wkemitted true def
+            /wkt2 wkt2 wkpitch add def
+        } loop
+        /wkrem wkt2 wkseglen sub def
+        /wkcum wkcum wkseglen add def
+    } if
+    /wkx wkx1 def /wky wky1 def
+} def
+
+/wkend {                                         % -  (subpath close-out)
+    wkemitted {
+        wkx wky wkang 1.0 wksub wklast sub 2 wkproc
+    } {
+        wkx wky 0 0 0 3 wkproc
+    } ifelse
+} def
+
+/walkpath {                                      % pitch proc -
+    /wkproc exch def /wkpitch exch def
+    flattenpath
+    wkmeasure /wklens exch def
+    /wksi 0 def /wkx 0 def /wky 0 def /wksx 0 def /wksy 0 def
+    /wksub 0 def /wkrem 0 def /wkcum 0 def /wklast 0 def
+    /wkfirst true def /wkemitted false def /wkstarted false def
+    {                                             % moveto x y
+        wkstarted { wkend } if
+        /wky exch def /wkx exch def
+        /wksx wkx def /wksy wky def
+        /wksub wklens wksi get def
+        /wkrem 0 def /wkcum 0 def /wklast 0 def
+        /wkfirst true def /wkemitted false def
+        /wkstarted true def
+        /wksi wksi 1 add def
+    }
+    { wkseg }
+    { pop pop pop pop pop pop }
+    { wksx wksy wkseg }
+    pathforall
+    wkstarted { wkend } if
 } def
 
 % (string) pathtext -

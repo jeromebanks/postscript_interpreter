@@ -3,6 +3,51 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## A reusable centerline path sampler for procedural brushes (issue #40, 2026-08-15)
+
+Closes issue #40, the foundation for the painterly-brush series
+(#41-#53): `walkpath` in `lib/artkit.ps`, a richer sibling to the
+existing `alongpath`. Same even-arc-length pitch stepping, but each
+call also carries normalized progress `t` through the current subpath
+(0 at its start, 1 at its end), the arc-length spacing `sp` since the
+previous stop, and an `atend` bitmask flagging the first/last stop of
+a subpath. `walkpath` additionally *guarantees* one call at the
+literal end of each subpath even when that doesn't fall on a pitch
+multiple — `alongpath`'s stepping alone can never promise that, and a
+pressure ribbon needs an exact endpoint to place tapers/caps.
+
+Implementation: one `flattenpath`, then two `pathforall` passes over
+the same flattened path (confirmed empirically that a flattened path
+survives repeated traversal, same as `alongpath`'s existing doc
+comment implies) — the first (`wkmeasure`) mark-collects each
+subpath's total arc length into an array so `t` can be computed
+without a second, dynamic length pass; the second (`wkseg`/`wkend`)
+walks and stamps, reusing `alintern`/`apseg`'s proven segment-walking
+approach.
+
+Deliberately *not* delegating `alongpath` to `walkpath` (the issue
+allowed either): `alintern`'s pitch argument is itself a *procedure*,
+re-evaluated before every stamp — `pathtext` depends on this to use
+each glyph's own advance as the next pitch, which `walkpath`'s scalar
+pitch can't express. `alongpath` stays untouched; its own tests are
+unaffected. First implementation attempt (per `advisor`, plan-review
+round) computed the start stamp's tangent as a hardcoded 0 in the
+moveto handler, before any segment had been seen — a ribbon can't
+orient a start cap off that. Fixed by letting the first stamp fall out
+of the normal segment-walking loop (bit 0 of `atend` marks it),
+instead of special-casing it separately.
+
+`examples/walkpath_demo.ps` demonstrates all three path shapes the
+acceptance criteria call out (line, Bézier curve, closed polygon).
+Ghostscript compatibility is verified by extending the existing
+`ghostscript_accepts_artkit` test's driver (mark-based `[ ...
+pathforall ... ]` array collection needed confirming under gs, not
+just pscat) rather than gs-running the demo file directly — the demo,
+like every other example that does `(lib/artkit.ps) run`, hits gs's
+default `SAFER` sandboxing on that file read, the same reason
+`paragraph_layout.ps` and friends are absent from `tests/golden.rs`'s
+list.
+
 ## A machine-readable catalog of agent-usable art capabilities (issue #39, 2026-08-15)
 
 Closes issue #39: an autonomous artist agent needs a dependable way to
