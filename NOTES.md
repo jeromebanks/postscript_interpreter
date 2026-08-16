@@ -58,13 +58,13 @@ through review alone:
    established: count first, then fill a preallocated array, so the
    proc's net stack effect is always zero.
 
-Per-vertex offsetting with no miter/bevel joint between segments
-notches a closed polygon's sharp corners visibly at generous widths --
-the discontinuous-tangent limit of the same self-intersection-at-tight-
-curvature tradeoff `fill` (not `eofill`) already accepts for a
-wide ribbon on a tight Bezier. Documented in the header as a known
-limitation of simple offset-curve stroking, not fixed -- a joint style
-is its own feature, out of this issue's "ribbon core" scope.
+(A suspected corner-notch limitation from unmitered per-vertex
+offsetting on a closed polygon turned out, on closer look, to be a
+symptom of the closed-loop winding bug below, not an independent
+issue -- gone once that was fixed, confirmed at ribbon widths several
+times the polygon's own size. `fill` vs `eofill`'s self-intersection
+tradeoff on a tight Bezier at a generous width is the real, still-true
+limitation, documented in the header.)
 
 `examples/paintkit_demo.ps` demonstrates all three centerline shapes,
 independent start/end taper, all three pressure profiles, all three
@@ -91,6 +91,50 @@ the header already promised) and adding both a taper demo row and
 taper-specific tests, including one that forces the degenerate-radius
 path (`/StartTaper 1` collapsing a `/round` cap to a point) rather than
 leaving it exercised only by coincidence.
+
+Cross-model review (Codex, round 1 on PR #76) found four more real
+defects, none caught locally:
+
+- **Closed loops filled solid, no hole.** Both `pkloop` calls (right
+  and left offset of the same closed centerline) traversed forward,
+  giving them the same winding sign under nonzero fill -- confirmed
+  visually beforehand (a closed square rendered as a solid filled
+  square) and misattributed at the time to the ring simply being too
+  thick to show a hole. Fixed by traversing one side in reverse index
+  order (`pkloop` gained a `reverse` argument); a real annulus needs
+  opposite winding between its two offset loops, not just opposite
+  sides.
+- **`/StartTaper`+`/EndTaper` past 1 jumped discontinuously.**
+  `pktaperf`'s mutually exclusive branch (ramp from the start *or* the
+  end, based on which side of the midpoint `t` fell on) only applied
+  one ramp once the two regions overlapped, jumping sharply at the
+  branch boundary instead of blending. Fixed by computing both ramps
+  unconditionally (each already defaults to 1.0 outside its own
+  region) and taking the minimum.
+- **Closed-path detection used a scale-fragile epsilon.** The same
+  category of bug already fixed once in `walkpath` itself (round 2 of
+  #40's review): a fixed `0.0001` user-space distance decided whether
+  a subpath's start/end coincided, which breaks under a large CTM
+  where a user-space-tiny gap is visually enormous. Switched to exact
+  equality -- correct because walkpath's own closepath handler feeds
+  the closing segment the *stored* start coordinates verbatim, never
+  recomputed through curve-flattening math, so a genuinely closed
+  subpath's guaranteed-end stop always lands bit-for-bit on its start.
+- **Cap-degeneracy check had the same scale-fragility.** The
+  round-to-pointed threshold (half-width <= 0.001) was also a fixed
+  user-space epsilon, silently collapsing a real, visibly-wide-once-
+  scaled cap (e.g. `/Width 0.0015` under a 10000x CTM) to a point.
+  Verified directly that a zero-radius `arc` is safe in both pscat and
+  Ghostscript, so there was nothing to guard against by treating a
+  merely-small-in-user-space width as zero -- narrowed the check to a
+  truly zero (or negative) half-width.
+
+All four came with regression tests (`closed_polygon_leaves_a_hole_*`,
+`overlapping_start_and_end_taper_ramps_stay_continuous`,
+`small_width_cap_survives_a_large_scale_*`), two of them specifically
+constructed under a large `scale` to pin the CTM-fragility class of bug
+rather than just the 1x-scale symptom. Full quality gate re-run clean
+(664 tests) before pushing the fix and re-running Codex review.
 
 ## A reusable centerline path sampler for procedural brushes (issue #40, 2026-08-15)
 

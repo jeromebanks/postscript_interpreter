@@ -74,13 +74,12 @@
 % curvature radius drops below half the ribbon's width, e.g. a tight
 % Bezier at a generous /Width -- still paints the whole ribbon rather
 % than punching a hole in it. That's a real, documented limitation of
-% simple offset-curve stroking, not a bug. The same limitation shows
-% up as a small notch at a polygon's sharp corners (the discontinuous-
-% tangent limit of the same problem): each walkpath stop is offset
-% along its own segment's tangent, with no miter/bevel joint between
-% consecutive segments, so a corner sharper than the ribbon is wide
-% pinches rather than mitering cleanly. Acceptable for the ribbon core
-% this issue scopes; a joint style would be its own feature.
+% simple offset-curve stroking, not a bug. (A closed polygon's sharp
+% corners might look like the same problem -- no miter/bevel joint
+% between consecutive segments -- but empirically don't show it even
+% at a ribbon width several times the polygon's own size: nonzero
+% fill's overlap tolerance absorbs the unmitered per-vertex offset
+% cleanly for the shapes this library actually renders.)
 %
 % Scratch prefixes: pk- (pkribbon/dispatch), pkbr- (pkbuildrun),
 % pko- (pkopenrun), pkl- (pkloop), pke- (pkedge), pkh- (pkhalfwat),
@@ -109,17 +108,29 @@
 /pkbell  { 180 mul sin } def                      % non-linear 0->1->0 hump
 
 % t -> mult   (StartTaper/EndTaper ramp; reads pkstarttaper/pkendtaper)
+% Both ramps are computed unconditionally and combined with the
+% minimum, not picked by a mutually exclusive branch on which side of
+% the midpoint t falls -- if /StartTaper and /EndTaper sum past 1
+% their ramp regions overlap, and a branch that applies only one would
+% jump discontinuously right at the branch boundary (Codex review,
+% round 1). Each ramp already evaluates to 1.0 (no constraint) outside
+% its own region, so the minimum is exactly "whichever ramp constrains
+% more here," continuous everywhere including the overlap.
 /pktaperf {
     /pktft exch def
-    pktft pkstarttaper lt pkstarttaper 0 gt and {
-        pktft pkstarttaper div
-    } {
-        pktft 1 pkendtaper sub gt pkendtaper 0 gt and {
-            1 pktft sub pkendtaper div
-        } {
-            1.0
-        } ifelse
-    } ifelse
+    /pktfs
+        pktft pkstarttaper lt pkstarttaper 0 gt and
+            { pktft pkstarttaper div }
+            { 1.0 }
+        ifelse
+    def
+    /pktfe
+        pktft 1 pkendtaper sub gt pkendtaper 0 gt and
+            { 1 pktft sub pkendtaper div }
+            { 1.0 }
+        ifelse
+    def
+    pktfs pktfe lt { pktfs } { pktfe } ifelse
 } def
 
 % t -> halfwidth   (reads pkwidth/pkpressure/pktaperf's globals)
@@ -159,14 +170,24 @@
     pkdhw 0 gt { pkdx pkdy pkdhw 0 360 arc closepath } if
 } def
 
-% start end side pkloop -   (one closed offset loop, no caps)
+% start end side reverse pkloop -   (one closed offset loop, no caps)
+% `reverse` must be opposite between the two loops of a ring (right
+% and left side of the same closed centerline): offsetting doesn't
+% change the underlying curve's own traversal direction, so building
+% both loops start-to-end gives them the *same* winding sign under
+% nonzero fill and they add instead of one punching a hole in the
+% other -- confirmed empirically (a closed square rendered solid, no
+% ring) before this fix (Codex review, round 1).
 /pkloop {
-    /pklside exch def /pklend exch def /pklstart exch def
-    pkraw pklstart get
+    /pklrev exch def /pklside exch def /pklend exch def /pklstart exch def
+    /pklfrom pklrev { pklend } { pklstart } ifelse def
+    /pklto pklrev { pklstart } { pklend } ifelse def
+    /pklstep pklrev { -1 } { 1 } ifelse def
+    pkraw pklfrom get
     dup 0 get /pklx exch def dup 1 get /pkly exch def
     dup 2 get /pklang exch def 3 get /pklt exch def
     pklx pkly pklang pklt pkhalfwat pklside pkedge moveto
-    pklstart 1 add 1 pklend {
+    pklfrom pklstep add pklstep pklto {
         /pkli exch def
         pkraw pkli get
         dup 0 get /pklx exch def dup 1 get /pkly exch def
@@ -177,6 +198,14 @@
 } def
 
 % start end pkopenrun -   (one open ribbon polygon with caps)
+% A cap degrades to /pointed automatically only when its half-width is
+% truly <= 0, not some small-but-scale-fragile epsilon: a zero-radius
+% `arc` is well-defined and safe in both pscat and Ghostscript
+% (verified directly), so there's nothing to guard against by treating
+% a merely-small-in-*user-space* width as zero -- that would wrongly
+% collapse a real cap to a point under a large CTM, where a user-space
+% width like 0.002 can still be many device pixels wide (Codex review,
+% round 1).
 /pkopenrun {
     /pkoend exch def /pkostart exch def
 
@@ -185,7 +214,7 @@
     dup 2 get /pkoang0 exch def 3 get /pkot0 exch def
     /pkohw0 pkot0 pkhalfwat def
     /pkostartpointed
-        pkstartcap /pointed eq pkohw0 0.001 le or
+        pkstartcap /pointed eq pkohw0 0 le or
     def
     pkostartpointed
         { pkox0 pkoy0 moveto }
@@ -195,7 +224,7 @@
     pkraw pkoend get 3 get /pkotend exch def
     /pkohwe pkotend pkhalfwat def
     /pkoendpointed
-        pkendcap /pointed eq pkohwe 0.001 le or
+        pkendcap /pointed eq pkohwe 0 le or
     def
     /pkorightlast pkoendpointed { pkoend 1 sub } { pkoend } ifelse def
 
@@ -247,18 +276,24 @@
         pkraw pkbrstart get 1 get /pkbry0 exch def
         pkraw pkbrend get 0 get /pkbrxl exch def
         pkraw pkbrend get 1 get /pkbryl exch def
-        /pkbrclosed
-            pkbrxl pkbrx0 sub abs 0.0001 lt
-            pkbryl pkbry0 sub abs 0.0001 lt and
-        def
+        % Exact equality, not a distance tolerance: walkpath's
+        % closepath handler feeds wkseg the *stored* start coordinates
+        % (wksx/wksy) as the closing segment's endpoint, never
+        % recomputed through curve-flattening math, so a genuinely
+        % closed subpath's guaranteed-end stop always lands bit-for-bit
+        % on its start -- and only a genuinely closed one does. A fixed
+        % user-space tolerance broke under a large CTM, where a merely
+        % nearby-but-open endpoint can be user-space-close yet
+        % device-space far apart (Codex review, round 1).
+        /pkbrclosed pkbrxl pkbrx0 eq pkbryl pkbry0 eq and def
         pkbrclosed {
             /pkbrend2
                 pkraw pkbrend get 4 get 0 eq pkbrend pkbrstart gt and
                 { pkbrend 1 sub } { pkbrend } ifelse
             def
             pkbrend2 pkbrstart gt {
-                pkbrstart pkbrend2 -1 pkloop
-                pkbrstart pkbrend2 1 pkloop
+                pkbrstart pkbrend2 -1 false pkloop
+                pkbrstart pkbrend2 1 true pkloop
             } {
                 pkraw pkbrstart get pkdot
             } ifelse

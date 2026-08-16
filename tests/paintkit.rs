@@ -145,6 +145,107 @@ fn multiple_subpaths_each_become_their_own_ribbon() {
 }
 
 #[test]
+fn closed_polygon_leaves_a_hole_in_the_middle() {
+    // Regression test for a Codex-round-1 finding: both closed-loop
+    // traversals (right and left offset of the same centerline) built
+    // forward, giving them the same winding sign under nonzero fill,
+    // so they added instead of one punching a hole in the other -- a
+    // closed square rendered as a solid filled square, not a ring.
+    let mut it = fresh(220, 220);
+    it.run_str(
+        "0 0 0 setrgbcolor 1 srand \
+         newpath 40 40 moveto 180 40 lineto 180 180 lineto 40 180 lineto closepath \
+         << /Width 20 >> pkribbon",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let center = it.gfx().pixmap.pixel(110, 110).expect("in bounds");
+    assert!(
+        luma(center) > 200.0,
+        "expected an unpainted hole at the ring's center, got luma {}",
+        luma(center)
+    );
+    let edge = it.gfx().pixmap.pixel(110, 40).expect("in bounds");
+    assert!(
+        luma(edge) < 100.0,
+        "expected ink on the ring itself, got luma {}",
+        luma(edge)
+    );
+}
+
+#[test]
+fn closed_polygon_leaves_a_hole_under_a_large_scale() {
+    // The exact-equality closed-path check (see the pkbrclosed comment
+    // in lib/paintkit.ps) must still correctly recognize a *real*
+    // closepath under a large CTM, not just at 1x scale -- a genuinely
+    // closed subpath's guaranteed-end stop coincides with its start
+    // bit-for-bit regardless of scale, since walkpath reports
+    // pre-CTM coordinates untouched by the scale transform.
+    let mut it = fresh(200, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 1 srand gsave 100 100 scale \
+         newpath 0.4 0.4 moveto 1.8 0.4 lineto 1.8 1.8 lineto 0.4 1.8 lineto closepath \
+         << /Width 0.2 >> pkribbon grestore",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let center = it.gfx().pixmap.pixel(110, 110).expect("in bounds");
+    assert!(
+        luma(center) > 200.0,
+        "expected an unpainted hole under scale, got luma {}",
+        luma(center)
+    );
+}
+
+#[test]
+fn overlapping_start_and_end_taper_ramps_stay_continuous() {
+    // Regression test for a Codex-round-1 finding: StartTaper/EndTaper
+    // summing past 1 (so their ramp regions overlap) used to pick one
+    // ramp by a mutually exclusive branch on t, jumping discontinuously
+    // right at the branch boundary instead of blending. Sampled just
+    // either side of the branch boundary the old code had (t=0.79 and
+    // t=0.80 on a 200-unit-wide ribbon at StartTaper=EndTaper=0.8),
+    // the measured width must be close, not a sharp jump.
+    let mut it = fresh(220, 60);
+    it.run_str(
+        "0 0 0 setrgbcolor 1 srand newpath 10 30 moveto 210 30 lineto \
+         << /Width 20 /StartTaper 0.8 /EndTaper 0.8 >> pkribbon",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let just_before = column_height(&it, 168, 60); // t ~= 0.79
+    let just_after = column_height(&it, 170, 60); // t ~= 0.80
+    let diff = just_before.abs_diff(just_after);
+    assert!(
+        diff <= 2,
+        "expected a continuous taper across the overlap, got {just_before} vs {just_after}"
+    );
+}
+
+#[test]
+fn small_width_cap_survives_a_large_scale_without_collapsing_to_a_point() {
+    // Regression test for a Codex-round-1 finding: the cap-degeneracy
+    // check used a fixed user-space half-width epsilon (0.001), so a
+    // /Width of 0.0015 (half-width 0.00075, under the old threshold)
+    // silently collapsed a /round cap to a point even though a large
+    // CTM scale makes it many device pixels wide. A zero-radius `arc`
+    // is safe in both pscat and Ghostscript (verified directly), so
+    // the check now degrades only a truly zero half-width.
+    let mut it = fresh(200, 100);
+    it.run_str(
+        "0 0 0 setrgbcolor 1 srand gsave 10000 10000 scale \
+         newpath 0.001 0.005 moveto 0.019 0.005 lineto \
+         << /Width 0.0015 /StartCap /round /EndCap /round >> pkribbon grestore",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    // Just inside the end cap (endpoint is at device x=190): a real
+    // round cap is close to the full ~15px device width there; a
+    // collapsed point would taper to near 0.
+    let h = column_height(&it, 189, 100);
+    assert!(
+        h > 8,
+        "expected a wide round cap near the end, got height {h}"
+    );
+}
+
+#[test]
 fn pressure_profiles_change_the_measured_width() {
     let mut flat = fresh(220, 60);
     flat.run_str(
