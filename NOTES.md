@@ -61,7 +61,22 @@ single-point subpath does) — the actual behavior (a distinct start
 and guaranteed-end call) is the more useful contract for a brush to
 build on, so the fix was correcting the documentation, not the code.
 
-## A machine-readable catalog of agent-usable art capabilities (issue #39, 2026-08-15)
+Round 2 caught a third, more interesting one: `wkseg`'s "is this
+segment real" guard used an *absolute* `0.0001` (user-space) epsilon
+rather than strict positivity. `pathforall` reports pre-CTM
+coordinates, so a subpath drawn tiny in user space and blown up with
+`scale` at render time — a real, visible mark — could have every one
+of its segments individually under that threshold, misclassifying the
+whole thing as a degenerate single point. `atan`/division only
+actually fail at *exact* zero (confirmed against `src/ops/arith.rs`'s
+`atan`, which only raises `undefinedresult` when both args are
+`0.0`), so the fix is `wkseglen 0 gt` instead of the arbitrary
+threshold — which also incidentally closes a smaller gap flagged (but
+judged negligible) during the original implementation review: with
+the absolute epsilon, `wkmeasure`'s unconditional length sum and
+`wkseg`'s conditional arc accumulation could drift apart by the sum of
+any skipped near-threshold segments; strict positivity keeps them in
+exact sync.
 
 Closes issue #39: an autonomous artist agent needs a dependable way to
 discover which fonts/palettes/templates/procedures a given `pscat`

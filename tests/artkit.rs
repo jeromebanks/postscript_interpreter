@@ -173,6 +173,32 @@ fn walkpath_rejects_non_positive_pitch_instead_of_hanging() {
 }
 
 #[test]
+fn walkpath_does_not_misclassify_short_positive_segments_under_a_large_scale() {
+    // A 0.00005-unit line under a 1,000,000x scale is a real, visible
+    // 50-device-unit mark, not a degenerate point -- but the old guard
+    // used an absolute 0.0001 (user-space) epsilon, so every segment
+    // in it looked "zero-length" and the whole subpath was
+    // misclassified as degenerate (Codex review, round 2). pathforall
+    // reports pre-CTM user-space coordinates, so this is a real risk
+    // for any path drawn in a small/normalized coordinate space and
+    // scaled up at render time, not just a contrived value.
+    let got = eval(
+        "1000000 1000000 scale \
+         newpath 0 0 moveto 0.00005 0 lineto \
+         /n 0 def /firstat null def /lastat null def \
+         5e-06 { /at exch def pop pop pop pop pop \
+              n 0 eq { /firstat at def } if /lastat at def \
+              /n n 1 add def } walkpath \
+         n firstat lastat",
+    );
+    assert_eq!(
+        got,
+        ["11", "1", "2"],
+        "regular start/end stops, not one atend=3 call"
+    );
+}
+
+#[test]
 fn walkpath_short_nonzero_subpath_gets_distinct_start_and_end_stops() {
     // A subpath shorter than one pitch step but with nonzero length
     // (unlike a true single-point subpath) still gets two distinct

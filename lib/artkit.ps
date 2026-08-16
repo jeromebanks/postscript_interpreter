@@ -326,7 +326,12 @@ end
     /wky1 exch def /wkx1 exch def
     /wkdx wkx1 wkx sub def /wkdy wky1 wky sub def
     /wkseglen wkdx dup mul wkdy dup mul add sqrt def
-    wkseglen 0.0001 gt {
+    % Strict positivity, not an absolute epsilon: atan/division only
+    % fail at exactly zero (Codex review, round 2 -- an absolute
+    % 0.0001 threshold misclassified genuinely short-but-positive
+    % segments as degenerate under a large scale, e.g. a path drawn in
+    % normalized 0..1 space and scaled up at render time).
+    wkseglen 0 gt {
         /wkang wkdy wkdx atan def
         /wkt2 wkrem def
         {
