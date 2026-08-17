@@ -621,10 +621,29 @@
 
 % t -> mult   (installed as pkribbon's own /Pressure; reads
 % pnangle/pnminwidth/pnuserpressure/pnangles, set fresh by pknib)
+% A single-sample pnangles table (pnn/pnangles length 1) means the
+% source subpath was a degenerate single point -- walkpath's own
+% contract guarantees any subpath with real length gets at least two
+% stops, so this is an unambiguous signal, not a heuristic. A lone
+% point has no direction of travel (walkpath reports a synthetic
+% ang=0 for it, not a real one), so the nib-angle response has nothing
+% meaningful to attenuate against; using it anyway made the degenerate-
+% point dot fallback either vanish (Angle 0, MinWidth 0) or resize
+% arbitrarily with Angle, silently breaking pkribbon's own documented
+% "degenerate paths fall back to a dot" contract this preset is
+% supposed to preserve (Codex review, PR #77). Skip the nib multiplier
+% entirely in that case -- full response, same as if travel were
+% perfectly perpendicular to the nib -- so the dot's size tracks only
+% /Pressure, exactly like pkribbon's own undiminished pkdot.
 /pnpressure {
     /pnpt exch def
-    pnpt pnangleat pnangle sub sin abs
-    dup pnminwidth lt { pop pnminwidth } if
+    pnangles length 1 eq
+        { 1.0 }
+        {
+            pnpt pnangleat pnangle sub sin abs
+            dup pnminwidth lt { pop pnminwidth } if
+        }
+    ifelse
     pnpt pnuserpressure mul
 } def
 
@@ -644,43 +663,50 @@
     pnmoveto 1 gt { pknib-path-must-be-a-single-subpath } if
     pnclosed { pknib-path-must-not-be-closed } if
 
+    % Same Width/Pitch validation pkribbon itself does, and -- like
+    % pkribbon -- run unconditionally, not only when the path is
+    % non-empty: pkribbon validates its whole opts dict before ever
+    % looking at the path, so a malformed dict (wrong types, a bare
+    % non-dict operand) errors the same way regardless of what's on
+    % the path. Gating validation behind `pnmoveto 0 gt` let a
+    % malformed opts dict through silently whenever the path happened
+    % to be empty -- `newpath 42 pknib` never even read `pnopts` as a
+    % dict, unlike pkribbon's own `typecheck` for the same call (Codex
+    % review, PR #77). Only the sampling/rendering work below is
+    % actually conditional on a non-empty path.
+    /pnwidth pnopts /Width 6 pkgetdef def
+    /pnwidth load xcheck { pknib-width-must-not-be-a-procedure } if
+    pnwidth 0 le { pknib-width-must-be-positive } if
+    /pnpitch
+        pnopts /Pitch
+        pnwidth 0.5 mul dup 6 gt { pop 6 } if
+        pkgetdef
+    def
+    /pnpitch load xcheck { pknib-pitch-must-not-be-a-procedure } if
+    pnpitch 0 le { pknib-pitch-must-be-positive } if
+
+    /pnangle pnopts /Angle 45 pkgetdef def
+    /pnangle load xcheck { pknib-angle-must-not-be-a-procedure } if
+
+    /pnminwidth pnopts /MinWidth 0.08 pkgetdef def
+    /pnminwidth load xcheck { pknib-minwidth-must-not-be-a-procedure } if
+    pnminwidth 0 lt pnminwidth 1 gt or { pknib-minwidth-must-be-0-to-1 } if
+
+    % Same /Pressure validation as pkribbon's own (Codex rounds 2/3/5
+    % there): must actually be callable, not just executable, since
+    % pnpressure above calls it by bare reference expecting it to
+    % consume t and leave one number.
+    /pnuserpressure pnopts /Pressure { pkflat } pkgetdef def
+    /pnuserpressure load xcheck
+    /pnuserpressure load type
+    dup /arraytype eq
+    exch dup /operatortype eq
+    exch /packedarraytype eq
+    or or
+    and
+    not { pknib-pressure-must-be-a-procedure } if
+
     pnmoveto 0 gt {
-        % Same Width/Pitch validation pkribbon itself does, run here
-        % first so a bad value fails with a clear message before it
-        % ever reaches the sampling pass below (which needs a valid
-        % pitch of its own), rather than a confusing walkpath error.
-        /pnwidth pnopts /Width 6 pkgetdef def
-        /pnwidth load xcheck { pknib-width-must-not-be-a-procedure } if
-        pnwidth 0 le { pknib-width-must-be-positive } if
-        /pnpitch
-            pnopts /Pitch
-            pnwidth 0.5 mul dup 6 gt { pop 6 } if
-            pkgetdef
-        def
-        /pnpitch load xcheck { pknib-pitch-must-not-be-a-procedure } if
-        pnpitch 0 le { pknib-pitch-must-be-positive } if
-
-        /pnangle pnopts /Angle 45 pkgetdef def
-        /pnangle load xcheck { pknib-angle-must-not-be-a-procedure } if
-
-        /pnminwidth pnopts /MinWidth 0.08 pkgetdef def
-        /pnminwidth load xcheck { pknib-minwidth-must-not-be-a-procedure } if
-        pnminwidth 0 lt pnminwidth 1 gt or { pknib-minwidth-must-be-0-to-1 } if
-
-        % Same /Pressure validation as pkribbon's own (Codex rounds
-        % 2/3/5 there): must actually be callable, not just executable,
-        % since pnpressure above calls it by bare reference expecting
-        % it to consume t and leave one number.
-        /pnuserpressure pnopts /Pressure { pkflat } pkgetdef def
-        /pnuserpressure load xcheck
-        /pnuserpressure load type
-        dup /arraytype eq
-        exch dup /operatortype eq
-        exch /packedarraytype eq
-        or or
-        and
-        not { pknib-pressure-must-be-a-procedure } if
-
         /pnn 0 def
         pnpitch { pop pop pop pop pop pop /pnn pnn 1 add def } walkpath
         /pnangles pnn array def

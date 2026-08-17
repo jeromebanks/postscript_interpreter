@@ -824,6 +824,50 @@ fn nib_guards_reject_malformed_input() {
 }
 
 #[test]
+fn nib_validates_opts_even_on_an_empty_path() {
+    // Regression test for a Codex-review (PR #77) finding: validation
+    // used to be nested entirely inside the `pnmoveto 0 gt` guard, so
+    // an empty path skipped it -- a malformed, non-dict opts operand
+    // (e.g. a bare number) never even got read, silently succeeding
+    // instead of erroring the way pkribbon does for the same call.
+    // pkribbon validates its whole opts dict unconditionally, before
+    // ever looking at the path; pknib now does too.
+    let mut it = Interp::new();
+    load(&mut it);
+    let err = it.run_str("newpath 42 pknib").unwrap_err();
+    assert!(
+        matches!(err, PsError::Typecheck),
+        "expected a typecheck error for a non-dict opts operand on an \
+         empty path, got {err}"
+    );
+}
+
+#[test]
+fn nib_degenerate_single_point_falls_back_to_a_visible_dot() {
+    // Regression test for a Codex-review (PR #77) finding: a moveto-
+    // only subpath has no direction of travel (walkpath reports a
+    // synthetic ang=0 for it, not a real one), but the nib-angle
+    // multiplier was applied anyway -- at Angle 0 with MinWidth 0 this
+    // floored the response to exactly 0, silently rendering nothing
+    // instead of the dot fallback pkribbon (and pknib's own header)
+    // document. pnpressure now skips the nib multiplier entirely for a
+    // single-sample pnangles table (walkpath's contract guarantees any
+    // subpath with real length gets at least two stops, so this is an
+    // unambiguous signal).
+    let mut it = fresh(60, 60);
+    it.run_str(
+        "0 0 0 setrgbcolor newpath 30 30 moveto \
+         << /Width 12 /Angle 0 /MinWidth 0 >> pknib",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 5,
+        "expected a filled dot despite Angle 0 / MinWidth 0, got {}",
+        ink_count(&it)
+    );
+}
+
+#[test]
 fn nib_angle_changes_the_measured_width() {
     // Angle 0 on a horizontal stroke: travel runs parallel to the nib,
     // so the response floors at /MinWidth (near-hairline). Angle 90:
