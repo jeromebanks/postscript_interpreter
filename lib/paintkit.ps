@@ -601,22 +601,55 @@
 % itself when it actually fills, at the same default pitch when the
 % caller didn't override /Pitch -- its own stops land at the same t
 % values this pass already sampled.
-/pnangleat {                                      % t -> nearest sample's travel angle (degrees)
+% Each pnangles entry is [t x y ang] -- x/y are needed only for the
+% two-sample chord fallback below, not the ordinary nearest-sample path.
+/pnangleat {                                      % t -> travel angle (degrees)
     /pnqt exch def
     pnangles 0 get
     dup 0 get pnqt sub abs /pnbestd exch def
-    1 get /pnbestang exch def
+    3 get /pnbestang exch def
     1 1 pnangles length 1 sub {
         /pnqi exch def
         pnangles pnqi get
         dup 0 get pnqt sub abs /pnqd exch def
-        1 get /pnqang exch def
+        3 get /pnqang exch def
         pnqd pnbestd lt {
             /pnbestd pnqd def
             /pnbestang pnqang def
         } if
     } for
-    pnbestang
+    % A run with exactly two raw samples (start+end, no interior stop
+    % -- a subpath shorter than one pitch step) has nothing at t values
+    % strictly between them. pkopenrun's own short-run synthesis (both
+    % ends pointed or zero-width) fills that gap with one interior
+    % bulge point, evaluated at the *chord's* own direction, not either
+    % endpoint's travel angle -- so a query for that synthesized point
+    % previously fell back to whichever endpoint's t happened to be
+    % numerically closer, an arbitrary and sometimes very wrong answer
+    % (a short symmetric arch with a horizontal midpoint tangent could
+    % render at nearly full width instead of the requested near-
+    % hairline; Codex review, PR #77, round 2). pkribbon only ever
+    % evaluates /Pressure at a raw stop's own t or at that one
+    % synthesized t, so a query that doesn't closely match either of
+    % our two raw samples can only be the synthesized point -- switch
+    % to the chord direction then, computed the same way pkopenrun
+    % computes it. A coincident-endpoint chord (an open path with
+    % positive arc length that still returns to its own start -- same
+    % edge case pkopenrun's own round-6 fix guards) has no direction to
+    % synthesize either; fall back to the nearest-sample angle already
+    % computed above rather than call `atan` on a zero chord.
+    pnangles length 2 eq pnbestd 1.0e-6 gt and {
+        pnangles 0 get /pnq0 exch def
+        pnangles 1 get /pnq1 exch def
+        pnq1 1 get pnq0 1 get sub /pnqdx exch def
+        pnq1 2 get pnq0 2 get sub /pnqdy exch def
+        pnqdx 0 eq pnqdy 0 eq and
+            { pnbestang }
+            { pnqdy pnqdx atan }
+        ifelse
+    } {
+        pnbestang
+    } ifelse
 } def
 
 % t -> mult   (installed as pkribbon's own /Pressure; reads
@@ -706,21 +739,29 @@
     and
     not { pknib-pressure-must-be-a-procedure } if
 
-    pnmoveto 0 gt {
-        /pnn 0 def
-        pnpitch { pop pop pop pop pop pop /pnn pnn 1 add def } walkpath
-        /pnangles pnn array def
-        /pnj 0 def
-        pnpitch {
-            /pnaatend exch def /pnasp exch def /pnat exch def
-            /pnaang exch def /pnay exch def /pnax exch def
-            pnangles pnj pnat pnaang 2 array astore put
-            /pnj pnj 1 add def
-        } walkpath
+    % Unconditional, like the validation above: pkribbon validates
+    % *every* forwarded field (including /StartTaper//EndTaper//
+    % StartCap//EndCap//Jitter, which pknib itself never checks) before
+    % looking at whether the path is empty, and its own `pkn 0 gt`
+    % guard already handles the actual no-op correctly -- gating this
+    % block behind `pnmoveto 0 gt` let those forwarded-only fields
+    % through unvalidated on an empty path (Codex review, PR #77,
+    % round 2). Sampling an empty path is harmless (walkpath's own
+    % callback never fires, same as pkribbon's own width-computation
+    % pass over an empty path), so nothing here needs a separate guard.
+    /pnn 0 def
+    pnpitch { pop pop pop pop pop pop /pnn pnn 1 add def } walkpath
+    /pnangles pnn array def
+    /pnj 0 def
+    pnpitch {
+        /pnaatend exch def /pnasp exch def /pnat exch def
+        /pnaang exch def /pnay exch def /pnax exch def
+        pnangles pnj pnat pnax pnay pnaang 4 array astore put
+        /pnj pnj 1 add def
+    } walkpath
 
-        /pnribbonopts pnopts length 1 add dict def
-        pnopts pnribbonopts copy pop
-        pnribbonopts /Pressure /pnpressure load put
-        pnribbonopts pkribbon
-    } if
+    /pnribbonopts pnopts length 1 add dict def
+    pnopts pnribbonopts copy pop
+    pnribbonopts /Pressure /pnpressure load put
+    pnribbonopts pkribbon
 } def

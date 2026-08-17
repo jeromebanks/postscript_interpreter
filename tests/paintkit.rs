@@ -868,6 +868,80 @@ fn nib_degenerate_single_point_falls_back_to_a_visible_dot() {
 }
 
 #[test]
+fn nib_empty_path_still_validates_fields_pknib_forwards_to_pkribbon() {
+    // Regression test for a Codex-review (PR #77, round 2) finding:
+    // pknib's own empty-path guard used to skip pkribbon entirely, so
+    // fields pknib itself never validates (StartTaper/EndTaper/
+    // StartCap/EndCap/Jitter -- only pkribbon checks these) went
+    // unchecked on an empty path, unlike the equivalent pkribbon call.
+    // pknib now always delegates to pkribbon, which validates
+    // everything before its own `pkn 0 gt` guard decides to no-op.
+    let mut it = Interp::new();
+    load(&mut it);
+    let cases = [
+        (
+            "newpath << /StartTaper -1 >> pknib",
+            "pkribbon-starttaper-must-be-0-to-1",
+        ),
+        (
+            "newpath << /StartCap /bogus >> pknib",
+            "pkribbon-startcap-must-be-round-flat-or-pointed",
+        ),
+    ];
+    for (src, name) in cases {
+        let err = it.run_str(src).unwrap_err();
+        assert!(
+            matches!(err, PsError::Undefined(ref n) if n == name),
+            "{src}: got {err}"
+        );
+    }
+}
+
+#[test]
+fn nib_short_pointed_stroke_uses_the_chord_direction_for_its_synthesized_midpoint() {
+    // Regression test for a Codex-review (PR #77, round 2) finding: a
+    // curved stroke shorter than /Pitch with both caps pointed has no
+    // interior walkpath sample -- pkopenrun synthesizes one interior
+    // bulge point using the *chord's* own direction, but pnangleat's
+    // plain nearest-t lookup had no sample there and picked whichever
+    // endpoint happened to be closer in t, an arbitrary answer. This
+    // curve's chord is horizontal (dx=3, dy=0): at /Angle 0 the
+    // response should collapse toward the /MinWidth floor (near-
+    // hairline, matching the chord), and at /Angle 90 it should render
+    // near full width (perpendicular to the chord) -- the same
+    // discriminator nib_angle_changes_the_measured_width uses, applied
+    // to the synthesized-midpoint code path specifically.
+    let curve = "newpath 20 30 moveto 21 31.5 22 31.5 23 30 curveto";
+
+    let mut parallel = fresh(60, 60);
+    parallel
+        .run_str(&format!(
+            "0 0 0 setrgbcolor 1 srand {curve} \
+             << /Width 20 /Angle 0 /MinWidth 0 \
+                /StartCap /pointed /EndCap /pointed >> pknib"
+        ))
+        .unwrap_or_else(|e| panic!("{}", parallel.error_report(&e)));
+    let parallel_ink = ink_count(&parallel);
+
+    let mut perpendicular = fresh(60, 60);
+    perpendicular
+        .run_str(&format!(
+            "0 0 0 setrgbcolor 1 srand {curve} \
+             << /Width 20 /Angle 90 /MinWidth 0 \
+                /StartCap /pointed /EndCap /pointed >> pknib"
+        ))
+        .unwrap_or_else(|e| panic!("{}", perpendicular.error_report(&e)));
+    let perpendicular_ink = ink_count(&perpendicular);
+
+    assert!(
+        perpendicular_ink > parallel_ink * 3,
+        "Angle perpendicular to the chord should render much more ink \
+         than Angle parallel to it at the synthesized midpoint: \
+         parallel {parallel_ink} perpendicular {perpendicular_ink}"
+    );
+}
+
+#[test]
 fn nib_angle_changes_the_measured_width() {
     // Angle 0 on a horizontal stroke: travel runs parallel to the nib,
     // so the response floors at /MinWidth (near-hairline). Angle 90:
