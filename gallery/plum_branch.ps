@@ -1,0 +1,195 @@
+%!PS-Adobe-3.0
+%%Title: Plum Branch in Ink
+%%BoundingBox: 0 0 700 900
+%%EndComments
+
+% A sumi-e style plum-blossom branch, built to make variable width the
+% subject rather than decoration: every stroke of ink here -- trunk,
+% forking branches, grass at the foot -- is a single bezier or turtle
+% centerline handed to lib/paintkit.ps's `pkribbon` (issue #41), which
+% walks it with lib/artkit.ps's `walkpath` (issue #40) and fills a
+% ribbon whose width answers to a pressure curve, independent start/
+% end tapers, and jitter, the way a loaded ink brush answers to how
+% hard it's pressed and how it lifts off the paper. A plain `stroke`
+% can only give a path one uniform width; that's exactly the
+% limitation this piece exists to not have.
+%
+% Pressure profile: `{ dup mul 1 exch sub }` -- a quadratic ease-out
+% (1 - t^2) -- stays near full width through the body of a branch and
+% narrows quickly only near the very tip, so the ink reads as a branch
+% tapering into a twig rather than a uniform line running out of paint.
+% Every branch's own tip degrades to a point automatically (pkribbon's
+% zero-half-width rule) once that curve reaches 0, so /EndCap /pointed
+% never has to fight a drawn cap. Grass blades invert the idea:
+% /StartTaper and /EndTaper (independent of Pressure) narrow both ends
+% of a blade that never gets fully wide, since a blade of grass has no
+% "body" the way a branch does.
+%
+% Seeded rand: same file, same ink, run to run.
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+7 srand
+
+/pb-ink      [0.16 0.12 0.10] def   % warm near-black sumi ink
+/pb-paper    [0.97 0.94 0.87] def   % warm cream paper
+/pb-wash     [0.91 0.87 0.78] def   % faint background wash, close to paper
+/pb-blossom-rgb [0.82 0.30 0.42] def % the one accent: plum pink
+/pb-bud      [0.64 0.20 0.33] def   % darker pink, unopened buds
+/pb-seal     [0.72 0.14 0.14] def   % seal red
+
+/pb-taper { dup mul 1 exch sub } def   % t -> 1 - t^2 (thick body, quick tip)
+
+% one petal, apex at (0,r), base at the origin
+/pb-petal {                                       % r pb-petal -
+    1 dict begin
+    /pb-r exch def
+    newpath
+    0 0 moveto
+    pb-r 0.32 mul pb-r 0.28 mul  pb-r 0.14 mul pb-r 0.85 mul  0 pb-r
+    curveto
+    pb-r -0.14 mul pb-r 0.85 mul  pb-r -0.32 mul pb-r 0.28 mul  0 0
+    curveto
+    closepath fill
+    end
+} def
+
+% five-petal blossom in the current color; ink stamen at center
+/pb-blossom {                                     % cx cy r pb-blossom -
+    gsave
+    3 dict begin
+    /pb-r exch def /pb-cy exch def /pb-cx exch def
+    pb-cx pb-cy translate
+    frnd 72 mul rotate
+    5 { pb-r pb-petal 72 rotate } repeat
+    pb-ink aload pop setrgbcolor
+    0 0 pb-r 0.16 mul 0 360 arc fill
+    end
+    grestore
+} def
+
+% one unopened bud: a single rotated petal, no stamen
+/pb-bud-stamp {                                   % cx cy r pb-bud-stamp -
+    gsave
+    3 dict begin
+    /pb-r exch def /pb-cy exch def /pb-cx exch def
+    pb-cx pb-cy translate
+    frnd 50 mul 15 add rotate
+    pb-r pb-petal
+    end
+    grestore
+} def
+
+% a single grass blade, turtle-built (a few jittered fd/tl steps),
+% then handed to pkribbon: both ends taper, the body never reaches
+% full Width -- a blade has no thick "trunk" the way a branch does
+/pb-blade {                                       % x y ang len pb-blade -
+    4 dict begin
+    /pb-len exch def /pb-ang exch def /pb-y exch def /pb-x exch def
+    gsave
+    newpath
+    pb-x pb-y pb-ang thome
+    pb-len 0.4 mul fd
+    10 jit tl
+    pb-len 0.35 mul fd
+    8 jit tl
+    pb-len 0.25 mul fd
+    << /Width 7 /Pitch 3 /StartTaper 0.2 /EndTaper 0.7
+       /Pressure { pkbell } /StartCap /round /EndCap /pointed
+       /Jitter 0.5 >> pkribbon
+    end
+    grestore
+} def
+
+% ---------------------------------------------------------------- paper
+pb-paper aload pop setrgbcolor clippath fill
+
+% ---------------------------------------------------------- background wash
+% Two wide, low, pkbell-pressure bands standing in for water-thinned
+% ink -- the same primitive as the branch, just very wide and very
+% pale, showing pkribbon can carry texture as well as line.
+gsave
+pb-wash aload pop setrgbcolor
+newpath
+-20 700 moveto
+220 750 460 660 720 715 curveto
+<< /Width 170 /Pitch 24 /Pressure { pkbell } /StartCap /round /EndCap /round >> pkribbon
+newpath
+-20 150 moveto
+210 110 470 195 720 145 curveto
+<< /Width 130 /Pitch 24 /Pressure { pkbell } /StartCap /round /EndCap /round >> pkribbon
+grestore
+
+% -------------------------------------------------------------- grass
+pb-ink aload pop setrgbcolor
+[ [148  50  70  62] [172  46  85  78] [198  55  65  90]
+  [222  48  95  68] [246  58  78  85] [268  45 100  58]
+  [288  52  70  72] ]
+{ aload pop pb-blade } forall
+
+% -------------------------------------------------------------- trunk
+% One bezier centerline, base to twig tip: Width 42 at the root,
+% pkribbon's pointed-cap-on-zero-halfwidth rule gives the tip its
+% point for free once pb-taper reaches 0 -- no separate cap geometry
+% needed at all.
+pb-ink aload pop setrgbcolor
+newpath
+180 66 moveto
+130 200 250 280 260 380 curveto
+300 460 380 520 400 560 curveto
+430 610 470 660 480 700 curveto
+500 740 520 780 540 822 curveto
+<< /Width 42 /Pitch 5 /Pressure { pb-taper } /StartCap /round
+   /EndCap /pointed /Jitter 1.1 >> pkribbon
+
+% branch A: forks near the trunk's mid bend, arcs right
+newpath
+400 560 moveto
+460 540 520 560 560 620 curveto
+590 660 610 700 630 742 curveto
+<< /Width 24 /Pitch 4 /Pressure { pb-taper } /StartCap /round
+   /EndCap /pointed /Jitter 0.8 >> pkribbon
+
+% branch B: forks lower, arcs left
+newpath
+300 452 moveto
+250 480 210 520 190 580 curveto
+175 620 165 660 158 702 curveto
+<< /Width 20 /Pitch 4 /Pressure { pb-taper } /StartCap /round
+   /EndCap /pointed /Jitter 0.8 >> pkribbon
+
+% branch C: a small twig forking off branch A
+newpath
+520 560 moveto
+552 598 570 648 588 698 curveto
+600 728 606 754 612 780 curveto
+<< /Width 13 /Pitch 3 /Pressure { pb-taper } /StartCap /round
+   /EndCap /pointed /Jitter 0.6 >> pkribbon
+
+% -------------------------------------------------------------- blossoms
+pb-blossom-rgb aload pop setrgbcolor
+540 828 17 pb-blossom
+630 748 15 pb-blossom
+612 786 12 pb-blossom
+158 708 15 pb-blossom
+480 700  9 pb-blossom
+300 452  9 pb-blossom
+
+pb-bud aload pop setrgbcolor
+590 622 8 pb-bud-stamp
+230 500 7 pb-bud-stamp
+560 690 6 pb-bud-stamp
+
+% -------------------------------------------------------------- caption + seal
+pb-ink aload pop setrgbcolor
+/Palatino-Italic findfont 15 scalefont setfont
+(Plum Branch in Ink -- pkribbon over a walkpath centerline) 350 34 showctr
+
+/NanumBrushScript findfont 26 scalefont setfont
+(ink) 620 50 showctr
+
+pb-seal aload pop setrgbcolor
+newpath
+595 62 34 24 3 rrect fill
+
+showpage
