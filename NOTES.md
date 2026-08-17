@@ -54,7 +54,21 @@ angles (0/45/90 -- 0 and 90 are the unambiguous discriminators, since
 combining taper, a bell pressure profile, and jitter. `pknib` is
 cataloged in `src/capabilities.rs` alongside `pkribbon`; its two
 top-level helper procs (`pnangleat`, `pnpressure`) are listed in
-`PAINTKIT_INTERNAL`. Tested against real Ghostscript as well as pscat.
+`PAINTKIT_INTERNAL`. Tested against real Ghostscript as well as pscat
+-- including running `examples/paintkit_nib_demo.ps` itself through
+`gs` directly (not just a synthetic driver string), since it's the
+only path that also exercises `pal`/`findfont`/`show` and the demo's
+own local helpers.
+
+Known tradeoff, not yet a problem: `pnangleat`'s nearest-sample lookup
+linear-scans all n travel-angle samples, and `pkribbon` calls it
+roughly 2n times per stroke while filling -- O(n^2) overall. Invisible
+at the scale every current caller uses (the demo's largest stroke
+samples well under 200 points), so not optimized preemptively. An
+O(1) alternative (`round(t*(n-1))` index math) only holds because
+`walkpath`'s pitch-spaced stops are near-uniform in t; if a future
+caller pushes a stroke long/dense enough for this to matter, that
+shortcut needs its own verification, not a drive-by swap.
 
 ## Pressure-sensitive ribbon strokes, a new paintkit library (issue #41, 2026-08-15)
 

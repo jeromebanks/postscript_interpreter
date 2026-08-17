@@ -878,6 +878,11 @@ fn nib_min_width_floors_the_near_hairline_response() {
     let zeroed_h = column_height(&zeroed, 110, 60);
 
     assert!(
+        floored_h > 0,
+        "expected the default MinWidth floor to render *something*, \
+         not a vacuous zero-vs-zero pass; got {floored_h}"
+    );
+    assert!(
         zeroed_h <= floored_h,
         "MinWidth 0 should never render wider than the default floor: \
          zeroed {zeroed_h} floored {floored_h}"
@@ -1053,4 +1058,43 @@ fn ghostscript_accepts_paintkit_nib() {
         .status()
         .expect("run gs");
     assert!(status.success(), "gs rejected paintkit's pknib");
+}
+
+#[test]
+fn ghostscript_accepts_the_actual_nib_demo_file() {
+    // ghostscript_accepts_paintkit_nib above exercises pknib itself
+    // through a synthetic driver, but the acceptance criterion is that
+    // the *example* -- what a human actually runs -- works unchanged in
+    // both interpreters, and the demo additionally exercises artkit's
+    // `pal`, `findfont`/`show`, and its own local helper procs, none of
+    // which the synthetic driver touches. Run the real file directly.
+    // `-dNOSAFER` is required because the demo does `(lib/artkit.ps)
+    // run` from disk, which gs's default sandbox blocks -- fine here,
+    // the file is repo-owned, not untrusted input.
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let status = std::process::Command::new("gs")
+        .args([
+            "-dNOSAFER",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g620x760",
+            "-r72",
+            "-o/dev/null",
+            "examples/paintkit_nib_demo.ps",
+        ])
+        .status()
+        .expect("run gs");
+    assert!(
+        status.success(),
+        "gs rejected examples/paintkit_nib_demo.ps"
+    );
 }
