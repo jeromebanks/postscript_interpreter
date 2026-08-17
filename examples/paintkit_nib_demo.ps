@@ -1,0 +1,97 @@
+%!PS-Adobe-3.0
+%%Title: Paintkit — angled-nib calligraphy brush (issue #42)
+%%BoundingBox: 0 0 620 760
+%%EndComments
+
+% Specimen for paintkit's pknib (lib/paintkit.ps): a chisel/broad-edge
+% calligraphic-nib preset built on pkribbon (issue #41). Row 1 shows
+% the same curved path rendered at three different /Angle values --
+% the acceptance criterion that nib angle visibly and predictably
+% changes thick/thin behavior. Row 2 shows corners and a direction
+% reversal (a sharp cusp) -- a real chisel nib's width genuinely jumps
+% at a sharp corner, not a bug. Row 3 shows broad-edge lettering
+% strokes (an "H") with pressure/taper/jitter left at their defaults.
+% Row 4 is a flourish: start/end taper, a bell pressure profile, and
+% jitter all composing with the nib-angle response at once.
+%
+%   pscat --page 620x760 examples/paintkit_nib_demo.ps --png paintkit_nib.png
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+
+3 srand
+
+1 1 1 setrgbcolor clippath fill
+
+% x y label -   (dm- prefix: demo-local, distinct from paintkit's own
+% reserved pn- prefix for pknib's internals)
+/dmlabel {
+    /dmllabel exch def /dmly exch def /dmlx exch def
+    gsave
+        0.55 0.55 0.55 setrgbcolor
+        /Helvetica findfont 11 scalefont setfont
+        dmlx dmly moveto dmllabel show
+    grestore
+} def
+
+% ox -   (one gentle arch, offset horizontally by ox)
+/dmarch {
+    /dmaox exch def
+    newpath
+    dmaox 610 moveto
+    dmaox 60 add 700 dmaox 120 add 700 dmaox 180 add 610 curveto
+} def
+
+/stone pal 2 get aload pop setrgbcolor
+
+% --- row 1: the same path, three nib angles ---------------------------
+
+20 730 (same path, nib angle 0) dmlabel
+20 dmarch
+<< /Width 18 /Angle 0 >> pknib
+
+220 730 (nib angle 45) dmlabel
+220 dmarch
+<< /Width 18 /Angle 45 >> pknib
+
+420 730 (nib angle 90) dmlabel
+420 dmarch
+<< /Width 18 /Angle 90 >> pknib
+
+/dusk pal 2 get aload pop setrgbcolor
+
+% --- row 2: corners and a direction reversal ---------------------------
+
+20 560 (corners) dmlabel
+newpath 20 460 moveto 90 540 lineto 160 460 lineto 230 540 lineto
+<< /Width 14 /Angle 30 >> pknib
+
+340 560 (direction reversal, a sharp cusp) dmlabel
+newpath 340 460 moveto 400 545 lineto 340 460 lineto
+<< /Width 14 /Angle 30 /StartCap /round /EndCap /round >> pknib
+
+/ember pal 2 get aload pop setrgbcolor
+
+% --- row 3: broad-edge lettering strokes, an "H" -----------------------
+
+60 400 (broad-edge lettering strokes, an H) dmlabel
+newpath 60 280 moveto 60 380 lineto
+<< /Width 16 /Angle 20 /StartCap /flat /EndCap /flat >> pknib
+newpath 180 280 moveto 180 380 lineto
+<< /Width 16 /Angle 20 /StartCap /flat /EndCap /flat >> pknib
+newpath 60 330 moveto 180 330 lineto
+<< /Width 16 /Angle 20 /StartCap /flat /EndCap /flat >> pknib
+
+/tide pal 2 get aload pop setrgbcolor
+
+% --- row 4: a flourish -- taper, bell pressure, and jitter together ----
+
+60 240 (a flourish) dmlabel
+newpath
+60 40 moveto
+60 220 260 220 300 130 curveto
+340 40 500 40 560 160 curveto
+<< /Width 20 /Angle 30 /StartTaper 0.3 /EndTaper 0.35
+   /Pressure { pkbell } /Jitter 1.5 >> pknib
+
+showpage

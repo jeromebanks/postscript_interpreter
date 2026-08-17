@@ -15,6 +15,13 @@
 //! up with more than one subpath in the source path, so
 //! `multiple_subpaths_each_become_their_own_ribbon` below is a
 //! regression test for that, not just a feature check.
+//!
+//! `pknib` (issue #42) tests start below the `pkribbon`-specific ones:
+//! its own validation guards (single-open-subpath, Width/Pitch/Angle/
+//! MinWidth/Pressure), the nib-angle response actually changing
+//! measured width, composition with /Pressure and the tapers, seeded
+//! jitter's determinism, and corners/a direction reversal rendering
+//! without crashing.
 
 use pscat::{Interp, PsError};
 
@@ -730,4 +737,482 @@ fn ghostscript_accepts_paintkit() {
         .status()
         .expect("run gs");
     assert!(status.success(), "gs rejected paintkit");
+}
+
+// --- pknib (issue #42): angled-nib calligraphy preset ------------------
+
+#[test]
+fn nib_guards_reject_malformed_input() {
+    let mut it = Interp::new();
+    load(&mut it);
+    let cases = [
+        (
+            "newpath 0 0 moveto 10 10 lineto 30 30 moveto 40 40 lineto \
+             << /Width 10 >> pknib",
+            "pknib-path-must-be-a-single-subpath",
+        ),
+        (
+            "newpath 0 0 moveto 10 0 lineto 10 10 lineto closepath \
+             << /Width 10 >> pknib",
+            "pknib-path-must-not-be-closed",
+        ),
+        (
+            "newpath 0 0 moveto 10 10 lineto << /Width 0 >> pknib",
+            "pknib-width-must-be-positive",
+        ),
+        (
+            "newpath 0 0 moveto 10 10 lineto << /Width -3 >> pknib",
+            "pknib-width-must-be-positive",
+        ),
+        (
+            "newpath 0 0 moveto 10 10 lineto << /Width { 10 } >> pknib",
+            "pknib-width-must-not-be-a-procedure",
+        ),
+        (
+            "newpath 0 0 moveto 10 10 lineto << /Width 10 /Pitch 0 >> pknib",
+            "pknib-pitch-must-be-positive",
+        ),
+        (
+            "newpath 0 0 moveto 10 10 lineto << /Width 10 /Pitch -1 >> pknib",
+            "pknib-pitch-must-be-positive",
+        ),
+        (
+            "newpath 0 0 moveto 10 10 lineto << /Width 10 /Pitch { 5 } >> pknib",
+            "pknib-pitch-must-not-be-a-procedure",
+        ),
+        (
+            "newpath 0 0 moveto 10 10 lineto << /Width 10 /Angle { 5 } >> pknib",
+            "pknib-angle-must-not-be-a-procedure",
+        ),
+        (
+            "newpath 0 0 moveto 10 10 lineto << /Width 10 /MinWidth -0.1 >> pknib",
+            "pknib-minwidth-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 10 10 lineto << /Width 10 /MinWidth 1.5 >> pknib",
+            "pknib-minwidth-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 10 10 lineto << /Width 10 /MinWidth { 0.1 } >> pknib",
+            "pknib-minwidth-must-not-be-a-procedure",
+        ),
+        // Same /Pressure-must-actually-be-callable trap pkribbon itself
+        // guards against (Codex rounds 2/3 there): pknib's own composite
+        // /Pressure calls the caller's proc by bare reference, so an
+        // unvalidated non-procedure would silently corrupt the stack
+        // instead of erroring.
+        (
+            "newpath 0 0 moveto 10 10 lineto << /Width 10 /Pressure 1 >> pknib",
+            "pknib-pressure-must-be-a-procedure",
+        ),
+        (
+            "newpath 0 0 moveto 10 10 lineto << /Width 10 /Pressure (nope) >> pknib",
+            "pknib-pressure-must-be-a-procedure",
+        ),
+        (
+            "newpath 0 0 moveto 10 10 lineto << /Width 10 /Pressure 2 cvx >> pknib",
+            "pknib-pressure-must-be-a-procedure",
+        ),
+    ];
+    for (src, name) in cases {
+        let err = it.run_str(src).unwrap_err();
+        assert!(
+            matches!(err, PsError::Undefined(ref n) if n == name),
+            "{src}: got {err}"
+        );
+    }
+}
+
+#[test]
+fn nib_validates_opts_even_on_an_empty_path() {
+    // Regression test for a Codex-review (PR #77) finding: validation
+    // used to be nested entirely inside the `pnmoveto 0 gt` guard, so
+    // an empty path skipped it -- a malformed, non-dict opts operand
+    // (e.g. a bare number) never even got read, silently succeeding
+    // instead of erroring the way pkribbon does for the same call.
+    // pkribbon validates its whole opts dict unconditionally, before
+    // ever looking at the path; pknib now does too.
+    let mut it = Interp::new();
+    load(&mut it);
+    let err = it.run_str("newpath 42 pknib").unwrap_err();
+    assert!(
+        matches!(err, PsError::Typecheck),
+        "expected a typecheck error for a non-dict opts operand on an \
+         empty path, got {err}"
+    );
+}
+
+#[test]
+fn nib_degenerate_single_point_falls_back_to_a_visible_dot() {
+    // Regression test for a Codex-review (PR #77) finding: a moveto-
+    // only subpath has no direction of travel (walkpath reports a
+    // synthetic ang=0 for it, not a real one), but the nib-angle
+    // multiplier was applied anyway -- at Angle 0 with MinWidth 0 this
+    // floored the response to exactly 0, silently rendering nothing
+    // instead of the dot fallback pkribbon (and pknib's own header)
+    // document. pnpressure now skips the nib multiplier entirely for a
+    // single-sample pnangles table (walkpath's contract guarantees any
+    // subpath with real length gets at least two stops, so this is an
+    // unambiguous signal).
+    let mut it = fresh(60, 60);
+    it.run_str(
+        "0 0 0 setrgbcolor newpath 30 30 moveto \
+         << /Width 12 /Angle 0 /MinWidth 0 >> pknib",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 5,
+        "expected a filled dot despite Angle 0 / MinWidth 0, got {}",
+        ink_count(&it)
+    );
+}
+
+#[test]
+fn nib_empty_path_still_validates_fields_pknib_forwards_to_pkribbon() {
+    // Regression test for a Codex-review (PR #77, round 2) finding:
+    // pknib's own empty-path guard used to skip pkribbon entirely, so
+    // fields pknib itself never validates (StartTaper/EndTaper/
+    // StartCap/EndCap/Jitter -- only pkribbon checks these) went
+    // unchecked on an empty path, unlike the equivalent pkribbon call.
+    // pknib now always delegates to pkribbon, which validates
+    // everything before its own `pkn 0 gt` guard decides to no-op.
+    let mut it = Interp::new();
+    load(&mut it);
+    let cases = [
+        (
+            "newpath << /StartTaper -1 >> pknib",
+            "pkribbon-starttaper-must-be-0-to-1",
+        ),
+        (
+            "newpath << /StartCap /bogus >> pknib",
+            "pkribbon-startcap-must-be-round-flat-or-pointed",
+        ),
+    ];
+    for (src, name) in cases {
+        let err = it.run_str(src).unwrap_err();
+        assert!(
+            matches!(err, PsError::Undefined(ref n) if n == name),
+            "{src}: got {err}"
+        );
+    }
+}
+
+#[test]
+fn nib_short_pointed_stroke_uses_the_chord_direction_for_its_synthesized_midpoint() {
+    // Regression test for a Codex-review (PR #77, round 2) finding: a
+    // curved stroke shorter than /Pitch with both caps pointed has no
+    // interior walkpath sample -- pkopenrun synthesizes one interior
+    // bulge point using the *chord's* own direction, but pnangleat's
+    // plain nearest-t lookup had no sample there and picked whichever
+    // endpoint happened to be closer in t, an arbitrary answer. This
+    // curve's chord is horizontal (dx=3, dy=0): at /Angle 0 the
+    // response should collapse toward the /MinWidth floor (near-
+    // hairline, matching the chord), and at /Angle 90 it should render
+    // near full width (perpendicular to the chord) -- the same
+    // discriminator nib_angle_changes_the_measured_width uses, applied
+    // to the synthesized-midpoint code path specifically.
+    let curve = "newpath 20 30 moveto 21 31.5 22 31.5 23 30 curveto";
+
+    let mut parallel = fresh(60, 60);
+    parallel
+        .run_str(&format!(
+            "0 0 0 setrgbcolor 1 srand {curve} \
+             << /Width 20 /Angle 0 /MinWidth 0 \
+                /StartCap /pointed /EndCap /pointed >> pknib"
+        ))
+        .unwrap_or_else(|e| panic!("{}", parallel.error_report(&e)));
+    let parallel_ink = ink_count(&parallel);
+
+    let mut perpendicular = fresh(60, 60);
+    perpendicular
+        .run_str(&format!(
+            "0 0 0 setrgbcolor 1 srand {curve} \
+             << /Width 20 /Angle 90 /MinWidth 0 \
+                /StartCap /pointed /EndCap /pointed >> pknib"
+        ))
+        .unwrap_or_else(|e| panic!("{}", perpendicular.error_report(&e)));
+    let perpendicular_ink = ink_count(&perpendicular);
+
+    assert!(
+        perpendicular_ink > parallel_ink * 3,
+        "Angle perpendicular to the chord should render much more ink \
+         than Angle parallel to it at the synthesized midpoint: \
+         parallel {parallel_ink} perpendicular {perpendicular_ink}"
+    );
+}
+
+#[test]
+fn nib_angle_changes_the_measured_width() {
+    // Angle 0 on a horizontal stroke: travel runs parallel to the nib,
+    // so the response floors at /MinWidth (near-hairline). Angle 90:
+    // travel runs perpendicular to the nib, the response is 1.0 (full
+    // /Width) -- the unambiguous discriminator, not a pair that happens
+    // to be symmetric under |sin|.
+    let mut thin = fresh(220, 60);
+    thin.run_str(
+        "0 0 0 setrgbcolor 1 srand newpath 10 30 moveto 210 30 lineto \
+         << /Width 20 /Angle 0 >> pknib",
+    )
+    .unwrap_or_else(|e| panic!("{}", thin.error_report(&e)));
+    let thin_h = column_height(&thin, 110, 60);
+
+    let mut thick = fresh(220, 60);
+    thick
+        .run_str(
+            "0 0 0 setrgbcolor 1 srand newpath 10 30 moveto 210 30 lineto \
+             << /Width 20 /Angle 90 >> pknib",
+        )
+        .unwrap_or_else(|e| panic!("{}", thick.error_report(&e)));
+    let thick_h = column_height(&thick, 110, 60);
+
+    assert!(
+        thick_h > thin_h * 3,
+        "Angle perpendicular to travel should render much wider than \
+         Angle parallel to it: thin {thin_h} thick {thick_h}"
+    );
+}
+
+#[test]
+fn nib_min_width_floors_the_near_hairline_response() {
+    // Same parallel-to-nib case as above, but MinWidth 0 -- the floor
+    // is off, so the stroke should be even thinner (ideally near
+    // invisible) than the default-MinWidth version.
+    let mut floored = fresh(220, 60);
+    floored
+        .run_str(
+            "0 0 0 setrgbcolor 1 srand newpath 10 30 moveto 210 30 lineto \
+             << /Width 20 /Angle 0 >> pknib",
+        )
+        .unwrap_or_else(|e| panic!("{}", floored.error_report(&e)));
+    let floored_h = column_height(&floored, 110, 60);
+
+    let mut zeroed = fresh(220, 60);
+    zeroed
+        .run_str(
+            "0 0 0 setrgbcolor 1 srand newpath 10 30 moveto 210 30 lineto \
+             << /Width 20 /Angle 0 /MinWidth 0 >> pknib",
+        )
+        .unwrap_or_else(|e| panic!("{}", zeroed.error_report(&e)));
+    let zeroed_h = column_height(&zeroed, 110, 60);
+
+    assert!(
+        floored_h > 0,
+        "expected the default MinWidth floor to render *something*, \
+         not a vacuous zero-vs-zero pass; got {floored_h}"
+    );
+    assert!(
+        zeroed_h <= floored_h,
+        "MinWidth 0 should never render wider than the default floor: \
+         zeroed {zeroed_h} floored {floored_h}"
+    );
+}
+
+#[test]
+fn taper_composes_with_the_nib_angle_response() {
+    // Angle 90 keeps the nib-angle multiplier pinned at 1.0 along this
+    // horizontal stroke, isolating StartTaper/EndTaper's own effect on
+    // top of it.
+    let mut it = fresh(220, 60);
+    it.run_str(
+        "0 0 0 setrgbcolor 1 srand newpath 10 30 moveto 210 30 lineto \
+         << /Width 20 /Angle 90 /StartTaper 0.3 /EndTaper 0.3 >> pknib",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let start = column_height(&it, 15, 60);
+    let mid = column_height(&it, 110, 60);
+    let end = column_height(&it, 205, 60);
+    assert!(
+        start < mid && end < mid,
+        "StartTaper/EndTaper should still thin both ends relative to \
+         the middle when composed with the nib-angle response: \
+         start {start} mid {mid} end {end}"
+    );
+}
+
+#[test]
+fn pressure_composes_with_the_nib_angle_response() {
+    let mut it = fresh(220, 60);
+    it.run_str(
+        "0 0 0 setrgbcolor 1 srand newpath 10 30 moveto 210 30 lineto \
+         << /Width 20 /Angle 90 /Pressure { pktaper } >> pknib",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let start = column_height(&it, 15, 60);
+    let end = column_height(&it, 205, 60);
+    assert!(
+        start < end,
+        "a linear /Pressure taper should still thin the start relative \
+         to the end when composed with the nib-angle response: \
+         start {start} end {end}"
+    );
+}
+
+#[test]
+fn nib_jitter_is_deterministic_and_perturbs_the_edge() {
+    fn render(jitter: f64, seed: i64) -> Vec<u8> {
+        let mut it = fresh(320, 60);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor {seed} srand newpath 10 30 moveto 310 30 lineto \
+             << /Width 16 /Angle 90 /Jitter {jitter} >> pknib"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        it.gfx().pixmap.data().to_vec()
+    }
+
+    let a = render(4.0, 5);
+    let b = render(4.0, 5);
+    assert_eq!(a, b, "same seed, same Jitter -> identical pixels");
+
+    let unjittered = render(0.0, 5);
+    assert_ne!(
+        a, unjittered,
+        "Jitter > 0 must perturb the edge, not render identically to Jitter 0"
+    );
+
+    let other_seed = render(4.0, 9);
+    assert_ne!(a, other_seed, "a different seed should jitter differently");
+}
+
+#[test]
+fn corners_render_without_crashing() {
+    let mut it = fresh(220, 220);
+    it.run_str(
+        "0 0 0 setrgbcolor 1 srand \
+         newpath 20 20 moveto 100 180 lineto 180 20 lineto \
+         << /Width 14 /Angle 30 >> pknib",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(ink_count(&it) > 200, "expected ink across the corners");
+}
+
+#[test]
+fn direction_reversal_renders_without_crashing() {
+    // A sharp cusp: travel direction reverses roughly 180 degrees
+    // partway along the stroke -- a real chisel nib's width genuinely
+    // jumps there, not a bug pknib needs to smooth over.
+    let mut it = fresh(220, 220);
+    it.run_str(
+        "0 0 0 setrgbcolor 1 srand \
+         newpath 20 20 moveto 100 180 lineto 20 20 lineto \
+         << /Width 14 /Angle 30 >> pknib",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 100,
+        "expected ink along the reversed stroke"
+    );
+}
+
+#[test]
+fn bezier_stroke_renders_without_crashing() {
+    let mut it = fresh(220, 100);
+    it.run_str(
+        "0 0 0 setrgbcolor 1 srand \
+         newpath 10 20 moveto 30 80 190 80 210 20 curveto \
+         << /Width 14 /Angle 45 >> pknib",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(ink_count(&it) > 200, "expected a substantial filled band");
+}
+
+#[test]
+fn nib_degenerate_single_point_falls_back_to_a_dot() {
+    let mut it = fresh(60, 60);
+    it.run_str("0 0 0 setrgbcolor newpath 30 30 moveto << /Width 12 >> pknib")
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(ink_count(&it) > 5, "expected a filled dot at the point");
+}
+
+#[test]
+fn nib_empty_path_is_a_no_op() {
+    let mut it = fresh(60, 60);
+    it.run_str("0 0 0 setrgbcolor newpath << /Width 12 >> pknib")
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(ink_count(&it), 0, "empty path should draw nothing");
+}
+
+#[test]
+fn ghostscript_accepts_paintkit_nib() {
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let artkit = std::fs::read_to_string("lib/artkit.ps").expect("artkit");
+    let paintkit = std::fs::read_to_string("lib/paintkit.ps").expect("paintkit");
+    let driver = "true setpacking 3 srand \
+        0 0 0 setrgbcolor \
+        newpath 10 10 moveto 100 10 lineto << /Width 12 /Angle 30 >> pknib \
+        newpath 10 40 moveto 90 40 lineto 90 80 lineto 10 80 lineto \
+            << /Width 10 /Angle 45 >> pknib \
+        newpath 130 10 moveto 190 60 lineto 130 10 lineto \
+            << /Width 10 /Angle 60 >> pknib \
+        newpath 220 10 moveto 240 60 260 60 280 10 curveto \
+            << /Width 10 /Angle 30 /StartTaper 0.2 /EndTaper 0.2 \
+               /Pressure { pkbell } /Jitter 2 >> pknib \
+        newpath 300 30 moveto << /Width 10 /Angle 20 >> pknib";
+    let dir = std::env::temp_dir().join(format!("pscat-paintkit-nib-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let combined = dir.join("paintkit_nib_gs.ps");
+    std::fs::write(
+        &combined,
+        format!("{artkit}\n{paintkit}\n{driver}\nshowpage\n"),
+    )
+    .expect("write");
+    let status = std::process::Command::new("gs")
+        .args([
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g400x120",
+            "-r72",
+            "-o/dev/null",
+        ])
+        .arg(&combined)
+        .status()
+        .expect("run gs");
+    assert!(status.success(), "gs rejected paintkit's pknib");
+}
+
+#[test]
+fn ghostscript_accepts_the_actual_nib_demo_file() {
+    // ghostscript_accepts_paintkit_nib above exercises pknib itself
+    // through a synthetic driver, but the acceptance criterion is that
+    // the *example* -- what a human actually runs -- works unchanged in
+    // both interpreters, and the demo additionally exercises artkit's
+    // `pal`, `findfont`/`show`, and its own local helper procs, none of
+    // which the synthetic driver touches. Run the real file directly.
+    // `-dNOSAFER` is required because the demo does `(lib/artkit.ps)
+    // run` from disk, which gs's default sandbox blocks -- fine here,
+    // the file is repo-owned, not untrusted input.
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let status = std::process::Command::new("gs")
+        .args([
+            "-dNOSAFER",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g620x760",
+            "-r72",
+            "-o/dev/null",
+            "examples/paintkit_nib_demo.ps",
+        ])
+        .status()
+        .expect("run gs");
+    assert!(
+        status.success(),
+        "gs rejected examples/paintkit_nib_demo.ps"
+    );
 }
