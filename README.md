@@ -458,7 +458,14 @@ ribbon; closed subpaths fill as two concentric loops with no caps;
 degenerate paths fall back to a dot or a no-op rather than erroring.
 `examples/paintkit_demo.ps` is a specimen sheet of all three
 centerline shapes, all three pressure profiles, all three cap styles,
-and jitter.
+and jitter. `pknib` (issue #42) is an angled-nib calligraphy preset
+built on `pkribbon`: mark width tracks the angle between local path
+direction and a fixed `/Angle`, widest perpendicular to the nib and
+narrowing toward a `/MinWidth` floor parallel to it, composing with
+`pkribbon`'s own pressure/taper/jitter. It requires a single open
+subpath (one call per stroke). `examples/paintkit_nib_demo.ps` shows
+the same path at several nib angles, corners, a direction reversal,
+broad-edge lettering strokes, and a flourish.
 
 ```postscript
 (lib/artkit.ps) run

@@ -236,11 +236,13 @@ pub const ARTKIT_INTERNAL: &[&str] = &[
 /// the three shared helpers (`pggetdef`/`pgzfitmax`/`pgframe`).
 pub const PAGEKIT_INTERNAL: &[&str] = &["pggetdef", "pgzfitmax", "pgframe"];
 
-/// Top-level names `lib/paintkit.ps` defines beyond `pkribbon` and the
-/// three `/Pressure` presets (`pkflat`/`pktaper`/`pkbell`, cataloged
-/// separately since they're documented, directly referenceable by
-/// name): the dict-default reader and the internal ribbon-construction
-/// helpers (edge offsetting, cap/loop building, taper/half-width math).
+/// Top-level names `lib/paintkit.ps` defines beyond `pkribbon`/`pknib`
+/// and the three `/Pressure` presets (`pkflat`/`pktaper`/`pkbell`,
+/// cataloged separately since they're documented, directly
+/// referenceable by name): the dict-default reader, the internal
+/// ribbon-construction helpers (edge offsetting, cap/loop building,
+/// taper/half-width math), and `pknib`'s own travel-angle sampling
+/// helpers (issue #42).
 pub const PAINTKIT_INTERNAL: &[&str] = &[
     "pkgetdef",
     "pktaperf",
@@ -252,6 +254,8 @@ pub const PAINTKIT_INTERNAL: &[&str] = &[
     "pkopenrun",
     "pkbuildrun",
     "pkscanclosed",
+    "pnangleat",
+    "pnpressure",
 ];
 
 /// Top-level names `lib/handscript.ps` defines beyond `hs-write`/
@@ -1027,6 +1031,66 @@ static ENTRIES: &[Entry] = &[
         &[],
         PAINTKIT,
         "t pkbell mult",
+        LIB
+    ),
+    entry!(
+        "pknib",
+        CapabilityKind::Procedure,
+        "An angled-nib calligraphy preset built on pkribbon: mark width is driven by the angle between local path direction and a fixed nib angle, widest perpendicular to it and narrowing toward MinWidth parallel to it. The current path must be exactly one open subpath -- call once per stroke.",
+        &[
+            Param {
+                name: "Angle",
+                description: "Nib angle in degrees; perpendicular to it is widest, parallel narrows toward MinWidth",
+                default: Some("45")
+            },
+            Param {
+                name: "MinWidth",
+                description: "0..1 floor on the nib-angle response itself, before Pressure and the tapers multiply through",
+                default: Some("0.08")
+            },
+            Param {
+                name: "Width",
+                description: "Base width, forwarded to pkribbon",
+                default: Some("6")
+            },
+            Param {
+                name: "Pitch",
+                description: "walkpath sampling pitch, forwarded to pkribbon",
+                default: Some("Width*0.5, capped at 6")
+            },
+            Param {
+                name: "Pressure",
+                description: "{t -> mult} proc, multiplies with the nib-angle response rather than replacing it",
+                default: Some("{ pkflat }")
+            },
+            Param {
+                name: "StartTaper",
+                description: "0..1 fraction of progress to ramp width in from the start, forwarded to pkribbon",
+                default: Some("0")
+            },
+            Param {
+                name: "EndTaper",
+                description: "0..1 fraction of progress to ramp width out at the end, forwarded to pkribbon",
+                default: Some("0")
+            },
+            Param {
+                name: "StartCap",
+                description: "/round, /flat, or /pointed, forwarded to pkribbon",
+                default: Some("/round")
+            },
+            Param {
+                name: "EndCap",
+                description: "/round, /flat, or /pointed, forwarded to pkribbon",
+                default: Some("/round")
+            },
+            Param {
+                name: "Jitter",
+                description: "Seeded edge displacement amount, forwarded to pkribbon",
+                default: Some("0")
+            },
+        ],
+        PAINTKIT,
+        "newpath ... << /Width 16 /Angle 30 >> pknib",
         LIB
     ),
     // --- Procedures: shapes ----------------------------------------------

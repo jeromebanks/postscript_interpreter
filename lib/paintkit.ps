@@ -9,10 +9,12 @@
 %
 %   (lib/artkit.ps) run  (lib/paintkit.ps) run
 %
-% What's inside: one entry point, `pkribbon`, that treats the current
-% path as a centerline and fills a variable-width ribbon along it --
-% the minimum useful abstraction for a PostScript path as the motion
-% of a physical tool rather than a uniform geometric stroke.
+% What's inside: `pkribbon`, that treats the current path as a
+% centerline and fills a variable-width ribbon along it -- the minimum
+% useful abstraction for a PostScript path as the motion of a physical
+% tool rather than a uniform geometric stroke -- and `pknib` (issue
+% #42), an angled-nib calligraphy preset built on top of it. See
+% `pknib`'s own header, near the end of this file, for its docs.
 %
 %   opts pkribbon -
 %
@@ -91,6 +93,7 @@
 % Scratch prefixes: pk- (pkribbon/dispatch), pkbr- (pkbuildrun),
 % pko- (pkopenrun), pkl- (pkloop), pke- (pkedge), pkh- (pkhalfwat),
 % pktf- (pktaperf), pkd- (pkdot), pkg- (pkgetdef), pksc- (pkscanclosed).
+% pn- (pknib/dispatch, pnangleat, pnpressure) -- issue #42, see below.
 
 % - [bool0 bool1 ...]   (one flag per subpath, in path order: was it
 % closed with an explicit closepath?)
@@ -525,5 +528,173 @@
         } loop
         fill
         grestore
+    } if
+} def
+
+% --- angled-nib calligraphy brush (issue #42) -------------------------
+% opts pknib -
+% A chisel/broad-edge calligraphic-nib preset built on `pkribbon`: mark
+% width is driven by the angle between the path's local direction of
+% travel and a fixed nib angle (`/Angle`), the same physical model as a
+% real flat-nib pen -- widest where travel runs perpendicular to the
+% nib, narrowing toward a hairline where travel runs parallel to it
+% (`width ~ |sin(travel - Angle)|`). Pressure, taper, caps, and seeded
+% jitter all still come straight from `pkribbon` (the brush core) and
+% compose multiplicatively with the nib-angle response.
+%
+%   opts pknib -
+%
+% The current path must be exactly one *open* subpath -- a nib stroke
+% has a start and an end by definition, the same as lifting a real pen
+% off the page; a closed loop has no ends to cap or taper, and more
+% than one subpath has no single well-defined travel direction for
+% `/Pressure` to reset against at each one's own t=0. Both are rejected
+% with a clear error rather than guessing which subpath is "the"
+% stroke or silently treating a closed loop as open. Draw multiple
+% strokes by calling `pknib` once per stroke -- the natural mental
+% model for a pen that's picked up and set down again. An empty path
+% is a no-op, same as `pkribbon`.
+%
+% Approximation, stated plainly: this varies *width* with travel angle
+% but still offsets edges perpendicular to travel (via `pkribbon`'s own
+% `pkedge`) and caps perpendicular to travel too -- a real broad nib
+% instead shears its edges along the fixed nib axis and leaves a flat
+% end-cut *at* the nib angle, regardless of travel direction. That
+% distinction shows up mainly at corners and cut ends, not along a
+% stroke's body. The issue's own framing -- "derive mark width from the
+% relationship between path direction and a configurable nib angle" --
+% asks for the width response, which this delivers exactly; the sheared
+% -edge/angled-cut refinement is a real, deliberately out-of-scope next
+% step for a later revision, not an oversight.
+%
+%   /Angle       nib angle in degrees (default 45). Perpendicular to
+%                Angle is widest; parallel to Angle narrows toward
+%                /MinWidth.
+%   /MinWidth    0..1 floor on the nib-angle response itself (not a
+%                floor on the final rendered width) -- the multiplier
+%                `|sin(travel - Angle)|` never drops below this before
+%                /Pressure and the tapers multiply through, modeling a
+%                real nib's own finite edge thickness rather than a
+%                mathematically perfect zero-width hairline. Default
+%                0.08.
+%   /Width, /Pitch, /Pressure, /StartTaper, /EndTaper, /StartCap,
+%                /EndCap, /Jitter -- forwarded to `pkribbon` verbatim;
+%                see its own docs. /Pressure (default `pkflat`)
+%                multiplies with the nib-angle response rather than
+%                replacing it, the same kind of composition
+%                /StartTaper//EndTaper already have with /Pressure
+%                inside `pkribbon` itself.
+%
+% Implementation: a preliminary `walkpath` pass, at the same pitch
+% `pkribbon` would use, samples (t, travel angle) once per stop; a
+% synthesized `/Pressure` proc installed on a shallow copy of `opts`
+% looks up the *nearest* sample's angle for a given t -- no
+% interpolation, deliberately: a real chisel nib's width genuinely
+% jumps at a sharp corner, so smoothing across one would be less
+% faithful, not more, and it sidesteps degrees-wraparound interpolation
+% entirely -- and folds in the nib-angle multiplier before calling
+% through to the caller's own /Pressure. `pkribbon` itself never
+% inspects /Angle//MinWidth -- unknown dict keys are already ignored
+% elsewhere in this file (`pkgetdef` only reads keys it's told to), so
+% the shallow copy doesn't need to strip them. `pkribbon` re-walks the
+% same (already-flattened, so identically flattened both times) path
+% itself when it actually fills, at the same default pitch when the
+% caller didn't override /Pitch -- its own stops land at the same t
+% values this pass already sampled.
+/pnangleat {                                      % t -> nearest sample's travel angle (degrees)
+    /pnqt exch def
+    pnangles 0 get
+    dup 0 get pnqt sub abs /pnbestd exch def
+    1 get /pnbestang exch def
+    1 1 pnangles length 1 sub {
+        /pnqi exch def
+        pnangles pnqi get
+        dup 0 get pnqt sub abs /pnqd exch def
+        1 get /pnqang exch def
+        pnqd pnbestd lt {
+            /pnbestd pnqd def
+            /pnbestang pnqang def
+        } if
+    } for
+    pnbestang
+} def
+
+% t -> mult   (installed as pkribbon's own /Pressure; reads
+% pnangle/pnminwidth/pnuserpressure/pnangles, set fresh by pknib)
+/pnpressure {
+    /pnpt exch def
+    pnpt pnangleat pnangle sub sin abs
+    dup pnminwidth lt { pop pnminwidth } if
+    pnpt pnuserpressure mul
+} def
+
+/pknib {
+    /pnopts exch def
+
+    /pnmoveto 0 def /pnclosed false def
+    {
+        pop pop /pnmoveto pnmoveto 1 add def
+    } {
+        pop pop
+    } {
+        pop pop pop pop pop pop
+    } {
+        /pnclosed true def
+    } pathforall
+    pnmoveto 1 gt { pknib-path-must-be-a-single-subpath } if
+    pnclosed { pknib-path-must-not-be-closed } if
+
+    pnmoveto 0 gt {
+        % Same Width/Pitch validation pkribbon itself does, run here
+        % first so a bad value fails with a clear message before it
+        % ever reaches the sampling pass below (which needs a valid
+        % pitch of its own), rather than a confusing walkpath error.
+        /pnwidth pnopts /Width 6 pkgetdef def
+        /pnwidth load xcheck { pknib-width-must-not-be-a-procedure } if
+        pnwidth 0 le { pknib-width-must-be-positive } if
+        /pnpitch
+            pnopts /Pitch
+            pnwidth 0.5 mul dup 6 gt { pop 6 } if
+            pkgetdef
+        def
+        /pnpitch load xcheck { pknib-pitch-must-not-be-a-procedure } if
+        pnpitch 0 le { pknib-pitch-must-be-positive } if
+
+        /pnangle pnopts /Angle 45 pkgetdef def
+        /pnangle load xcheck { pknib-angle-must-not-be-a-procedure } if
+
+        /pnminwidth pnopts /MinWidth 0.08 pkgetdef def
+        /pnminwidth load xcheck { pknib-minwidth-must-not-be-a-procedure } if
+        pnminwidth 0 lt pnminwidth 1 gt or { pknib-minwidth-must-be-0-to-1 } if
+
+        % Same /Pressure validation as pkribbon's own (Codex rounds
+        % 2/3/5 there): must actually be callable, not just executable,
+        % since pnpressure above calls it by bare reference expecting
+        % it to consume t and leave one number.
+        /pnuserpressure pnopts /Pressure { pkflat } pkgetdef def
+        /pnuserpressure load xcheck
+        /pnuserpressure load type
+        dup /arraytype eq
+        exch dup /operatortype eq
+        exch /packedarraytype eq
+        or or
+        and
+        not { pknib-pressure-must-be-a-procedure } if
+
+        /pnn 0 def
+        pnpitch { pop pop pop pop pop pop /pnn pnn 1 add def } walkpath
+        /pnangles pnn array def
+        /pnj 0 def
+        pnpitch {
+            /pnaatend exch def /pnasp exch def /pnat exch def
+            /pnaang exch def /pnay exch def /pnax exch def
+            pnangles pnj pnat pnaang 2 array astore put
+            /pnj pnj 1 add def
+        } walkpath
+
+        /pnribbonopts pnopts length 1 add dict def
+        pnopts pnribbonopts copy pop
+        pnribbonopts /Pressure /pnpressure load put
+        pnribbonopts pkribbon
     } if
 } def

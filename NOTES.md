@@ -3,6 +3,59 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## An angled-nib calligraphy brush preset (issue #42, 2026-08-16)
+
+Closes issue #42, the second of the painterly-brush series (#42-#53)
+built on #41's `pkribbon`: `lib/paintkit.ps`'s `pknib`, a chisel/
+broad-edge calligraphic-nib preset that derives mark width from the
+angle between the path's local direction of travel and a fixed
+`/Angle` -- widest where travel runs perpendicular to the nib,
+narrowing toward a `/MinWidth` floor (default 0.08, before /Pressure
+and the tapers multiply through) where travel runs parallel to it. A
+real flat-nib pen's own physical model: `width ~ |sin(travel - Angle)|`.
+
+Built as a thin wrapper over `pkribbon` rather than a new geometry
+engine: `pkribbon`'s own `/Pressure` hook only sees normalized progress
+`t`, not travel angle, so `pknib` does its own preliminary `walkpath`
+pass (at the same pitch `pkribbon` would use) to sample `(t, travel
+angle)` once per stop, then installs a synthesized `/Pressure` closure
+on a shallow copy of the caller's options dict -- nearest-sample angle
+lookup (deliberately no interpolation; a real chisel nib's width
+genuinely jumps at a sharp corner, which the demo's zigzag and cusp
+rows both exercise) folded together with the caller's own `/Pressure`
+-- before delegating straight through. `/Width`, `/Pitch`,
+`/StartTaper`, `/EndTaper`, `/StartCap`, `/EndCap`, and `/Jitter`
+forward to `pkribbon` unchanged, so all of its existing machinery (caps,
+degenerate-point/empty-path fallbacks, seeded jitter) comes along for
+free.
+
+Requires the current path be exactly one *open* subpath -- a nib
+stroke has a start and an end by definition, the same as lifting a
+real pen; a closed loop or more than one subpath errors rather than
+guessing which subpath is "the" stroke. Callers draw multiple strokes
+by calling `pknib` once per stroke.
+
+Known, deliberate approximation (documented in `pknib`'s own header,
+not just here): edges still offset perpendicular to *travel*
+(`pkribbon`'s own `pkedge`), not sheared along the fixed nib axis, and
+caps cut perpendicular to travel rather than at the nib angle -- a real
+broad nib's edges and end-cuts follow the nib axis regardless of travel
+direction. That distinction shows up at corners and cut ends, not along
+a stroke's body; the issue's acceptance criterion asks for the width
+response specifically ("derive mark width from the relationship between
+path direction and a configurable nib angle"), which this delivers
+exactly. The sheared-edge/angled-cut refinement is a real next step for
+a later revision.
+
+`examples/paintkit_nib_demo.ps`: the same arch rendered at three nib
+angles (0/45/90 -- 0 and 90 are the unambiguous discriminators, since
+`|sin|` is otherwise symmetric), a zigzag (corners) and a sharp cusp
+(direction reversal), a broad-edge lettering "H", and a flourish
+combining taper, a bell pressure profile, and jitter. `pknib` is
+cataloged in `src/capabilities.rs` alongside `pkribbon`; its two
+top-level helper procs (`pnangleat`, `pnpressure`) are listed in
+`PAINTKIT_INTERNAL`. Tested against real Ghostscript as well as pscat.
+
 ## Pressure-sensitive ribbon strokes, a new paintkit library (issue #41, 2026-08-15)
 
 Closes issue #41, the first of the painterly-brush series (#42-#53)
