@@ -16,6 +16,13 @@
 % #42), an angled-nib calligraphy preset built on top of it. See
 % `pknib`'s own header, near the end of this file, for its docs.
 %
+% `pkdry` (issue #43) is a dry-bristle preset also built on `pkribbon`:
+% a bounded family of thin offset bristles scattered across the
+% centerline, each broken into ink/no-ink runs by a seeded two-state
+% Markov chain, so the mark ranges from a mostly loaded brush to
+% visibly broken coverage without any raster work. See its own header,
+% after `pknib`'s, for full docs.
+%
 %   opts pkribbon -
 %
 % `opts` is a dict of optional keys (a sparse or empty dict still
@@ -94,6 +101,11 @@
 % pko- (pkopenrun), pkl- (pkloop), pke- (pkedge), pkh- (pkhalfwat),
 % pktf- (pktaperf), pkd- (pkdot), pkg- (pkgetdef), pksc- (pkscanclosed).
 % pn- (pknib/dispatch, pnangleat, pnpressure) -- issue #42, see below.
+% pb- (pkdry/dispatch, pbdashrun) -- issue #43, see below. Deliberately
+% distinct from pk-/pn-: pkdry calls pkribbon itself once per bristle
+% dash, and pkribbon's own body freely redefines every pk*-prefixed
+% name listed above on each call -- a pkdry-owned name sharing that
+% prefix would get silently clobbered by its own nested pkribbon call.
 
 % - [bool0 bool1 ...]   (one flag per subpath, in path order: was it
 % closed with an explicit closepath?)
@@ -764,4 +776,320 @@
     pnopts pnribbonopts copy pop
     pnribbonopts /Pressure /pnpressure load put
     pnribbonopts pkribbon
+} def
+
+% --- dry-bristle brush (issue #43) ------------------------------------
+% opts pkdry -
+% A bounded family of thin offset bristles scattered across the
+% centerline, each broken into its own ink/no-ink runs by a seeded
+% two-state Markov chain -- the physical model of a brush that's
+% running low on paint: some bristles keep full contact, others skip
+% and catch unevenly, the breakup tracking the path itself rather than
+% reading as unrelated page noise. Ranges from a mostly loaded stroke
+% (high /Load, low /Dropout) to visibly broken dry-brush texture (low
+% /Load, high /Dropout) with no raster work at all: every dash is a
+% small `pkribbon` call, so caps, taper, and a single isolated fleck
+% (walkpath's own degenerate single-point fallback -- see pkribbon's
+% own dot doc) all come for free.
+%
+%   opts pkdry -
+%
+%   /Width         envelope width the bristles scatter across (default
+%                  6). Must be > 0. Same role as pkribbon's /Width, but
+%                  here it bounds the *scatter*, not one mark's own
+%                  thickness -- see /BristleWidth for that.
+%   /Bristles      bristle count (default 18). A hard safety cap: must
+%                  be 1..100 -- chosen so even the cap combined with a
+%                  long path at the default /Pitch stays in the
+%                  single-digit seconds (measured, see Performance
+%                  below), not unbounded. This alone doesn't bound
+%                  total ink deposits (a long path at a fine /Pitch
+%                  still multiplies out) -- see the deposit-budget
+%                  check below, the real limit the issue asks for.
+%   /Spread        0..1 fraction of Width the bristles scatter across,
+%                  centered on the centerline (default 0.85). Must be
+%                  0..1.
+%   /BristleWidth  base width of each individual bristle's own mark
+%                  (default Width*0.12). Must be > 0.
+%   /WidthJitter   0..1 fraction of BristleWidth that each bristle's
+%                  own width randomly varies by, one draw per bristle,
+%                  clamped to never go below 5% of BristleWidth
+%                  (default 0.4). Must be 0..1.
+%   /Load          the resume-contact rate: how readily a bristle
+%                  picks ink back up after a gap (default 0.6).
+%   /Dropout       the lose-contact rate: how readily a loaded bristle
+%                  skips contact (default 0.4).
+%                  Both /Load and /Dropout are expressed as a rate per
+%                  one /Width's worth of travel along the path, *not*
+%                  per raw walkpath sample -- scaled down to a
+%                  per-sample transition probability by (Pitch/Width),
+%                  clamped to 0..1, so the same numbers read as the
+%                  same dryness regardless of /Pitch. Both must be
+%                  0..1 (the rate itself, before that scaling).
+%                  Loaded: high Load, low Dropout. Very dry: low Load,
+%                  high Dropout. A subpath's very first sample rolls
+%                  initial contact with the raw (unscaled) Load
+%                  probability, not the Pitch-scaled per-step rate --
+%                  "does this bristle start loaded" is a one-time
+%                  boundary condition, not a rate along the path, and
+%                  it's the *only* roll a degenerate single-point
+%                  subpath (see below) ever gets.
+%   /Jitter        edge roughness, forwarded verbatim as each dash's
+%                  own pkribbon /Jitter (default 0). Shares the same
+%                  seeded random stream as the Markov chain above --
+%                  changing /Jitter from 0 reshuffles every downstream
+%                  on/off roll too, not just the edges, so two renders
+%                  that differ only in /Jitter will generally have a
+%                  *different breakup pattern*, not the same pattern
+%                  with rougher edges. Still fully deterministic under
+%                  the caller's own `N srand` either way.
+%   /Pitch         walkpath sampling pitch for the shared centerline
+%                  pass (default BristleWidth*0.6, capped at 6, same
+%                  shape as pkribbon's own default). Must be > 0.
+%   /ColorJitter   0..1 magnitude of small per-bristle color variation
+%                  (default 0.06): each bristle applies one `shade`
+%                  draw, k = 1 +/- ColorJitter, around whatever color
+%                  is active when pkdry is called (`currentrgbcolor`)
+%                  -- consistent with the rest of this file, color is
+%                  deliberately not a settable key here either. 0
+%                  disables the variation. Must be 0..1. The caller's
+%                  own current color is restored before pkdry returns.
+%
+% Determinism: same doctrine as pkribbon -- no library-owned seed,
+% reproducible under the caller's own `N srand`.
+%
+% A degenerate single-point subpath (a bare moveto) has no direction
+% of travel to offset perpendicular to (walkpath reports a synthetic
+% ang=0, not a real one, same case pknib's own pnpressure guards
+% against) -- fanning bristles perpendicular to that arbitrary angle
+% would draw a straight line of dots, not a dab. Instead each bristle
+% scatters isotropically around the point (both x and y independently
+% jittered by its own offset magnitude) so a lone point reads as a
+% pressed-down dab cluster, not a line.
+%
+% Multiple subpaths in the source path each get their own independent
+% bristle scatter and Markov runs, same generality as pkribbon. Unlike
+% pkribbon, pkdry does not special-case a *truly* closed subpath into
+% a two-loop ring -- every subpath, closed or not, is walked once as a
+% linear sequence of raw stops for dash purposes, and the Markov chain
+% does not wrap across a closed subpath's own seam. A deliberate
+% simplification, not an oversight: dashes are discrete marks, not a
+% continuous offset band, so there's no ring geometry to get right,
+% and not wrapping keeps the seam no more special-cased than any other
+% sample.
+%
+% Performance: the dominant cost is the per-sample Markov walk itself
+% (O(Bristles * PathLength/Pitch) loop iterations, each with a handful
+% of small `pkribbon` calls layered on top), not raster work. The
+% `Bristles` * (raw stop count) product is checked against a fixed
+% budget (150000) before any drawing starts
+% (`pkdry-deposit-count-exceeds-safety-limit`) -- the documented safety
+% limit against an accidentally unbounded bristle or deposit count.
+% Measured on a ~700-unit curved stroke (the demo's flourish, Width
+% 24): the default (18 bristles, default Pitch) renders in ~1.5s; the
+% /Bristles safety cap (100) at the same default Pitch takes ~8s.
+% Custom, finer /Pitch values raise the sample count and cost
+% proportionally -- see NOTES.md's issue #43 entry for the full
+% figures.
+%
+% Scratch prefix pb- (pkdry/pbdashrun) -- deliberately distinct from
+% pk-/pn-, see the file header.
+/pkdry {
+    /pbopts exch def
+
+    /pbwidth pbopts /Width 6 pkgetdef def
+    /pbwidth load xcheck { pkdry-width-must-not-be-a-procedure } if
+    pbwidth 0 le { pkdry-width-must-be-positive } if
+
+    /pbbristles pbopts /Bristles 18 pkgetdef def
+    /pbbristles load xcheck { pkdry-bristles-must-not-be-a-procedure } if
+    pbbristles 1 lt pbbristles 100 gt or
+        { pkdry-bristles-must-be-1-to-100 } if
+
+    /pbspread pbopts /Spread 0.85 pkgetdef def
+    /pbspread load xcheck { pkdry-spread-must-not-be-a-procedure } if
+    pbspread 0 lt pbspread 1 gt or { pkdry-spread-must-be-0-to-1 } if
+
+    /pbbristlewidth pbopts /BristleWidth pbwidth 0.12 mul pkgetdef def
+    /pbbristlewidth load xcheck
+        { pkdry-bristlewidth-must-not-be-a-procedure } if
+    pbbristlewidth 0 le { pkdry-bristlewidth-must-be-positive } if
+
+    /pbwidthjitter pbopts /WidthJitter 0.4 pkgetdef def
+    /pbwidthjitter load xcheck
+        { pkdry-widthjitter-must-not-be-a-procedure } if
+    pbwidthjitter 0 lt pbwidthjitter 1 gt or
+        { pkdry-widthjitter-must-be-0-to-1 } if
+
+    /pbload pbopts /Load 0.6 pkgetdef def
+    /pbload load xcheck { pkdry-load-must-not-be-a-procedure } if
+    pbload 0 lt pbload 1 gt or { pkdry-load-must-be-0-to-1 } if
+
+    /pbdropout pbopts /Dropout 0.4 pkgetdef def
+    /pbdropout load xcheck { pkdry-dropout-must-not-be-a-procedure } if
+    pbdropout 0 lt pbdropout 1 gt or { pkdry-dropout-must-be-0-to-1 } if
+
+    /pbjitter pbopts /Jitter 0 pkgetdef def
+    /pbjitter load xcheck { pkdry-jitter-must-not-be-a-procedure } if
+
+    /pbpitch
+        pbopts /Pitch
+        pbbristlewidth 0.6 mul dup 6 gt { pop 6 } if
+        pkgetdef
+    def
+    /pbpitch load xcheck { pkdry-pitch-must-not-be-a-procedure } if
+    pbpitch 0 le { pkdry-pitch-must-be-positive } if
+
+    /pbcolorjitter pbopts /ColorJitter 0.06 pkgetdef def
+    /pbcolorjitter load xcheck
+        { pkdry-colorjitter-must-not-be-a-procedure } if
+    pbcolorjitter 0 lt pbcolorjitter 1 gt or
+        { pkdry-colorjitter-must-be-0-to-1 } if
+
+    % Two walkpath passes over the shared centerline, same shape as
+    % pkribbon's own pkraw collection (count, then fill) -- reused
+    % across every bristle rather than re-walking the source path once
+    % per bristle.
+    /pbcount 0 def
+    pbpitch { pop pop pop pop pop pop /pbcount pbcount 1 add def } walkpath
+    /pbn pbcount def
+
+    % The documented safety limit: /Bristles alone (capped at 100
+    % above) doesn't bound total deposits -- a long path at a fine
+    % /Pitch multiplies out regardless. Checked here, before the
+    % second walkpath pass or any drawing, using only the cheap
+    % counting pass just done. 150000 is calibrated against the
+    % measured per-iteration cost in the header's Performance note --
+    % comfortably above the /Bristles cap (100) at the default /Pitch
+    % on a long (~1500-unit) stroke, while still rejecting a custom
+    % /Pitch fine enough to multiply that out by another order of
+    % magnitude.
+    pbbristles pbn mul 150000 gt
+        { pkdry-deposit-count-exceeds-safety-limit } if
+
+    /pbraw pbn array def
+    /pbci 0 def
+    pbpitch {
+        6 array astore pbraw pbci 3 -1 roll put
+        /pbci pbci 1 add def
+    } walkpath
+
+    pbn 0 gt {
+        gsave
+        /pbbasecolor [ currentrgbcolor ] def
+        1 1 pbbristles {
+            /pbbi exch def
+            /pbevenfrac pbbi 0.5 sub pbbristles div def
+            /pbhalfspread pbwidth 0.5 mul pbspread mul def
+            /pboff
+                pbevenfrac 0.5 sub 2 mul pbhalfspread mul
+                pbhalfspread 0.15 mul pkjit
+                add
+            def
+            /pbw
+                pbbristlewidth pbwidthjitter pbbristlewidth mul pkjit add
+            def
+            pbw pbbristlewidth 0.05 mul lt
+                { /pbw pbbristlewidth 0.05 mul def } if
+            /pbk pbcolorjitter pkjit 1 add def
+            pbbasecolor pbk shade setrgbcolor
+
+            /pbsi 0 def
+            /pbrunstart 0 def
+            {
+                pbsi pbn ge { exit } if
+                pbraw pbsi get 5 get /pbae exch def
+                pbae 1 and 1 eq { /pbrunstart pbsi def } if
+                pbae 2 and 2 eq {
+                    pboff pbw pbrunstart pbsi pbdashrun
+                } if
+                /pbsi pbsi 1 add def
+            } loop
+        } for
+        grestore
+    } if
+} def
+
+% pboff pbw pbrunstart pbrunend pbdashrun -   (one bristle's dashes
+% across one subpath's raw-stop range [pbrunstart pbrunend], inclusive
+% -- see pkdry's own header for the model)
+% A two-state Markov chain over consecutive raw stops decides ink
+% contact per sample: pbdronrate/pbdroffrate (derived from pkdry's
+% pbload/pbdropout, scaled by pbpitch/pbwidth so the rate is per one
+% Width of travel, not per sample) are this run's resume-contact and
+% lose-contact probabilities. Each contiguous on-run becomes its own
+% small polyline, flushed through a nested `pkribbon` call as soon as
+% the run ends (an off transition, or the range's last sample) --
+% pkribbon's own single-point-subpath handling turns a lone on-sample
+% into a dot automatically, exactly the isolated-fleck fallback a real
+% skipping bristle should have.
+/pbdashrun {
+    /pbdrend exch def /pbdrstart exch def
+    /pbdrw exch def /pbdroff exch def
+
+    % A single-index range (pbdrstart == pbdrend) can only be walkpath's
+    % own degenerate single-point case -- any real, even very short,
+    % subpath gets at least two raw stops by walkpath's own documented
+    % contract. Offset isotropically then, not perpendicular to the
+    % synthetic ang=0 (see pkdry's own header).
+    /pbdrsingle pbdrstart pbdrend eq def
+
+    /pbdronrate pbload pbpitch pbwidth div mul dup 1 gt { pop 1 } if def
+    /pbdroffrate pbdropout pbpitch pbwidth div mul dup 1 gt { pop 1 } if def
+
+    % The very first sample's state uses raw (unscaled) pbload, not
+    % pbdronrate: "does this bristle start loaded" is a one-time
+    % boundary condition, not a rate along the path, so it shouldn't
+    % shrink with a finer /Pitch the way a genuine per-step transition
+    % probability should. This matters most for a single-sample run
+    % (pbdrsingle): with no second sample to ever roll a transition,
+    % this is the *only* roll that decides whether that bristle marks
+    % at all -- using the scaled rate there made /Load 1 /Dropout 0
+    % still leave most bristles unmarked for an isolated dab, since
+    % pbdronrate is typically well under 1 even at pbload 1.
+    /pbdrstate frnd pbload lt def
+    /pbdrwasoff true def
+
+    /pbdri pbdrstart def
+    {
+        pbdri pbdrend gt { exit } if
+        pbraw pbdri get
+        dup 0 get /pbdrpx exch def dup 1 get /pbdrpy exch def
+        2 get /pbdrpang exch def
+
+        pbdrsingle
+            {
+                /pbdrex pbdrpx pbdroff pkjit add def
+                /pbdrey pbdrpy pbdroff pkjit add def
+            }
+            {
+                /pbdrex pbdrpx pbdrpang 90 add cos pbdroff mul add def
+                /pbdrey pbdrpy pbdrpang 90 add sin pbdroff mul add def
+            }
+        ifelse
+
+        pbdri pbdrstart gt {
+            pbdrstate
+                { frnd pbdroffrate lt { /pbdrstate false def } if }
+                { frnd pbdronrate lt { /pbdrstate true def } if }
+            ifelse
+        } if
+
+        pbdrstate {
+            pbdrwasoff
+                { newpath pbdrex pbdrey moveto }
+                { pbdrex pbdrey lineto }
+            ifelse
+        } {
+            pbdrwasoff not {
+                << /Width pbdrw /Jitter pbjitter >> pkribbon
+            } if
+        } ifelse
+        /pbdrwasoff pbdrstate not def
+        /pbdri pbdri 1 add def
+    } loop
+
+    pbdrstate {
+        << /Width pbdrw /Jitter pbjitter >> pkribbon
+    } if
 } def

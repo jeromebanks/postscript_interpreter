@@ -1178,6 +1178,510 @@ fn ghostscript_accepts_paintkit_nib() {
     assert!(status.success(), "gs rejected paintkit's pknib");
 }
 
+// --- pkdry (issue #43): dry-bristle brush with broken coverage --------
+//
+// A bounded family of thin offset bristles scattered across the
+// centerline, each broken into ink/no-ink runs by a seeded two-state
+// Markov chain (see the model doc above `/pkdry` in lib/paintkit.ps).
+// Coverage (ink_count) is the primary discriminator below since the
+// output isn't one continuous band -- loaded vs. very-dry differ in
+// how *much* of the path stays inked, not in a simple width measure.
+
+#[test]
+fn dry_guards_reject_malformed_input() {
+    let mut it = Interp::new();
+    load(&mut it);
+    let cases = [
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Width 0 >> pkdry",
+            "pkdry-width-must-be-positive",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Width -3 >> pkdry",
+            "pkdry-width-must-be-positive",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Width { 10 } >> pkdry",
+            "pkdry-width-must-not-be-a-procedure",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Bristles 0 >> pkdry",
+            "pkdry-bristles-must-be-1-to-100",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Bristles 101 >> pkdry",
+            "pkdry-bristles-must-be-1-to-100",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Bristles { 10 } >> pkdry",
+            "pkdry-bristles-must-not-be-a-procedure",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Spread -0.1 >> pkdry",
+            "pkdry-spread-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Spread 1.1 >> pkdry",
+            "pkdry-spread-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /BristleWidth 0 >> pkdry",
+            "pkdry-bristlewidth-must-be-positive",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /WidthJitter -0.1 >> pkdry",
+            "pkdry-widthjitter-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /WidthJitter 1.1 >> pkdry",
+            "pkdry-widthjitter-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Load -0.1 >> pkdry",
+            "pkdry-load-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Load 1.1 >> pkdry",
+            "pkdry-load-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Dropout -0.1 >> pkdry",
+            "pkdry-dropout-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Dropout 1.1 >> pkdry",
+            "pkdry-dropout-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Jitter { 1 } >> pkdry",
+            "pkdry-jitter-must-not-be-a-procedure",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Pitch 0 >> pkdry",
+            "pkdry-pitch-must-be-positive",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Pitch -1 >> pkdry",
+            "pkdry-pitch-must-be-positive",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /ColorJitter -0.1 >> pkdry",
+            "pkdry-colorjitter-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /ColorJitter 1.1 >> pkdry",
+            "pkdry-colorjitter-must-be-0-to-1",
+        ),
+    ];
+    for (src, name) in cases {
+        let err = it.run_str(src).unwrap_err();
+        assert!(
+            matches!(err, PsError::Undefined(ref n) if n == name),
+            "{src}: got {err}"
+        );
+    }
+}
+
+#[test]
+fn dry_deposit_budget_guard_rejects_bristles_times_samples_over_the_limit() {
+    // 100 bristles (the /Bristles cap) on a long path at a fine custom
+    // /Pitch multiplies out past the 150000 deposit budget even though
+    // /Bristles alone is within its own range guard -- the second,
+    // independent safety limit the issue's acceptance criteria ask for.
+    let mut it = Interp::new();
+    load(&mut it);
+    let err = it
+        .run_str(
+            "newpath 0 0 moveto 3000 0 lineto \
+             << /Width 10 /Bristles 100 /Pitch 1 >> pkdry",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "pkdry-deposit-count-exceeds-safety-limit"),
+        "got {err}"
+    );
+}
+
+#[test]
+fn dry_loaded_preset_covers_more_of_the_stroke_than_very_dry() {
+    fn render(load_v: f64, dropout_v: f64) -> usize {
+        let mut it = fresh(320, 40);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 7 srand newpath 10 20 moveto 310 20 lineto \
+             << /Width 14 /Bristles 24 /Load {load_v} /Dropout {dropout_v} >> pkdry"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        ink_count(&it)
+    }
+
+    let loaded = render(0.95, 0.05);
+    let very_dry = render(0.1, 0.9);
+    assert!(
+        loaded > very_dry * 2,
+        "a loaded brush should cover substantially more of the stroke \
+         than a very-dry one: loaded {loaded} very_dry {very_dry}"
+    );
+}
+
+#[test]
+fn dry_seeded_render_is_deterministic() {
+    fn render(seed: i64) -> Vec<u8> {
+        let mut it = fresh(320, 40);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor {seed} srand newpath 10 20 moveto 310 20 lineto \
+             << /Width 14 /Bristles 20 /Load 0.6 /Dropout 0.4 >> pkdry"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        it.gfx().pixmap.data().to_vec()
+    }
+
+    let a = render(11);
+    let b = render(11);
+    assert_eq!(a, b, "same seed, same opts -> identical pixels");
+
+    let other = render(12);
+    assert_ne!(a, other, "a different seed should render differently");
+}
+
+#[test]
+fn dry_spread_widens_the_inked_band_around_the_centerline() {
+    // The issue names "bristle count and spread" as required
+    // configurables, and "coverage breakup follows the path rather
+    // than looking like unrelated page noise" as an acceptance
+    // criterion. A narrow /Spread should keep ink confined close to
+    // the centerline (a real signal of "follows the path", not
+    // scattered noise); a wide /Spread should visibly widen that band.
+    // High /Load and low /Dropout keep both renders solidly covered so
+    // the measured column height reflects /Spread, not Markov holes. A
+    // small, explicit /BristleWidth keeps each individual bristle's own
+    // mark from itself dominating the measured band height (the default
+    // BristleWidth, Width*0.12, is wide enough at Width 40 to swamp a
+    // narrow /Spread's own contribution).
+    fn inked_band_height(spread: f64) -> u32 {
+        let mut it = fresh(220, 100);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 6 srand newpath 10 50 moveto 210 50 lineto \
+             << /Width 40 /BristleWidth 1 /Bristles 40 /Spread {spread} \
+                /Load 0.97 /Dropout 0.03 >> pkdry"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        column_height(&it, 110, 100)
+    }
+
+    let narrow = inked_band_height(0.15);
+    let wide = inked_band_height(1.0);
+    assert!(
+        wide > narrow * 2,
+        "a wide /Spread should visibly widen the inked band around the \
+         centerline compared to a narrow one: narrow {narrow} wide {wide}"
+    );
+    assert!(
+        (narrow as f64) < 40.0 * 0.15 * 2.0 + 3.0,
+        "a narrow /Spread should keep ink close to the centerline, not \
+         scattered across the full envelope: narrow {narrow}"
+    );
+}
+
+#[test]
+fn dry_multiple_subpaths_each_get_their_own_bristle_scatter() {
+    let mut it = fresh(220, 220);
+    it.run_str(
+        "0 0 0 setrgbcolor 3 srand \
+         newpath 10 10 moveto 100 10 lineto \
+         30 60 moveto 90 60 lineto 90 120 lineto 30 120 lineto closepath \
+         << /Width 10 /Bristles 20 /Load 0.9 /Dropout 0.1 >> pkdry",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(ink_count(&it) > 100, "expected ink from both subpaths");
+}
+
+#[test]
+fn dry_empty_path_is_a_no_op() {
+    let mut it = fresh(60, 60);
+    it.run_str("0 0 0 setrgbcolor newpath << /Width 12 >> pkdry")
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(ink_count(&it), 0, "empty path should draw nothing");
+}
+
+#[test]
+fn dry_degenerate_single_point_scatters_isotropically_not_in_a_line() {
+    // Regression test for the fix documented in pkdry's own header: a
+    // bare moveto has no real direction of travel (walkpath's ang=0 is
+    // synthetic), so bristles must not fan out perpendicular to that
+    // arbitrary angle (which would draw a straight vertical line of
+    // dots) -- they scatter isotropically around the point instead.
+    // /Load 1 /Dropout 0 forces every bristle to mark (the initial-
+    // contact roll uses raw, unscaled /Load -- see the header comment
+    // above pbdrstate's definition in lib/paintkit.ps), so the ink's
+    // own bounding box should be a genuine 2D cluster, not a 1D line:
+    // both its width and height should be a substantial fraction of
+    // the configured scatter width, not one collapsed near zero.
+    let mut it = fresh(120, 120);
+    it.run_str(
+        "1 0 0 setrgbcolor 6 srand newpath 60 60 moveto \
+         << /Width 40 /BristleWidth 4 /Bristles 30 \
+            /Load 1 /Dropout 0 >> pkdry",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+
+    let (mut min_x, mut max_x, mut min_y, mut max_y) = (120u32, 0u32, 120u32, 0u32);
+    let mut any = false;
+    for y in 0..120u32 {
+        for x in 0..120u32 {
+            let p = it.gfx().pixmap.pixel(x, y).expect("in bounds");
+            if luma(p) < 180.0 {
+                any = true;
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+                min_y = min_y.min(y);
+                max_y = max_y.max(y);
+            }
+        }
+    }
+    assert!(any, "expected some ink around the point");
+    let (w, h) = (max_x - min_x, max_y - min_y);
+    assert!(
+        w > 10 && h > 10,
+        "expected a 2D scatter cluster, not a line: bounding box {w}x{h}"
+    );
+}
+
+#[test]
+fn dry_color_jitter_varies_per_bristle_but_zero_stays_uniform() {
+    // Counting distinct RGB triples directly is too noisy: with 24
+    // overlapping bristles there are many internal edge-to-edge seams,
+    // each contributing its own partial-coverage antialiased blend
+    // regardless of /ColorJitter, not just the outer envelope edge.
+    // Variance of the red channel among solidly-inked pixels is robust
+    // to that geometric AA noise (present, roughly equally, in both
+    // renders) while still picking up the much larger spread
+    // /ColorJitter itself adds.
+    fn red_variance(color_jitter: f64, seed: i64) -> f64 {
+        let mut it = fresh(220, 60);
+        it.run_str(&format!(
+            "0.2 0.3 0.8 setrgbcolor {seed} srand \
+             newpath 10 30 moveto 210 30 lineto \
+             << /Width 20 /Bristles 24 /Load 0.95 /Dropout 0.05 \
+                /ColorJitter {color_jitter} >> pkdry"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        // Strict threshold, well under the test color's own solid-fill
+        // luma (~82 for 0.2/0.3/0.8), to favor solidly-covered pixels
+        // over antialiased edges.
+        let reds: Vec<f64> = it
+            .gfx()
+            .pixmap
+            .pixels()
+            .iter()
+            .filter(|&&p| luma(p) < 100.0)
+            .map(|p| p.red() as f64)
+            .collect();
+        assert!(!reds.is_empty(), "expected some solidly-inked pixels");
+        let mean = reds.iter().sum::<f64>() / reds.len() as f64;
+        reds.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / reds.len() as f64
+    }
+
+    let uniform_var = red_variance(0.0, 9);
+    let varied_var = red_variance(0.3, 9);
+    assert!(
+        varied_var > uniform_var * 3.0 && varied_var > 1.0,
+        "ColorJitter > 0 should spread the red channel noticeably more \
+         than ColorJitter 0's own antialiasing noise: uniform_var \
+         {uniform_var} varied_var {varied_var}"
+    );
+}
+
+#[test]
+fn dry_restores_the_callers_current_color_before_returning() {
+    // pkdry sets a jittered color per bristle while it draws -- the
+    // caller's own color must not leak the last bristle's variation
+    // once pkdry returns (color is deliberately not a settable key
+    // here, same doctrine as pkribbon, so it must not be an ambient
+    // side effect either).
+    let mut it = Interp::new();
+    load(&mut it);
+    it.run_str(
+        "0.4 0.5 0.6 setrgbcolor 2 srand \
+         newpath 10 10 moveto 100 10 lineto \
+         << /Width 10 /Bristles 20 /ColorJitter 0.3 >> pkdry",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let (r, g, b) = it.gfx().rgb();
+    assert!(
+        (r - 0.4).abs() < 1e-6 && (g - 0.5).abs() < 1e-6 && (b - 0.6).abs() < 1e-6,
+        "expected the caller's own color restored, got ({r}, {g}, {b})"
+    );
+}
+
+#[test]
+fn dry_widthjitter_changes_the_render_relative_to_no_jitter() {
+    fn render(width_jitter: f64) -> Vec<u8> {
+        let mut it = fresh(220, 60);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 4 srand newpath 10 30 moveto 210 30 lineto \
+             << /Width 20 /Bristles 24 /Load 0.95 /Dropout 0.05 \
+                /WidthJitter {width_jitter} >> pkdry"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        it.gfx().pixmap.data().to_vec()
+    }
+
+    let none = render(0.0);
+    let jittered = render(0.8);
+    assert_ne!(
+        none, jittered,
+        "WidthJitter should visibly change the render, not be ignored"
+    );
+}
+
+#[test]
+fn dry_dryness_reads_similarly_across_different_pitch_values() {
+    // Regression test for the /Pitch-coupling fix: /Load and /Dropout
+    // are a rate per one /Width of travel, scaled by (Pitch/Width) into
+    // a per-sample transition probability.
+    //
+    // Total *ink fraction* is the wrong thing to assert on here: for a
+    // two-state Markov chain the stationary ink fraction is a/(a+b)
+    // (a = on-rate, b = off-rate), which is unchanged by scaling both
+    // rates by the same factor -- it would pass identically whether or
+    // not the /Pitch scaling is applied, so an ink_count-based assertion
+    // can't actually detect a regression here. What the scaling protects
+    // is *mean run length in user-space units*: without it, run length
+    // is pitch/a (grows/shrinks with /Pitch); with it, Width/a (pitch-
+    // independent). So the number of separate ink runs a fixed stroke
+    // length produces is the real discriminator -- a finer /Pitch
+    // without the fix produces visibly *more, shorter* runs. Counted
+    // here as white-to-ink transitions along each pixel row.
+    //
+    // A single bristle (/Bristles 1) and a thin /BristleWidth: with many
+    // overlapping bristles, one bristle's gap is frequently covered by a
+    // neighbor's ink at a slightly different offset, and a wide
+    // /BristleWidth's own round caps can visually bridge a short gap
+    // even for one bristle -- both mask the per-bristle run-length
+    // signal this test needs at the pixel level. Confirmed empirically:
+    // an earlier 24-bristle, default-/BristleWidth version of this test
+    // still passed after deliberately reverting the (Pitch/Width)
+    // scaling in lib/paintkit.ps (using raw pbload/pbdropout as
+    // pbdronrate/pbdroffrate directly), i.e. it couldn't detect the
+    // regression it was meant to catch. One thin bristle removes both
+    // sources of masking; with that reverted scaling, the fine-pitch
+    // transition count came out ~3-4x the coarse-pitch count, well
+    // outside the ratio bound below. Restoring the scaling (the actual
+    // shipped code) brings it back within bounds.
+    fn transition_count(pitch: f64) -> usize {
+        let mut it = fresh(320, 40);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 8 srand newpath 10 20 moveto 310 20 lineto \
+             << /Width 14 /BristleWidth 0.6 /Bristles 1 \
+                /Load 0.6 /Dropout 0.35 /Pitch {pitch} >> pkdry"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        let mut count = 0usize;
+        for y in 0..40u32 {
+            let mut prev_ink = false;
+            for x in 0..320u32 {
+                let p = it.gfx().pixmap.pixel(x, y).expect("in bounds");
+                let ink = luma(p) < 180.0;
+                if ink && !prev_ink {
+                    count += 1;
+                }
+                prev_ink = ink;
+            }
+        }
+        count
+    }
+
+    let fine = transition_count(1.0);
+    let coarse = transition_count(4.0);
+    assert!(
+        fine > 0 && coarse > 0,
+        "expected some ink runs at both pitches"
+    );
+    let ratio = fine.max(coarse) as f64 / fine.min(coarse) as f64;
+    assert!(
+        ratio < 2.0,
+        "ink run count should stay in the same ballpark across /Pitch \
+         values, not swing by multiples: fine {fine} coarse {coarse} \
+         ratio {ratio}"
+    );
+}
+
+#[test]
+fn ghostscript_accepts_paintkit_dry() {
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let artkit = std::fs::read_to_string("lib/artkit.ps").expect("artkit");
+    let paintkit = std::fs::read_to_string("lib/paintkit.ps").expect("paintkit");
+    let driver = "true setpacking 3 srand \
+        0.1 0.1 0.1 setrgbcolor \
+        newpath 10 10 moveto 150 10 lineto \
+            << /Width 10 /Bristles 20 /Load 0.8 /Dropout 0.2 >> pkdry \
+        newpath 10 40 moveto 90 40 lineto 90 80 lineto 10 80 lineto closepath \
+            << /Width 8 /Bristles 16 /Load 0.4 /Dropout 0.6 \
+               /ColorJitter 0.1 >> pkdry \
+        newpath 220 10 moveto 240 60 260 60 280 10 curveto \
+            << /Width 10 /Bristles 12 /Jitter 1.5 >> pkdry \
+        newpath 300 30 moveto << /Width 10 /Bristles 10 >> pkdry";
+    let dir = std::env::temp_dir().join(format!("pscat-paintkit-dry-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let combined = dir.join("paintkit_dry_gs.ps");
+    std::fs::write(
+        &combined,
+        format!("{artkit}\n{paintkit}\n{driver}\nshowpage\n"),
+    )
+    .expect("write");
+    let status = std::process::Command::new("gs")
+        .args([
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g400x120",
+            "-r72",
+            "-o/dev/null",
+        ])
+        .arg(&combined)
+        .status()
+        .expect("run gs");
+    assert!(status.success(), "gs rejected paintkit's pkdry");
+}
+
+#[test]
+fn ghostscript_accepts_the_actual_dry_demo_file() {
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let status = std::process::Command::new("gs")
+        .args([
+            "-dNOSAFER",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g620x760",
+            "-r72",
+            "-o/dev/null",
+            "examples/paintkit_dry_demo.ps",
+        ])
+        .status()
+        .expect("run gs");
+    assert!(
+        status.success(),
+        "gs rejected examples/paintkit_dry_demo.ps"
+    );
+}
+
 #[test]
 fn ghostscript_accepts_the_actual_nib_demo_file() {
     // ghostscript_accepts_paintkit_nib above exercises pknib itself
