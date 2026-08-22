@@ -44,7 +44,7 @@
 % easing down into the warm gold of the horizon -- the same overlapping
 % -band trick ember_tree.ps uses, just driven by mix3 across a named
 % palette instead of a hand-rolled HSB conversion.
-4 dict begin
+8 dict begin
 /Sky /dusk pal def
 /skyBands 72 def
 /skyH 460 rd-horizon sub def
@@ -63,7 +63,7 @@ end
 % ---------------------------------------------------------------- water
 % A darker, desaturated echo of the sky -- still water at dusk reflects
 % color without reflecting brightness.
-4 dict begin
+5 dict begin
 /WaterNear /dusk pal 2 get def
 /WaterFar  /dusk pal 0 get def
 /waterBands 40 def
@@ -131,7 +131,7 @@ grestore
 % plain trig rather than the turtle, since two segments need to share
 % an exact joint and `pkdry` consumes a whole fresh path per call.
 /rd-reed {                                    % x y ang len w bend rd-reed -
-    9 dict begin
+    14 dict begin
     /bend exch def /w exch def /len exch def /ang exch def
     /y0 exch def /x0 exch def
     /midlen len 0.55 mul def
