@@ -893,6 +893,31 @@
 % proportionally -- see NOTES.md's issue #43 entry for the full
 % figures.
 %
+% Known residual gap, not closed here (issue #79): the deposit budget
+% above bounds `Bristles * stops`, not the cost of each dash's own
+% *nested* pkribbon call, which re-walks that dash's offset polyline at
+% /Pitch. That nested cost normally tracks the corresponding centerline
+% segment's own length closely -- but at a sharp cusp (a near-180
+% degree tangent reversal between two adjacent walkpath stops), the two
+% stops' perpendicular offsets (each up to Width/2*Spread from the
+% centerline) can end up O(Width) apart even though the centerline
+% stops themselves were close together, and re-walking that one segment
+% at /Pitch then costs O(Width/Pitch) nested samples the outer guard
+% never sees (Codex review, PR #78 round 3; repro in issue #79). Two
+% fixes were evaluated and rejected: a blanket worst-case multiplier on
+% the deposit budget rejects pkdry's own *default* settings on the
+% demo's flourish (~373000 against the 150000 budget); a static
+% (Width*Spread)/Pitch ratio cap, independent of the path's actual
+% geometry, rejects legitimate smooth large-Width strokes that never
+% approach a real cusp. Both point at the same root cause -- walkpath's
+% contract is one global, uniform pitch across the whole path, with no
+% way to sample finely along a genuine curve while sampling coarsely
+% across a single cusp-induced jump -- which needs its own per-segment-
+% adaptive design, not a quick patch. Triggering this needs a /Width//
+% Pitch ratio in the thousands *plus* a genuine cusp, three orders of
+% magnitude past anything in examples/paintkit_dry_demo.ps or realistic
+% use.
+%
 % Scratch prefix pb- (pkdry/pbdashrun) -- deliberately distinct from
 % pk-/pn-, see the file header.
 /pkdry {
