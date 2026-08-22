@@ -86,7 +86,9 @@ fn measuring_agrees_with_writing() {
         .gfx()
         .pixmap
         .data()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| p[0] < 200)
         .count();
     assert!(dark > 300, "the note left ink, got {dark} inked pixels");
