@@ -1038,15 +1038,37 @@
     } if
 } def
 
+% rate -> bool   (true with probability rate, clamped at both ends: a
+% rate >= 1 is *always* true and a rate <= 0 is *always* false, not
+% left to a bare `frnd rate lt`. artkit's `frnd` (rand's high bits
+% divided down) can land on exactly 1.0, which would otherwise make
+% even `frnd 1 lt` false and silently break a documented "rate 1 means
+% certain" contract -- confirmed: seed 5659 with a single bristle drew
+% nothing at /Load 1 before this fix (Codex review). Used for every
+% probabilistic decision pbdashrun makes.
+/pbroll {
+    dup 1 ge
+        { pop true }
+        { dup 0 le { pop false } { frnd exch lt } ifelse }
+    ifelse
+} def
+
 % pboff pbw pbrunstart pbrunend pbdashrun -   (one bristle's dashes
 % across one subpath's raw-stop range [pbrunstart pbrunend], inclusive
 % -- see pkdry's own header for the model)
 % A two-state Markov chain over consecutive raw stops decides ink
-% contact per sample: pbdronrate/pbdroffrate (derived from pkdry's
-% pbload/pbdropout, scaled by pbpitch/pbwidth so the rate is per one
-% Width of travel, not per sample) are this run's resume-contact and
-% lose-contact probabilities. Each contiguous on-run becomes its own
-% small polyline, flushed through a nested `pkribbon` call as soon as
+% contact per sample: each transition's own probability is
+% pkdry's pbload/pbdropout scaled by (that stop's own `sp` field /
+% pbwidth) -- `sp` is the *actual* arc-length distance from the
+% previous stop (walkpath's own doc: not always == Pitch -- 0 for a
+% subpath's first stop, and whatever's left over for the guaranteed
+% final stop), not the nominal `pbpitch`. Using the nominal pitch
+% instead of each stop's real `sp` overstated the transition
+% probability for the guaranteed short final stop specifically (Codex
+% review) -- the "per one Width of travel" contract has to hold
+% per-stop, not just on average, since a stop's actual travel can be
+% shorter than a full pitch step. Each contiguous on-run becomes its
+% own small polyline, flushed through a nested `pkribbon` call as soon as
 % the run ends (an off transition, or the range's last sample) --
 % pkribbon's own single-point-subpath handling turns a lone on-sample
 % into a dot automatically, exactly the isolated-fleck fallback a real
@@ -1073,28 +1095,28 @@
     % synthetic ang=0 (see pkdry's own header).
     /pbdrsingle pbdrstart pbdrend eq def
 
-    /pbdronrate pbload pbpitch pbwidth div mul dup 1 gt { pop 1 } if def
-    /pbdroffrate pbdropout pbpitch pbwidth div mul dup 1 gt { pop 1 } if def
-
-    % The very first sample's state uses raw (unscaled) pbload, not
-    % pbdronrate: "does this bristle start loaded" is a one-time
-    % boundary condition, not a rate along the path, so it shouldn't
-    % shrink with a finer /Pitch the way a genuine per-step transition
-    % probability should. This matters most for a single-sample run
-    % (pbdrsingle): with no second sample to ever roll a transition,
-    % this is the *only* roll that decides whether that bristle marks
-    % at all -- using the scaled rate there made /Load 1 /Dropout 0
-    % still leave most bristles unmarked for an isolated dab, since
-    % pbdronrate is typically well under 1 even at pbload 1.
-    /pbdrstate frnd pbload lt def
+    % The very first sample's state uses raw (unscaled) pbload, not a
+    % travel-scaled rate: "does this bristle start loaded" is a
+    % one-time boundary condition, not a rate along the path, so it
+    % shouldn't shrink with a finer /Pitch the way a genuine per-step
+    % transition probability should. This matters most for a
+    % single-sample run (pbdrsingle): with no second sample to ever
+    % roll a transition, this is the *only* roll that decides whether
+    % that bristle marks at all -- using a scaled rate there made
+    % /Load 1 /Dropout 0 still leave most bristles unmarked for an
+    % isolated dab, since a Pitch/Width-scaled rate is typically well
+    % under 1 even at pbload 1.
+    /pbdrstate pbload pbroll def
     /pbdrwasoff true def
 
     /pbdri pbdrstart def
     {
         pbdri pbdrend gt { exit } if
         pbraw pbdri get
-        dup 0 get /pbdrpx exch def dup 1 get /pbdrpy exch def
-        2 get /pbdrpang exch def
+        dup 0 get /pbdrpx exch def
+        dup 1 get /pbdrpy exch def
+        dup 2 get /pbdrpang exch def
+        4 get /pbdrsp exch def
 
         pbdrsingle
             {
@@ -1107,10 +1129,19 @@
             }
         ifelse
 
+        % Each transition's own probability is scaled by *this stop's*
+        % actual sp (arc-length since the previous stop), not the
+        % nominal pbpitch -- see this proc's own header.
         pbdri pbdrstart gt {
             pbdrstate
-                { frnd pbdroffrate lt { /pbdrstate false def } if }
-                { frnd pbdronrate lt { /pbdrstate true def } if }
+                {
+                    pbdropout pbdrsp pbwidth div mul pbroll
+                        { /pbdrstate false def } if
+                }
+                {
+                    pbload pbdrsp pbwidth div mul pbroll
+                        { /pbdrstate true def } if
+                }
             ifelse
         } if
 
@@ -1129,6 +1160,6 @@
     } loop
 
     pbdrstate {
-        << /Width pbdrw /Jitter pbjitter >> pkribbon
+        << /Width pbdrw /Jitter pbjitter /Pitch pbpitch >> pkribbon
     } if
 } def

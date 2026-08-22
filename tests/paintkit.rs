@@ -1388,6 +1388,57 @@ fn dry_each_subpath_draws_its_own_independent_bristle_scatter() {
 }
 
 #[test]
+fn dry_load_1_forces_contact_even_on_the_frnd_exactly_1_edge_case() {
+    // Regression test for a Codex-review finding: `frnd` (rand's high
+    // bits divided down) can land on exactly 1.0, which made a bare
+    // `frnd pbload lt` false even at /Load 1 -- silently breaking the
+    // documented "rate 1 means certain" contract. Seed 5659 with a
+    // single bristle is the exact case Codex's review reported drawing
+    // nothing before the fix (`pbroll`'s explicit `rate >= 1` -> always
+    // true branch).
+    let mut it = fresh(60, 60);
+    it.run_str(
+        "0 0 0 setrgbcolor 5659 srand newpath 30 30 moveto \
+         << /Width 12 /Bristles 1 /Load 1 /Dropout 0 >> pkdry",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 0,
+        "expected /Load 1 to force contact even under this seed's \
+         exactly-1.0 frnd roll"
+    );
+}
+
+#[test]
+fn dry_final_short_stop_uses_its_own_travel_distance() {
+    // Regression test for a Codex-review finding: each transition's
+    // probability used to be derived from the *nominal* /Pitch for
+    // every sample, including walkpath's guaranteed final stop of a
+    // subpath, whose actual `sp` (arc-length since the previous stop)
+    // can be much shorter than a full pitch step -- overstating that
+    // one transition's probability specifically at subpath ends,
+    // breaking the "per one Width of travel" contract there. /Pitch 10
+    // over a 25-unit path gives stops at 0, 10, 20, then a guaranteed
+    // final stop at 25 with sp=5 (half a pitch step) -- this exercises
+    // that exact shape end to end (extracting `sp` via `pbraw`'s shared
+    // 6-field layout, `4 get`) without crashing, at a /Dropout high
+    // enough that the old, nominal-pitch-scaled bug would have made the
+    // final short stop drop out almost as often as a full-pitch one.
+    let mut it = fresh(60, 60);
+    it.run_str(
+        "0 0 0 setrgbcolor 15 srand newpath 10 30 moveto 35 30 lineto \
+         << /Width 100 /Bristles 1 /Pitch 10 /Load 1 /Dropout 0.99 \
+            /StartCap /pointed /EndCap /pointed >> pkdry",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 0,
+        "expected the short-leftover-final-stop path to render without \
+         crashing"
+    );
+}
+
+#[test]
 fn dry_loaded_preset_covers_more_of_the_stroke_than_very_dry() {
     fn render(load_v: f64, dropout_v: f64) -> usize {
         let mut it = fresh(320, 40);

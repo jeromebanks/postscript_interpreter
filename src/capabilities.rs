@@ -242,8 +242,8 @@ pub const PAGEKIT_INTERNAL: &[&str] = &["pggetdef", "pgzfitmax", "pgframe"];
 /// referenceable by name): the dict-default reader, the internal
 /// ribbon-construction helpers (edge offsetting, cap/loop building,
 /// taper/half-width math), `pknib`'s own travel-angle sampling helpers
-/// (issue #42), and `pkdry`'s own per-bristle dash-run helper (issue
-/// #43).
+/// (issue #42), and `pkdry`'s own per-bristle dash-run helper and
+/// clamped-probability roll (issue #43).
 pub const PAINTKIT_INTERNAL: &[&str] = &[
     "pkgetdef",
     "pktaperf",
@@ -255,6 +255,7 @@ pub const PAINTKIT_INTERNAL: &[&str] = &[
     "pkopenrun",
     "pkbuildrun",
     "pkscanclosed",
+    "pbroll",
     "pnangleat",
     "pnpressure",
     "pbdashrun",
