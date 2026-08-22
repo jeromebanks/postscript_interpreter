@@ -115,7 +115,9 @@ fn a_syllable_from_each_layout_class_paints_ink() {
             .gfx()
             .pixmap
             .data()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[0] < 128)
             .count();
         assert!(dark > 30, "{name} should paint ink, got {dark}");
@@ -343,7 +345,9 @@ fn the_example_runs_and_leaves_ink() {
         .gfx()
         .pixmap
         .data()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| p[0] < 200)
         .count();
     assert!(dark > 300, "the note left ink, got {dark} inked pixels");

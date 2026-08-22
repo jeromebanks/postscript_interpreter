@@ -22,7 +22,9 @@ fn ink_count(it: &Interp, dark_ground: bool) -> usize {
     it.gfx()
         .pixmap
         .data()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| {
             if dark_ground {
                 p[0] > 90 || p[1] > 90 || p[2] > 90 // lit pixels on night
