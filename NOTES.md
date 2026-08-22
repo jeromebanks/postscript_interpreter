@@ -3,6 +3,112 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## A dry-bristle brush with deterministic broken coverage (issue #43, 2026-08-22)
+
+Closes issue #43, the third of the painterly-brush series (#42-#53)
+built on #41's `pkribbon`: `lib/paintkit.ps`'s `pkdry`, a bounded
+family of thin offset bristles scattered across the centerline, each
+broken into ink/no-ink runs by a seeded two-state Markov chain --
+`/Load` is the resume-contact rate, `/Dropout` the lose-contact rate.
+Ranges from a mostly loaded stroke (high Load, low Dropout) to visibly
+broken dry-brush texture (low Load, high Dropout) with no raster work
+at all: every contiguous "on" run becomes its own small `pkribbon`
+call, so caps, taper, and a single isolated fleck (`pkribbon`'s own
+degenerate-single-point dot fallback) all come for free rather than
+needing their own geometry.
+
+Built as a scatter-and-delegate wrapper over `pkribbon`, the same
+shape as `pknib`: one shared `walkpath` pass collects the centerline's
+raw stops once (reused across every bristle), then for each bristle a
+per-bristle offset/width/color is drawn once and a helper
+(`pbdashrun`) walks that bristle's samples per subpath, running the
+Markov chain and flushing each on-run through `pkribbon`. Deliberately
+its own scratch prefix (`pb-`), distinct from `pkribbon`'s own `pk-`
+and `pknib`'s `pn-` -- `pkribbon`'s body freely redefines every
+`pk*`-prefixed name on each call, so a `pkdry`-owned name sharing that
+prefix would be silently clobbered by its own nested `pkribbon` calls.
+Verified this is safe to rely on before writing any of it: pscat's own
+`gsave`/`grestore` (`src/gfx.rs`) clone/restore the *entire*
+`GraphicsState`, including the current path -- a deliberate deviation
+from the PLRM (where `gsave` does not save the path) that `pkribbon`'s
+own header already claims ("the caller's current path survives") and
+that this design leans on too.
+
+`/Load` and `/Dropout` are documented as a rate per one `/Width` of
+travel along the path, not per raw sample, scaled down to a per-sample
+transition probability by `(Pitch/Width)` (clamped to 0..1) -- without
+that scaling the same numbers would read as a different dryness at a
+fine vs. coarse `/Pitch`, undercutting "the same options render the
+same dryness" as a portable contract. The very first sample of each
+subpath is the one exception: it rolls initial contact with the raw,
+unscaled `/Load`, not the Pitch-scaled rate, since "does this bristle
+start loaded" is a one-time boundary condition, not a rate along the
+path -- and it's the *only* roll a degenerate single-point subpath
+ever gets. Missed on the first pass: with the scaled rate, a
+single-point stroke (see below) at `/Load 1 /Dropout 0` still left
+most bristles unmarked, since the scaled rate is typically well under
+1 even at `/Load` 1. Caught by rendering the actual degenerate-point
+demo case and looking at it, not by a test -- the existing test suite
+at that point only exercised multi-sample strokes.
+
+A degenerate single-point subpath (a bare `moveto`) has no direction
+of travel to offset perpendicular to (`walkpath` reports a synthetic
+`ang=0`, the same case `pknib`'s own `pnpressure` guards against) --
+fanning bristles perpendicular to that arbitrary angle drew a straight
+vertical line of dots in an early version. Fixed by scattering each
+bristle isotropically (both x and y independently jittered) around the
+point instead, so a lone point reads as a pressed-down dab cluster.
+`tests/paintkit.rs`'s `dry_degenerate_single_point_scatters_isotropically_not_in_a_line`
+asserts the ink's bounding box is a genuine 2D cluster, not a
+collapsed line.
+
+Two safety limits, matching the issue's "bristle or deposit count"
+wording as two separate things: `/Bristles` is hard-capped at 1..100
+(not 200 -- see Performance below), and independently, `Bristles *`
+(raw stop count) is checked against a fixed budget (150000) right
+after the cheap counting `walkpath` pass, before the second pass or
+any drawing -- catches a long path combined with a fine custom
+`/Pitch` even when `/Bristles` alone is within range.
+
+Performance was measured, not guessed, and changed the design: the
+dominant cost is the per-sample Markov loop itself (interpreted
+PostScript, O(Bristles * PathLength/Pitch) iterations), not the
+raster fills layered on top -- confirmed by timing the *same* sample
+count under both a near-maximal-alternation `/Load 0.5 /Dropout 0.5`
+and a typical `/Load 0.6 /Dropout 0.4`, which came out within a few
+seconds of each other despite very different actual dash-flush counts.
+That ruled out a worst-case-dash-count budget and pointed at
+`Bristles * raw-stop-count` as the right metric. Measured on a
+~700-unit curved stroke (Width 24): the original `/Bristles` cap of
+200 at the *default* `/Pitch` took ~15s -- too slow to be a reasonable
+artistic-range cap -- so the cap was lowered to 100 (~8s at the same
+settings) and the deposit budget raised from an initial 20000 (which
+falsely rejected that same ordinary 200-bristle call) to 150000. The
+defaults (18 bristles) render the same stroke in ~1.5s.
+
+`examples/paintkit_dry_demo.ps`: row 1 is the acceptance criterion
+directly -- the same path at loaded/medium-dry/very-dry `/Load`+
+`/Dropout` pairs; row 2 varies `/Bristles`, `/Spread`, and
+`/WidthJitter`; row 3 shows `/ColorJitter`'s small per-bristle color
+variation (0 vs. a subtle amount) and a pressed-down single-point dab;
+row 4 is a flourish combining all of it. `pkdry` is cataloged in
+`src/capabilities.rs` alongside `pkribbon`/`pknib`; its one top-level
+helper proc (`pbdashrun`) is listed in `PAINTKIT_INTERNAL`. Tested
+against real Ghostscript as well as pscat, including running
+`examples/paintkit_dry_demo.ps` itself through `gs` directly (not just
+a synthetic driver string), same pattern as `pknib`'s own gs test.
+
+Deliberately out of scope, matching the issue's own scope note: no wet
+diffusion, alpha compositing, or external image filters -- every mark
+is an opaque vector fill, same doctrine as `pkribbon`. Also deliberate:
+unlike `pkribbon`, `pkdry` does not special-case a truly closed
+subpath into a two-loop ring; every subpath is walked once as a linear
+sequence of raw stops for dash purposes, and the Markov chain does not
+wrap across a closed subpath's own seam. Dashes are discrete marks,
+not a continuous offset band, so there's no ring geometry to get right
+here, and not wrapping keeps the seam no more special-cased than any
+other sample.
+
 ## An angled-nib calligraphy brush preset (issue #42, 2026-08-16)
 
 Closes issue #42, the second of the painterly-brush series (#42-#53)

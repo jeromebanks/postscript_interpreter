@@ -465,7 +465,20 @@ narrowing toward a `/MinWidth` floor parallel to it, composing with
 `pkribbon`'s own pressure/taper/jitter. It requires a single open
 subpath (one call per stroke). `examples/paintkit_nib_demo.ps` shows
 the same path at several nib angles, corners, a direction reversal,
-broad-edge lettering strokes, and a flourish.
+broad-edge lettering strokes, and a flourish. `pkdry` (issue #43) is a
+dry-bristle brush, also built on `pkribbon`: a bounded family of thin
+offset bristles scattered across the centerline, each broken into
+ink/no-ink runs by a seeded two-state Markov chain (`/Load` the
+resume-contact rate, `/Dropout` the lose-contact rate, both expressed
+per one `/Width` of travel so the same numbers read as the same
+dryness regardless of `/Pitch`) -- ranging from a mostly loaded stroke
+to visibly broken dry-brush texture with no raster work, every dash
+its own small `pkribbon` call. `/Bristles` is hard-capped at 1..100,
+and bristle count times raw sample count is checked against a fixed
+deposit budget before any drawing starts, the two safety limits
+against an accidentally unbounded render. `examples/paintkit_dry_demo.ps`
+shows loaded/medium-dry/very-dry presets, bristle count/spread/width-
+jitter variation, small per-bristle color variation, and a flourish.
 
 ```postscript
 (lib/artkit.ps) run

@@ -1,0 +1,106 @@
+%!PS-Adobe-3.0
+%%Title: Paintkit — dry-bristle brush with deterministic broken coverage (issue #43)
+%%BoundingBox: 0 0 620 760
+%%EndComments
+
+% Specimen for paintkit's pkdry (lib/paintkit.ps): a bounded family of
+% thin offset bristles scattered across the centerline, each broken
+% into ink/no-ink runs by a seeded two-state Markov chain -- built on
+% pkribbon (issue #41), the same foundation pknib (issue #42) uses.
+% Row 1 shows the same path at three dryness levels -- the acceptance
+% criterion that /Load and /Dropout can demonstrate a loaded stroke, a
+% medium-dry one, and a visibly broken very-dry one. Row 2 varies
+% /Bristles, /Spread, and /WidthJitter. Row 3 shows /ColorJitter's
+% small per-bristle color variation. Row 4 is a flourish combining
+% taper-like coverage thinning (via /Dropout climbing along a curve),
+% jitter, and color variation at once.
+%
+%   pscat --page 620x760 examples/paintkit_dry_demo.ps --png paintkit_dry.png
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+
+7 srand
+
+1 1 1 setrgbcolor clippath fill
+
+% x y label -   (dm- prefix: demo-local, distinct from paintkit's own
+% reserved pk-/pn-/pb- prefixes)
+/dmlabel {
+    /dmllabel exch def /dmly exch def /dmlx exch def
+    gsave
+        0.55 0.55 0.55 setrgbcolor
+        /Helvetica findfont 11 scalefont setfont
+        dmlx dmly moveto dmllabel show
+    grestore
+} def
+
+/stone pal 2 get aload pop setrgbcolor
+
+% --- row 1: the same path, three dryness levels ------------------------
+
+20 720 (loaded -- high Load, low Dropout) dmlabel
+newpath 20 690 moveto 180 690 lineto
+<< /Width 16 /Bristles 26 /Load 0.95 /Dropout 0.08 >> pkdry
+
+220 720 (medium-dry) dmlabel
+newpath 220 690 moveto 380 690 lineto
+<< /Width 16 /Bristles 26 /Load 0.55 /Dropout 0.4 >> pkdry
+
+420 720 (very dry -- low Load, high Dropout) dmlabel
+newpath 420 690 moveto 580 690 lineto
+<< /Width 16 /Bristles 26 /Load 0.15 /Dropout 0.85 >> pkdry
+
+/ember pal 2 get aload pop setrgbcolor
+
+% --- row 2: bristle count, spread, and width variation ------------------
+
+20 620 (few wide bristles, tight spread) dmlabel
+newpath 20 590 moveto 180 590 lineto
+<< /Width 20 /Bristles 6 /BristleWidth 3 /Spread 0.4
+   /Load 0.9 /Dropout 0.15 >> pkdry
+
+220 620 (many fine bristles, full spread) dmlabel
+newpath 220 590 moveto 380 590 lineto
+<< /Width 20 /Bristles 60 /BristleWidth 1 /Spread 1.0
+   /Load 0.9 /Dropout 0.15 >> pkdry
+
+420 620 (heavy width jitter) dmlabel
+newpath 420 590 moveto 580 590 lineto
+<< /Width 20 /Bristles 26 /WidthJitter 0.9
+   /Load 0.9 /Dropout 0.15 >> pkdry
+
+/tide pal 2 get aload pop setrgbcolor
+
+% --- row 3: small per-bristle color variation ---------------------------
+
+20 520 (no color variation) dmlabel
+newpath 20 490 moveto 180 490 lineto
+<< /Width 18 /Bristles 30 /Load 0.9 /Dropout 0.15 /ColorJitter 0 >> pkdry
+
+% Same base color as the cell above, deliberately -- this pair exists
+% specifically to show /ColorJitter's own effect, so the base color
+% must not also change between them.
+220 520 (subtle color variation) dmlabel
+newpath 220 490 moveto 380 490 lineto
+<< /Width 18 /Bristles 30 /Load 0.9 /Dropout 0.15 /ColorJitter 0.12 >> pkdry
+
+/carnival pal 2 get aload pop setrgbcolor
+420 520 (a pressed-down dab) dmlabel
+newpath 500 460 moveto
+<< /Width 40 /BristleWidth 5 /Bristles 40
+   /Load 1 /Dropout 0 /ColorJitter 0.15 >> pkdry
+
+/nocturne pal 2 get aload pop setrgbcolor
+
+% --- row 4: a flourish -- dryness increasing along the stroke ----------
+
+20 400 (a flourish, running dry along its own length) dmlabel
+newpath
+40 60 moveto
+40 220 240 220 280 320 curveto
+320 420 480 420 560 340 curveto
+<< /Width 22 /Bristles 40 /Spread 0.9 /WidthJitter 0.5
+   /Load 0.85 /Dropout 0.45 /Jitter 1.2 /ColorJitter 0.1 >> pkdry
+
+showpage

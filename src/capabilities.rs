@@ -236,13 +236,14 @@ pub const ARTKIT_INTERNAL: &[&str] = &[
 /// the three shared helpers (`pggetdef`/`pgzfitmax`/`pgframe`).
 pub const PAGEKIT_INTERNAL: &[&str] = &["pggetdef", "pgzfitmax", "pgframe"];
 
-/// Top-level names `lib/paintkit.ps` defines beyond `pkribbon`/`pknib`
-/// and the three `/Pressure` presets (`pkflat`/`pktaper`/`pkbell`,
-/// cataloged separately since they're documented, directly
+/// Top-level names `lib/paintkit.ps` defines beyond `pkribbon`/`pknib`/
+/// `pkdry` and the three `/Pressure` presets (`pkflat`/`pktaper`/
+/// `pkbell`, cataloged separately since they're documented, directly
 /// referenceable by name): the dict-default reader, the internal
 /// ribbon-construction helpers (edge offsetting, cap/loop building,
-/// taper/half-width math), and `pknib`'s own travel-angle sampling
-/// helpers (issue #42).
+/// taper/half-width math), `pknib`'s own travel-angle sampling helpers
+/// (issue #42), and `pkdry`'s own per-bristle dash-run helper and
+/// clamped-probability roll (issue #43).
 pub const PAINTKIT_INTERNAL: &[&str] = &[
     "pkgetdef",
     "pktaperf",
@@ -254,8 +255,10 @@ pub const PAINTKIT_INTERNAL: &[&str] = &[
     "pkopenrun",
     "pkbuildrun",
     "pkscanclosed",
+    "pbroll",
     "pnangleat",
     "pnpressure",
+    "pbdashrun",
 ];
 
 /// Top-level names `lib/handscript.ps` defines beyond `hs-write`/
@@ -1091,6 +1094,66 @@ static ENTRIES: &[Entry] = &[
         ],
         PAINTKIT,
         "newpath ... << /Width 16 /Angle 30 >> pknib",
+        LIB
+    ),
+    entry!(
+        "pkdry",
+        CapabilityKind::Procedure,
+        "A dry-bristle brush built on pkribbon: a bounded family of thin offset bristles scattered across the centerline, each broken into ink/no-ink runs by a seeded two-state Markov chain, ranging from a mostly loaded stroke to visibly broken dry-brush texture with no raster work.",
+        &[
+            Param {
+                name: "Width",
+                description: "Envelope width the bristles scatter across",
+                default: Some("6")
+            },
+            Param {
+                name: "Bristles",
+                description: "Bristle count; hard safety cap 1..100",
+                default: Some("18")
+            },
+            Param {
+                name: "Spread",
+                description: "0..1 fraction of Width the bristles scatter across, centered on the centerline",
+                default: Some("0.85")
+            },
+            Param {
+                name: "BristleWidth",
+                description: "Base width of each individual bristle's own mark",
+                default: Some("Width*0.12")
+            },
+            Param {
+                name: "WidthJitter",
+                description: "0..1 fraction of BristleWidth each bristle's own width randomly varies by",
+                default: Some("0.4")
+            },
+            Param {
+                name: "Load",
+                description: "Resume-contact rate per one Width of travel along the path",
+                default: Some("0.6")
+            },
+            Param {
+                name: "Dropout",
+                description: "Lose-contact rate per one Width of travel along the path",
+                default: Some("0.4")
+            },
+            Param {
+                name: "Jitter",
+                description: "Edge roughness, forwarded verbatim as each dash's own pkribbon Jitter; shares the Markov chain's random stream",
+                default: Some("0")
+            },
+            Param {
+                name: "Pitch",
+                description: "walkpath sampling pitch for the shared centerline pass",
+                default: Some("BristleWidth*0.6, capped at 6")
+            },
+            Param {
+                name: "ColorJitter",
+                description: "0..1 magnitude of small per-bristle color variation around the color active when pkdry is called",
+                default: Some("0.06")
+            },
+        ],
+        PAINTKIT,
+        "newpath ... << /Width 16 /Load 0.9 /Dropout 0.1 >> pkdry",
         LIB
     ),
     // --- Procedures: shapes ----------------------------------------------
