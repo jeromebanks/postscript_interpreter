@@ -798,8 +798,9 @@
 %                  6). Must be > 0. Same role as pkribbon's /Width, but
 %                  here it bounds the *scatter*, not one mark's own
 %                  thickness -- see /BristleWidth for that.
-%   /Bristles      bristle count (default 18). A hard safety cap: must
-%                  be 1..100 -- chosen so even the cap combined with a
+%   /Bristles      bristle count (default 18). Must be a whole number,
+%                  1..100 -- a hard safety cap chosen so even the cap
+%                  combined with a
 %                  long path at the default /Pitch stays in the
 %                  single-digit seconds (measured, see Performance
 %                  below), not unbounded. This alone doesn't bound
@@ -903,7 +904,14 @@
 
     /pbbristles pbopts /Bristles 18 pkgetdef def
     /pbbristles load xcheck { pkdry-bristles-must-not-be-a-procedure } if
-    pbbristles 1 lt pbbristles 100 gt or
+    % Must be a whole number, not just in range: /Bristles feeds the
+    % deposit-budget calculation below (Bristles * raw stop count) as
+    % well as the `1 1 pbbristles for` loop bound, and a fractional
+    % value like 1.5 would silently truncate through `for`'s own
+    % semantics (drawing exactly one bristle) rather than erroring on
+    % malformed input, undermining both the documented count and the
+    % safety-budget math that assumes an integer (Codex review).
+    pbbristles 1 lt pbbristles 100 gt or pbbristles truncate pbbristles ne or
         { pkdry-bristles-must-be-1-to-100 } if
 
     /pbspread pbopts /Spread 0.85 pkgetdef def
@@ -950,22 +958,29 @@
     % pkribbon's own pkraw collection (count, then fill) -- reused
     % across every bristle rather than re-walking the source path once
     % per bristle.
+    %
+    % The documented safety limit -- /Bristles alone (capped at 100
+    % above) doesn't bound total deposits, since a long path at a fine
+    % /Pitch multiplies out regardless -- is checked *inside* this
+    % counting pass, on every stop, not only once after it finishes:
+    % checking only afterward would still let a pathologically small
+    % /Pitch on a long path run the counting walk itself to completion
+    % first (potentially billions of interpreted iterations) before
+    % ever rejecting anything, defeating the "before any drawing
+    % starts" guarantee (Codex review). 150000 is calibrated against
+    % the measured per-iteration cost in the header's Performance note
+    % -- comfortably above the /Bristles cap (100) at the default
+    % /Pitch on a long (~1500-unit) stroke, while still rejecting a
+    % custom /Pitch fine enough to multiply that out by another order
+    % of magnitude.
     /pbcount 0 def
-    pbpitch { pop pop pop pop pop pop /pbcount pbcount 1 add def } walkpath
+    pbpitch {
+        pop pop pop pop pop pop
+        /pbcount pbcount 1 add def
+        pbbristles pbcount mul 150000 gt
+            { pkdry-deposit-count-exceeds-safety-limit } if
+    } walkpath
     /pbn pbcount def
-
-    % The documented safety limit: /Bristles alone (capped at 100
-    % above) doesn't bound total deposits -- a long path at a fine
-    % /Pitch multiplies out regardless. Checked here, before the
-    % second walkpath pass or any drawing, using only the cheap
-    % counting pass just done. 150000 is calibrated against the
-    % measured per-iteration cost in the header's Performance note --
-    % comfortably above the /Bristles cap (100) at the default /Pitch
-    % on a long (~1500-unit) stroke, while still rejecting a custom
-    % /Pitch fine enough to multiply that out by another order of
-    % magnitude.
-    pbbristles pbn mul 150000 gt
-        { pkdry-deposit-count-exceeds-safety-limit } if
 
     /pbraw pbn array def
     /pbci 0 def
@@ -977,22 +992,10 @@
     pbn 0 gt {
         gsave
         /pbbasecolor [ currentrgbcolor ] def
+        /pbhalfspread pbwidth 0.5 mul pbspread mul def
         1 1 pbbristles {
             /pbbi exch def
             /pbevenfrac pbbi 0.5 sub pbbristles div def
-            /pbhalfspread pbwidth 0.5 mul pbspread mul def
-            /pboff
-                pbevenfrac 0.5 sub 2 mul pbhalfspread mul
-                pbhalfspread 0.15 mul pkjit
-                add
-            def
-            /pbw
-                pbbristlewidth pbwidthjitter pbbristlewidth mul pkjit add
-            def
-            pbw pbbristlewidth 0.05 mul lt
-                { /pbw pbbristlewidth 0.05 mul def } if
-            /pbk pbcolorjitter pkjit 1 add def
-            pbbasecolor pbk shade setrgbcolor
 
             /pbsi 0 def
             /pbrunstart 0 def
@@ -1001,6 +1004,31 @@
                 pbraw pbsi get 5 get /pbae exch def
                 pbae 1 and 1 eq { /pbrunstart pbsi def } if
                 pbae 2 and 2 eq {
+                    % Offset/width/color are drawn fresh for each
+                    % subpath, not once for the whole bristle: reusing
+                    % a single draw across every subpath made the same
+                    % bristle index render at an identical position,
+                    % width, and color on every subpath, contradicting
+                    % pkribbon's own "each subpath becomes an
+                    % independent [mark]" contract that pkdry's header
+                    % explicitly claims too (Codex review). /pbevenfrac
+                    % (the bristle's systematic slot within the
+                    % envelope) stays fixed across subpaths -- only the
+                    % jitter/width/color *draws* are re-rolled.
+                    /pboff
+                        pbevenfrac 0.5 sub 2 mul pbhalfspread mul
+                        pbhalfspread 0.15 mul pkjit
+                        add
+                    def
+                    /pbw
+                        pbbristlewidth pbwidthjitter pbbristlewidth mul pkjit
+                        add
+                    def
+                    pbw pbbristlewidth 0.05 mul lt
+                        { /pbw pbbristlewidth 0.05 mul def } if
+                    /pbk pbcolorjitter pkjit 1 add def
+                    pbbasecolor pbk shade setrgbcolor
+
                     pboff pbw pbrunstart pbsi pbdashrun
                 } if
                 /pbsi pbsi 1 add def
@@ -1022,7 +1050,18 @@
 % the run ends (an off transition, or the range's last sample) --
 % pkribbon's own single-point-subpath handling turns a lone on-sample
 % into a dot automatically, exactly the isolated-fleck fallback a real
-% skipping bristle should have.
+% skipping bristle should have. Each flush passes `/Pitch pbpitch`
+% explicitly rather than letting `pkribbon` default it from `pbdrw`
+% (the dash's own, often tiny, width): `pkribbon`'s default Pitch is
+% `Width*0.5`, so a very small `/BristleWidth` would otherwise make
+% every dash internally re-walk its own short polyline at an
+% arbitrarily fine resolution, unaccounted for by pkdry's own
+% deposit-budget check above (which only counts the coarser outer
+% `pbraw` stops) -- an unbounded amount of extra work a valid, in-range
+% `/BristleWidth`/`/Pitch` combination could still trigger (Codex
+% review). Reusing the same `pbpitch` already validated and budgeted
+% at the outer level keeps a dash's own internal resampling the same
+% order of magnitude as the stops it was built from.
 /pbdashrun {
     /pbdrend exch def /pbdrstart exch def
     /pbdrw exch def /pbdroff exch def
@@ -1082,7 +1121,7 @@
             ifelse
         } {
             pbdrwasoff not {
-                << /Width pbdrw /Jitter pbjitter >> pkribbon
+                << /Width pbdrw /Jitter pbjitter /Pitch pbpitch >> pkribbon
             } if
         } ifelse
         /pbdrwasoff pbdrstate not def

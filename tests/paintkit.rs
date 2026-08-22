@@ -1213,6 +1213,15 @@ fn dry_guards_reject_malformed_input() {
             "pkdry-bristles-must-be-1-to-100",
         ),
         (
+            // Regression test for a Codex-review finding: a fractional
+            // /Bristles used to pass the range check and silently draw
+            // only one bristle through `1 1 pbbristles for`'s own
+            // truncating semantics, instead of erroring on malformed
+            // input.
+            "newpath 0 0 moveto 100 0 lineto << /Bristles 1.5 >> pkdry",
+            "pkdry-bristles-must-be-1-to-100",
+        ),
+        (
             "newpath 0 0 moveto 100 0 lineto << /Bristles { 10 } >> pkdry",
             "pkdry-bristles-must-not-be-a-procedure",
         ),
@@ -1299,6 +1308,82 @@ fn dry_deposit_budget_guard_rejects_bristles_times_samples_over_the_limit() {
     assert!(
         matches!(err, PsError::Undefined(ref n) if n == "pkdry-deposit-count-exceeds-safety-limit"),
         "got {err}"
+    );
+}
+
+#[test]
+fn dry_deposit_budget_guard_rejects_quickly_even_on_a_huge_path() {
+    // Regression test for a Codex-review finding: the budget check
+    // originally ran only *after* the counting walkpath pass finished,
+    // so a pathologically long path at a tiny /Pitch could spend an
+    // enormous number of interpreted iterations counting stops before
+    // ever getting rejected -- the advertised "before any drawing
+    // starts" safety limit didn't actually bound that pass itself. The
+    // budget check now runs inside the counting callback, aborting as
+    // soon as the running Bristles*count product crosses the limit.
+    // This uses a path far too long to finish a full count in
+    // reasonable time if the abort weren't working -- the test itself
+    // completing at all (within the harness's normal timeout) is the
+    // assertion, not just the error kind.
+    let mut it = Interp::new();
+    load(&mut it);
+    let err = it
+        .run_str(
+            "newpath 0 0 moveto 5000000 0 lineto \
+             << /Width 10 /Bristles 100 /Pitch 0.01 >> pkdry",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "pkdry-deposit-count-exceeds-safety-limit"),
+        "got {err}"
+    );
+}
+
+#[test]
+fn dry_each_subpath_draws_its_own_independent_bristle_scatter() {
+    // Regression test for a Codex-review finding: bristle offset,
+    // width, and color used to be drawn once per bristle and reused
+    // verbatim across every subpath, contradicting pkribbon's own
+    // "each subpath becomes an independent [mark]" contract that
+    // pkdry's own header claims too. A single bristle (isolating the
+    // effect from cross-bristle averaging) on two identical, vertically
+    // separated horizontal subpaths with heavy /ColorJitter: with the
+    // bug, both subpaths draw the exact same color (one shared draw);
+    // fixed, each subpath's independent `shade` draw lands in
+    // continuous RGB space, where two independent rolls coinciding
+    // exactly is vanishingly unlikely -- a far higher-resolution signal
+    // than comparing pixel-quantized band heights (which collapse a
+    // continuous width into only a handful of possible pixel counts,
+    // and coincided in an earlier draft of this test).
+    // The most-inked (lowest-luma) pixel in the range, not a fixed
+    // luma threshold: a lightening ColorJitter draw (shade's k > 1
+    // branch) can push even a fully-covered pixel's luma well above a
+    // fixed cutoff tuned to the base color, so a threshold-based search
+    // can spuriously find nothing for one of the two draws.
+    fn most_inked_color(it: &Interp, x: u32, y_lo: u32, y_hi: u32) -> (u8, u8, u8) {
+        (y_lo..y_hi)
+            .map(|y| it.gfx().pixmap.pixel(x, y).expect("in bounds"))
+            .min_by(|a, b| luma(*a).partial_cmp(&luma(*b)).expect("not NaN"))
+            .map(|p| (p.red(), p.green(), p.blue()))
+            .expect("non-empty y range")
+    }
+
+    let mut it = fresh(220, 100);
+    it.run_str(
+        "0.2 0.3 0.8 setrgbcolor 21 srand \
+         newpath 10 25 moveto 210 25 lineto \
+         10 75 moveto 210 75 lineto \
+         << /Width 20 /Bristles 1 /Spread 0 \
+            /Load 1 /Dropout 0 /ColorJitter 0.4 >> pkdry",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+
+    let top = most_inked_color(&it, 110, 0, 50);
+    let bottom = most_inked_color(&it, 110, 50, 100);
+    assert_ne!(
+        top, bottom,
+        "each subpath's bristle should draw its own independent color \
+         roll, not reuse the same one: top {top:?} bottom {bottom:?}"
     );
 }
 
