@@ -1,0 +1,239 @@
+%!PS-Adobe-3.0
+%%Title: Flying White: Reeds at Dusk
+%%BoundingBox: 0 0 700 460
+%%EndComments
+
+% A wetland at dusk, built to put lib/paintkit.ps's `pkdry` (issue #43)
+% front and center rather than treat it as a texture afterthought.
+% "Flying white" (feibai) is the classical name for exactly what pkdry
+% models: a brush run dry enough that individual bristles lose and
+% regain contact with the paper, leaving streaks of bare ground inside
+% what reads, from a distance, as one continuous stroke. Every reed
+% stalk here is two `pkdry` calls sharing an endpoint -- a loaded, mostly
+% -solid base and a drier, more broken tip -- so the breakup is doing
+% real compositional work: it's how a reed reads as *rising out of*
+% wet ground into dry air, not just an even width running out of ink.
+% The water's reflection streaks and the birds are also `pkdry`, at the
+% opposite extreme: a handful of bristles, mostly gap.
+%
+% Sky and water are plain banded gradients (ember_tree.ps's technique,
+% ported to artkit's `mix3`/pal machinery instead of a hand-rolled HSB
+% conversion) so the brushwork has an uncluttered field to sit in.
+%
+% Seeded rand: same file, same reeds, run to run.
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+11 srand
+
+/rd-ink     [0.15 0.11 0.09] def   % near-black warm ink, foreground reeds
+/rd-pale    [0.97 0.92 0.80] def   % pale cream -- reads against dark water
+/rd-horizon 150 def                % y of the shoreline
+
+% x y w h rd-hbox -   (filled rect, ember_tree.ps's `box`)
+/rd-hbox {
+    4 dict begin
+    /h exch def /w exch def /y exch def /x exch def
+    newpath x y moveto w 0 rlineto 0 h rlineto w neg 0 rlineto
+    closepath fill
+    end
+} def
+
+% ------------------------------------------------------------------ sky
+% Banded gradient across all five /dusk stops, indigo night at the top
+% easing down into the warm gold of the horizon -- the same overlapping
+% -band trick ember_tree.ps uses, just driven by mix3 across a named
+% palette instead of a hand-rolled HSB conversion.
+4 dict begin
+/Sky /dusk pal def
+/skyBands 72 def
+/skyH 460 rd-horizon sub def
+0 1 skyBands 1 sub {
+    /bi exch def
+    /frac bi skyBands 1 sub div def          % 0 at horizon .. 1 at top
+    /t frac 4 mul def
+    /si t floor cvi dup 3 gt { pop 3 } if def
+    /f t si sub def
+    Sky si get Sky si 1 add get f mix3 setrgbcolor
+    0 rd-horizon frac skyH mul add
+    700 skyH skyBands div 1.4 mul rd-hbox
+} for
+end
+
+% ---------------------------------------------------------------- water
+% A darker, desaturated echo of the sky -- still water at dusk reflects
+% color without reflecting brightness.
+4 dict begin
+/WaterNear /dusk pal 2 get def
+/WaterFar  /dusk pal 0 get def
+/waterBands 40 def
+0 1 waterBands 1 sub {
+    /bi exch def
+    /frac bi waterBands 1 sub div def        % 0 at the bottom .. 1 at shore
+    WaterFar WaterNear frac mix3 3 array astore 0.5 shade setrgbcolor
+    0 rd-horizon waterBands div bi mul
+    700 rd-horizon waterBands div 1.4 mul rd-hbox
+} for
+end
+
+% ------------------------------------------------------------------ sun
+% A low, pale disc near the horizon, dimmest ring first -- same idea as
+% ember_tree's sun glow, three rings instead of many since it's a
+% supporting element here, not the subject.
+gsave
+/dusk pal 4 get 1.4 shade setrgbcolor
+560 rd-horizon 12 add 46 0 360 arc fill
+/dusk pal 4 get 1.15 shade setrgbcolor
+560 rd-horizon 12 add 32 0 360 arc fill
+/dusk pal 4 get aload pop setrgbcolor
+560 rd-horizon 12 add 19 0 360 arc fill
+grestore
+
+% ---------------------------------------------------------- sky wisps
+% A few high, drifting dry-brush strokes standing in for thin evening
+% mist -- pkdry again, at yet another scale: broad, pale, mostly gap,
+% breaking up the open sky rather than reflecting on water or bristling
+% into a reed.
+gsave
+rd-pale /dusk pal 2 get 0.4 mix3 setrgbcolor
+[ [60 270 500 8] [190 320 360 -10] ]
+{
+    aload pop
+    4 dict begin
+    /bend exch def /len exch def /y exch def /x exch def
+    newpath x y moveto x len add y bend add lineto
+    << /Width 5 /BristleWidth 1.4 /Bristles 6 /Spread 0.7
+       /Load 0.22 /Dropout 0.85 /Jitter 1.5 /ColorJitter 0.05 >> pkdry
+    end
+} forall
+grestore
+
+% ------------------------------------------------------- water texture
+% Thin, very-dry horizontal strokes standing in for a broken reflection
+% -- mostly gap, a handful of bristles, exactly what pkdry is for when
+% the "coverage" is meant to look incomplete rather than corrected.
+/dusk pal 3 get 1.2 shade setrgbcolor
+[ [10 118 640] [40 96 560] [140 70 500] [260 40 420] [70 20 380] ]
+{
+    aload pop
+    3 dict begin
+    /len exch def /y exch def /x exch def
+    newpath x y moveto x len add y lineto
+    << /Width 3 /BristleWidth 1.1 /Bristles 9 /Spread 0.9
+       /Load 0.4 /Dropout 0.8 /Jitter 0.4 >> pkdry
+    end
+} forall
+
+% ---------------------------------------------------------------- reeds
+% One stalk: three `pkdry` calls sharing endpoints -- a loaded base, a
+% drier upper run, and a small pressed-down dab (a single-point path;
+% pkdry's isotropic-scatter case) for the seed head. Coordinates are
+% plain trig rather than the turtle, since two segments need to share
+% an exact joint and `pkdry` consumes a whole fresh path per call.
+/rd-reed {                                    % x y ang len w bend rd-reed -
+    9 dict begin
+    /bend exch def /w exch def /len exch def /ang exch def
+    /y0 exch def /x0 exch def
+    /midlen len 0.55 mul def
+    /tiplen len 0.45 mul def
+    /midang ang bend 0.4 mul add def
+    /tipang ang bend add def
+    /x1 x0 midang cos midlen mul add def
+    /y1 y0 midang sin midlen mul add def
+    /x2 x1 tipang cos tiplen mul add def
+    /y2 y1 tipang sin tiplen mul add def
+
+    newpath x0 y0 moveto x1 y1 lineto
+    << /Width w /BristleWidth w 0.22 mul /Bristles 6 /Spread 0.35
+       /Load 0.92 /Dropout 0.12 /Jitter 0.4 >> pkdry
+
+    newpath x1 y1 moveto x2 y2 lineto
+    << /Width w 0.7 mul /BristleWidth w 0.18 mul /Bristles 5 /Spread 0.3
+       /Load 0.35 /Dropout 0.8 /Jitter 0.7 >> pkdry
+
+    newpath x2 y2 moveto
+    << /Width w 1.8 mul /BristleWidth w 0.28 mul /Bristles 9
+       /Load 0.8 /Dropout 0.3 /Jitter 1.3 >> pkdry
+    end
+} def
+
+% A cluster: n reeds fanned from a shared footing, each with its own
+% jittered angle/length/bend so no two stalks repeat.
+/rd-cluster {                          % x y n w baselen spread rd-cluster -
+    7 dict begin
+    /spread exch def /baselen exch def /w exch def /n exch def
+    /y exch def /x exch def
+    n {
+        x 6 jit add
+        y
+        90 spread jit add
+        baselen 1 frnd 2 mul 1 sub 0.3 mul add mul
+        w 1 frnd 2 mul 1 sub 0.25 mul add mul
+        14 jit
+        rd-reed
+    } repeat
+    end
+} def
+
+% Distant cluster -- small, pale, aerial-perspective color, tucked just
+% past the sun. Drawn first so nearer clusters overlap it.
+gsave
+rd-ink /dusk pal 3 get 0.62 mix3 setrgbcolor
+430 rd-horizon 4 sub 5 1.6 34 10 rd-cluster
+grestore
+
+% Mid cluster, at the shoreline proper.
+gsave
+rd-ink /dusk pal 2 get 0.35 mix3 setrgbcolor
+615 rd-horizon 3 sub 7 2.4 62 14 rd-cluster
+grestore
+
+% Foreground cluster -- the piece's anchor: largest, darkest, most
+% broken. Rooted low so it rises out of the water band into the sky.
+gsave
+rd-ink aload pop setrgbcolor
+90 40 9 4.2 190 20 rd-cluster
+grestore
+
+gsave
+rd-ink aload pop setrgbcolor
+190 18 6 3.6 150 24 rd-cluster
+grestore
+
+% ---------------------------------------------------------------- birds
+% Each bird is one broken V stroke -- a handful of bristles, high
+% dropout, the same primitive as the water texture put to a different
+% shape.
+/rd-bird {                                    % x y s rd-bird -
+    3 dict begin
+    /s exch def /y exch def /x exch def
+    newpath
+    x s 0.5 mul sub y moveto
+    x y s 0.4 mul add lineto
+    x s 0.5 mul add y lineto
+    << /Width s 0.16 mul /BristleWidth s 0.055 mul /Bristles 5
+       /Spread 0.6 /Load 0.85 /Dropout 0.25 /Jitter 0.3 >> pkdry
+    end
+} def
+
+rd-ink 1.3 shade setrgbcolor
+310 372 26 rd-bird
+348 388 22 rd-bird
+380 366 20 rd-bird
+
+% -------------------------------------------------------- caption + seal
+% The water gradient underneath is dark for most of its range, so the
+% caption goes pale rather than reusing rd-ink -- the same warm near-
+% black that reads cleanly on plum_branch.ps's pale paper would nearly
+% vanish here.
+rd-pale aload pop setrgbcolor
+/Palatino-Italic findfont 14 scalefont setfont
+(Flying White: Reeds at Dusk -- pkdry over a walkpath centerline) 350 22 showctr
+
+/NanumBrushScript findfont 24 scalefont setfont
+(dry) 640 50 showctr
+
+0.78 0.16 0.14 setrgbcolor
+newpath 615 62 32 22 3 rrect fill
+
+showpage

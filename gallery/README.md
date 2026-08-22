@@ -29,6 +29,7 @@ overridden per line through the font's scratch dict.
 | Field Notes | `field_notes.ps` | (issue #14) A marsh census styled as a naturalist's field journal: `dataviz.ps`'s `barchart` and `linechart` sharing one category axis (weekly sightings against a temperature trend), a species-mix donut with a hand-drawn legend, all lettered in the Stage 12 /HandScript font |
 | The Compositor's Proof | `compositors_proof.ps` | (issue #16) A printer's proof sheet for artkit's paragraph-flow section: a motto set inside a round medallion via `tfflow` and a hand-written circle boundsproc, a justified body paragraph via `tfblock`, and a two-column colophon via `tfcols` that genuinely spills from the first column into the second |
 | Lodestone | `lodestone.ps` | (issue #19) A naturalist's demonstration plate: 1,400 `advect`-traced iron filings swirling around a jittered rock, following a `curl2` flow field built from a hand-composed potential — coherent `noise2` texture plus a radial term, whose perpendicular gradient curls a purely radial field into the concentric loops real filings make around a magnet |
+| Flying White: Reeds at Dusk | `flying_white_reeds.ps` | (issue #80) A wetland at dusk built around paintkit's `pkdry` dry-bristle brush (issue #43): reed stalks each a loaded base and a drier, more broken tip sharing an endpoint, plus a broken reflection on the water and thin dry-brush mist in the sky — the same primitive at three different scales, over a banded `mix3` dusk-palette gradient |
 
 ## Viewing the gallery
 
