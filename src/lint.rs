@@ -81,8 +81,10 @@ fn check_blank_pages(interp: &Interp, findings: &mut Vec<LintFinding>) {
 fn is_blank(pixmap: &Pixmap) -> bool {
     pixmap
         .data()
-        .chunks_exact(4)
-        .all(|p| p == [255, 255, 255, 255])
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|p| *p == [255, 255, 255, 255])
 }
 
 fn check_gsave_balance(interp: &Interp, findings: &mut Vec<LintFinding>) {

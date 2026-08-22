@@ -88,7 +88,7 @@ mod tests {
 
     fn ink_fraction(pm: &Pixmap) -> f32 {
         let data = pm.data();
-        let black = data.chunks_exact(4).filter(|p| p[0] == 0).count();
+        let black = data.as_chunks::<4>().0.iter().filter(|p| p[0] == 0).count();
         black as f32 / (pm.width() * pm.height()) as f32
     }
 
@@ -129,7 +129,9 @@ mod tests {
         assert!(
             screened
                 .data()
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .all(|p| (p[0] == 0 || p[0] == 255) && p[0] == p[1] && p[1] == p[2] && p[3] == 255)
         );
     }
