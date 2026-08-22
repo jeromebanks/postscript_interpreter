@@ -51,7 +51,7 @@
 0 1 skyBands 1 sub {
     /bi exch def
     /frac bi skyBands 1 sub div def          % 0 at horizon .. 1 at top
-    /t frac 4 mul def
+    /t 1 frac sub 4 mul def                  % Sky[4] (gold) at horizon, Sky[0] (indigo) at top
     /si t floor cvi dup 3 gt { pop 3 } if def
     /f t si sub def
     Sky si get Sky si 1 add get f mix3 setrgbcolor
@@ -81,11 +81,11 @@ end
 % ember_tree's sun glow, three rings instead of many since it's a
 % supporting element here, not the subject.
 gsave
-/dusk pal 4 get 1.4 shade setrgbcolor
+/dusk pal 4 get aload pop setrgbcolor
 560 rd-horizon 12 add 46 0 360 arc fill
 /dusk pal 4 get 1.15 shade setrgbcolor
 560 rd-horizon 12 add 32 0 360 arc fill
-/dusk pal 4 get aload pop setrgbcolor
+/dusk pal 4 get 1.4 shade setrgbcolor
 560 rd-horizon 12 add 19 0 360 arc fill
 grestore
 
