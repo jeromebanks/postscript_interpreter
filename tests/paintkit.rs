@@ -1856,3 +1856,505 @@ fn ghostscript_accepts_the_actual_nib_demo_file() {
         "gs rejected examples/paintkit_nib_demo.ps"
     );
 }
+
+// --- pkspray (issue #44): seeded particle spray around the centerline --
+
+#[test]
+fn spray_loads_clean() {
+    let it = fresh(50, 50);
+    assert_eq!(ink_count(&it), 0, "paintkit drew on load");
+}
+
+#[test]
+fn spray_validation_guards_reject_bad_values() {
+    // Same convention as pkribbon/pknib/pkdry: every documented range
+    // constraint gets a self-documenting undefined-name error, and
+    // executable values are rejected outright (no proc-valued options
+    // exist here, so `load xcheck` is the whole guard -- the same
+    // shape as pkribbon's /Width check).
+    let mut it = Interp::new();
+    load(&mut it);
+    let cases = [
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Nozzle 0 >> pkspray",
+            "pkspray-nozzle-must-be-positive",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Nozzle -3 >> pkspray",
+            "pkspray-nozzle-must-be-positive",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Nozzle { 8 } >> pkspray",
+            "pkspray-nozzle-must-not-be-a-procedure",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Density -1 >> pkspray",
+            "pkspray-density-must-be-non-negative",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Falloff -0.1 >> pkspray",
+            "pkspray-falloff-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Falloff 1.1 >> pkspray",
+            "pkspray-falloff-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Overspray -0.5 >> pkspray",
+            "pkspray-overspray-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Overspray 2 >> pkspray",
+            "pkspray-overspray-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Speck 0 >> pkspray",
+            "pkspray-speck-must-be-positive",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Speckle -0.1 >> pkspray",
+            "pkspray-speckle-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Speckle 1.5 >> pkspray",
+            "pkspray-speckle-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /Pitch 0 >> pkspray",
+            "pkspray-pitch-must-be-positive",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /StartBurst -0.1 >> pkspray",
+            "pkspray-startburst-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /StartBurst 1.2 >> pkspray",
+            "pkspray-startburst-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /EndBurst -1 >> pkspray",
+            "pkspray-endburst-must-be-0-to-1",
+        ),
+        (
+            "newpath 0 0 moveto 100 0 lineto << /EndBurst 7 >> pkspray",
+            "pkspray-endburst-must-be-0-to-1",
+        ),
+        // Validation must run even when the path is empty (the PR #77
+        // lesson): the malformed dict errors the same way either way.
+        ("<< /Nozzle 0 >> pkspray", "pkspray-nozzle-must-be-positive"),
+    ];
+    for (src, want) in cases {
+        let err = it.run_str(src).unwrap_err();
+        assert!(
+            matches!(err, PsError::Undefined(ref n) if n == want),
+            "{src}: expected {want}, got {err}"
+        );
+    }
+}
+
+#[test]
+fn spray_same_seed_renders_identically_and_different_seed_differs() {
+    fn render(seed: u32) -> Vec<u8> {
+        let mut it = fresh(300, 60);
+        it.run_str(&format!(
+            "0.2 0.2 0.2 setrgbcolor {seed} srand \
+             newpath 10 30 moveto 290 30 lineto \
+             << /Nozzle 12 /Density 40 >> pkspray"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        it.gfx().pixmap.data().to_vec()
+    }
+    let a = render(9);
+    let b = render(9);
+    assert_eq!(a, b, "same seed and options must render identically");
+    let c = render(10);
+    assert_ne!(a, c, "different seeds should move particles");
+}
+
+#[test]
+fn spray_falloff_concentrates_ink_near_the_centerline() {
+    // The acceptance criterion: particle density falls off predictably
+    // from the gesture centerline. Fraction of ink within a narrow band
+    // around the centerline must be clearly higher at /Falloff 1
+    // (quadratic thinning outward) than at /Falloff 0 (uniform in
+    // radius), same seed and everything else.
+    fn band_fraction(falloff: f64) -> f64 {
+        let mut it = fresh(300, 80);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 17 srand \
+             newpath 20 40 moveto 280 40 lineto \
+             << /Nozzle 24 /Density 60 /Speckle 0.15 /Falloff {falloff} >> pkspray"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        let mut in_band = 0usize;
+        let mut total = 0usize;
+        for y in 8..72u32 {
+            for x in 16..284u32 {
+                let p = it.gfx().pixmap.pixel(x, y).expect("in bounds");
+                if luma(p) < 180.0 {
+                    total += 1;
+                    if (y as i32 - 40).abs() <= 6 {
+                        in_band += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            total > 200,
+            "expected real ink coverage at falloff {falloff}"
+        );
+        in_band as f64 / total as f64
+    }
+
+    let low = band_fraction(0.0);
+    let high = band_fraction(1.0);
+    assert!(
+        high > low * 1.15,
+        "falloff should concentrate ink near the centerline: low {low:.3} high {high:.3}"
+    );
+}
+
+#[test]
+fn spray_overspray_extends_mist_past_the_nozzle_edge() {
+    // With a generous nozzle the discriminator is wide: interior
+    // particles stop at Nozzle (+ speck/2 + antialiasing slack), while
+    // /Overspray 1 scatters uniformly out to 2*Nozzle. Baseline must
+    // stay inside the nozzle; oversprayed must reach clearly past it.
+    fn max_offset(overspray: f64) -> i32 {
+        let mut it = fresh(240, 160);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 23 srand \
+             newpath 30 80 moveto 210 80 lineto \
+             << /Nozzle 30 /Density 45 /Speck 1.4 /Overspray {overspray} >> pkspray"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        let mut max_off = 0i32;
+        for y in 0..160u32 {
+            for x in 34..206u32 {
+                let p = it.gfx().pixmap.pixel(x, y).expect("in bounds");
+                if luma(p) < 180.0 {
+                    max_off = max_off.max((y as i32 - 80).abs());
+                }
+            }
+        }
+        max_off
+    }
+    let base = max_offset(0.0);
+    let mist = max_offset(1.0);
+    assert!(
+        base <= 35,
+        "overspray 0 should keep all ink within the nozzle (+speck/AA slack), got {base}"
+    );
+    assert!(
+        mist >= 40,
+        "overspray 1 should throw mist well past the nozzle edge, got {mist}"
+    );
+}
+
+#[test]
+fn spray_end_burst_pools_ink_at_the_stroke_end() {
+    fn tail_ink(end_burst: f64) -> usize {
+        let mut it = fresh(260, 120);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 31 srand \
+             newpath 20 60 moveto 180 60 lineto \
+             << /Nozzle 12 /Density 26 /EndBurst {end_burst} >> pkspray"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        let mut count = 0usize;
+        for y in 0..120u32 {
+            for x in 150..259u32 {
+                let p = it.gfx().pixmap.pixel(x, y).expect("in bounds");
+                if luma(p) < 180.0 {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+    let plain = tail_ink(0.0);
+    let burst = tail_ink(1.0);
+    assert!(
+        burst > plain * 3 / 2,
+        "end burst should pool extra ink past the stroke end: plain {plain} burst {burst}"
+    );
+}
+
+#[test]
+fn spray_empty_path_is_a_noop() {
+    let mut it = fresh(50, 50);
+    it.run_str("<< /Nozzle 12 /Density 40 /StartBurst 1 /EndBurst 1 >> pkspray")
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(ink_count(&it), 0, "empty path drew something");
+}
+
+#[test]
+fn spray_single_point_deposits_a_dab_cluster() {
+    // A bare moveto has zero-length sp, so without the degenerate-dab
+    // fallback the emission accumulator would deposit nothing at all.
+    // With it, the point reads as a pressed-down spray dot: a genuine
+    // 2D cluster, not a collapsed line.
+    let mut it = fresh(140, 140);
+    it.run_str(
+        "0 0 0 setrgbcolor 41 srand newpath 70 70 moveto \
+         << /Nozzle 18 /Density 40 >> pkspray",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+
+    let (mut min_x, mut max_x, mut min_y, mut max_y) = (140u32, 0u32, 140u32, 0u32);
+    let mut any = false;
+    for y in 0..140u32 {
+        for x in 0..140u32 {
+            let p = it.gfx().pixmap.pixel(x, y).expect("in bounds");
+            if luma(p) < 180.0 {
+                any = true;
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+                min_y = min_y.min(y);
+                max_y = max_y.max(y);
+            }
+        }
+    }
+    assert!(any, "expected some ink around the lone point");
+    let (w, h) = (max_x - min_x, max_y - min_y);
+    assert!(
+        w > 8 && h > 8,
+        "expected a 2D dab cluster, not a line: bounding box {w}x{h}"
+    );
+}
+
+#[test]
+fn spray_deposit_budget_guard_rejects_uncapped_density_dabs() {
+    // Regression test for a review finding on this very feature's
+    // plan: the budget estimate originally counted only accumulated
+    // per-stop emissions (+ truncation spares + bursts). A degenerate
+    // single-point stop reports sp=0, so its dab of
+    // truncate(Density*2) particles was invisible to the estimate --
+    // and /Density is uncapped, so a page of bare movetos with huge
+    // /Density slipped arbitrarily many deposits past the limit.
+    // The dab count now goes into the estimate explicitly.
+    let mut it = Interp::new();
+    load(&mut it);
+    let err = it
+        .run_str(
+            "newpath 1 1 30 { pop 10 10 moveto } for \
+             << /Density 100000 >> pkspray",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "pkspray-deposit-count-exceeds-safety-limit"),
+        "got {err}"
+    );
+}
+
+#[test]
+fn spray_deposit_budget_guard_rejects_quickly_even_on_a_huge_path() {
+    // The check runs inside the counting callback (every stop adds at
+    // least 1 spare to the estimate), so a pathological fine /Pitch on
+    // a long path is rejected within ~budget-many callbacks instead of
+    // walking the whole path first -- same placement argument as
+    // pkdry's own quick-reject test above.
+    let mut it = Interp::new();
+    load(&mut it);
+    let err = it
+        .run_str(
+            "newpath 0 0 moveto 5000000 0 lineto \
+             << /Density 200000 /Pitch 0.01 >> pkspray",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "pkspray-deposit-count-exceeds-safety-limit"),
+        "got {err}"
+    );
+}
+
+#[test]
+fn spray_multiple_subpaths_each_get_their_own_scatter() {
+    // walkpath's stack-discipline trap (a callback that leaves operands
+    // behind corrupts wkend across subpath boundaries) only ever bites
+    // with more than one subpath -- every sibling brush carries a
+    // multi-subpath regression test for exactly that.
+    let mut it = fresh(320, 150);
+    it.run_str(
+        "0 0 0 setrgbcolor 13 srand \
+         newpath 20 30 moveto 300 30 lineto \
+                 20 75 moveto 300 75 lineto \
+                 20 120 moveto 300 120 lineto \
+         << /Nozzle 9 /Density 40 >> pkspray",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    for (name, lo, hi) in [("top", 0u32, 52), ("middle", 53, 97), ("bottom", 98, 150)] {
+        let mut band = 0usize;
+        for y in lo..hi {
+            for x in 15..305u32 {
+                let p = it.gfx().pixmap.pixel(x, y).expect("in bounds");
+                if luma(p) < 180.0 {
+                    band += 1;
+                }
+            }
+        }
+        assert!(
+            band > 100,
+            "{name} subpath should carry its own scatter, got {band} ink pixels"
+        );
+    }
+}
+
+#[test]
+fn spray_total_deposits_are_pitch_independent() {
+    // The accumulator's headline claim: total particles track arc
+    // length (about Density per nozzle-diameter of travel), not the
+    // stop count, so the same options at different /Pitch values leave
+    // comparable ink. A buggy fixed-per-stop implementation passes
+    // every other test here but fails this one.
+    fn ink_at_pitch(pitch: f64) -> usize {
+        let mut it = fresh(320, 60);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 47 srand \
+             newpath 15 30 moveto 305 30 lineto \
+             << /Nozzle 10 /Density 50 /Pitch {pitch} >> pkspray"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        ink_count(&it)
+    }
+    let fine = ink_at_pitch(1.0);
+    let coarse = ink_at_pitch(4.0);
+    assert!(fine > 0 && coarse > 0, "expected ink at both pitches");
+    let ratio = fine.max(coarse) as f64 / fine.min(coarse) as f64;
+    assert!(
+        ratio < 2.0,
+        "total deposits should stay in the same ballpark across /Pitch values: \
+         fine {fine} coarse {coarse} ratio {ratio}"
+    );
+}
+
+#[test]
+fn spray_respects_the_active_clip() {
+    // Stencil support is just PostScript clipping: particles are plain
+    // fills inside whatever clip is active. Nothing may land outside
+    // the clip even though the sprayed line crosses far past it.
+    let mut it = fresh(320, 80);
+    it.run_str(
+        "0 0 0 setrgbcolor 19 srand \
+         newpath 0 0 moveto 150 0 lineto 150 80 lineto 0 80 lineto closepath clip \
+         newpath 10 40 moveto 310 40 lineto \
+         << /Nozzle 12 /Density 40 >> pkspray",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let mut outside = 0usize;
+    for y in 0..80u32 {
+        for x in 154..320u32 {
+            let p = it.gfx().pixmap.pixel(x, y).expect("in bounds");
+            if luma(p) < 180.0 {
+                outside += 1;
+            }
+        }
+    }
+    assert_eq!(outside, 0, "ink leaked past the active clip");
+    let mut inside = 0usize;
+    for y in 0..80u32 {
+        for x in 0..150u32 {
+            let p = it.gfx().pixmap.pixel(x, y).expect("in bounds");
+            if luma(p) < 180.0 {
+                inside += 1;
+            }
+        }
+    }
+    assert!(inside > 100, "expected ink inside the clip, got {inside}");
+}
+
+#[test]
+fn spray_closed_subpath_renders_without_error() {
+    // Closed subpaths need no ring special-casing -- their stops are
+    // walked once linearly and the end burst lands where the nozzle
+    // lifts. Assert it renders real ink rather than erroring or
+    // drawing nothing.
+    let mut it = fresh(160, 160);
+    it.run_str(
+        "0 0 0 setrgbcolor 29 srand \
+         newpath 30 30 moveto 130 30 lineto 130 130 lineto 30 130 lineto closepath \
+         << /Nozzle 8 /Density 30 /EndBurst 0.6 >> pkspray",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(ink_count(&it) > 200, "closed subpath should leave real ink");
+}
+
+#[test]
+fn ghostscript_accepts_paintkit_spray() {
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let artkit = std::fs::read_to_string("lib/artkit.ps").expect("artkit");
+    let paintkit = std::fs::read_to_string("lib/paintkit.ps").expect("paintkit");
+    let driver = "true setpacking 5 srand \
+        0.1 0.1 0.1 setrgbcolor \
+        newpath 10 10 moveto 150 10 lineto \
+            << /Nozzle 10 /Density 30 /Overspray 0.4 /Speckle 0.5 >> pkspray \
+        newpath 10 40 moveto 90 40 lineto 90 80 lineto 10 80 lineto closepath \
+            << /Nozzle 9 /Density 26 /Falloff 0 /EndBurst 0.7 >> pkspray \
+        newpath 220 10 moveto 240 60 260 60 280 10 curveto \
+            << /Nozzle 12 /Density 24 /StartBurst 1 >> pkspray \
+        newpath 300 30 moveto << /Nozzle 10 /Density 18 >> pkspray";
+    let dir = std::env::temp_dir().join(format!("pscat-paintkit-spray-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let combined = dir.join("paintkit_spray_gs.ps");
+    std::fs::write(
+        &combined,
+        format!("{artkit}\n{paintkit}\n{driver}\nshowpage\n"),
+    )
+    .expect("write");
+    let status = std::process::Command::new("gs")
+        .args([
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g400x120",
+            "-r72",
+            "-o/dev/null",
+        ])
+        .arg(&combined)
+        .status()
+        .expect("run gs");
+    assert!(status.success(), "gs rejected paintkit's pkspray");
+}
+
+#[test]
+fn ghostscript_accepts_the_actual_spray_demo_file() {
+    // Same pattern as the nib/dry demo checks: the synthetic driver
+    // exercises pkspray itself, but the demo additionally exercises
+    // artkit's pal/star, charpath clipping, findfont/show, and its own
+    // local helper procs -- run the real file directly. -dNOSAFER
+    // because the demo loads lib files from disk.
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let status = std::process::Command::new("gs")
+        .args([
+            "-dNOSAFER",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g620x760",
+            "-r72",
+            "-o/dev/null",
+            "examples/paintkit_spray_demo.ps",
+        ])
+        .status()
+        .expect("run gs");
+    assert!(
+        status.success(),
+        "gs rejected examples/paintkit_spray_demo.ps"
+    );
+}

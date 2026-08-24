@@ -23,6 +23,13 @@
 % visibly broken coverage without any raster work. See its own header,
 % after `pknib`'s, for full docs.
 %
+% `pkspray` (issue #44) is not built on `pkribbon` -- spray is discrete
+% particle deposition, not an offset band -- but it shares the same
+% walkpath-driven shape: seeded particles scattered around each sampled
+% centerline stop under the caller's own srand, with a radial falloff,
+% overspray mist past the nozzle edge, and optional start/end trigger-
+% dwell bursts. See its own header, after `pkdry`'s, for full docs.
+%
 %   opts pkribbon -
 %
 % `opts` is a dict of optional keys (a sparse or empty dict still
@@ -106,6 +113,8 @@
 % dash, and pkribbon's own body freely redefines every pk*-prefixed
 % name listed above on each call -- a pkdry-owned name sharing that
 % prefix would get silently clobbered by its own nested pkribbon call.
+% pz- (pkspray/dispatch, pzpdot, pzburstcluster) -- issue #44, see
+% below; also deliberately distinct, same reasoning as pkdry's pb-.
 
 % - [bool0 bool1 ...]   (one flag per subpath, in path order: was it
 % closed with an explicit closepath?)
@@ -1186,5 +1195,326 @@
 
     pbdrstate {
         << /Width pbdrw /Jitter pbjitter /Pitch pbpitch >> pkribbon
+    } if
+} def
+
+% --- spray-paint brush (issue #44) ------------------------------------
+% opts pkspray -
+% Seeded particle deposition around the sampled centerline: at each
+% walkpath stop a small cloud of opaque dots is scattered around that
+% point, denser near the centerline and thinning outward, with an
+% optional sparse mist escaping past the nozzle edge -- the physical
+% model of an aerosol can moved along a gesture. Not built on
+% `pkribbon` (discrete dots, not an offset band) but the same
+% walkpath-driven shape as every preset here.
+%
+%   opts pkspray -
+%
+% Emission is a *cumulative accumulator*, not a fixed count per stop:
+% each stop adds `Density * sp / (2*Nozzle)` to a running total (sp is
+% the actual arc-length since the previous stop, walkpath's own
+% contract), deposits its integer part, and keeps the fraction for the
+% next stop. Total particles therefore tracks arc length --
+% approximately `Density * (path length / nozzle diameter)` --
+% regardless of /Pitch, so the same options read as the same density
+% at any sampling pitch (the portability contract pkdry's per-Width
+% rate scaling gives its Markov rates). The accumulator resets at each
+% subpath's first stop: subpaths are independent marks, same doctrine
+% as pkribbon/pkdry, and this makes each subpath's own total track its
+% own length exactly rather than borrowing from its neighbors. The
+% guaranteed-final-stop duplicate (walkpath's sp==0 coincidence case)
+% then naturally deposits nothing extra.
+%
+%   /Nozzle     spray radius around the centerline (default 8). Must
+%               be > 0.
+%   /Density    mean particles deposited per one nozzle-*diameter* of
+%               travel (default 30). Must be >= 0; 0 renders nothing.
+%               Uncapped by itself -- total deposits are bounded by
+%               the safety limit below instead, which sees Density
+%               directly.
+%   /Falloff    0..1 (default 0.5): how quickly particle density
+%               thins from the centerline outward. Implemented as a
+%               radial draw r = Nozzle * (minimum of m fresh frnd
+%               draws), m = 1 + truncate(2*Falloff): min-of-m-uniforms
+%               has radial density proportional to (1 - r/Nozzle)^(m-1)
+%               -- m=1 spreads particles uniformly *in radius* (areal
+%               density still rises mildly toward the center), m=2
+%               falls off linearly, m=3 quadratically. Three discrete
+%               levels, deliberately not interpolated: the jump at
+%               Falloff 0.5 changes the texture visibly but predictably,
+%               and keeping m integral keeps the draw count (and the
+%               deposit budget below) honest.
+%   /Overspray  0..1 (default 0.12): probability each particle escapes
+%               past the nozzle edge as finer mist, placed uniformly in
+%               the band [Nozzle, Nozzle*(1+Overspray)] and drawn at
+%               half size. The escape roll is clamped at both ends the
+%               way pkdry's own probability rolls are (`pzroll`): frnd
+%               can return exactly 1.0, so a bare `frnd rate lt` would
+%               never escape at /Overspray 1.
+%   /Speck      mean particle diameter (default 1.4). Must be > 0.
+%   /Speckle    0..1 (default 0.35): per-particle diameter variation of
+%               up to +/-Speckle*Speck, clamped to never go below 10%
+%               of Speck (same clamp shape as pkdry's /WidthJitter).
+%   /Pitch      walkpath sampling pitch (default Nozzle*0.5, capped at
+%               6, same shape as every sibling). Must be > 0.
+%   /StartBurst /EndBurst   0..1 (default 0): extra particles pooled at
+%               each subpath's first/last stop -- trigger dwell before
+%               the hand starts moving / after it stops. Count is
+%               truncate(Burst * Density * 2) (a dwell of about two
+%               nozzle-diameters' worth of emission), scattered with
+%               the same radial profile over radius
+%               Nozzle*(1 + Burst*0.5) -- a dwelling nozzle blooms.
+%
+% A degenerate single-point subpath (walkpath's atend=3 case) gets one
+% dab of truncate(Density*2) particles around the point -- without it,
+% a zero-length sp would deposit nothing and a pressed-down spray dot
+% would vanish entirely (the same failure mode pkdry's dab fallback
+% guards against).
+%
+% Stencil/clipping needs no support here: every particle is a plain
+% fill inside whatever clip the caller set up (`clip` after a
+% `charpath`, an arbitrary path, anything), exactly like every other
+% mark in this file.
+%
+% Determinism: same doctrine as the rest of the file -- no library-
+% owned seed, fully reproducible under the caller's own `N srand`.
+% Per-particle draw order is pinned and deliberate: overspray roll,
+% then radial position (m interior draws, or one band draw when
+% oversprayed), then angle, then size jitter. Changing /Falloff changes
+% the number of radial draws and therefore reshuffles the whole random
+% stream downstream -- two renders differing only in /Falloff are not
+% the same pattern with different spread, they're different patterns
+% (same caveat pkdry documents for /Jitter). Still fully deterministic
+% under any fixed seed either way.
+%
+% Color is deliberately not a key: all particles fill with whatever
+% color the caller already set, same as every other preset here. The
+% caller's current path survives (flattened); drawing happens inside
+% its own gsave/newpath/grestore, batched into one path and filled
+% once for the whole call.
+%
+% Multiple subpaths each get their own independent scatter, burst(s),
+% and accumulator share. Closed subpaths need no ring special-casing:
+% their stops are walked once linearly like any other subpath's, and
+% the end burst lands where the nozzle lifts.
+%
+% Safety limit: total expected deposits are estimated during the cheap
+% counting pass (accumulated per-stop emissions + 1 truncation spare
+% per stop + both bursts' counts per subpath + the degenerate-dab count
+% for atend==3 stops) and rejected past 150000
+% (`pkspray-deposit-count-exceeds-safety-limit`) before any drawing or
+% even the second walkpath pass starts. The check lives *inside* the
+% counting callback -- every stop adds at least 1 to the estimate, so
+% a pathological fine /Pitch crosses the budget within ~150k callbacks
+% instead of walking an unbounded path to completion first (the same
+% placement argument pkdry's own check makes). The dab term is not
+% optional: a page of bare movetos reports sp=0 for every one of them
+% (zero accumulated emissions), so without it an uncapped /Density
+% could slip arbitrarily many dab particles past the estimate.
+%
+% Scratch prefix pz- (pkspray/pzpdot/pzburstcluster/pzroll) --
+% deliberately distinct from pk-/pn-/pb-, see the file header.
+/pzroll {                                          % rate -> bool
+% Clamped probability roll: true with probability rate, certain at
+% rate >= 1, impossible at rate <= 0. Mirrors pkdry's pbroll -- artkit's
+% frnd can land on exactly 1.0, which a bare `frnd rate lt` would turn
+% into "never" even for a documented-certain rate of 1 (pkdry's own
+% header records the confirmed seed-5659 failure that fix came from).
+    dup 1 ge
+        { pop true }
+        { dup 0 le { pop false } { frnd exch lt } ifelse }
+    ifelse
+} def
+
+% cx cy baseradius pzpdot -   (append one particle dot to the current
+% path; consumes this particle's randomness in the pinned order the
+% pkspray header documents. Reads the pzm/pzoverspray/pznozzle/
+% pzspeck/pzspeckle globals pkspray sets fresh on every call.)
+/pzpdot {
+    /pzdbR exch def /pzdy exch def /pzdx exch def
+    pzoverspray pzroll {
+        % Escaped mist: uniformly in the outer band, half size.
+        frnd pznozzle pzoverspray mul mul pznozzle add
+        /pzdr exch def
+        /pzdsz pzspeck 0.5 mul def
+    } {
+        % Interior: minimum of m fresh draws, scaled by the base
+        % radius. Init above 1 (frnd's ceiling) so the first draw
+        % always wins the min.
+        /pzrmin 2 def
+        1 1 pzm {
+            pop frnd dup pzrmin lt { /pzrmin exch def } { pop } ifelse
+        } for
+        /pzdr pzdbR pzrmin mul def
+        /pzdsz pzspeck def
+    } ifelse
+    % Angle and size jitter draw regardless of branch, in pinned order.
+    /pzda frnd 360 mul def
+    /pzdsz pzdsz pzspeckle pzspeck mul pkjit add def
+    pzdsz pzspeck 0.1 mul lt { /pzdsz pzspeck 0.1 mul def } if
+    /pzdpx pzdx pzdr pzda cos mul add def
+    /pzdpz pzdy pzdr pzda sin mul add def
+    % Jump to the circle's own start point before arcing: `arc` from a
+    % current point would connect the previous particle to this one
+    % with a stray line across the whole batched path.
+    pzdpx pzdsz 2 div add pzdpz moveto
+    pzdpx pzdpz pzdsz 2 div 0 360 arc
+} def
+
+% x y baseradius count pzburstcluster -   (count particles pooled
+% around one point: trigger-dwell bursts and the degenerate dab)
+/pzburstcluster {
+    /pzbc exch def /pzbbR exch def /pzby exch def /pzbx exch def
+    1 1 pzbc { pop pzbx pzby pzbbR pzpdot } for
+} def
+
+% opts pkspray -
+/pkspray {
+    /pzopts exch def
+
+    % Validation runs unconditionally, before any walking, even for an
+    % empty path -- pkribbon validates its whole dict before looking at
+    % the path and pknib learned the hard way not to gate that on
+    % non-emptiness (Codex review, PR #77). No proc-valued options
+    % exist here, so every field gets only the executable-value guard:
+    % binding a procedure straight to its name would auto-execute it on
+    % every later bare reference (the trap pkgetdef's own header
+    % documents), so `/key load xcheck` rejects them outright the way
+    % pkribbon rejects an executable /Width (Codex review, round 7).
+    /pznozzle pzopts /Nozzle 8 pkgetdef def
+    /pznozzle load xcheck { pkspray-nozzle-must-not-be-a-procedure } if
+    pznozzle 0 le { pkspray-nozzle-must-be-positive } if
+
+    /pzdensity pzopts /Density 30 pkgetdef def
+    /pzdensity load xcheck { pkspray-density-must-not-be-a-procedure } if
+    pzdensity 0 lt { pkspray-density-must-be-non-negative } if
+
+    /pzfalloff pzopts /Falloff 0.5 pkgetdef def
+    /pzfalloff load xcheck { pkspray-falloff-must-not-be-a-procedure } if
+    pzfalloff 0 lt pzfalloff 1 gt or { pkspray-falloff-must-be-0-to-1 } if
+
+    /pzoverspray pzopts /Overspray 0.12 pkgetdef def
+    /pzoverspray load xcheck
+        { pkspray-overspray-must-not-be-a-procedure } if
+    pzoverspray 0 lt pzoverspray 1 gt or
+        { pkspray-overspray-must-be-0-to-1 } if
+
+    /pzspeck pzopts /Speck 1.4 pkgetdef def
+    /pzspeck load xcheck { pkspray-speck-must-not-be-a-procedure } if
+    pzspeck 0 le { pkspray-speck-must-be-positive } if
+
+    /pzspeckle pzopts /Speckle 0.35 pkgetdef def
+    /pzspeckle load xcheck { pkspray-speckle-must-not-be-a-procedure } if
+    pzspeckle 0 lt pzspeckle 1 gt or
+        { pkspray-speckle-must-be-0-to-1 } if
+
+    /pzpitch
+        pzopts /Pitch
+        pznozzle 0.5 mul dup 6 gt { pop 6 } if
+        pkgetdef
+    def
+    /pzpitch load xcheck { pkspray-pitch-must-not-be-a-procedure } if
+    pzpitch 0 le { pkspray-pitch-must-be-positive } if
+
+    /pzstartburst pzopts /StartBurst 0 pkgetdef def
+    /pzstartburst load xcheck
+        { pkspray-startburst-must-not-be-a-procedure } if
+    pzstartburst 0 lt pzstartburst 1 gt or
+        { pkspray-startburst-must-be-0-to-1 } if
+
+    /pzendburst pzopts /EndBurst 0 pkgetdef def
+    /pzendburst load xcheck { pkspray-endburst-must-not-be-a-procedure } if
+    pzendburst 0 lt pzendburst 1 gt or
+        { pkspray-endburst-must-be-0-to-1 } if
+
+    % Radial draw count for /Falloff: three discrete levels 1..3, see
+    % the header.
+    /pzm 1 pzfalloff 2 mul truncate add def
+
+    % Counting pass: number the stops, run the deposit-budget check
+    % inside the callback (see the header for why inside), and consume
+    % all six operands every call -- walkpath's moveto handler emits a
+    % subpath's closing stop *before* consuming the next subpath's x/y,
+    % so anything left on the stack corrupts it (artkit's own warning;
+    % store atend/sp by name first, then drop the rest).
+    /pzcount 0 def /pzest 0 def
+    pzpitch {
+        /pzae exch def /pzasp exch def pop pop pop pop
+        /pzest
+            pzest
+            pzdensity pzasp mul pznozzle 2 mul div
+            add 1 add
+        def
+        pzae 1 and 1 eq {
+            /pzest pzest pzstartburst pzdensity 2 mul mul add def
+        } if
+        pzae 2 and 2 eq pzae 3 ne and {
+            /pzest pzest pzendburst pzdensity 2 mul mul add def
+        } if
+        % Degenerate single-point dab: sp arrives 0, so the accumulated-
+        % emission term never sees it -- the dab's full count goes into
+        % the estimate explicitly or an uncapped /Density slips past
+        % the budget (review finding on this very implementation plan).
+        pzae 3 eq {
+            /pzest pzest pzdensity 2 mul add def
+        } if
+        pzest 150000 gt
+            { pkspray-deposit-count-exceeds-safety-limit } if
+        /pzcount pzcount 1 add def
+    } walkpath
+
+    % Collection pass into a preallocated array -- count, then fill,
+    % the only shape that survives walkpath's cross-subpath stack
+    % discipline (same as pkribbon's pkraw).
+    /pzraw pzcount array def
+    /pzci 0 def
+    pzpitch {
+        6 array astore pzraw pzci 3 -1 roll put
+        /pzci pzci 1 add def
+    } walkpath
+
+    pzcount 0 gt {
+        gsave
+        newpath
+        /pzacc 0 def
+        0 1 pzcount 1 sub {
+            /pzi exch def
+            pzraw pzi get
+            dup 0 get /pzx exch def
+            dup 1 get /pzy exch def
+            dup 4 get /pzsp exch def
+            5 get /pzae exch def
+            pzae 3 eq {
+                % Degenerate single point: one pressed-down dab.
+                pzx pzy pznozzle pzdensity 2 mul truncate
+                pzburstcluster
+            } {
+                pzae 1 and 1 eq {
+                    % Subpath start: reset this subpath's accumulator
+                    % (subpaths are independent marks) and fire the
+                    % start burst if any.
+                    /pzacc 0 def
+                    pzstartburst 0 gt {
+                        pzx pzy pznozzle pzstartburst 0.5 mul 1 add mul
+                        pzstartburst pzdensity mul 2 mul truncate
+                        pzburstcluster
+                    } if
+                } if
+                /pzacc pzacc pzdensity pzsp mul pznozzle 2 mul div add def
+                /pzn pzacc truncate def
+                /pzacc pzacc pzn sub def
+                1 1 pzn { pop pzx pzy pznozzle pzpdot } for
+                pzae 2 and 2 eq {
+                    pzendburst 0 gt {
+                        pzx pzy
+                        pznozzle pzendburst 0.5 mul 1 add mul
+                        pzendburst pzdensity mul 2 mul truncate
+                        pzburstcluster
+                    } if
+                } if
+            } ifelse
+        } for
+        fill
+        grestore
     } if
 } def

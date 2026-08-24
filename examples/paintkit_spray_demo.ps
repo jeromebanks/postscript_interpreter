@@ -1,0 +1,111 @@
+%!PS-Adobe-3.0
+%%Title: Paintkit — spray-paint deposition brush with seeded particle scatter (issue #44)
+%%BoundingBox: 0 0 620 760
+%%EndComments
+
+% Specimen for paintkit's pkspray (lib/paintkit.ps): seeded opaque
+% particles deposited around each sampled centerline stop, thinning
+% outward under a radial falloff -- built on artkit's walkpath
+% (issue #40), not on pkribbon. Row 1 is the acceptance criterion's
+% two passes of one gesture: a clean pass and a wide aerosol pass.
+% Row 2 varies /Falloff and /Overspray. Row 3 is stencils: a word
+% sprayed through a charpath clip, then through an arbitrary path --
+% no library support needed, particles respect whatever clip is set.
+% Row 4 is a short burst/tag mark with trigger-dwell bursts at both
+% ends.
+%
+%   pscat --page 620x760 examples/paintkit_spray_demo.ps --png paintkit_spray.png
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+
+11 srand
+
+1 1 1 setrgbcolor clippath fill
+
+% x y label -   (dz- prefix: demo-local, distinct from paintkit's own
+% reserved pk-/pn-/pb-/pz- prefixes)
+/dzlabel {
+    /dzllabel exch def /dzly exch def /dzlx exch def
+    gsave
+        0.55 0.55 0.55 setrgbcolor
+        /Helvetica findfont 11 scalefont setfont
+        dzlx dzly moveto dzllabel show
+    grestore
+} def
+
+% --- row 1: one gesture, two nozzles ------------------------------------
+
+/stone pal 1 get aload pop setrgbcolor
+
+20 720 (clean pass -- tight nozzle) dzlabel
+newpath 20 685 moveto 200 685 lineto
+<< /Nozzle 9 /Density 34 >> pkspray
+
+220 720 (wide aerosol pass -- same gesture) dzlabel
+newpath 220 685 moveto 400 685 lineto
+<< /Nozzle 26 /Density 22 /Falloff 0.35 /Speck 2 >> pkspray
+
+420 720 (heavy overspray mist) dzlabel
+newpath 420 685 moveto 600 685 lineto
+<< /Nozzle 12 /Density 30 /Overspray 0.85 /Speckle 0.6 >> pkspray
+
+% --- row 2: falloff levels ------------------------------------------------
+
+/tide pal 2 get aload pop setrgbcolor
+
+20 610 (falloff 0 -- even in radius) dzlabel
+newpath 20 570 moveto 180 570 lineto
+<< /Nozzle 18 /Density 40 /Falloff 0 /Speckle 0.15 >> pkspray
+
+220 610 (falloff 0.5 -- thins linearly) dzlabel
+newpath 220 570 moveto 380 570 lineto
+<< /Nozzle 18 /Density 40 /Falloff 0.5 /Speckle 0.15 >> pkspray
+
+420 610 (falloff 1 -- hugs the centerline) dzlabel
+newpath 420 570 moveto 580 570 lineto
+<< /Nozzle 18 /Density 40 /Falloff 1 /Speckle 0.15 >> pkspray
+
+% --- row 3: stencils --------------------------------------------------------
+
+% A word sprayed through its own charpath'd outline as the clip: the
+% classic stencil. Particles are plain fills, so any active clip works.
+% Several passes cover the glyphs' height -- one thin line wouldn't.
+20 498 (stencil through a charpath clip) dzlabel
+gsave
+    newpath 24 340 moveto
+    /Helvetica-Bold findfont 110 scalefont setfont
+    (SPRAY) true charpath clip
+    0.42 0.09 0.06 setrgbcolor
+    355 25 430 {
+        /dzsy exch def
+        newpath 10 dzsy moveto 610 dzsy lineto
+        << /Nozzle 11 /Density 55 /Falloff 0.2 /Speckle 0.2 >> pkspray
+    } for
+grestore
+
+% The same idea through an arbitrary path: artkit's star as the mask.
+% Several passes again -- one thin line only grazes the star's tip.
+320 498 (stencil through an arbitrary path) dzlabel
+gsave
+    newpath 490 385 55 25 5 star clip
+    0.13 0.52 0.53 setrgbcolor
+    345 28 429 {
+        /dzsy exch def
+        newpath 410 dzsy moveto 570 dzsy lineto
+        << /Nozzle 14 /Density 45 /Falloff 0.25 >> pkspray
+    } for
+grestore
+
+% --- row 4: a short burst/tag mark ------------------------------------------
+
+/carnival pal 0 get aload pop setrgbcolor
+
+20 250 (tag mark -- bursts pooled at both ends) dzlabel
+newpath
+60 90 moveto
+140 190 lineto 240 120 lineto 350 210 lineto 480 100 lineto
+<< /Nozzle 14 /Density 36 /Falloff 0.6 /Speckle 0.5
+   /StartBurst 0.8 /EndBurst 1 >> pkspray
+
+showpage
