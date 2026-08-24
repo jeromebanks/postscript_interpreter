@@ -76,7 +76,7 @@ cloud2 << /Nozzle 36 /Density 45 /Falloff 0.3 /Speck 0.6
     pop
     /nsx 580 frnd mul 20 add def
     /nsy 560 frnd mul 240 add def
-    nsx 110 lt nsx 510 gt or nsy 280 lt nsy 800 gt or {
+    nsx 110 lt nsx 510 gt or nsy 280 lt nsy 800 gt or or {
         parch3 aload pop setrgbcolor
         newpath nsx nsy 0.9 frnd mul 0.8 add 0 360 arc fill
     } if
@@ -112,13 +112,17 @@ parch3 aload pop setrgbcolor
 0.008 0.012 0.035 setrgbcolor
 newpath 0 0 moveto 620 0 lineto 620 140 lineto 0 140 lineto closepath fill
 0.035 0.05 0.11 setrgbcolor
-60 40 moveto 560 40 lineto
+% newpath before every band: pkdry preserves the caller's path, so
+% without it each band re-walks its predecessors (and the first would
+% re-walk the field rectangle's perimeter) with different options and
+% random draws (Codex review, round 2).
+newpath 60 40 moveto 560 40 lineto
 << /Width 7 /Bristles 9 /Load 0.45 /Dropout 0.55
    /BristleWidth 0.9 /Spread 1 >> pkdry
-40 90 moveto 580 90 lineto
+newpath 40 90 moveto 580 90 lineto
 << /Width 6 /Bristles 8 /Load 0.4 /Dropout 0.6
    /BristleWidth 0.8 /Spread 1 >> pkdry
-80 118 moveto 540 118 lineto
+newpath 80 118 moveto 540 118 lineto
 << /Width 5 /Bristles 7 /Load 0.35 /Dropout 0.65
    /BristleWidth 0.7 /Spread 1 >> pkdry
 
