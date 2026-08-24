@@ -3,6 +3,89 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## A spray-paint deposition brush (issue #44, 2026-08-24)
+
+Closes issue #44, the fourth of the painterly-brush series (#42-#53):
+`lib/paintkit.ps`'s `pkspray`, seeded opaque particles deposited around
+each sampled centerline stop under a radial falloff, with an optional
+overspray mist past the nozzle edge and optional trigger-dwell bursts
+pooling particles at each subpath's ends. The one preset in the file
+*not* built on `pkribbon` -- spray is discrete particle deposition, not
+an offset band -- but the same walkpath-driven shape as everything else
+here (issue #40's sampler, #41's opts conventions, #43's safety-limit
+doctrine).
+
+Emission uses a **cumulative accumulator**, not a fixed count per stop:
+each stop adds `Density * sp / (2*Nozzle)` to a running total, deposits
+the integer part, and keeps the fraction. Total particles therefore
+track arc length -- about `Density` per nozzle-diameter of travel --
+regardless of `/Pitch`, the same portability contract pkdry's
+per-Width rate scaling gives its Markov rates (and pinned by a
+dedicated pitch-independence test, which a buggy fixed-per-stop
+implementation would fail while passing everything else). The
+accumulator resets at each subpath's first stop, so subpaths stay
+independent marks; the guaranteed-final-stop duplicate (sp==0
+coincidence case) then naturally deposits nothing extra at a closed
+subpath's seam.
+
+Radial falloff avoids `pow`/`exp` entirely: the particle's radius is
+`Nozzle * (minimum of m fresh frnd draws)`, `m = 1 + truncate(2*
+Falloff)`. Min-of-m-uniforms has radial density ∝ (1 - r/Nozzle)^(m-1)
+-- three discrete levels, deliberately not interpolated (the jump at
+Falloff 0.5 is visible but predictable, and keeping m integral keeps
+the per-particle draw count, and therefore the deposit budget, honest).
+One wording subtlety the plan review caught: m=1 is uniform *in
+radius*, not a uniform disc (areal density still rises mildly toward
+the center) -- the header says so.
+
+Two bugs the test suite caught before any review did, both in the
+burst/dab plumbing:
+- The end-burst test failed with *identical* ink counts for burst and
+  no-burst: `pzendburst pzdensity 2 mul truncate` computes
+  `Density*2` and leaves `EndBurst` stranded on the stack, so
+  `pzburstcluster` read the burst strength as the base radius, the
+  nozzle-scaled radius as a y coordinate, drew the cluster in the
+  wrong place, and leaked an operand. The dab block only worked
+  because `Density*2` involves no second factor. Fixed by multiplying
+  through: `pzendburst pzdensity mul 2 mul truncate`.
+- The demo's first draft sprayed the star stencil with a single thin
+  line that only grazed the star's bottom tip -- visually invisible
+  despite "working." Caught by looking at the rendered page, not by
+  any test (the same lesson as #43's dab fix: render the actual demo
+  and look at it). Several passes cover the shape's extent now, same
+  as the charpath stencil row.
+
+The deposit-budget estimate includes the degenerate-dab count
+explicitly (a review finding on the plan, before implementation): a
+bare moveto reports sp=0, so its `truncate(Density*2)`-particle dab is
+invisible to the accumulated-emission term, and `/Density` is
+uncapped -- without the explicit term, a page of movetos with huge
+`/Density` slips arbitrarily many deposits past the limit. There's a
+regression test for exactly that bypass. The check itself runs inside
+the counting callback (every stop adds ≥1 spare, so a pathological
+fine `/Pitch` rejects within ~budget-many callbacks), same placement
+argument as pkdry's. Overspray's escape roll is clamped at both ends
+(`pzroll`, mirroring `pbroll`): `frnd` can return exactly 1.0, which
+would make `/Overspray 1` never escape with a bare `frnd rate lt`.
+
+Scratch prefix `pz-` (`pzpdot`/`pzburstcluster`/`pzroll`),
+deliberately distinct from pk-/pn-/pb- per the file-header doctrine.
+All particles of a call batch into one path and fill once; per-particle
+draw order (overspray roll, radial position, angle, size) is pinned
+and documented, since changing `/Falloff` changes the draw count and
+therefore reshuffles the whole random stream. Cataloged in
+`src/capabilities.rs` (`pkspray` + the three `pz-` internals in
+`PAINTKIT_INTERNAL`); tested against real Ghostscript both through a
+synthetic driver and through `examples/paintkit_spray_demo.ps` itself,
+same pattern as #42/#43.
+
+Deliberately out of scope, matching the issue's own scope note: no
+fluid dynamics, raster convolution, or aerosol physics; no per-particle
+color variation (color is not a key, same doctrine as every preset
+here); no closed-subpath ring special-casing (discrete dots don't
+care about closure); no site/gallery wiring (the demo surface for
+library presets is `examples/*_demo.ps` + tests, matching #42/#43).
+
 ## A dry-bristle brush with deterministic broken coverage (issue #43, 2026-08-22)
 
 Closes issue #43, the third of the painterly-brush series (#42-#53)

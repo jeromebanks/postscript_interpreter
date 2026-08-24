@@ -479,6 +479,22 @@ deposit budget before any drawing starts, the two safety limits
 against an accidentally unbounded render. `examples/paintkit_dry_demo.ps`
 shows loaded/medium-dry/very-dry presets, bristle count/spread/width-
 jitter variation, small per-bristle color variation, and a flourish.
+`pkspray` (issue #44) is a spray-paint brush -- the one preset not
+built on `pkribbon`, since spray is discrete particle deposition rather
+than an offset band: seeded opaque particles scattered around each
+sampled centerline stop under a radial falloff (three discrete levels,
+min-of-m-uniforms draws, no pow/exp), an optional overspray mist
+escaping past the nozzle edge, per-particle size variation, and
+optional trigger-dwell bursts pooling particles at each subpath's
+ends. Total deposits track arc length (about `/Density` per
+nozzle-diameter of travel) regardless of `/Pitch`, and are bounded by
+a deposit-budget safety limit checked during the counting pass, before
+any drawing. Stencils need no library support: particles are plain
+fills, so any active clip (`charpath` + `clip` included) masks them.
+`examples/paintkit_spray_demo.ps` shows a clean pass, a wide aerosol
+pass, heavy overspray, the falloff levels, a word sprayed through a
+charpath stencil, a star sprayed through an arbitrary-path stencil,
+and a tag mark with bursts pooled at both ends.
 
 ```postscript
 (lib/artkit.ps) run

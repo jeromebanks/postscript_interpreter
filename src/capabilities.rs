@@ -237,13 +237,15 @@ pub const ARTKIT_INTERNAL: &[&str] = &[
 pub const PAGEKIT_INTERNAL: &[&str] = &["pggetdef", "pgzfitmax", "pgframe"];
 
 /// Top-level names `lib/paintkit.ps` defines beyond `pkribbon`/`pknib`/
-/// `pkdry` and the three `/Pressure` presets (`pkflat`/`pktaper`/
-/// `pkbell`, cataloged separately since they're documented, directly
-/// referenceable by name): the dict-default reader, the internal
-/// ribbon-construction helpers (edge offsetting, cap/loop building,
-/// taper/half-width math), `pknib`'s own travel-angle sampling helpers
-/// (issue #42), and `pkdry`'s own per-bristle dash-run helper and
-/// clamped-probability roll (issue #43).
+/// `pkdry`/`pkspray` and the three `/Pressure` presets (`pkflat`/
+/// `pktaper`/`pkbell`, cataloged separately since they're documented,
+/// directly referenceable by name): the dict-default reader, the
+/// internal ribbon-construction helpers (edge offsetting, cap/loop
+/// building, taper/half-width math), `pknib`'s own travel-angle
+/// sampling helpers (issue #42), `pkdry`'s per-bristle dash-run helper
+/// and clamped-probability roll (issue #43), and `pkspray`'s particle
+/// generator, burst-cluster helper, and clamped-probability roll
+/// (issue #44).
 pub const PAINTKIT_INTERNAL: &[&str] = &[
     "pkgetdef",
     "pktaperf",
@@ -259,6 +261,9 @@ pub const PAINTKIT_INTERNAL: &[&str] = &[
     "pnangleat",
     "pnpressure",
     "pbdashrun",
+    "pzpdot",
+    "pzburstcluster",
+    "pzroll",
 ];
 
 /// Top-level names `lib/handscript.ps` defines beyond `hs-write`/
@@ -1154,6 +1159,61 @@ static ENTRIES: &[Entry] = &[
         ],
         PAINTKIT,
         "newpath ... << /Width 16 /Load 0.9 /Dropout 0.1 >> pkdry",
+        LIB
+    ),
+    entry!(
+        "pkspray",
+        CapabilityKind::Procedure,
+        "A spray-paint brush: seeded opaque particles deposited around each sampled centerline stop, thinning outward under a radial falloff, with an optional overspray mist past the nozzle edge and optional start/end trigger-dwell bursts. Total deposits track arc length (about Density per nozzle-diameter of travel) regardless of Pitch; deterministic under the caller's own srand; respects any active clip, so stencils are just clip before calling.",
+        &[
+            Param {
+                name: "Nozzle",
+                description: "Spray radius around the centerline",
+                default: Some("8")
+            },
+            Param {
+                name: "Density",
+                description: "Mean particles deposited per one nozzle-diameter of travel; uncapped, bounded by the deposit-budget safety limit instead",
+                default: Some("30")
+            },
+            Param {
+                name: "Falloff",
+                description: "0..1 how quickly density thins outward; three discrete levels (min-of-m-uniforms radial draws, m = 1 + truncate(2*Falloff))",
+                default: Some("0.5")
+            },
+            Param {
+                name: "Overspray",
+                description: "0..1 probability each particle escapes past the nozzle edge as half-size mist in the band [Nozzle, Nozzle*(1+Overspray)]",
+                default: Some("0.12")
+            },
+            Param {
+                name: "Speck",
+                description: "Mean particle diameter",
+                default: Some("1.4")
+            },
+            Param {
+                name: "Speckle",
+                description: "0..1 per-particle diameter variation, clamped to never go below 10% of Speck",
+                default: Some("0.35")
+            },
+            Param {
+                name: "Pitch",
+                description: "walkpath sampling pitch for the shared centerline pass",
+                default: Some("Nozzle*0.5, capped at 6")
+            },
+            Param {
+                name: "StartBurst",
+                description: "0..1 extra particles pooled at each subpath's first stop (trigger dwell)",
+                default: Some("0")
+            },
+            Param {
+                name: "EndBurst",
+                description: "0..1 extra particles pooled at each subpath's last stop (trigger dwell)",
+                default: Some("0")
+            },
+        ],
+        PAINTKIT,
+        "newpath ... << /Nozzle 12 /Density 40 >> pkspray",
         LIB
     ),
     // --- Procedures: shapes ----------------------------------------------
