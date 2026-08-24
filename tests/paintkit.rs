@@ -2411,3 +2411,72 @@ fn spray_roll_clamps_rate_1_and_0() {
         "rate 1 must be certainly true, rate 0 certainly false (0.5 consumed)"
     );
 }
+
+#[test]
+fn spray_overspray_band_scales_with_the_burst_radius() {
+    // Codex review, PR #83: the overspray band used to be computed from
+    // the nozzle radius even for burst particles, whose base radius is
+    // the bloomed Nozzle*(1+Burst*0.5) -- so with /Overspray 1 every
+    // burst particle ignored the spatial bloom entirely. The band must
+    // scale off the particle's own base radius: with a start burst the
+    // escaped mist reaches well past the plain burst bloom.
+    fn burst_reach(overspray: f64) -> i32 {
+        let mut it = fresh(240, 200);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 53 srand \
+             newpath 120 100 moveto \
+             << /Nozzle 20 /Density 30 /StartBurst 1 /Overspray {overspray} >> pkspray"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        // Chebyshev distance of the farthest ink pixel from the burst
+        // center; the point path deposits nothing but dab + burst.
+        let mut max_off = 0i32;
+        for y in 0..200u32 {
+            for x in 0..240u32 {
+                let p = it.gfx().pixmap.pixel(x, y).expect("in bounds");
+                if luma(p) < 180.0 {
+                    let dy = (y as i32 - 100).abs();
+                    let dx = (x as i32 - 120).abs();
+                    max_off = max_off.max(dx.max(dy));
+                }
+            }
+        }
+        max_off
+    }
+    let plain = burst_reach(0.0);
+    let mist = burst_reach(1.0);
+    // Plain burst bloom: radius 1.5*Nozzle = 30 (+speck slack).
+    assert!(
+        plain <= 34,
+        "overspray 0 should stay within the bloom, got {plain}"
+    );
+    // Oversprayed burst mist scales off the bloom: out to 2*30 = 60.
+    assert!(
+        mist >= 42,
+        "oversprayed burst should throw mist past the plain bloom, got {mist}"
+    );
+}
+
+#[test]
+fn spray_degenerate_point_honors_endpoint_bursts() {
+    // Codex review, PR #83: a bare moveto reports atend==3 (both first
+    // and last stop), but the dab-only branch skipped both burst
+    // options entirely -- enabling either had no effect on a single-
+    // point subpath. Bursts must land on top of the dab.
+    fn dab_ink(end_burst: f64) -> usize {
+        let mut it = fresh(160, 160);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 59 srand newpath 80 80 moveto \
+             << /Nozzle 12 /Density 24 /EndBurst {end_burst} >> pkspray"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        ink_count(&it)
+    }
+    let plain = dab_ink(0.0);
+    let burst = dab_ink(1.0);
+    assert!(plain > 0, "dab should mark on its own");
+    assert!(
+        burst > plain * 3 / 2,
+        "endpoint bursts must apply to a single-point subpath: plain {plain} burst {burst}"
+    );
+}

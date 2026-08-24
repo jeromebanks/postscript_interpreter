@@ -1245,9 +1245,12 @@
 %               and keeping m integral keeps the draw count (and the
 %               deposit budget below) honest.
 %   /Overspray  0..1 (default 0.12): probability each particle escapes
-%               past the nozzle edge as finer mist, placed uniformly in
-%               the band [Nozzle, Nozzle*(1+Overspray)] and drawn at
-%               half size. The escape roll is clamped at both ends the
+%               past its base radius as finer mist, placed uniformly in
+%               the band [R, R*(1+Overspray)] -- R is the particle's
+%               own base radius: the nozzle for ordinary particles,
+%               the bloomed Nozzle*(1+Burst*0.5) for burst/dab
+%               particles -- and drawn at half size. The escape roll is
+%               clamped at both ends the
 %               way pkdry's own probability rolls are (`pzroll`): frnd
 %               can return exactly 1.0, so a bare `frnd rate lt` would
 %               never escape at /Overspray 1.
@@ -1269,7 +1272,9 @@
 % dab of truncate(Density*2) particles around the point -- without it,
 % a zero-length sp would deposit nothing and a pressed-down spray dot
 % would vanish entirely (the same failure mode pkdry's dab fallback
-% guards against).
+% guards against). A single point is also both its subpath's first and
+% last stop, so requested /StartBurst//EndBurst clusters land there
+% too, on top of the dab.
 %
 % Stencil/clipping needs no support here: every particle is a plain
 % fill inside whatever clip the caller set up (`clip` after a
@@ -1336,8 +1341,11 @@
 /pzpdot {
     /pzdbR exch def /pzdy exch def /pzdx exch def
     pzoverspray pzroll {
-        % Escaped mist: uniformly in the outer band, half size.
-        frnd pznozzle pzoverspray mul mul pznozzle add
+        % Escaped mist: uniformly in the outer band, half size. The
+        % band scales off the particle's own base radius -- the nozzle
+        % for ordinary particles, the bloomed burst radius for
+        % trigger-dwell/dab particles (Codex review, PR #83).
+        frnd pzdbR pzoverspray mul mul pzdbR add
         /pzdr exch def
         /pzdsz pzspeck 0.5 mul def
     } {
@@ -1448,10 +1456,15 @@
             pzdensity pzasp mul pznozzle 2 mul div
             add 1 add
         def
-        pzae 1 and 1 eq pzae 3 ne and {
+        % Burst estimates key off the same bitmask bits the drawing
+        % pass does, with no atend==3 carve-out either side: a
+        % degenerate single point is both its subpath's first and last
+        % stop (3 has both bits set), so both bursts apply there and
+        % both terms belong in the estimate (Codex review, PR #83).
+        pzae 1 and 1 eq {
             /pzest pzest pzstartburst pzdensity 2 mul mul add def
         } if
-        pzae 2 and 2 eq pzae 3 ne and {
+        pzae 2 and 2 eq {
             /pzest pzest pzendburst pzdensity 2 mul mul add def
         } if
         % Degenerate single-point dab: sp arrives 0, so the accumulated-
@@ -1488,9 +1501,22 @@
             dup 4 get /pzsp exch def
             5 get /pzae exch def
             pzae 3 eq {
-                % Degenerate single point: one pressed-down dab.
+                % Degenerate single point: one pressed-down dab. A
+                % single point is also both its subpath's first and
+                % last stop, so requested endpoint bursts apply here
+                % too (Codex review, PR #83).
                 pzx pzy pznozzle pzdensity 2 mul truncate
                 pzburstcluster
+                pzstartburst 0 gt {
+                    pzx pzy pznozzle pzstartburst 0.5 mul 1 add mul
+                    pzstartburst pzdensity mul 2 mul truncate
+                    pzburstcluster
+                } if
+                pzendburst 0 gt {
+                    pzx pzy pznozzle pzendburst 0.5 mul 1 add mul
+                    pzendburst pzdensity mul 2 mul truncate
+                    pzburstcluster
+                } if
             } {
                 pzae 1 and 1 eq {
                     % Subpath start: reset this subpath's accumulator
