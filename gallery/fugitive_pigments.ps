@@ -1,0 +1,248 @@
+%!PS-Adobe-3.0
+%%Title: Fugitive Pigments — a poetry broadside for the paintkit brushes
+%%BoundingBox: 0 0 620 1000
+%%EndComments
+
+% A poetry broadside: an original poem, typeset in Palatino, illustrated
+% end to end with the painterly brushes. The title is spray-stenciled
+% through its own charpath; the milky way is pkspray deposition along
+% two curved centerlines (soft cloud passes plus a fine speck pass over
+% the same walks); the moon wears a spray halo; the horizon glow is
+% spray hugging a low line; the reeds are pknib tapers, each seed head
+% a small spray dab; the field is pkdry broken texture. Almost nothing
+% on the page is a plain stroke or fill — the brushes are the ink.
+%
+%   pscat --page 620x1000 gallery/fugitive_pigments.ps
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+
+84 srand
+
+/noct0 [0.02 0.03 0.08] def
+/noct1 [0.07 0.10 0.22] def
+/noct2 [0.13 0.55 0.72] def
+/noct3 [0.25 0.90 0.85] def
+/noct4 [0.95 0.35 0.65] def
+/parch4 [0.93 0.91 0.87] def
+/parch3 [0.82 0.78 0.72] def
+/ember3 [0.98 0.55 0.12] def
+/ember4 [1.00 0.85 0.40] def
+/dusk3  [0.85 0.48 0.34] def
+/dusk4  [0.98 0.80 0.53] def
+
+% --- ground: deep indigo, lifting toward the top ----------------------
+
+noct0 aload pop setrgbcolor clippath fill
+
+% A breath of lighter indigo high in the sky, so the top never reads
+% as flat black behind the title.
+noct1 aload pop setrgbcolor
+newpath -60 930 moveto 680 930 lineto
+<< /Nozzle 90 /Density 5 /Falloff 0.6 /Speck 3 /Pitch 5 >> pkspray
+
+% --- the milky way ------------------------------------------------------
+% Two curved centerlines walked repeatedly: soft teal cloud, a pink
+% wisp inside it, then fine star dust along the same shapes — cloud
+% and stars share one silhouette.
+
+/cloud1 { newpath -60 905 moveto 160 945 420 915 680 860 curveto } def
+/cloud2 { newpath -60 845 moveto 180 900 400 960 680 915 curveto } def
+
+% Glow is layered small specks, not big ones: each pass lays hundreds
+% of fine particles hugging the centerline; falloff keeps the spine
+% dense and the edges misty.
+noct2 aload pop setrgbcolor
+cloud1 << /Nozzle 48 /Density 200 /Falloff 0.7 /Overspray 0.4
+          /Speck 2.2 /Speckle 0.6 /Pitch 6 >> pkspray
+cloud2 << /Nozzle 36 /Density 140 /Falloff 0.7 /Overspray 0.35
+          /Speck 1.8 /Speckle 0.6 /Pitch 6 >> pkspray
+
+noct4 aload pop setrgbcolor
+cloud1 << /Nozzle 22 /Density 80 /Falloff 0.75 /Speck 1.6
+          /Speckle 0.5 /Pitch 6 >> pkspray
+
+parch4 aload pop setrgbcolor
+cloud1 << /Nozzle 46 /Density 60 /Falloff 0.25 /Speck 0.7
+          /Speckle 0.5 /Pitch 5 >> pkspray
+cloud2 << /Nozzle 36 /Density 45 /Falloff 0.3 /Speck 0.6
+          /Speckle 0.5 /Pitch 5 >> pkspray
+
+% --- scattered night stars --------------------------------------------
+% Sparse singles from artkit's seeded stream, kept out of the poem's
+% column; a few bright ones wear tiny spray halos.
+
+1 1 110 {
+    pop
+    /nsx 580 frnd mul 20 add def
+    /nsy 560 frnd mul 240 add def
+    nsx 110 lt nsx 510 gt or nsy 280 lt nsy 800 gt or {
+        parch3 aload pop setrgbcolor
+        newpath nsx nsy 0.9 frnd mul 0.8 add 0 360 arc fill
+    } if
+} for
+
+/nightstar { /nhx exch def /nhy exch def
+    parch4 aload pop setrgbcolor
+    newpath nhx nhy 1.1 0 360 arc fill
+    newpath nhx nhy 7 0 360 arc
+    << /Nozzle 4.5 /Density 9 /Falloff 0.5 /Speck 0.7 /Pitch 2 >> pkspray
+} def
+
+150 955 nightstar
+60 780 nightstar
+585 700 nightstar
+480 620 nightstar
+95 560 nightstar
+560 430 nightstar
+40 350 nightstar
+
+% --- moon with a spray halo -------------------------------------------
+
+parch4 aload pop setrgbcolor
+newpath 545 935 17 0 360 arc fill
+newpath 545 935 30 0 360 arc
+parch3 aload pop setrgbcolor
+<< /Nozzle 9 /Density 8 /Falloff 0.55 /Speck 1.3 /Pitch 3 >> pkspray
+
+% --- horizon glow and the field ----------------------------------------
+% The field goes down first so the glow's overspray falls ON the field
+% and softens the horizon line instead of being cut by it.
+
+0.008 0.012 0.035 setrgbcolor
+newpath 0 0 moveto 620 0 lineto 620 140 lineto 0 140 lineto closepath fill
+0.035 0.05 0.11 setrgbcolor
+60 40 moveto 560 40 lineto
+<< /Width 7 /Bristles 9 /Load 0.45 /Dropout 0.55
+   /BristleWidth 0.9 /Spread 1 >> pkdry
+40 90 moveto 580 90 lineto
+<< /Width 6 /Bristles 8 /Load 0.4 /Dropout 0.6
+   /BristleWidth 0.8 /Spread 1 >> pkdry
+80 118 moveto 540 118 lineto
+<< /Width 5 /Bristles 7 /Load 0.35 /Dropout 0.65
+   /BristleWidth 0.7 /Spread 1 >> pkdry
+
+dusk3 aload pop setrgbcolor
+newpath 0 155 moveto 620 155 lineto
+<< /Nozzle 50 /Density 26 /Falloff 0.55 /Speck 2.6 /Pitch 6 >> pkspray
+newpath 0 150 moveto 620 150 lineto
+<< /Nozzle 30 /Density 22 /Falloff 0.75 /Speck 2.4 /Pitch 6 >> pkspray
+dusk4 aload pop setrgbcolor
+newpath 0 142 moveto 620 142 lineto
+<< /Nozzle 12 /Density 16 /Falloff 0.7 /Speck 1.6 /Pitch 4 >> pkspray
+
+% --- reeds ---------------------------------------------------------------
+% Each reed is one curved centerline through pknib (nib angle 90 so
+% vertical travel runs full width), thick at the root and tapered out
+% at the tip; the seed head is a spray dab at the same tip.
+% Call order: x bend height reed
+
+/reed { /nrh exch def /nrb exch def /nrx exch def
+    0 0 0 setrgbcolor
+    newpath nrx 136 moveto
+    nrx nrb 0.3 mul add 136 nrh 0.45 mul add
+    nrx nrb 0.7 mul add 136 nrh 0.8 mul add
+    nrx nrb add 136 nrh add curveto
+    << /Width 3.6 /Angle 0 /EndTaper 0.8 >> pknib
+    dusk4 aload pop setrgbcolor
+    newpath nrx nrb add 136 nrh add moveto
+    << /Nozzle 3 /Density 18 /Speck 1.1 /Falloff 0.25 /Speckle 0.4
+       /Pitch 1.5 >> pkspray
+} def
+
+52 14 118 reed
+78 -10 96 reed
+30 8 74 reed
+105 12 60 reed
+18 6 88 reed
+66 16 52 reed
+560 -14 128 reed
+532 10 88 reed
+585 -6 70 reed
+505 14 56 reed
+575 10 46 reed
+548 -8 62 reed
+597 12 96 reed
+45 -8 52 reed
+
+% --- the title, spray-stenciled through its own charpath ----------------
+% Call order: (string) baseline stencil
+
+/stencil { /sty exch def /ststr exch def
+    gsave
+        newpath 0 0 moveto
+        ststr stringwidth pop 2 div 310 exch sub sty moveto
+        ststr true charpath clip
+        ember3 aload pop setrgbcolor
+        sty 8 add 10 sty 40 add {
+            /nsy exch def
+            newpath 60 nsy moveto 560 nsy lineto
+            << /Nozzle 6.5 /Density 50 /Falloff 0.3 /Speck 1.5
+               /Speckle 0.4 /Overspray 0.12 /Pitch 4 >> pkspray
+        } for
+        ember4 aload pop setrgbcolor
+        newpath 60 sty 14 add moveto 560 sty 14 add lineto
+        << /Nozzle 5 /Density 22 /Falloff 0.35 /Speck 1.2 /Pitch 4
+           >> pkspray
+    grestore
+} def
+
+/Helvetica-Bold findfont 58 scalefont setfont
+(FUGITIVE) 880 stencil
+(PIGMENTS) 806 stencil
+
+% --- the poem ------------------------------------------------------------
+
+/Palatino-Italic findfont 13 scalefont setfont
+parch4 aload pop setrgbcolor
+
+/stanzas [
+  [ (Nothing we mean is meant to last.)
+    (The can hisses; the wall consents;)
+    (a color insists on itself one season,)
+    (then rain takes its tithe, the sun takes the rest,)
+    (and the wall forgets in slow motion)
+    (what it was told.) ]
+  [ (And still we write; not because)
+    (the mark will outlive the morning,)
+    (but because the hand wants a witness,)
+    (because the breath between the trigger)
+    (and the stone is the only prayer)
+    (some of us will ever finish.) ]
+  [ (Look up: the oldest spray there is)
+    (is scattered overhead, still wet,)
+    (every star a fleck of light that left)
+    (its source already dying. The dark)
+    (is not the absence of the mark.)
+    (The dark is what the mark is on.) ]
+] def
+
+/poy 768 def
+stanzas {
+    { /pln exch def pln 310 poy showctr
+      /poy poy 21 sub def } forall
+    /poy poy 16 sub def
+} forall
+
+% The last stanza, drawn line by line so the final line can change
+% color — the poem lets go into the same aqua as the star dust.
+(So fade. Fade like everything.) 310 poy showctr
+/poy poy 21 sub def
+(The point was never to be kept.) 310 poy showctr
+/poy poy 21 sub def
+(The point was to be seen: to land) 310 poy showctr
+/poy poy 21 sub def
+(warm on some stranger's evening,) 310 poy showctr
+/poy poy 21 sub def
+(hold the wall a little while,) 310 poy showctr
+/poy poy 21 sub def
+noct3 aload pop setrgbcolor
+(and let go, luminous, let go.) 310 poy showctr
+
+% --- colophon ------------------------------------------------------------
+
+0.5 0.52 0.58 setrgbcolor
+/Palatino-Roman findfont 8 scalefont setfont
+(pscat  -  artkit + paintkit, four brushes  -  seed 84) 310 24 showctr
+
+showpage
