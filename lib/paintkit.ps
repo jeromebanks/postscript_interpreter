@@ -1299,15 +1299,18 @@
 % the end burst lands where the nozzle lifts.
 %
 % Safety limit: total expected deposits are estimated during the cheap
-% counting pass (accumulated per-stop emissions + 1 truncation spare
-% per stop + both bursts' counts per subpath + the degenerate-dab count
-% for atend==3 stops) and rejected past 150000
+% counting pass (accumulated per-stop emissions + 1 per stop + both
+% bursts' counts per subpath + the degenerate-dab count for atend==3
+% stops) and rejected past 150000
 % (`pkspray-deposit-count-exceeds-safety-limit`) before any drawing or
-% even the second walkpath pass starts. The check lives *inside* the
-% counting callback -- every stop adds at least 1 to the estimate, so
-% a pathological fine /Pitch crosses the budget within ~150k callbacks
-% instead of walking an unbounded path to completion first (the same
-% placement argument pkdry's own check makes). The dab term is not
+% even the second walkpath pass starts. The per-stop +1 is not a
+% truncation-loss allowance -- the fractional carry means deposits
+% telescope to the floor of the accumulated emissions, with nothing
+% lost per stop -- it is what guarantees the running estimate grows by
+% at least 1 every callback, so a pathological fine /Pitch crosses the
+% budget within ~150k callbacks instead of walking an unbounded path
+% to completion first (the same placement argument pkdry's own check
+% makes). The dab term is not
 % optional: a page of bare movetos reports sp=0 for every one of them
 % (zero accumulated emissions), so without it an uncapped /Density
 % could slip arbitrarily many dab particles past the estimate.
@@ -1445,7 +1448,7 @@
             pzdensity pzasp mul pznozzle 2 mul div
             add 1 add
         def
-        pzae 1 and 1 eq {
+        pzae 1 and 1 eq pzae 3 ne and {
             /pzest pzest pzstartburst pzdensity 2 mul mul add def
         } if
         pzae 2 and 2 eq pzae 3 ne and {

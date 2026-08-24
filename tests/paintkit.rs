@@ -2358,3 +2358,56 @@ fn ghostscript_accepts_the_actual_spray_demo_file() {
         "gs rejected examples/paintkit_spray_demo.ps"
     );
 }
+
+#[test]
+fn spray_start_burst_pools_ink_at_the_stroke_start() {
+    // Mirror of the end-burst test: the two burst paths are near-
+    // copies, not shared code, and the end one already caught a
+    // stranded-operand bug the start one shared -- pin both.
+    fn head_ink(start_burst: f64) -> usize {
+        let mut it = fresh(260, 120);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 37 srand \
+             newpath 80 60 moveto 240 60 lineto \
+             << /Nozzle 12 /Density 26 /StartBurst {start_burst} >> pkspray"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        let mut count = 0usize;
+        for y in 0..120u32 {
+            for x in 0..110u32 {
+                let p = it.gfx().pixmap.pixel(x, y).expect("in bounds");
+                if luma(p) < 180.0 {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+    let plain = head_ink(0.0);
+    let burst = head_ink(1.0);
+    assert!(
+        burst > plain * 3 / 2,
+        "start burst should pool extra ink before the stroke starts: \
+         plain {plain} burst {burst}"
+    );
+}
+
+#[test]
+fn spray_roll_clamps_rate_1_and_0() {
+    // pzroll's documented contract: rate >= 1 is certain, rate <= 0
+    // impossible -- not left to a bare `frnd rate lt`, which frnd's
+    // exactly-1.0 draws (rare but real; pkdry's seed-5659 case) would
+    // break at rate 1. Unit-tested directly on the clamped endpoints
+    // rather than statistically through /Overspray, where the exactly-
+    // 1.0 draw is far too rare to pin.
+    let mut it = Interp::new();
+    load(&mut it);
+    it.run_str("7 srand 1 pzroll 1 pzroll 0 pzroll 0.5 pzroll pop")
+        .expect("pzroll calls");
+    let stack: Vec<String> = it.operand_stack().iter().map(|o| o.repr()).collect();
+    assert_eq!(
+        stack,
+        vec!["true", "true", "false"],
+        "rate 1 must be certainly true, rate 0 certainly false (0.5 consumed)"
+    );
+}
