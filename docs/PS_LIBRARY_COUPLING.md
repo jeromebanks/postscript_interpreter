@@ -54,12 +54,15 @@ could recover names, defaults, and parameter text fairly reliably (the
 catalog was built to carry, or requiring authors to write a *second*,
 new, terse summary tag that doesn't exist in any `lib/*.ps` file today.
 
-**Recommendation:** a follow-up issue should add one new, disciplined
-tag — e.g. `%%Summary:` — to the doc-comment convention (retrofitting
-existing files once), keep parsing `/Key ... (default D)` for
-parameters, and derive the catalog by **`include_str!`-embedding each
-`lib/*.ps` file and parsing it at build time**, not by reading it from
-disk at runtime and not by committing a generated `.rs` file. Runtime
+**Recommendation:** a follow-up issue should add new, disciplined tags
+— `%%Summary:` per procedure at minimum, plus `%%Example:` and a
+file-level `%%Requires:` naming the prerequisite `run` chain (see
+"What this doesn't solve on its own" below for why those two also
+turned out necessary, not optional) — to the doc-comment convention
+(retrofitting existing files once), keep parsing `/Key ... (default
+D)` for parameters, and derive the catalog by **`include_str!`-embedding
+each `lib/*.ps` file and parsing it at build time**, not by reading it
+from disk at runtime and not by committing a generated `.rs` file. Runtime
 parsing was the first instinct here and is wrong for two concrete
 reasons: `--capabilities`/`describe_art_capabilities` would become
 fallible on a moved or missing `lib/` (today's static table can't fail
@@ -135,6 +138,17 @@ cross-check the moment it exists, with no new per-file test function
 to remember either. That's a stronger claim than "a tagged proc can't
 ship uncataloged" — it's "a new *file* can't ship unchecked," which is
 the shape of the actual miss.
+
+A second, unrelated gap in this same recommendation, caught later
+(worked example below has the detail): `%%Summary:` alone only
+recovers a `Capability`'s `description` and `parameters`. Two more
+fields — `example` (a hand-picked illustrative call, not derivable
+from the generic stack-effect comment) and `load` (a per-*file*
+prerequisite `run` chain, currently a hard-coded Rust match) — need
+their own tags (`%%Example:`, file-level `%%Requires:`) or stay
+hand-written regardless of how good the rest of this mechanism gets.
+`availability`/`kind` are probably safe to derive but that's an
+assumption, not verified here.
 
 **Rejected:** full free-text parsing of the existing prose without a
 new summary tag. The risk isn't that it fails loudly (a botched parse
@@ -333,8 +347,8 @@ each actually buys:
 - **Larger, blocked on touchpoint 2**: once Phase A/B ship and are
   proven to catch what `cargo test` catches today, a narrower path
   becomes possible — but narrower than *today's* full gate, not as
-  narrow as "skip `cargo build` entirely." Seven corrections to that
-  first draft, caught across four rounds of cross-model review rather
+  narrow as "skip `cargo build` entirely." Eight corrections to that
+  first draft, caught across five rounds of cross-model review rather
   than shipped as written:
   - **Still needs a fresh `cargo build`, not a cached binary.**
     Touchpoint 1's catalog is `include_str!`-embedded — compile-time,
@@ -426,8 +440,21 @@ each actually buys:
     library (subject to the transitive-dependent rule just above), once
     that migration has landed, not the moment Phase A/B exist as a
     mechanism in the abstract.
+  - **Must keep running `tests/capabilities.rs`'s cross-check — an
+    eighth correction, caught by a fifth review round.** Every command
+    in this narrow path so far — `cargo build`, strict `--lint`,
+    `--selftest`, the extracted gs-checks — verifies rendering/
+    validation behavior. None of them re-runs the two-way name check
+    (every cataloged name still exists, every defined name is cataloged
+    or allowlisted) touchpoint 1 explicitly keeps. Dropping `cargo
+    test` wholesale drops that check too unless it's carried forward —
+    either keep `cargo test --test capabilities` specifically inside
+    the narrow path (cheap: it's one focused test file, not the whole
+    suite) or have touchpoint 1's follow-up produce a standalone,
+    non-`cargo`-test equivalent (a `pscat --verify-capabilities` mode,
+    say) the same way touchpoint 2 extracts `ghostscript_accepts_*`.
 
-  With those seven corrections, the win is real but smaller than the
+  With those eight corrections, the win is real but smaller than the
   first draft claimed: `clippy` (≈7s) plus most of `cargo test`'s ≈58s
   minus whatever the self-test/strict-lint/gs-check pass itself costs —
   not the full ≈58s, and not `cargo build`'s ≈8s at all. Doing any of
@@ -460,30 +487,59 @@ friends actually ran).
 **Projected, once all three follow-ups above land** (not built — this
 is what the recommended mechanisms predict, stated as a projection,
 not a measurement):
-- `lib/paintkit.ps` — 226 lines, unchanged. It's the feature; nothing
-  proposed here touches library code itself.
+- `lib/paintkit.ps` — **not 226 lines unchanged; a sixth review round
+  caught this omission.** The feature's actual logic stays 226 lines,
+  but the projection above requires `pkoil`'s header to carry
+  `%%Summary:`/`%%Requires:`/`%%Example:` tags (replacing, not just
+  adding to, today's equivalent prose — a wash in line count, not a
+  clean addition) *and* a `%%SelfTest` block covering the
+  Phase-A-expressible half of what `tests/paintkit.rs` currently
+  checks (the 29 validation-guard lines below). That block is new PS
+  content with nowhere else to live — call it roughly the same order
+  of magnitude as the Rust it replaces, so `lib/paintkit.ps` plausibly
+  grows by something in the neighborhood of 20-30 lines, not zero. This
+  is a real cost the "Rust lines gone" framing doesn't cancel out — it
+  moves work from Rust to PS, it doesn't delete it, for the Phase-A
+  share specifically (the Phase-B-dependent pixel-measurement tests
+  have no PS-side home yet at all, since Phase B's `%%SelfTest`
+  extension isn't designed here). Not counted precisely here — sizing
+  `%%SelfTest`'s actual syntax is the follow-up's job — but flagged so
+  the net comparison below doesn't silently assume PS stays flat while
+  Rust shrinks.
 - `examples/paintkit_oil_demo.ps` — 109 lines, unchanged, same reason.
 - `src/capabilities.rs` — **not 0 hand-written lines outright; the
-  claim needed narrowing, caught by a fourth review round.** The real
-  `pkoil` entry (`src/capabilities.rs:1222-1299`) carries five fields:
-  `description`, `parameters` (name/description/default), `source`,
-  `example`, and `availability`. `%%Summary:` plus `/Key (default D)`
-  lines recover the first two — genuinely automatic. `example` (here,
-  `"newpath ... << /Width 16 /Ridges 12 /Load 0.9 >> pkoil"`) is a
-  hand-picked, illustrative call with good default values, not
-  something the generic `opts pkoil -` stack-effect comment contains
-  or implies — it needs its own tag (`%%Example:`, say) or stays
-  hand-written. `availability` is `"library"` for every entry sourced
-  from `lib/*.ps` today, so it's plausibly a safe constant to derive
-  from `kind`/`source` alone rather than author-supplied — but that's
-  an assumption to verify against every existing entry before treating
-  it as free, not something checked here. `kind` (`Procedure` vs.
-  `Dial` vs. `Template`) is inferable from *how* a name is bound (`def`
-  of a proc vs. a plain value) with real but not source-comment-derived
+  claim needed narrowing twice, caught across two review rounds.** The
+  real `pkoil` entry (`src/capabilities.rs:1222-1299`) is a
+  `Capability` with `name`, `kind`, `description`, `parameters`,
+  `source`, `load`, `example`, and `availability` — six fields worth
+  discussing beyond the trivially-automatic `name`/`source`.
+  `%%Summary:` plus `/Key (default D)` lines recover `description` and
+  `parameters` — genuinely automatic. `example` (here, `"newpath ...
+  << /Width 16 /Ridges 12 /Load 0.9 >> pkoil"`) is a hand-picked,
+  illustrative call with good default values, not something the
+  generic `opts pkoil -` stack-effect comment contains or implies — it
+  needs its own tag (`%%Example:`, say) or stays hand-written.
+  **`load` was missed entirely in the first two passes, caught by a
+  fifth review round**: it's not a per-procedure detail at all but a
+  per-*file* dependency chain (`src/capabilities.rs`'s hard-coded
+  `load_sequence` match — `pagekit.ps` needs `(lib/artkit.ps) run
+  (lib/pagekit.ps) run`, not just its own file), already written in
+  prose at the top of every `lib/*.ps` file's header (paintkit.ps's own
+  says exactly this) but not in a form a generator could extract
+  without a new file-level tag (`%%Requires:`, say, naming the
+  prerequisite `run` chain once per file rather than per procedure).
+  `availability` is `"library"` for every entry sourced from `lib/*.ps`
+  today, so it's plausibly a safe constant to derive from `kind`/
+  `source` alone rather than author-supplied — but that's an
+  assumption to verify against every existing entry before treating it
+  as free, not something checked here. `kind` (`Procedure` vs. `Dial`
+  vs. `Template`) is inferable from *how* a name is bound (`def` of a
+  proc vs. a plain value) with real but not source-comment-derived
   confidence. So the honest claim is: `description`+`parameters` reach
-  zero hand-written lines; `example` needs a new tag or stays manual;
-  `availability`/`kind` are probably derivable but unverified here —
-  not the uniform "0 hand-written lines" a first draft claimed.
+  zero hand-written lines; `example` and `load` each need their own new
+  tag (`%%Example:`, `%%Requires:`) or stay manual; `availability`/
+  `kind` are probably derivable but unverified here — not the uniform
+  "0 hand-written lines" a first draft claimed.
 - `tests/paintkit.rs` — its actual 50 lines (`git diff b4dcbe4 16eff60
   -- tests/paintkit.rs`) are three tests, not a uniform block: 29 lines
   (`oil_validation_and_safety`, four malformed-input cases each
@@ -506,20 +562,28 @@ not a measurement):
   `--selftest` alone doesn't) over *every migrated* library's
   self-checks (not just `paintkit.ps` — it has no dependents among the
   sibling libraries today, but the narrow path can't assume that in
-  general) plus every extracted gs-check driver for gs-acceptance.
+  general), every extracted gs-check driver for gs-acceptance, and
+  `cargo test --test capabilities` specifically (or its extracted
+  equivalent) — the narrow path drops the rest of `cargo test`'s Rust
+  suite, not this one focused check.
 
-Net: the PS-only work itself (335 lines) is exactly as much PS as
-before — this was never going to shrink, and shouldn't. Of the 132
-Rust lines: most of the 82-line catalog entry (its `description` and
-`parameters`, the bulk of the entry) plus 29 of the 50 test lines
-(validation guards) reach zero after Phase A + touchpoint 1 alone; the
-entry's `example` field needs its own new tag or stays hand-written
-either way; and the remaining 21 test lines (the two pixel-measurement
-checks) need Phase B as well. So the realistic near-term floor for a
-feature shaped like `pkoil` is *most* of 111 of the 132 Rust lines
-gone — a real majority, not a precise count, since `example`'s
-share of the 82 isn't sized here — not all 132, until Phase B ships.
-None of this is built yet; all three follow-ups below are what would
+Net: the PS-only work's *core logic* (335 lines) is exactly as much PS
+as before — that part was never going to shrink, and shouldn't — but
+the PS side isn't flat: `lib/paintkit.ps` picks up new
+`%%Summary:`/`%%Requires:`/`%%Example:` tags (replacing, not purely
+adding to, today's prose header) and a `%%SelfTest` block, some tens
+of lines not sized precisely above. Of the 132 Rust lines: most of the
+82-line catalog entry (`description`/`parameters`, the bulk of it)
+plus 29 of the 50 test lines (validation guards) reach zero after
+Phase A + touchpoint 1 alone; `example`/`load` each need their own new
+tag or stay hand-written either way; and the remaining 21 test lines
+(the two pixel-measurement checks) need Phase B, which has no PS-side
+home designed for them here at all. So the realistic near-term floor
+for a feature shaped like `pkoil` is *most* of 111 of the 132 Rust
+lines gone, offset by a real but unsized growth on the PS side — a
+shift of where the work lives, not a pure deletion, and not all 132
+Rust lines gone until Phase B ships. None of this is built yet; all
+three follow-ups below are what would
 have to land first.
 
 ## Answering the issue's questions to settle
@@ -532,7 +596,10 @@ have to land first.
   survives with the same "every name needs an explicit classification"
   property it has today, just deriving both classifications
   (`%%Summary:`/`%%Internal:`) from the source instead of maintaining
-  two independent hand-written lists.
+  two independent hand-written lists — with the caveat that `%%Summary:`
+  only covers a `Capability`'s `description`/`parameters`; `example`
+  and the per-file `load` chain need their own tags
+  (`%%Example:`/`%%Requires:`) or stay hand-written regardless.
 - **What does PS-native verification need, and is it one-time or
   recurring?** Phase A (a `%%SelfTest` convention + `--selftest` CLI
   mode) needs no new interpreter primitive and is genuinely one-time;
@@ -560,16 +627,21 @@ have to land first.
   `lib/**/*.ps`-only allowlist rather than "no `.rs` changed" (a diff
   to `examples/postcard.ps`, say, has no `.rs` changes but is directly
   tested by `tests/pdf.rs:96` — "no `.rs`" is not the same claim as
-  "PS-library-only"), it invokes `--lint` alongside `--selftest` (a
-  `%%SelfTest` block alone only runs `stopped`-based assertions —
-  three of the ten defects Phase A covers, rows 9/11/12, are
-  `--lint`'s blank-page check specifically, not anything a
-  `%%SelfTest` block itself would catch), and it runs self-tests for
-  every migrated library (not just the changed one, to cover
-  dependents) plus the extracted gs-acceptance check for every
-  existing driver — doing so before Phase A/B exist, before a given
-  library's migration lands, or without those corrections, would ship
-  PS-only PRs with strictly less verification than today.
+  "PS-library-only"), it invokes a *strict* `--lint` mode against
+  defined rendering drivers alongside `--selftest` (today's `--lint`
+  findings are advisory and don't fail the process, and a bare
+  `lib/*.ps` file draws nothing on load for `--lint` to judge either
+  way — a `%%SelfTest` block alone only runs `stopped`-based
+  assertions; three of the ten defects Phase A covers, rows 9/11/12,
+  are the strict-lint-on-a-driver class specifically), it keeps
+  running `tests/capabilities.rs`'s two-way name check (or an
+  extracted equivalent) rather than dropping it with the rest of
+  `cargo test`, and it runs self-tests for every migrated,
+  transitively-dependent library (not just the changed one) plus the
+  extracted gs-acceptance check for every existing driver — doing so
+  before Phase A/B exist, before every dependent's migration lands, or
+  without those corrections, would ship PS-only PRs with strictly less
+  verification than today.
 - **Where does Ghostscript remain necessary vs. default habit?**
   Necessary and *actually exercised in CI today* (corrected finding,
   above) for `tests/golden.rs`/`tests/corpus.rs` (interpreter-level
@@ -630,42 +702,67 @@ acceptance criterion; filing them is left to whoever picks this
 document up next, same as #46 left #47's filing to a human/agent
 follow-up rather than filing it itself.
 
-1. **Doc-comment-driven capabilities catalog** (touchpoint 1): new
-   `%%Summary:`/`%%Internal:` tags, `include_str!`-based build-time
-   parsing with a mandatory `build.rs` directory scan (or an equivalent
+**Restating these three below turned out to be its own hazard —
+repeated across three rounds of review, a condensed summary kept
+quietly dropping a requirement the fuller treatment above already
+established (strict-lint, dependent-migration, the tool-config files,
+the catalog cross-check, `Capability::load`).** Treat what follows as
+a pointer into the sections above, not an independent spec — the
+touchpoint sections carry the authoritative requirement list; a
+follow-up implementer should read those, not stop at this summary.
+
+1. **Doc-comment-driven capabilities catalog** (touchpoint 1, full
+   detail above): new `%%Summary:`/`%%Internal:`/`%%Example:`/
+   `%%Requires:` tags — the last covers `Capability::load`
+   (`src/capabilities.rs`'s hard-coded `load_sequence` match, e.g.
+   `pagekit.ps` needing `artkit.ps` loaded first), a sixth catalog
+   field this document initially missed alongside `example`/
+   `availability`/`kind` — `include_str!`-based build-time parsing with
+   a mandatory `build.rs` directory scan (or an equivalent
    on-disk-vs-manifest test) so a brand-new `lib/*.ps` file can't be
    silently forgotten from the embedded set, and a `tests/capabilities.rs`
    cross-check that keeps requiring an explicit classification for
    every name (deriving both lists from source, not hand-maintaining
-   them, but not dropping the requirement itself).
-2. **PS-native self-check convention** (touchpoint 2): Phase A
-   (`%%SelfTest` + `--selftest`, no new operator — plus `--lint`'s
-   existing blank-page check, which must be invoked alongside
-   `--selftest` for their combined coverage claim to hold) and Phase B
-   (a pixel-sample operator), plus extracting every existing
-   `ghostscript_accepts_*` driver (not one per source file — several
-   files have more than one distinct driver) into standalone scripts.
-   Phase A is independently shippable and should land first — it's the
-   larger share of the defect classes
-   found (10 of 18) for the smaller cost.
-3. **CI diff-shape detection** (touchpoint 3): the small `fmt`/`clippy`
-   skip is independently shippable now, for any diff touching none of
-   `.rs`/`Cargo.toml`/`Cargo.lock`; `cargo build` stays required
-   regardless (the embedded catalog/self-test content changes with the
-   PS diff). The `cargo test` Rust-suite replacement is blocked on
-   issue 2's Phase A/B landing *and* on migrating each library's
-   existing Rust coverage into its own self-tests one library at a
-   time (landing Phase A/B doesn't retroactively cover
+   them, but not dropping the requirement itself) — kept running as
+   part of any narrow CI path, not dropped along with the rest of
+   `cargo test`'s Rust suite (see touchpoint 3's narrow-path definition
+   above, which must retain it explicitly).
+2. **PS-native self-check convention** (touchpoint 2, full detail
+   above): Phase A (`%%SelfTest` + `--selftest`, no new operator — plus
+   a new *strict* `--lint` mode, since today's `--lint` findings are
+   advisory and don't fail the process, run against defined per-library
+   rendering drivers with their load sequences specified, since a bare
+   `lib/*.ps` file draws nothing on load) and Phase B (a pixel-sample
+   operator), plus extracting every existing `ghostscript_accepts_*`
+   driver (not one per source file — several files have more than one
+   distinct driver) into standalone scripts. Phase A is independently
+   shippable and should land first — it's the larger share of the
+   defect classes found (10 of 18) for the smaller cost.
+3. **CI diff-shape detection** (touchpoint 3, full detail above): the
+   small `fmt`/`clippy` skip is independently shippable now, for any
+   diff touching none of `.rs`/`Cargo.toml`/`Cargo.lock`/a
+   Rust-tool-config file (`rustfmt.toml`/`clippy.toml`/
+   `rust-toolchain.toml`/`.cargo/config.toml`); `cargo build` stays
+   required regardless (the embedded catalog/self-test content changes
+   with the PS diff). The `cargo test` Rust-suite replacement is
+   blocked on issue 2's Phase A/B landing *and* on migrating every
+   transitively-dependent library's existing Rust coverage into its
+   own self-tests (landing Phase A/B doesn't retroactively cover
    `tests/graph.rs`/`tests/dataviz.rs`/etc. for libraries that haven't
-   been migrated yet); must be scoped to an explicit `lib/**/*.ps`-only
-   allowlist rather than "no `.rs` changed" (a non-`.rs` change under
-   `examples/`/`fonts/`/test data can still be directly covered by a
-   named Rust test); must invoke `--lint` alongside `--selftest` (three
-   of Phase A's ten defect classes are `--lint`'s blank-page check
-   specifically, not anything `--selftest` alone runs); must run every
-   migrated library's self-tests (not just the changed file, to cover
-   dependents) plus every extracted `ghostscript_accepts_*` driver
-   (not one per source file — `tests/paintkit.rs` alone has seven,
+   migrated, and a shared dependency like `artkit.ps` isn't safely
+   narrow until everything depending on it has migrated too); must be
+   scoped to an explicit `lib/**/*.ps`-only allowlist rather than "no
+   `.rs` changed" (a non-`.rs` change under `examples/`/`fonts/`/test
+   data can still be directly covered by a named Rust test); must
+   invoke the strict `--lint` mode against rendering drivers alongside
+   `--selftest` (three of Phase A's ten defect classes are `--lint`'s
+   blank-page check specifically, not anything `--selftest` alone
+   runs); must keep running `tests/capabilities.rs`'s cross-check (or
+   an equivalent standalone verifier) rather than dropping it with the
+   rest of `cargo test`; must run every migrated library's self-tests
+   (not just the changed file, to cover dependents) plus every
+   extracted `ghostscript_accepts_*` driver (not one per source file —
+   `tests/paintkit.rs` alone has seven,
    each a distinct scenario); and should be scoped as part of that
    work, not before it.
 
