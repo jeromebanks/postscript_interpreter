@@ -68,9 +68,22 @@ filesystem to read from at all — `.claude/skills/work-issue/SKILL.md`
 already documents this exact constraint for the playground picker,
 which is why it requires self-contained `.ps` files. `include_str!`
 keeps the parse entirely in the binary (wasm included) while still
-meaning **zero hand-written Rust per feature** — a new `pkfoo` with a
-correct doc comment needs a rebuild to pick it up, not a hand-edited
-`ENTRIES` row. `tests/capabilities.rs`'s two-way cross-check should
+meaning **zero hand-written Rust for a new procedure in an existing
+file** — a new `pkfoo` in `lib/paintkit.ps` with a correct doc comment
+needs a rebuild to pick it up, not a hand-edited `ENTRIES` row. **A
+brand-new sibling file is a different case, caught by cross-model
+review rather than shipped as an overclaim**: `include_str!` takes a
+literal path at a Rust call site, so a genuinely new `lib/newkit.ps`
+still needs one line added where the existing files are listed —
+`include_str!` alone doesn't enumerate a directory. True zero-touch
+even for a brand-new file needs a `build.rs` directory scan (emitting
+an `OUT_DIR` manifest, tracking the directory for rebuilds) instead of
+a fixed list of `include_str!` calls — a real design choice for the
+follow-up, not a detail to gloss over. Either way, the *test-coverage*
+gap from the round-2 finding above (a new file needing its own
+hand-written cross-check function) still closes: a generic checker
+walking whatever the embed step produced doesn't care whether that
+list came from a fixed `include_str!` set or a `build.rs` scan. `tests/capabilities.rs`'s two-way cross-check should
 survive essentially unchanged in spirit, but its `INTERNAL_*`
 allowlists can likely shrink or disappear: instead of a name needing to
 be either cataloged-by-hand or explicitly allowlisted, only a name
@@ -131,7 +144,10 @@ have very different costs to replace.**
 **Classifying all 18 real defects Codex's seven review rounds on PR #76
 found** (read from `gh pr view 76 --comments` in full, not just round
 1), against what would actually have caught each one, sizes tier 2
-honestly instead of asserting it:
+honestly instead of asserting it. The `#` column below is this table's
+own row number, not a GitHub issue number — this repo's issue #8 (PDF
+metadata) is unrelated to row 8 below, and the two get referenced near
+each other later in this document:
 
 | # | Round | Finding | Catchable by |
 |---|---|---|---|
@@ -142,7 +158,7 @@ honestly instead of asserting it:
 | 5 | 2 | Non-procedure `/Pressure` not rejected | `stopped` — **today** |
 | 6 | 2 | Unsupported cap values not rejected | `stopped` — **today** |
 | 7 | 2 | `pkribbon` missing from catalog | solved by touchpoint 1 |
-| 8 | 2 | Demo file missing `showpage` | `--lint`'s blank-page check — **today** |
+| 8 | 2 | Demo file missing `showpage` | **not covered — see below** |
 | 9 | 3 | Short pointed stroke renders blank | `--lint`'s blank-page check — **today** |
 | 10 | 3 | `xcheck` insufficient for `/Pressure` type | `stopped` — **today** |
 | 11 | 4 | Exact-pitch-multiple stroke renders blank | `--lint`'s blank-page check — **today** |
@@ -154,11 +170,11 @@ honestly instead of asserting it:
 | 17 | 6 | `pathforall` missing implicit moveto after `closepath` | **interpreter bug — Rust/gs-parity only** |
 | 18 | 7 | Executable-array value options not rejected | `stopped` — **today** |
 
-Eleven of eighteen (5–6, 8–12, 14–16, 18) need **no new interpreter
-work at all** — PostScript's own `stopped`/`errordict` already catches
-a validation guard firing or not firing, and `--lint`'s existing
+Ten of eighteen (5–6, 9–12, 14–16, 18) need **no new interpreter work
+at all** — PostScript's own `stopped`/`errordict` already catches a
+validation guard firing or not firing, and `--lint`'s existing
 blank-page heuristic (issue #17, already shipped) already catches a
-render silently producing nothing. **Verified directly, not assumed**:
+render producing genuinely no ink. **Verified directly, not assumed**:
 built a release `pscat` and ran
 
 ```
@@ -173,18 +189,40 @@ always-catching. One (#7) disappears by construction once touchpoint 1
 lands. One (#17) is a genuine interpreter defect that only Rust-level
 (here, `tests/pathforall.rs`, gs-pinned) testing catches — direct
 evidence for the issue's own acceptance criterion that
-interpreter-level gs-parity testing must not go away. The remaining
-five (1–4, 13) are exactly the geometry/rendering-correctness class
-that needs the new pixel-sample operator.
+interpreter-level gs-parity testing must not go away. Five (1–4, 13)
+are the geometry/rendering-correctness class that needs the new
+pixel-sample operator.
+
+**#8 was misclassified in a first pass and corrected by cross-model
+review**: a demo that paints ink but never calls `showpage` is *not*
+what `--lint`'s `check_blank_pages` flags. Its own logic
+(`src/lint.rs`) deliberately treats a live trailing canvas that
+contains ink as a legitimate final page — that's the right behavior
+for lint's actual purpose (don't flag a program that simply forgot the
+final `showpage`-then-exit boilerplate as having drawn nothing), but
+it means "painted something, forgot `showpage`" and "painted nothing"
+are different conditions and only the second is caught today. #8 is
+genuinely uncovered by anything that exists now. Closing it doesn't
+need a new interpreter primitive, though — it needs a *second*, narrower
+lint check alongside the existing blank-page one: "the trailing canvas
+has ink but the program never called `showpage`." That's small enough
+to fold into Phase A rather than treat as its own gap, so the honest
+tally is **11 of 18** need no new interpreter primitive (the 10 above
+plus #8 once Phase A adds this one check), not the 10 that exist
+today.
 
 **Recommendation:** a follow-up issue, phased:
 - **Phase A** (small, no new operator): a `%%SelfTest` doc-comment
   convention wrapping `stopped`-based assertions, plus a `pscat
   --selftest file.ps` CLI mode that runs a file's self-check blocks
-  and exits non-zero on any failure, printing which assertion failed.
-  This alone covers 11 of 18 real defect classes found on the one PR
-  this repo has the deepest review history for, entirely in PS, no gs
-  required.
+  and exits non-zero on any failure, printing which assertion failed —
+  plus one small addition to `--lint`'s existing blank-page heuristic:
+  flag a trailing canvas that has ink but was never explicitly closed
+  with `showpage` (today's heuristic deliberately doesn't flag this,
+  since it exists to catch "painted nothing," a different condition —
+  see #8 below). Together this covers 11 of 18 real defect classes
+  found on the one PR this repo has the deepest review history for,
+  entirely in PS/CLI, no gs and no new interpreter primitive required.
 - **Phase B** (real new Rust, one-time): a pixel/coverage-sampling
   operator (e.g. `x y currentluma`, or a coverage-at-point query) so a
   `%%SelfTest` block can also assert "this region has ink" / "this
@@ -195,8 +233,10 @@ that needs the new pixel-sample operator.
   usable outside `cargo test` today, independent of Phases A/B.
 
 **Rejected:** treating `--lint`'s existing heuristics as sufficient on
-their own (they already catch 4 of 18, not the geometry-correctness
-class) and treating this as fully solved without Phase B (5 of 18
+their own (they catch 3 of 18 today — a fourth, #8, needs the small
+`--lint` addition Phase A above adds, not something `--lint` already
+does — and none of the 18 are the geometry-correctness class) and
+treating this as fully solved without Phase B (5 of 18
 genuinely need pixel readback). **Not weakened:** cross-model review
 stays required regardless — #17 (the `pathforall` bug) was found
 *while implementing pkribbon*, not by any test shape, and nothing
@@ -241,14 +281,43 @@ each actually buys:
   diff touches no `.rs`/`Cargo.toml`/`Cargo.lock`. Worth doing on its
   own merits even though the win is modest.
 - **Larger, blocked on touchpoint 2**: once Phase A/B ship and are
-  proven to catch what `cargo test` catches today, a genuinely narrow
-  path becomes possible — a cached/released `pscat` binary running
-  `--selftest` over the changed `.ps` files instead of a full
-  `cargo build && cargo test`. This is where the real ≈58s (and the
-  toolchain-setup/cache-restore overhead around it) actually goes away
-  for a PS-only PR. Doing this before touchpoint 2 exists would mean
-  shipping a PS-only PR with *less* verification than it gets today,
-  which is exactly what the issue's own acceptance criteria rule out.
+  proven to catch what `cargo test` catches today, a narrower path
+  becomes possible — but narrower than *today's* full gate, not as
+  narrow as "skip `cargo build` entirely." Three corrections to that
+  first draft, caught by cross-model review rather than shipped as
+  written:
+  - **Still needs a fresh `cargo build`, not a cached binary.**
+    Touchpoint 1's catalog is `include_str!`-embedded — compile-time,
+    not runtime. A cached `pscat` from before this PR still contains
+    the *old* library source; `--selftest` run against it can't
+    validate a new `%%Summary:` tag, a new procedure's catalog
+    entry, or anything else this PR actually changed. The narrow path
+    still pays `cargo build`'s ≈8s; what it skips is `clippy`
+    (≈7s) and the Rust portion of `cargo test`.
+  - **Still needs the extracted `ghostscript_accepts_*` check.**
+    Touchpoint 2 says that check moves out of `cargo test` into a
+    standalone script, not away — a PS change that `pscat` accepts but
+    real `gs` rejects is exactly the class of bug this path must not
+    stop catching. The narrow path is `cargo build` + `pscat
+    --selftest` + the extracted `gs_check.sh`, not `--selftest` alone.
+  - **Must cover dependent libraries, not just the changed file.**
+    `lib/pagekit.ps`/`lib/paintkit.ps`/the style packs all depend on
+    `lib/artkit.ps`; running `--selftest` only against a changed
+    `artkit.ps` would miss a regression in one of its callers that
+    today's full `cargo test` catches by running every test
+    regardless of what changed. The narrow path needs to run every
+    library's self-tests (simplest, and safe by construction) or a
+    real dependency-closure computation (narrower, but its own design
+    problem) — not just the changed files' own tests. Sizing that
+    tradeoff is follow-up-3's work, not resolved here.
+
+  With those three corrections, the win is real but smaller than the
+  first draft claimed: `clippy` (≈7s) plus most of `cargo test`'s ≈58s
+  minus whatever the self-test/gs-check pass itself costs — not the
+  full ≈58s, and not `cargo build`'s ≈8s at all. Doing any of this
+  before touchpoint 2 exists would still mean shipping a PS-only PR
+  with *less* verification than it gets today, which the issue's own
+  acceptance criteria rule out.
 
 **Not rejected, not weakened:** `tests/golden.rs`/`tests/corpus.rs`
 stay exactly as-is — they verify the interpreter's own gs-parity
@@ -294,10 +363,14 @@ not a measurement):
   feature the honest split is **~29 lines → 0 Rust (Phase A alone)**,
   **~21 lines → 0 Rust only after Phase B**, not a uniform "delete all
   50" claim.
-- CI: `fmt`/`clippy` skipped (diff touches no `.rs`); `cargo build &&
-  cargo test` replaced by `pscat --selftest` against a cached binary —
-  the ≈58s dominant cost gone, along with the toolchain/cache-restore
-  overhead around it.
+- CI: `fmt`/`clippy` skipped (diff touches no `.rs`); `cargo build`
+  still runs (this diff changes `lib/paintkit.ps`'s embedded content,
+  so a cached binary would validate against stale catalog/self-test
+  source — corrected above); `cargo test`'s Rust suite replaced by
+  `pscat --selftest` over *every* library's self-checks (not just
+  `paintkit.ps` — it has no dependents among the sibling libraries
+  today, but the narrow path can't assume that in general) plus the
+  extracted `gs_check.sh` for gs-acceptance.
 
 Net: the PS-only work itself (335 lines) is exactly as much PS as
 before — this was never going to shrink, and shouldn't. Of the 132
@@ -326,9 +399,14 @@ yet; all three follow-ups below are what would have to land first.
   also one-time, not per-feature, and covers the remaining 5.
 - **Can CI detect a PS-only diff and run narrower?** Yes for
   `fmt`/`clippy` today (small win, ≈7s of ≈106s, real and doable now).
-  Not for `cargo build && cargo test` until Phase A/B exist to replace
-  what they currently verify — doing so earlier would ship PS-only PRs
-  with strictly less verification than today.
+  Not for `cargo build` — the embedded catalog/self-test content
+  changes with the PS diff, so a fresh build stays required regardless
+  of Phase A/B. `cargo test`'s Rust suite can shrink once Phase A/B
+  exist and the narrow path runs self-tests for every library (not
+  just the changed one, to cover dependents) plus the extracted
+  gs-acceptance check — doing so before Phase A/B exist, or without
+  those two corrections, would ship PS-only PRs with strictly less
+  verification than today.
 - **Where does Ghostscript remain necessary vs. default habit?**
   Necessary and *actually exercised in CI today* (corrected finding,
   above) for `tests/golden.rs`/`tests/corpus.rs` (interpreter-level
@@ -353,17 +431,20 @@ a ≈106s job, and a required-status-check mistake in a CI change is
 exactly the kind of hard-to-reverse-if-wrong risk not worth taking
 inside a spike PR whose actual deliverable is this decision record.
 Bug-catching value is not weakened by any of this: of the 18 real
-defects tabulated above, 12 are covered by mechanisms already shipped
-(`--lint`) or proposed with no new operator (Phase A's `stopped`-based
-checks), 5 more are covered once Phase B's pixel-sample operator
-lands, and 1 (`pathforall`'s interpreter bug) is permanently out of
-reach for PS-native testing and stays exactly where it is today, in
+defects tabulated above, 12 need no new interpreter operator — 3
+already caught by `--lint` today, 7 by PostScript's own
+`stopped`/`errordict` today, 1 (#7) by touchpoint 1's catalog
+mechanism, and 1 (#8) by the small `--lint` addition Phase A adds — 5
+more are covered once Phase B's pixel-sample operator lands, and 1
+(`pathforall`'s interpreter bug) is permanently out of reach for
+PS-native testing and stays exactly where it is today, in
 `tests/pathforall.rs`, gs-pinned.
 
 **Open question for whichever follow-up lands `%%Summary:`/
 `%%SelfTest`:** `%%`-prefixed comments are DSC structured comments,
 already meaningfully parsed by this repo (`%%Title:`/`%%For:` feed PDF
-`/Info`, issue #8) and by Ghostscript's own DSC parser. Two new tags in
+`/Info`, this repo's GitHub issue #8 — unrelated to row 8 in the
+defect table above) and by Ghostscript's own DSC parser. Two new tags in
 that same namespace is a real decision, not a free choice, and needs
 picking deliberately — a non-DSC prefix (`%!Summary:`/`%!SelfTest`, or
 `% @summary`/`% @selftest`) avoids the collision entirely and is
@@ -389,9 +470,13 @@ follow-up rather than filing it itself.
    should land first — it's the larger share of the defect classes
    found (11 of 18) for the smaller cost.
 3. **CI diff-shape detection** (touchpoint 3): the small `fmt`/`clippy`
-   skip is independently shippable now; the larger `cargo test`
-   replacement is blocked on issue 2's Phase A/B landing and should be
-   scoped as part of that work, not before it.
+   skip is independently shippable now; `cargo build` stays required
+   regardless (the embedded catalog/self-test content changes with the
+   PS diff); the `cargo test` Rust-suite replacement is blocked on
+   issue 2's Phase A/B landing, must run every library's self-tests
+   (not just the changed file, to cover dependents) plus the extracted
+   `ghostscript_accepts_*` check, and should be scoped as part of that
+   work, not before it.
 
 ## What's explicitly rejected
 
@@ -399,12 +484,20 @@ follow-up rather than filing it itself.
   capabilities catalog — breaks on wasm, adds a new failure mode
   static data doesn't have.
 - Treating `--lint`'s existing heuristics as a full replacement for
-  `tests/paintkit.rs` — they cover 4 of 18 real defect classes found
-  here, not the geometry-correctness class.
-- Narrowing CI's `cargo build && cargo test` step before a PS-native
-  verification path exists to replace what it currently proves —
-  would ship PS-only PRs with less verification than today, which the
-  issue's own acceptance criteria rule out.
+  `tests/paintkit.rs` — they cover 3 of 18 real defect classes found
+  here today (a 4th, the missing-`showpage` case, needs a small
+  addition to `--lint` that doesn't exist yet), and none of the 18 are
+  the geometry-correctness class Phase B targets.
+- Skipping `cargo build` for a PS-only diff, at any point — the
+  embedded catalog/self-test content changes with the PS source, so a
+  cached binary can't validate it.
+- Narrowing CI's `cargo test` step to only the changed `.ps` file's
+  own self-tests, or to skip the extracted gs-acceptance check — both
+  would ship PS-only PRs with less verification than today (missing a
+  dependent-library regression, or a `gs`-rejects-it defect `pscat`
+  itself doesn't), which the issue's own acceptance criteria rule out.
+  Narrowing it at all is blocked on a PS-native verification path
+  existing to replace what it currently proves.
 - Reducing or removing cross-model review for PS-only changes — it
   caught the one defect (#17, the `pathforall` interpreter bug) that
   no test shape proposed here would have found, and 4 more (closed-loop
