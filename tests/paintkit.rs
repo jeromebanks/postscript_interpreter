@@ -2487,7 +2487,7 @@ fn oil_validation_and_safety() {
     fn err(src: &str) -> String {
         let mut it = fresh(100, 100);
         let e = it.run_str(src).unwrap_err();
-        format!("{}", it.error_report(&e))
+        it.error_report(&e).to_string()
     }
     assert!(
         err("newpath 0 0 moveto 100 0 lineto << /Width 0 >> pkoil")

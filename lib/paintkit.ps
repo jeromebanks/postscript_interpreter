@@ -1732,7 +1732,7 @@
                     /pooff poevenfrac 0.5 sub 2 mul pohalfspread mul pohalfspread 0.15 mul pkjit add def
                     /porw poRidgeWidth poWidthJitter poRidgeWidth mul pkjit add def
                     porw poRidgeWidth 0.05 mul lt { /porw poRidgeWidth 0.05 mul def } if
-                    /poshade 1 poevenfrac 0.5 sub abs 0.4 gt { poEdgePickup 0.5 mul neg } { 0 } ifelse poColorJitter pkjit add add def
+                    /poshade 1 pori 1 eq pori poRidges eq or { poEdgePickup 0.5 mul neg } { 0 } ifelse poColorJitter pkjit add add def
                     pobasecolor poshade shade setrgbcolor
                     pooff porw porunstart posi porad
                     pobasecolor aload pop setrgbcolor
