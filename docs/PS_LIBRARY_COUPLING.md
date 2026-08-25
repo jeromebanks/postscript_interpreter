@@ -291,14 +291,27 @@ say — which is its own small design problem, not sized here. Like
 #17, it stays in the "cross-model review catches this, no automated
 mechanism proposed here does" bucket, but at far lower severity.
 
-**Recommendation:** a follow-up issue, phased:
-- **Phase A** (small, no new operator): a `%%SelfTest` doc-comment
-  convention wrapping `stopped`-based assertions, plus a `pscat
-  --selftest file.ps` CLI mode that runs a file's self-check blocks
-  and exits non-zero on any failure, printing which assertion failed.
-  This alone covers 10 of 18 real defect classes found on the one PR
-  this repo has the deepest review history for, entirely in PS, no gs
-  or new interpreter primitive required.
+**Recommendation:** a follow-up issue, phased. **Phase A is two
+mechanisms, not one — stating them separately here specifically
+because a seventh review round caught the combined "10 of 18" figure
+drifting, in a later summary, into sounding like the first mechanism
+alone gets there:**
+- **Phase A, mechanism 1** (small, no new operator): a `%%SelfTest`
+  doc-comment convention wrapping `stopped`-based assertions, plus a
+  `pscat --selftest file.ps` CLI mode that runs a file's self-check
+  blocks and exits non-zero on any failure, printing which assertion
+  failed. Covers 7 of 18 on its own (rows 5-6, 10, 14-16, 18).
+- **Phase A, mechanism 2** (also small, also no new operator): a
+  *strict* `--lint` mode — today's `--lint` findings are advisory and
+  don't fail the process (`src/main.rs`'s `report_lint`) — run against
+  a defined set of per-library rendering drivers with their load
+  sequences specified (a bare `lib/*.ps` file draws nothing on load,
+  so `--lint` alone has nothing to judge without one). Covers 3 more
+  (rows 9, 11, 12).
+
+Together, not either alone, Phase A covers 10 of 18 real defect
+classes found on the one PR this repo has the deepest review history
+for, entirely in PS/CLI, no gs or new interpreter primitive required.
 - **Phase B** (real new Rust, one-time): a pixel/coverage-sampling
   operator (e.g. `x y currentluma`, or a coverage-at-point query) so a
   `%%SelfTest` block can also assert "this region has ink" / "this
@@ -374,8 +387,16 @@ each actually buys:
   'clippy.toml' -o -iname '.clippy.toml' -o -iname 'rust-toolchain*'
   -o -iname '.cargo'` found nothing) — the skip condition needs to name
   every variant anyway, so it doesn't quietly stay broken the day one
-  is added. Worth doing on its own merits even though the win is
-  modest.
+  is added. **One more file, caught by an eighth review round: the
+  workflow file itself.** A PR that only edits `.github/workflows/ci.yml`
+  — changing the toolchain version, `clippy`'s `-D warnings` flags, or
+  the job's working directory — touches none of `.rs`/`Cargo.toml`/a
+  tool-config file, so the condition as stated would skip `fmt`/`clippy`
+  on the very PR that changed what they run under. `ci.yml` itself
+  (and any wrapper script it invokes for these two steps, if one is
+  ever added) must be in the invalidation set too — a self-referential
+  gap, since it's the skip condition's own home file. Worth doing on
+  its own merits even though the win is modest.
 - **Larger, blocked on touchpoint 2**: once Phase A/B ship and are
   proven to catch what `cargo test` catches today, a narrower path
   becomes possible — but narrower than *today's* full gate, not as
@@ -625,9 +646,15 @@ have to land first.
 
 - **Can `capabilities.rs` be generated from doc comments without
   losing the cross-check?** Yes, via `include_str!` + a new
-  `%%Summary:` tag, not via runtime parsing (breaks wasm and adds a
-  new failure mode) and not via committing generated Rust (still a
-  per-feature `.rs` diff, just an automated one). The cross-check
+  `%%Summary:` tag — **not via a runtime *disk read* of `lib/*.ps`**
+  (breaks wasm, adds a new failure mode; a seventh review round caught
+  this bullet drifting into sounding like it rules out *all* runtime
+  parsing, which it shouldn't — parsing the `include_str!`-embedded
+  *string* at runtime is wasm-safe and a legitimate option, see
+  touchpoint 1 above for the full runtime-parse-the-embedded-string
+  vs. build.rs-codegen tradeoff) — and not via committing generated
+  Rust (still a per-feature `.rs` diff, just an automated one). The
+  cross-check
   survives with the same "every name needs an explicit classification"
   property it has today, just deriving both classifications
   (`%%Summary:`/`%%Internal:`) from the source instead of maintaining
@@ -638,18 +665,28 @@ have to land first.
   `Procedure`), and the per-file `load` chain each need their own tag
   or stay hand-written regardless.
 - **What does PS-native verification need, and is it one-time or
-  recurring?** Phase A (a `%%SelfTest` convention + `--selftest` CLI
-  mode) needs no new interpreter primitive and is genuinely one-time;
-  it alone covers 10 of 18 real defects from this repo's
-  best-documented review history. Phase B (a pixel-sample operator) is
-  also one-time, not per-feature, and covers the remaining 5.
+  recurring?** Phase A is two mechanisms, not one, and the 10-of-18
+  figure is their sum, not either alone — worth restating precisely
+  since a seventh review round caught this claim drifting toward
+  implying `%%SelfTest`/`--selftest` alone gets there: `%%SelfTest` +
+  `--selftest` (`stopped`-based assertions, no new operator) covers 7
+  of 18; a *strict* `--lint` mode run against defined rendering
+  drivers (today's `--lint` is advisory and a bare `lib/*.ps` file
+  renders nothing, so this is real added scope, not "just call
+  `--lint`") covers 3 more, rows 9/11/12. Both together, not either
+  alone, is genuinely one-time and needs no new interpreter primitive.
+  Phase B (a pixel-sample operator) is also one-time, not per-feature,
+  and covers the remaining 5.
 - **Can CI detect a PS-only diff and run narrower?** Yes for
   `fmt`/`clippy` today, for any diff touching none of
   `.rs`/`Cargo.toml`/`Cargo.lock`/a Rust-tool-config file, every
   filename variant each tool recognizes (`rustfmt.toml`/`.rustfmt.toml`,
   `clippy.toml`/`.clippy.toml`, `rust-toolchain.toml`/`rust-toolchain`,
   `.cargo/config.toml`/`.cargo/config` — none exist in this repo today,
-  but the condition should name every variant anyway)
+  but the condition should name every variant anyway)/`ci.yml` itself
+  (a self-referential gap otherwise: a PR that only edits the workflow's
+  toolchain version or `clippy` flags would skip the very steps it
+  changed)
   (small win, ≈7s of ≈106s, real and doable now — the manifest/lockfile
   stay in the condition alongside `.rs`, since a dependency-version or
   feature-flag change can surface a new `clippy` lint with no `.rs`
@@ -689,14 +726,20 @@ have to land first.
   standalone script independent of the other two follow-ups.
 - **Does "done" change for a PS-only issue in `SDLC.md`/
   `work-issue`?** Not yet — none of the three follow-ups exist. Once
-  they do (and once the touched libraries' coverage has actually been
-  migrated), `.claude/skills/work-issue/SKILL.md`'s step 5 quality gate
-  could special-case a diff scoped to `lib/**/*.ps` to run `cargo
-  build` (still required — a fresh binary or a stale one is exactly
-  the distinction touchpoint 1's `include_str!` embedding makes load-
-  bearing) followed by `pscat --lint` + `pscat --selftest` plus the
-  extracted gs-check scripts, instead of the full `cargo` gate; that's
-  a change to make when Phase A/B land, not now.
+  they do — and once *every transitively-dependent* library's coverage
+  has actually been migrated, not just the one the diff touches
+  (`lib/artkit.ps` changing is only narrow-path-eligible once
+  `pagekit.ps`/`paintkit.ps`/the style packs have migrated too, per
+  touchpoint 3's eligibility rule above) —
+  `.claude/skills/work-issue/SKILL.md`'s step 5 quality gate could
+  special-case a diff scoped to `lib/**/*.ps` to run `cargo build`
+  (still required — a fresh binary or a stale one is exactly the
+  distinction touchpoint 1's `include_str!` embedding makes
+  load-bearing) followed by strict `pscat --lint` against rendering
+  drivers, `pscat --selftest`, `cargo test --test capabilities` (or its
+  extracted equivalent), and the extracted gs-check scripts, instead of
+  the full `cargo` gate; that's a change to make when Phase A/B land
+  and every affected library has migrated, not now.
 
 ## Which touchpoints does this issue address directly?
 
