@@ -2458,6 +2458,56 @@ fn spray_overspray_band_scales_with_the_burst_radius() {
 }
 
 #[test]
+fn oil_renders_loaded_impasto() {
+    let mut it = fresh(200, 200);
+    it.run_str("0 0 0 setrgbcolor 7 srand newpath 20 100 moveto 180 100 lineto << /Width 14 /Ridges 8 >> pkoil")
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    // A loaded oil stroke should put ink on the centerline
+    assert!(
+        ink_count(&it) > 200,
+        "oil should paint a solid impasto band"
+    );
+}
+
+#[test]
+fn oil_determinism_fixed_seed() {
+    fn render_once() -> usize {
+        let mut it = fresh(200, 200);
+        it.run_str("0 0 0 setrgbcolor 42 srand newpath 20 100 moveto 180 100 lineto << /Width 14 /Ridges 8 /ColorJitter 0.08 >> pkoil")
+            .unwrap();
+        ink_count(&it)
+    }
+    let a = render_once();
+    let b = render_once();
+    assert_eq!(a, b, "pkoil must be deterministic under fixed seed");
+}
+
+#[test]
+fn oil_validation_and_safety() {
+    fn err(src: &str) -> String {
+        let mut it = fresh(100, 100);
+        let e = it.run_str(src).unwrap_err();
+        it.error_report(&e).to_string()
+    }
+    assert!(
+        err("newpath 0 0 moveto 100 0 lineto << /Width 0 >> pkoil")
+            .contains("pkoil-width-must-be-positive")
+    );
+    assert!(
+        err("newpath 0 0 moveto 100 0 lineto << /Ridges 0 >> pkoil")
+            .contains("pkoil-ridges-must-be-1-to-40")
+    );
+    assert!(
+        err("newpath 0 0 moveto 100 0 lineto << /Ridges 41 >> pkoil")
+            .contains("pkoil-ridges-must-be-1-to-40")
+    );
+    assert!(
+        err("newpath 0 0 moveto 2000 0 lineto << /Width 14 /Ridges 40 /Pitch 0.5 >> pkoil")
+            .contains("pkoil-deposit-count-exceeds-safety-limit")
+    );
+}
+
+#[test]
 fn spray_degenerate_point_honors_endpoint_bursts() {
     // Codex review, PR #83: a bare moveto reports atend==3 (both first
     // and last stop), but the dab-only branch skipped both burst
