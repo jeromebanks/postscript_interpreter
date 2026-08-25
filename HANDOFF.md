@@ -370,10 +370,16 @@ renders eight examples in both and compares block-downsampled output).
    `src/capabilities.rs` (an `include_str!`-embedded, build-time-parsed
    catalog, not runtime parsing — breaks wasm), a PS-native
    `%%SelfTest`/`--selftest` verification path (Phase A needs no new
-   operator and covers 11 of 18 real defects found on PR #76; Phase B's
-   pixel-sample operator covers the rest), and CI diff-shape detection
-   (the small `fmt`/`clippy` skip is independent; the larger
-   `cargo test` replacement is gated on Phase A/B landing first — doing
+   operator and covers 10 of 18 real defects found on PR #76; Phase B's
+   pixel-sample operator covers 5 more; 2 stay uncovered by anything
+   proposed — one an interpreter bug only Rust/gs-parity testing
+   catches, one a low-severity gap whose cheap automated fix
+   false-positived on real demos and was withdrawn), and CI diff-shape
+   detection (the small `fmt`/`clippy` skip is independent, scoped to
+   `.rs`/`Cargo.toml`/`Cargo.lock`; the larger `cargo test` replacement
+   needs a `lib/**/*.ps` allowlist, not "no `.rs` changed," is gated on
+   Phase A/B landing first, and on migrating each library's existing
+   Rust test coverage into self-tests one library at a time — doing
    it earlier would ship PS-only PRs with less verification than
    today).
 

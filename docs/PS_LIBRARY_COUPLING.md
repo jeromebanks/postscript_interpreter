@@ -71,19 +71,29 @@ keeps the parse entirely in the binary (wasm included) while still
 meaning **zero hand-written Rust for a new procedure in an existing
 file** — a new `pkfoo` in `lib/paintkit.ps` with a correct doc comment
 needs a rebuild to pick it up, not a hand-edited `ENTRIES` row. **A
-brand-new sibling file is a different case, caught by cross-model
-review rather than shipped as an overclaim**: `include_str!` takes a
-literal path at a Rust call site, so a genuinely new `lib/newkit.ps`
-still needs one line added where the existing files are listed —
-`include_str!` alone doesn't enumerate a directory. True zero-touch
-even for a brand-new file needs a `build.rs` directory scan (emitting
-an `OUT_DIR` manifest, tracking the directory for rebuilds) instead of
-a fixed list of `include_str!` calls — a real design choice for the
-follow-up, not a detail to gloss over. Either way, the *test-coverage*
-gap from the round-2 finding above (a new file needing its own
-hand-written cross-check function) still closes: a generic checker
-walking whatever the embed step produced doesn't care whether that
-list came from a fixed `include_str!` set or a `build.rs` scan.
+brand-new sibling file is a different case, and a first attempt to
+wave it away was wrong twice over — caught by two separate rounds of
+cross-model review, not shipped as written either time.** `include_str!`
+takes a literal path at a Rust call site, so a genuinely new
+`lib/newkit.ps` still needs one line added where the existing files
+are listed — `include_str!` alone doesn't enumerate a directory. The
+first correction claimed this didn't matter because a generic checker
+walking "whatever the embed step produced" would catch a forgotten
+file either way — **that's wrong, and a third review round caught it**:
+a fixed `include_str!` list only embeds what's *in* the list: a
+forgotten `lib/newkit.ps` is simply absent from the embedded set, so
+there is nothing for a generic checker to walk that would reveal its
+absence. That reopens exactly the new-sibling-file gap this whole
+touchpoint exists to close — the round-1 finding about
+`paintkit_names_match_the_catalog_exactly` needing its own hand-written
+function applies here too, just one layer up. **A `build.rs` directory
+scan (emitting an `OUT_DIR` manifest, tracking the directory for
+rebuilds) is not an optional refinement — it's mandatory** for the
+new-file case to be covered at all; an equally acceptable alternative
+is a dedicated test that walks `lib/` on disk and asserts every `.ps`
+file it finds has a matching `include_str!` call, so a forgotten file
+fails loudly instead of silently. A fixed `include_str!` list without
+either safeguard should not be considered a solution to this gap.
 
 `tests/capabilities.rs`'s two-way cross-check should survive
 essentially unchanged — **including its "every name needs an explicit
@@ -145,16 +155,24 @@ have very different costs to replace.**
    to read back what got painted. PostScript has no operator for that
    today — replacing this tier needs one-time new Rust: a pixel/coverage
    -sampling operator exposed to PS.
-2. **`ghostscript_accepts_*`** (seven of them across `paintkit.rs`, one
-   per library file) — concatenates the library source plus a driver
-   snippet, shells out to `gs`, asserts exit 0. No golden image, no
-   pixel comparison, no pscat-specific state. This is a shell script
+2. **`ghostscript_accepts_*`** — concatenates the library source plus a
+   driver snippet, shells out to `gs`, asserts exit 0. No golden image,
+   no pixel comparison, no pscat-specific state. This is a shell script
    wearing a `#[test]` attribute; it's in Rust purely because that's
    where the test suite lives, not because it needs to be. **This is
    an immediately-extractable win, not follow-up work** — a
    `scripts/gs_check.sh <file.ps> <driver>` invoked directly (from a
    PS-only CI path, or by hand) does the identical check with zero
-   Rust.
+   Rust. **Correction, caught by a third round of cross-model review:**
+   these are not "one per library file" (16 total across the whole test
+   suite, `grep -rn '^fn ghostscript_accepts' tests/*.rs`) — 7 alone
+   live in `tests/paintkit.rs`, each exercising a *distinct* driver
+   (`pkribbon` vs. `pknib` vs. `pkdry` vs. `pkspray`, plus separate
+   checks against the actual dry/nib/spray demo files) against the same
+   `paintkit.ps`. Extraction must preserve every existing driver as its
+   own script invocation, not collapse them to one check per source
+   file — doing the latter would silently drop the nib/dry/spray/demo
+   acceptance scenarios the moment `paintkit.ps` changes.
 
 **Classifying all 18 real defects Codex's seven review rounds on PR #76
 found** (read from `gh pr view 76 --comments` in full, not just round
@@ -249,7 +267,10 @@ mechanism proposed here does" bucket, but at far lower severity.
   remaining rendering-correctness class. One-time cost like touchpoint
   1's parser, not a per-feature one.
 - Extract `ghostscript_accepts_*`'s pattern into a standalone script
-  usable outside `cargo test` today, independent of Phases A/B.
+  usable outside `cargo test` today, independent of Phases A/B — every
+  existing driver invocation as its own script call, not collapsed to
+  one per source file (see the correction above: `tests/paintkit.rs`
+  alone has seven distinct drivers).
 
 **Rejected:** treating `--lint`'s existing heuristics as sufficient on
 their own (they catch 3 of 18 today, and none of the 18 are the
@@ -303,9 +324,9 @@ each actually buys:
 - **Larger, blocked on touchpoint 2**: once Phase A/B ship and are
   proven to catch what `cargo test` catches today, a narrower path
   becomes possible — but narrower than *today's* full gate, not as
-  narrow as "skip `cargo build` entirely." Three corrections to that
-  first draft, caught by cross-model review rather than shipped as
-  written:
+  narrow as "skip `cargo build` entirely." Six corrections to that
+  first draft, caught across three rounds of cross-model review rather
+  than shipped as written:
   - **Still needs a fresh `cargo build`, not a cached binary.**
     Touchpoint 1's catalog is `include_str!`-embedded — compile-time,
     not runtime. A cached `pscat` from before this PR still contains
@@ -338,17 +359,45 @@ each actually buys:
     changed" rule, would skip the exact Rust test written to cover it.
     The same risk applies to anything else under `examples/`, `fonts/`,
     or other test-referenced data. The narrow *`cargo test`-replacement*
-    path (unlike the small `fmt`/`clippy` skip, which is safe for any
-    diff with zero `.rs` changes, since those two checks only ever
-    inspect Rust source) needs an explicit allowlist of paths the
+    path (unlike the small `fmt`/`clippy` skip below, which is safe for
+    any diff touching none of `.rs`/`Cargo.toml`/`Cargo.lock` — a
+    manifest or lockfile change can shift dependency versions or
+    feature flags and surface a new `clippy` lint even with identical
+    `.rs` text, so `Cargo.toml`/`Cargo.lock` must stay in that
+    condition too, not `.rs` alone) needs an explicit allowlist of
+    paths the
     replacement checks actually cover — realistically `lib/**/*.ps`
     only — not an absence-of-`.rs` heuristic.
+  - **Must invoke `--lint`, not just `--selftest` — a fifth
+    correction.** A `%%SelfTest` block only runs `stopped`-based
+    assertions (that's Phase A's whole definition above). Three of the
+    ten defects credited to "no new interpreter primitive" — rows 9,
+    11, 12 in touchpoint 2's table — are caught by `--lint`'s existing
+    blank-page heuristic specifically, a separate mechanism `--selftest`
+    never invokes on its own. A narrow-path command that runs only
+    `pscat --selftest` (as an earlier draft of this recommendation
+    specified) silently drops those three regression classes even
+    though they're real today. The narrow path is `cargo build` +
+    `pscat --lint` + `pscat --selftest` + the extracted gs-check
+    scripts, not `--selftest` alone.
+  - **Gated on migrating each library's existing coverage, not just on
+    Phase A/B existing as a mechanism — a sixth correction.** Landing
+    the self-test CLI and pixel operator doesn't retroactively cover
+    what `tests/graph.rs`, `tests/dataviz.rs`, `tests/etching.rs`, and
+    every other library's dedicated Rust suite already exercises for
+    *that* library. A `lib/graph.ps`-only diff under the narrow path
+    would skip all of `tests/graph.rs` unless graph.ps's own coverage
+    has actually been migrated into `%%SelfTest` blocks first. The
+    narrow path can only apply, library by library, once that
+    library's migration has landed — not the moment Phase A/B exist in
+    the abstract.
 
-  With those four corrections, the win is real but smaller than the
+  With those six corrections, the win is real but smaller than the
   first draft claimed: `clippy` (≈7s) plus most of `cargo test`'s ≈58s
-  minus whatever the self-test/gs-check pass itself costs — not the
-  full ≈58s, and not `cargo build`'s ≈8s at all. Doing any of this
-  before touchpoint 2 exists would still mean shipping a PS-only PR
+  minus whatever the self-test/lint/gs-check pass itself costs — not
+  the full ≈58s, and not `cargo build`'s ≈8s at all. Doing any of this
+  before touchpoint 2 exists, before a library's migration lands, or
+  without these corrections, would still mean shipping a PS-only PR
   with *less* verification than it gets today, which the issue's own
   acceptance criteria rule out.
 
@@ -396,14 +445,16 @@ not a measurement):
   feature the honest split is **~29 lines → 0 Rust (Phase A alone)**,
   **~21 lines → 0 Rust only after Phase B**, not a uniform "delete all
   50" claim.
-- CI: `fmt`/`clippy` skipped (diff touches no `.rs`); `cargo build`
-  still runs (this diff changes `lib/paintkit.ps`'s embedded content,
-  so a cached binary would validate against stale catalog/self-test
-  source — corrected above); `cargo test`'s Rust suite replaced by
-  `pscat --selftest` over *every* library's self-checks (not just
-  `paintkit.ps` — it has no dependents among the sibling libraries
-  today, but the narrow path can't assume that in general) plus the
-  extracted `gs_check.sh` for gs-acceptance.
+- CI: `fmt`/`clippy` skipped (diff touches none of `.rs`/`Cargo.toml`/
+  `Cargo.lock`); `cargo build` still runs (this diff changes
+  `lib/paintkit.ps`'s embedded content, so a cached binary would
+  validate against stale catalog/self-test source — corrected above);
+  `cargo test`'s Rust suite replaced by `pscat --lint` + `pscat
+  --selftest` (both — `--lint` alone catches the blank-page class,
+  `--selftest` alone doesn't) over *every migrated* library's
+  self-checks (not just `paintkit.ps` — it has no dependents among the
+  sibling libraries today, but the narrow path can't assume that in
+  general) plus every extracted gs-check driver for gs-acceptance.
 
 Net: the PS-only work itself (335 lines) is exactly as much PS as
 before — this was never going to shrink, and shouldn't. Of the 132
@@ -434,21 +485,33 @@ yet; all three follow-ups below are what would have to land first.
   best-documented review history. Phase B (a pixel-sample operator) is
   also one-time, not per-feature, and covers the remaining 5.
 - **Can CI detect a PS-only diff and run narrower?** Yes for
-  `fmt`/`clippy` today, for any diff with zero `.rs` changes (small
-  win, ≈7s of ≈106s, real and doable now — safe regardless of *which*
-  non-`.rs` paths changed, since those two checks only ever inspect
-  Rust source). Not for `cargo build` — the embedded catalog/self-test
-  content changes with the PS diff, so a fresh build stays required
-  regardless of Phase A/B. `cargo test`'s Rust suite can shrink once
-  Phase A/B exist, the narrow path is scoped to an explicit
+  `fmt`/`clippy` today, for any diff touching none of
+  `.rs`/`Cargo.toml`/`Cargo.lock` (small win, ≈7s of ≈106s, real and
+  doable now — the manifest/lockfile stay in the condition alongside
+  `.rs`, since a dependency-version or feature-flag change can surface
+  a new `clippy` lint with no `.rs` text changed at all). Not for
+  `cargo build` — the embedded catalog/self-test content changes with
+  the PS diff, so a fresh build stays required regardless of Phase
+  A/B. `cargo test`'s Rust suite can shrink once Phase A/B exist *and*
+  each library's existing Rust test coverage has actually been
+  migrated into that library's self-tests — `tests/graph.rs`,
+  `tests/dataviz.rs`, `tests/etching.rs`, and the rest are each their
+  own suite today, so the narrow path is only safe library-by-library
+  as each one's migration lands, not the moment Phase A/B merely
+  *exist* as a mechanism. The narrow path is scoped to an explicit
   `lib/**/*.ps`-only allowlist rather than "no `.rs` changed" (a diff
   to `examples/postcard.ps`, say, has no `.rs` changes but is directly
   tested by `tests/pdf.rs:96` — "no `.rs`" is not the same claim as
-  "PS-library-only"), and it runs self-tests for every library (not
-  just the changed one, to cover dependents) plus the extracted
-  gs-acceptance check — doing so before Phase A/B exist, or without
-  those corrections, would ship PS-only PRs with strictly less
-  verification than today.
+  "PS-library-only"), it invokes `--lint` alongside `--selftest` (a
+  `%%SelfTest` block alone only runs `stopped`-based assertions —
+  three of the ten defects Phase A covers, rows 9/11/12, are
+  `--lint`'s blank-page check specifically, not anything a
+  `%%SelfTest` block itself would catch), and it runs self-tests for
+  every migrated library (not just the changed one, to cover
+  dependents) plus the extracted gs-acceptance check for every
+  existing driver — doing so before Phase A/B exist, before a given
+  library's migration lands, or without those corrections, would ship
+  PS-only PRs with strictly less verification than today.
 - **Where does Ghostscript remain necessary vs. default habit?**
   Necessary and *actually exercised in CI today* (corrected finding,
   above) for `tests/golden.rs`/`tests/corpus.rs` (interpreter-level
@@ -457,10 +520,14 @@ yet; all three follow-ups below are what would have to land first.
   standalone script independent of the other two follow-ups.
 - **Does "done" change for a PS-only issue in `SDLC.md`/
   `work-issue`?** Not yet — none of the three follow-ups exist. Once
-  they do, `.claude/skills/work-issue/SKILL.md`'s step 5 quality gate
-  could special-case a diff scoped to `lib/**/*.ps` to run `pscat
-  --selftest` plus the extracted gs-check instead of the full `cargo`
-  gate; that's a change to make when Phase A/B land, not now.
+  they do (and once the touched libraries' coverage has actually been
+  migrated), `.claude/skills/work-issue/SKILL.md`'s step 5 quality gate
+  could special-case a diff scoped to `lib/**/*.ps` to run `cargo
+  build` (still required — a fresh binary or a stale one is exactly
+  the distinction touchpoint 1's `include_str!` embedding makes load-
+  bearing) followed by `pscat --lint` + `pscat --selftest` plus the
+  extracted gs-check scripts, instead of the full `cargo` gate; that's
+  a change to make when Phase A/B land, not now.
 
 ## Which touchpoints does this issue address directly?
 
@@ -507,27 +574,41 @@ follow-up rather than filing it itself.
 
 1. **Doc-comment-driven capabilities catalog** (touchpoint 1): new
    `%%Summary:`/`%%Internal:` tags, `include_str!`-based build-time
-   parsing, and a `tests/capabilities.rs` cross-check that keeps
-   requiring an explicit classification for every name (deriving both
-   lists from source, not hand-maintaining them, but not dropping the
-   requirement itself).
+   parsing with a mandatory `build.rs` directory scan (or an equivalent
+   on-disk-vs-manifest test) so a brand-new `lib/*.ps` file can't be
+   silently forgotten from the embedded set, and a `tests/capabilities.rs`
+   cross-check that keeps requiring an explicit classification for
+   every name (deriving both lists from source, not hand-maintaining
+   them, but not dropping the requirement itself).
 2. **PS-native self-check convention** (touchpoint 2): Phase A
-   (`%%SelfTest` + `--selftest`, no new operator) and Phase B (a
-   pixel-sample operator), plus extracting `ghostscript_accepts_*`
-   into a standalone script. Phase A is independently shippable and
-   should land first — it's the larger share of the defect classes
+   (`%%SelfTest` + `--selftest`, no new operator — plus `--lint`'s
+   existing blank-page check, which must be invoked alongside
+   `--selftest` for their combined coverage claim to hold) and Phase B
+   (a pixel-sample operator), plus extracting every existing
+   `ghostscript_accepts_*` driver (not one per source file — several
+   files have more than one distinct driver) into standalone scripts.
+   Phase A is independently shippable and should land first — it's the
+   larger share of the defect classes
    found (10 of 18) for the smaller cost.
 3. **CI diff-shape detection** (touchpoint 3): the small `fmt`/`clippy`
-   skip is independently shippable now, for any diff with zero `.rs`
-   changes; `cargo build` stays required regardless (the embedded
-   catalog/self-test content changes with the PS diff); the `cargo
-   test` Rust-suite replacement is blocked on issue 2's Phase A/B
-   landing, must be scoped to an explicit `lib/**/*.ps`-only allowlist
-   rather than "no `.rs` changed" (a non-`.rs` change under
+   skip is independently shippable now, for any diff touching none of
+   `.rs`/`Cargo.toml`/`Cargo.lock`; `cargo build` stays required
+   regardless (the embedded catalog/self-test content changes with the
+   PS diff). The `cargo test` Rust-suite replacement is blocked on
+   issue 2's Phase A/B landing *and* on migrating each library's
+   existing Rust coverage into its own self-tests one library at a
+   time (landing Phase A/B doesn't retroactively cover
+   `tests/graph.rs`/`tests/dataviz.rs`/etc. for libraries that haven't
+   been migrated yet); must be scoped to an explicit `lib/**/*.ps`-only
+   allowlist rather than "no `.rs` changed" (a non-`.rs` change under
    `examples/`/`fonts/`/test data can still be directly covered by a
-   named Rust test), must run every library's self-tests (not just the
-   changed file, to cover dependents) plus the extracted
-   `ghostscript_accepts_*` check, and should be scoped as part of that
+   named Rust test); must invoke `--lint` alongside `--selftest` (three
+   of Phase A's ten defect classes are `--lint`'s blank-page check
+   specifically, not anything `--selftest` alone runs); must run every
+   migrated library's self-tests (not just the changed file, to cover
+   dependents) plus every extracted `ghostscript_accepts_*` driver
+   (not one per source file — `tests/paintkit.rs` alone has seven,
+   each a distinct scenario); and should be scoped as part of that
    work, not before it.
 
 ## What's explicitly rejected
@@ -537,21 +618,25 @@ follow-up rather than filing it itself.
   static data doesn't have.
 - Treating `--lint`'s existing heuristics as a full replacement for
   `tests/paintkit.rs` — they cover 3 of 18 real defect classes found
-  here today (a 4th, the missing-`showpage` case, needs a small
-  addition to `--lint` that doesn't exist yet), and none of the 18 are
-  the geometry-correctness class Phase B targets.
+  here today, none of the 18 are the geometry-correctness class Phase B
+  targets, and a 4th (the missing-`showpage` case) has no safe
+  automated fix proposed here at all (see touchpoint 2 above — a
+  blanket rule false-positives on real committed demos).
 - Skipping `cargo build` for a PS-only diff, at any point — the
   embedded catalog/self-test content changes with the PS source, so a
   cached binary can't validate it.
 - Narrowing CI's `cargo test` step to only the changed `.ps` file's own
-  self-tests, to skip the extracted gs-acceptance check, or to trigger
-  on "no `.rs` changed" instead of an explicit `lib/**/*.ps` allowlist
-  — all three would ship PS-only PRs with less verification than today
-  (missing a dependent-library regression, a `gs`-rejects-it defect
-  `pscat` itself doesn't, or a Rust test that directly covers a
-  non-`.rs` file like `tests/pdf.rs:96`'s coverage of
-  `examples/postcard.ps`), which the issue's own acceptance criteria
-  rule out. Narrowing it at all is blocked on a PS-native verification path
+  self-tests, to skip `--lint` or the extracted gs-acceptance checks, to
+  trigger on "no `.rs` changed" instead of an explicit `lib/**/*.ps`
+  allowlist, or to apply to a library whose existing Rust coverage
+  hasn't actually been migrated into self-tests yet — any of these
+  would ship PS-only PRs with less verification than today (missing a
+  blank-page regression `--lint` alone catches, a dependent-library
+  regression, a `gs`-rejects-it defect `pscat` itself doesn't, a Rust
+  test that directly covers a non-`.rs` file like `tests/pdf.rs:96`'s
+  coverage of `examples/postcard.ps`, or a whole library's untested
+  suite), which the issue's own acceptance criteria rule out. Narrowing
+  it at all is blocked on a PS-native verification path
   existing to replace what it currently proves.
 - Reducing or removing cross-model review for PS-only changes — it
   caught the one defect (#17, the `pathforall` interpreter bug) that

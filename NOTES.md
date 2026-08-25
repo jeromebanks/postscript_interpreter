@@ -25,17 +25,23 @@ after.
 Classified all 18 real defects found across all seven rounds of Codex
 review on PR #76 (issue #41, `pkribbon` -- read in full via `gh pr
 view 76 --comments`, not just round 1) against what would actually
-catch each one: 11 of 18 need no new interpreter work at all
+catch each one: 10 of 18 need no new interpreter work at all
 (PostScript's existing `stopped`/`errordict`, or `--lint`'s existing
 blank-page heuristic), verified directly by running a `stopped`-wrapped
 malformed-input call against real `lib/paintkit.ps` on a locally built
 release binary and confirming it discriminates (catches the bad call,
-doesn't fire on a well-formed one). One defect (`pathforall`'s missing
-implicit moveto after `closepath`) is a genuine interpreter bug that
-only Rust/gs-parity testing caught -- direct evidence for keeping
-`tests/golden.rs`/`tests/corpus.rs` exactly as-is, per the issue's own
-acceptance criteria. The remaining five need a new one-time
-pixel-sample operator, scoped as the follow-up's "Phase B."
+doesn't fire on a well-formed one); a further one closes by
+construction once the capabilities-catalog follow-up lands. Five need
+a new one-time pixel-sample operator, scoped as a follow-up's "Phase
+B." The remaining two stay uncovered by anything proposed -- one
+(`pathforall`'s missing implicit moveto after `closepath`) a genuine
+interpreter bug only Rust/gs-parity testing caught, direct evidence
+for keeping `tests/golden.rs`/`tests/corpus.rs` exactly as-is per the
+issue's own acceptance criteria; the other (a demo missing `showpage`)
+a real but low-severity gap whose cheap automated fix turned out to
+false-positive on two already-committed demos, caught in a second
+round of cross-model review on this very PR and withdrawn rather than
+shipped.
 
 Worked example: `pkoil` (issue #45, PR #86)'s real diff was 467 lines,
 335 PS / 132 Rust (82 in `src/capabilities.rs`, 50 in
