@@ -364,6 +364,18 @@ renders eight examples in both and compares block-downsampled output).
    deliberately left undone, and names a real gs-portability gap (no
    PostScript-callable alpha operator in gs 10.07.1) to document rather
    than paper over.
+5. Shrinking PS-library-only coupling to Rust/CI/gs (architecture
+   spike in issue #92): read `docs/PS_LIBRARY_COUPLING.md` before
+   starting any of its three follow-ups — a doc-comment-driven
+   `src/capabilities.rs` (an `include_str!`-embedded, build-time-parsed
+   catalog, not runtime parsing — breaks wasm), a PS-native
+   `%%SelfTest`/`--selftest` verification path (Phase A needs no new
+   operator and covers 11 of 18 real defects found on PR #76; Phase B's
+   pixel-sample operator covers the rest), and CI diff-shape detection
+   (the small `fmt`/`clippy` skip is independent; the larger
+   `cargo test` replacement is gated on Phase A/B landing first — doing
+   it earlier would ship PS-only PRs with less verification than
+   today).
 
 ## Gotchas for the next implementer
 
