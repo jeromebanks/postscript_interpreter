@@ -1,0 +1,109 @@
+%!PS-Adobe-3.0
+%%Title: Paintkit — stylized oil-paint impasto (issue #45)
+%%BoundingBox: 0 0 620 760
+%%EndComments
+
+% Specimen for paintkit's pkoil (lib/paintkit.ps): layered pressure
+% ribbons and bristle ridges suggesting a loaded oil brush, with
+% restrained highlight/shadow that reads as impasto thickness — built on
+% pkribbon (issue #41) and the dry-bristle Markov (issue #43) but
+% dialed toward a mostly loaded mark.
+% Row 1 varies load; row 2 varies ridge count / spread / width jitter;
+% row 3 shows color jitter and the highlight/shadow lift; row 4 is a
+% small overlapping composition (a wet-looking glaze).
+
+%   pscat --page 620x760 examples/paintkit_oil_demo.ps --png paintkit_oil.png
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+
+7 srand
+
+1 1 1 setrgbcolor clippath fill
+
+/dmlabel {
+    /dmllabel exch def /dmly exch def /dmlx exch def
+    gsave
+        0.55 0.55 0.55 setrgbcolor
+        /Helvetica findfont 11 scalefont setfont
+        dmlx dmly moveto dmllabel show
+    grestore
+} def
+
+/stone pal 2 get aload pop setrgbcolor
+
+% --- row 1: same path, three load levels --------------------------------
+20 720 (oil -- high Load, loaded) dmlabel
+newpath 20 690 moveto 180 690 lineto
+<< /Width 16 /Ridges 12 /Load 0.95 /Dropout 0.08 >> pkoil
+
+220 720 (medium load) dmlabel
+newpath 220 690 moveto 380 690 lineto
+<< /Width 16 /Ridges 12 /Load 0.65 /Dropout 0.25 >> pkoil
+
+420 720 (lower load -- still oil, not dry) dmlabel
+newpath 420 690 moveto 580 690 lineto
+<< /Width 16 /Ridges 12 /Load 0.35 /Dropout 0.45 >> pkoil
+
+/ember pal 2 get aload pop setrgbcolor
+
+% --- row 2: ridge count, spread, width jitter -----------------------------
+20 620 (few broad ridges) dmlabel
+newpath 20 590 moveto 180 590 lineto
+<< /Width 18 /Ridges 5 /RidgeWidth 2.8 /RidgeSpread 0.5 >> pkoil
+
+220 620 (many fine ridges) dmlabel
+newpath 220 590 moveto 380 590 lineto
+<< /Width 18 /Ridges 24 /RidgeWidth 1.0 /RidgeSpread 0.9 >> pkoil
+
+420 620 (heavy width jitter) dmlabel
+newpath 420 590 moveto 580 590 lineto
+<< /Width 18 /Ridges 12 /WidthJitter 0.8 >> pkoil
+
+/tide pal 2 get aload pop setrgbcolor
+
+% --- row 3: color variation and impasto lift -----------------------------
+20 520 (no color variation) dmlabel
+newpath 20 490 moveto 180 490 lineto
+<< /Width 16 /Ridges 12 /ColorJitter 0 >> pkoil
+
+220 520 (subtle color variation) dmlabel
+newpath 220 490 moveto 380 490 lineto
+<< /Width 16 /Ridges 12 /ColorJitter 0.14 >> pkoil
+
+420 520 (highlight + shadow) dmlabel
+newpath 420 490 moveto 580 490 lineto
+<< /Width 16 /Ridges 12 /Highlight 0.22 /Shadow 0.18 /ColorJitter 0.08 >> pkoil
+
+/carnival pal 2 get aload pop setrgbcolor
+20 420 (edge pickup -- darker outer ridges) dmlabel
+newpath 20 390 moveto 180 390 lineto
+<< /Width 16 /Ridges 12 /EdgePickup 0.35 >> pkoil
+
+220 420 (a pressed dab -- isotropic impasto) dmlabel
+newpath 300 360 moveto
+<< /Width 32 /Ridges 14 /RidgeWidth 2.2 /Load 0.9 /ColorJitter 0.12 /Highlight 0.14 /Shadow 0.12 >> pkoil
+
+% --- row 4: overlapping wet-looking composition ---------------------------
+/nocturne pal 2 get aload pop setrgbcolor
+20 300 (overlapping glazes -- wet impasto) dmlabel
+% three overlapping curved strokes, same palette, deterministic order
+0.78 0.32 0.22 setrgbcolor
+newpath 40 240 moveto 120 280 200 260 280 200 curveto
+<< /Width 20 /Ridges 10 /Load 0.9 /Highlight 0.12 /Shadow 0.1 >> pkoil
+
+0.92 0.68 0.24 setrgbcolor
+newpath 60 220 moveto 160 200 260 240 360 180 curveto
+<< /Width 18 /Ridges 10 /Load 0.88 /Highlight 0.12 /Shadow 0.1 >> pkoil
+
+0.22 0.45 0.65 setrgbcolor
+newpath 80 180 moveto 180 140 280 160 420 200 curveto
+<< /Width 16 /Ridges 9 /Load 0.9 /Highlight 0.1 /Shadow 0.12 >> pkoil
+
+% a final dry-bristle contrast for the eye
+0.5 0.5 0.5 setrgbcolor
+340 120 (for contrast -- dry bristle, same path) dmlabel
+newpath 340 100 moveto 500 100 lineto
+<< /Width 16 /Bristles 18 /Load 0.5 /Dropout 0.4 >> pkdry
+
+showpage

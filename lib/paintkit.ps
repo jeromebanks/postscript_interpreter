@@ -23,6 +23,11 @@
 % visibly broken coverage without any raster work. See its own header,
 % after `pknib`'s, for full docs.
 %
+% `pkoil` (issue #45) is a stylized oil-paint preset — layered pressure
+% ribbons and bristle traces suggesting loaded impasto without any 3D
+% height map or fluid simulation. See its own header, after `pkspray`'s,
+% for full docs.
+%
 % `pkspray` (issue #44) is not built on `pkribbon` -- spray is discrete
 % particle deposition, not an offset band -- but it shares the same
 % walkpath-driven shape: seeded particles scattered around each sampled
@@ -115,6 +120,9 @@
 % prefix would get silently clobbered by its own nested pkribbon call.
 % pz- (pkspray/dispatch, pzpdot, pzburstcluster) -- issue #44, see
 % below; also deliberately distinct, same reasoning as pkdry's pb-.
+% po- (pkoil/dispatch, porad, poroll) -- issue #45, see below; also
+% deliberately distinct, same reasoning — pkoil calls pkribbon once per
+% bristle dash and pkribbon's own body redefines every pk*-prefixed name.
 
 % - [bool0 bool1 ...]   (one flag per subpath, in path order: was it
 % closed with an explicit closepath?)
@@ -1544,6 +1552,225 @@
             } ifelse
         } for
         fill
+        grestore
+    } if
+} def
+% --- stylized oil-paint brush (issue #45) -----------------------------
+% opts pkoil -
+% A stylized oil-paint impasto preset built from layered pressure ribbons
+% and bristle traces: a solid base ribbon suggesting a loaded brush, a
+% bounded family of thin offset bristle ridges that catch and skip
+% slightly (Markov, like pkdry but with high load), and restrained
+% highlight/shadow edge lifts that read as paint thickness without any
+% 3D height map, fluid mixing, or blending. Pure vector fill, portable
+% to pscat and Ghostscript.
+%
+%   opts pkoil -
+%
+%   /Width         envelope width the ridges scatter across (default
+%                  14). Must be > 0. Same role as pkdry's /Width.
+%   /Pitch         walkpath sampling pitch (default Width*0.35, capped
+%                  at 4). Must be > 0.
+%   /Ridges        bristle ridge count (default 12). Must be whole
+%                  1..40 — hard cap so even at default Pitch on a long
+%                  stroke the work stays bounded (see Safety below).
+%   /RidgeSpread   0..1 fraction of Width ridges scatter across,
+%                  centered on the centerline (default 0.75). 0..1.
+%   /RidgeWidth    base width of each ridge's own mark (default
+%                  Width*0.14). Must be > 0.
+%   /WidthJitter   0..1 fraction of RidgeWidth each ridge's width
+%                  varies by (default 0.3). 0..1. Clamped to 5% floor.
+%   /Load          0..1 resume-contact rate (default 0.85). High load
+%                  means ridges stay inked; low load breaks up. 0..1.
+%   /Dropout       0..1 lose-contact rate (default 0.18). 0..1. Both
+%                  rates are per one Width of travel, scaled by
+%                  (sp/Width) per step like pkdry, same portability.
+%   /ColorJitter   0..1 per-ridge color variation via `shade` around
+%                  the caller's current color (default 0.08). 0..1.
+%   /EdgePickup    0..1 darker pickup at the envelope edges (default
+%                  0.15). 0..1. Implemented as subtle darkening of the
+%                  outermost ridges' shade, not a separate pass.
+%   /Highlight     0..1 restrained highlight strength (default 0.12).
+%                  Lighter lift on one side of each stroke. 0..1.
+%   /Shadow        0..1 restrained shadow strength (default 0.10).
+%                  Darker lift on the opposite side. 0..1.
+%   /Pressure      {t -> mult} proc (default pkflat). Must be a
+%                  procedure (xcheck + type check same as pkribbon).
+%   /Jitter        edge roughness forwarded to each dash's pkribbon
+%                  /Jitter (default 0). Shares the seeded rand stream.
+%
+% Determinism: no library seed, fully reproducible under the caller's
+% own `N srand`, same doctrine as pkribbon/pkdry/pkspray.
+%
+% Multiple subpaths each get independent ridge scatter and Markov runs.
+% A single-point subpath scatters ridges isotropically around the point
+% so a dab reads as a pressed impasto cluster, not a line.
+%
+% Layering order (documented, deterministic):
+%  1. Base load ribbon at current color (full Width)
+%  2. Bristle ridges (Ridges thin ribbons, each broken by Markov)
+%  3. Highlight ridge on the + side, shadow ridge on the - side
+% Later layers are drawn on top of earlier ones.
+%
+% Safety: Ridges * stopCount is checked against 120000 before any
+% drawing, same placement argument as pkdry's 150000 (checked inside
+% the counting walk, not after). The per-ridge dash calls reuse
+% poPitch for their own nested pkribbon resampling, so the budget
+% accounts for outer stops only, not multiplied nested cost — same
+% scope as pkdry's own limit and its documented #79 residual gap.
+%
+% Scratch prefix po- (pkoil/poroll/porad) — deliberately distinct from
+% pk-/pn-/pb-/pz-, since pkoil calls pkribbon and would clobber pk*
+% names.
+%
+/poroll {
+    dup 1 ge { pop true } { dup 0 le { pop false } { frnd exch lt } ifelse } ifelse
+} def
+
+% pooff porw porunstart porunend porad -
+/porad {
+    /porend exch def /porstart exch def /porw exch def /poroff exch def
+    /porsingle porstart porend eq def
+    /porstate poLoad poroll def
+    /porwasoff true def
+    /pori porstart def
+    {
+        pori porend gt { exit } if
+        poraw pori get dup 0 get /porpx exch def dup 1 get /porpy exch def dup 2 get /porpang exch def 4 get /porsp exch def
+        porsingle {
+            /porex porpx poroff pkjit add def
+            /porey porpy poroff pkjit add def
+        } {
+            /porex porpx porpang 90 add cos poroff mul add def
+            /porey porpy porpang 90 add sin poroff mul add def
+        } ifelse
+        pori porstart gt {
+            porstate {
+                poDropout porsp poWidth div mul poroll { /porstate false def } if
+            } {
+                poLoad porsp poWidth div mul poroll { /porstate true def } if
+            } ifelse
+        } if
+        porstate {
+            porwasoff { newpath porex porey moveto } { porex porey lineto } ifelse
+        } {
+            porwasoff not { << /Width porw /Jitter poJitter /Pitch poPitch >> pkribbon } if
+        } ifelse
+        /porwasoff porstate not def
+        /pori pori 1 add def
+    } loop
+    porstate { << /Width porw /Jitter poJitter /Pitch poPitch >> pkribbon } if
+} def
+
+/pkoil {
+    /poopts exch def
+    /poWidth poopts /Width 14 pkgetdef def
+    /poWidth load xcheck { pkoil-width-must-not-be-a-procedure } if
+    poWidth 0 le { pkoil-width-must-be-positive } if
+    /poPitch poopts /Pitch poWidth 0.35 mul dup 4 gt { pop 4 } if pkgetdef def
+    /poPitch load xcheck { pkoil-pitch-must-not-be-a-procedure } if
+    poPitch 0 le { pkoil-pitch-must-be-positive } if
+    /poRidges poopts /Ridges 12 pkgetdef def
+    /poRidges load xcheck { pkoil-ridges-must-not-be-a-procedure } if
+    poRidges 1 lt poRidges 40 gt or poRidges truncate poRidges ne or { pkoil-ridges-must-be-1-to-40 } if
+    /poRidgeSpread poopts /RidgeSpread 0.75 pkgetdef def
+    /poRidgeSpread load xcheck { pkoil-ridgespread-must-not-be-a-procedure } if
+    poRidgeSpread 0 lt poRidgeSpread 1 gt or { pkoil-ridgespread-must-be-0-to-1 } if
+    /poRidgeWidth poopts /RidgeWidth poWidth 0.14 mul pkgetdef def
+    /poRidgeWidth load xcheck { pkoil-ridgewidth-must-not-be-a-procedure } if
+    poRidgeWidth 0 le { pkoil-ridgewidth-must-be-positive } if
+    /poWidthJitter poopts /WidthJitter 0.3 pkgetdef def
+    /poWidthJitter load xcheck { pkoil-widthjitter-must-not-be-a-procedure } if
+    poWidthJitter 0 lt poWidthJitter 1 gt or { pkoil-widthjitter-must-be-0-to-1 } if
+    /poLoad poopts /Load 0.85 pkgetdef def
+    /poLoad load xcheck { pkoil-load-must-not-be-a-procedure } if
+    poLoad 0 lt poLoad 1 gt or { pkoil-load-must-be-0-to-1 } if
+    /poDropout poopts /Dropout 0.18 pkgetdef def
+    /poDropout load xcheck { pkoil-dropout-must-not-be-a-procedure } if
+    poDropout 0 lt poDropout 1 gt or { pkoil-dropout-must-be-0-to-1 } if
+    /poColorJitter poopts /ColorJitter 0.08 pkgetdef def
+    /poColorJitter load xcheck { pkoil-colorjitter-must-not-be-a-procedure } if
+    poColorJitter 0 lt poColorJitter 1 gt or { pkoil-colorjitter-must-be-0-to-1 } if
+    /poEdgePickup poopts /EdgePickup 0.15 pkgetdef def
+    /poEdgePickup load xcheck { pkoil-edgepickup-must-not-be-a-procedure } if
+    poEdgePickup 0 lt poEdgePickup 1 gt or { pkoil-edgepickup-must-be-0-to-1 } if
+    /poHighlight poopts /Highlight 0.12 pkgetdef def
+    /poHighlight load xcheck { pkoil-highlight-must-not-be-a-procedure } if
+    poHighlight 0 lt poHighlight 1 gt or { pkoil-highlight-must-be-0-to-1 } if
+    /poShadow poopts /Shadow 0.10 pkgetdef def
+    /poShadow load xcheck { pkoil-shadow-must-not-be-a-procedure } if
+    poShadow 0 lt poShadow 1 gt or { pkoil-shadow-must-be-0-to-1 } if
+    /poJitter poopts /Jitter 0 pkgetdef def
+    /poJitter load xcheck { pkoil-jitter-must-not-be-a-procedure } if
+    /poPressure poopts /Pressure { pkflat } pkgetdef def
+    /poPressure load xcheck /poPressure load type dup /arraytype eq exch dup /operatortype eq exch /packedarraytype eq or or and not { pkoil-pressure-must-be-a-procedure } if
+    % counting pass with safety budget
+    /pocount 0 def
+    poPitch { pop pop pop pop pop pop /pocount pocount 1 add def poRidges pocount mul 120000 gt { pkoil-deposit-count-exceeds-safety-limit } if } walkpath
+    /pon pocount def
+    /poraw pon array def
+    /poci 0 def
+    poPitch { 6 array astore poraw poci 3 -1 roll put /poci poci 1 add def } walkpath
+    pon 0 gt {
+        gsave
+        /pobasecolor [ currentrgbcolor ] def
+        /pohalfspread poWidth 0.5 mul poRidgeSpread mul def
+        % 1. base load ribbon at full Width
+        pobasecolor aload pop setrgbcolor
+        << /Width poWidth /Pitch poPitch /Jitter poJitter >> dup /Pressure /poPressure load put pkribbon
+        % 2. bristle ridges
+        pobasecolor aload pop setrgbcolor
+        1 1 poRidges {
+            /pori exch def
+            /poevenfrac pori 0.5 sub poRidges div def
+            /pooff poevenfrac 0.5 sub 2 mul pohalfspread mul pohalfspread 0.15 mul pkjit add def
+            /porw poRidgeWidth poWidthJitter poRidgeWidth mul pkjit add def
+            porw poRidgeWidth 0.05 mul lt { /porw poRidgeWidth 0.05 mul def } if
+            % edge pickup darkens outermost ridges slightly
+            /poedgefrac poevenfrac 0.5 sub abs 2 mul def
+            /poshade 1 poevenfrac 0.5 sub abs 0.4 gt { poEdgePickup 0.5 mul neg } { 0 } ifelse poColorJitter pkjit add add def
+            pobasecolor poshade 1 add shade setrgbcolor
+            % walk subpaths
+            /posi 0 def /porunstart 0 def
+            {
+                posi pon ge { exit } if
+                poraw posi get 5 get /poae exch def
+                poae 1 and 1 eq { /porunstart posi def } if
+                poae 2 and 2 eq { pooff porw porunstart posi porad } if
+                /posi posi 1 add def
+            } loop
+            pobasecolor aload pop setrgbcolor
+        } for
+        % 3. highlight on + side
+        poHighlight 0 gt {
+            /pohoff pohalfspread 0.85 mul def
+            /pohpow poRidgeWidth 0.6 mul def
+            pobasecolor poHighlight 1 add shade setrgbcolor
+            /posi 0 def /porunstart 0 def
+            {
+                posi pon ge { exit } if
+                poraw posi get 5 get /poae exch def
+                poae 1 and 1 eq { /porunstart posi def } if
+                poae 2 and 2 eq { pohoff pohpow porunstart posi porad } if
+                /posi posi 1 add def
+            } loop
+            pobasecolor aload pop setrgbcolor
+        } if
+        % 4. shadow on - side
+        poShadow 0 gt {
+            /posoff pohalfspread -0.85 mul def
+            /pospow poRidgeWidth 0.6 mul def
+            pobasecolor poShadow neg 1 add shade setrgbcolor
+            /posi 0 def /porunstart 0 def
+            {
+                posi pon ge { exit } if
+                poraw posi get 5 get /poae exch def
+                poae 1 and 1 eq { /porunstart posi def } if
+                poae 2 and 2 eq { posoff pospow porunstart posi porad } if
+                /posi posi 1 add def
+            } loop
+            pobasecolor aload pop setrgbcolor
+        } if
         grestore
     } if
 } def

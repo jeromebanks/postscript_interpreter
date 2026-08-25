@@ -264,6 +264,8 @@ pub const PAINTKIT_INTERNAL: &[&str] = &[
     "pzpdot",
     "pzburstcluster",
     "pzroll",
+    "poroll",
+    "porad",
 ];
 
 /// Top-level names `lib/handscript.ps` defines beyond `hs-write`/
@@ -1214,6 +1216,86 @@ static ENTRIES: &[Entry] = &[
         ],
         PAINTKIT,
         "newpath ... << /Nozzle 12 /Density 40 >> pkspray",
+        LIB
+    ),
+    entry!(
+        "pkoil",
+        CapabilityKind::Procedure,
+        "A stylized oil-paint impasto preset built on pkribbon: layered pressure ribbons and bristle ridges suggesting a loaded brush, with restrained highlight/shadow edge lifts that read as paint thickness without any 3D height map or blending. Deterministic under the caller's own srand; bounded by Ridges * stops; respects clip like every other preset.",
+        &[
+            Param {
+                name: "Width",
+                description: "Envelope width the ridges scatter across",
+                default: Some("14")
+            },
+            Param {
+                name: "Pitch",
+                description: "walkpath sampling pitch for the shared centerline pass",
+                default: Some("Width*0.35, capped at 4")
+            },
+            Param {
+                name: "Ridges",
+                description: "Bristle ridge count; hard safety cap 1..40",
+                default: Some("12")
+            },
+            Param {
+                name: "RidgeSpread",
+                description: "0..1 fraction of Width the ridges scatter across, centered on the centerline",
+                default: Some("0.75")
+            },
+            Param {
+                name: "RidgeWidth",
+                description: "Base width of each ridge's own mark",
+                default: Some("Width*0.14")
+            },
+            Param {
+                name: "WidthJitter",
+                description: "0..1 fraction of RidgeWidth each ridge's own width randomly varies by",
+                default: Some("0.3")
+            },
+            Param {
+                name: "Load",
+                description: "Resume-contact rate per one Width of travel; high Load stays inked",
+                default: Some("0.85")
+            },
+            Param {
+                name: "Dropout",
+                description: "Lose-contact rate per one Width of travel",
+                default: Some("0.18")
+            },
+            Param {
+                name: "ColorJitter",
+                description: "0..1 per-ridge color variation magnitude around the caller's current color",
+                default: Some("0.08")
+            },
+            Param {
+                name: "EdgePickup",
+                description: "0..1 darker pickup at the envelope edges",
+                default: Some("0.15")
+            },
+            Param {
+                name: "Highlight",
+                description: "0..1 restrained highlight strength on one side",
+                default: Some("0.12")
+            },
+            Param {
+                name: "Shadow",
+                description: "0..1 restrained shadow strength on the opposite side",
+                default: Some("0.10")
+            },
+            Param {
+                name: "Pressure",
+                description: "{t -> mult} proc over normalized path progress, forwarded to the base ribbon",
+                default: Some("{ pkflat }")
+            },
+            Param {
+                name: "Jitter",
+                description: "Seeded edge displacement amount, forwarded to each dash's pkribbon Jitter",
+                default: Some("0")
+            },
+        ],
+        PAINTKIT,
+        "newpath ... << /Width 16 /Ridges 12 /Load 0.9 >> pkoil",
         LIB
     ),
     // --- Procedures: shapes ----------------------------------------------
