@@ -365,23 +365,20 @@ renders eight examples in both and compares block-downsampled output).
    PostScript-callable alpha operator in gs 10.07.1) to document rather
    than paper over.
 5. Shrinking PS-library-only coupling to Rust/CI/gs (architecture
-   spike in issue #92): read `docs/PS_LIBRARY_COUPLING.md` before
-   starting any of its three follow-ups — a doc-comment-driven
-   `src/capabilities.rs` (an `include_str!`-embedded, build-time-parsed
-   catalog, not runtime parsing — breaks wasm), a PS-native
-   `%%SelfTest`/`--selftest` verification path (Phase A needs no new
-   operator and covers 10 of 18 real defects found on PR #76; Phase B's
-   pixel-sample operator covers 5 more; 2 stay uncovered by anything
-   proposed — one an interpreter bug only Rust/gs-parity testing
-   catches, one a low-severity gap whose cheap automated fix
-   false-positived on real demos and was withdrawn), and CI diff-shape
-   detection (the small `fmt`/`clippy` skip is independent, scoped to
-   `.rs`/`Cargo.toml`/`Cargo.lock`; the larger `cargo test` replacement
-   needs a `lib/**/*.ps` allowlist, not "no `.rs` changed," is gated on
-   Phase A/B landing first, and on migrating each library's existing
-   Rust test coverage into self-tests one library at a time — doing
-   it earlier would ship PS-only PRs with less verification than
-   today).
+   spike in issue #92): **read `docs/PS_LIBRARY_COUPLING.md` in full
+   before starting any of its three follow-ups (a doc-comment-driven
+   capabilities catalog, a phased PS-native verification path, CI
+   diff-shape detection) — do not work from a summary of it, including
+   this one.** That document itself needed eight rounds of cross-model
+   review to converge (mostly the same failure mode each time: a
+   correction made in one section not propagating to a shorter
+   restatement elsewhere, including in an earlier version of this very
+   HANDOFF.md entry) — a short paraphrase here is exactly the kind of
+   restatement that risks going stale the next time the source document
+   is revised. If you need the shape before opening the file: three
+   follow-up issues, none built yet, each phased/corrected in ways that
+   matter (a naive read of any one paragraph in isolation has
+   repeatedly proven wrong in review). Read the whole thing.
 
 ## Gotchas for the next implementer
 

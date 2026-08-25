@@ -48,8 +48,13 @@ Worked example: `pkoil` (issue #45, PR #86)'s real diff was 467 lines,
 `tests/paintkit.rs`) against a ≈106s CI job dominated by `cargo test`
 (≈58s) more than `clippy`+`fmt` (≈7s combined, measured from the same
 run's per-step timings) -- the 132 Rust lines are what the three
-follow-ups target, not the 335 PS lines, which were never going to
-shrink.
+follow-ups target; the PS side's core logic doesn't shrink, but isn't
+perfectly flat either, since the projected mechanism adds new
+`%%Summary:`/`%%Requires:`/`%%Example:`/`%%SelfTest` content (a real,
+unsized-here cost the write-up initially left out, caught in review --
+see `docs/PS_LIBRARY_COUPLING.md`'s worked-example section for the
+detail rather than trusting this summary, which has itself needed
+correcting more than once).
 
 ## Watercolor rendering architecture spike (issue #46, 2026-08-25)
 
