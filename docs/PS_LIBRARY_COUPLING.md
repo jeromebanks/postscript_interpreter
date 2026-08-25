@@ -61,19 +61,35 @@ file-level `%%Requires:` naming the prerequisite `run` chain (see
 turned out necessary, not optional) — to the doc-comment convention
 (retrofitting existing files once), keep parsing `/Key ... (default
 D)` for parameters, and derive the catalog by **`include_str!`-embedding
-each `lib/*.ps` file and parsing it at build time**, not by reading it
-from disk at runtime and not by committing a generated `.rs` file. Runtime
-parsing was the first instinct here and is wrong for two concrete
-reasons: `--capabilities`/`describe_art_capabilities` would become
-fallible on a moved or missing `lib/` (today's static table can't fail
-that way), and the wasm build (`web/`, `scripts/build_wasm.sh`) has no
-filesystem to read from at all — `.claude/skills/work-issue/SKILL.md`
-already documents this exact constraint for the playground picker,
-which is why it requires self-contained `.ps` files. `include_str!`
-keeps the parse entirely in the binary (wasm included) while still
-meaning **zero hand-written Rust for a new procedure in an existing
-file** — a new `pkfoo` in `lib/paintkit.ps` with a correct doc comment
-needs a rebuild to pick it up, not a hand-edited `ENTRIES` row. **A
+each `lib/*.ps` file into the binary**, not by reading it from disk at
+runtime and not by committing a generated `.rs` file. **"Not by
+reading from disk at runtime" needed a real distinction this document
+initially blurred, caught by a sixth review round: `include_str!`
+embeds *text*, it doesn't parse it.** Something still has to turn that
+embedded string into structured `Capability` data, and there are two
+legitimate ways to do that — parsing the *embedded string* (not a disk
+read) at runtime inside `catalog()` itself, or parsing it at build
+time in a `build.rs` that code-generates typed Rust into `OUT_DIR`
+for `catalog()` to `include!()`. Both avoid the two real problems a
+disk-read-at-runtime has (fallibility on a moved/missing `lib/`; no
+filesystem at all in the wasm build, per
+`.claude/skills/work-issue/SKILL.md`'s documented constraint for the
+playground picker, which is why it requires self-contained `.ps`
+files) — `include_str!`'s content is baked into the binary either way,
+wasm included. The tradeoff between the two: runtime-parse-the-embedded
+-string is simpler (no `build.rs` at all) but a malformed tag becomes a
+`--capabilities` runtime failure, caught whenever that code path
+actually runs; `build.rs` codegen is more machinery but turns a
+malformed tag into a build failure, caught on every `cargo build`
+regardless of whether anything later calls `--capabilities`. Either
+is a legitimate choice for the follow-up to make explicitly — this
+document doesn't pick one, but no version of "parse the embedded
+string" reopens the disk-read/wasm problems `include_str!` was chosen
+to avoid. `include_str!` keeps the parse entirely in the binary (wasm
+included) either way, meaning **zero hand-written Rust for a new
+procedure in an existing file** — a new `pkfoo` in `lib/paintkit.ps`
+with a correct doc comment needs a rebuild to pick it up, not a
+hand-edited `ENTRIES` row. **A
 brand-new sibling file is a different case, and a first attempt to
 wave it away was wrong twice over — caught by two separate rounds of
 cross-model review, not shipped as written either time.** `include_str!`
@@ -141,14 +157,23 @@ the shape of the actual miss.
 
 A second, unrelated gap in this same recommendation, caught later
 (worked example below has the detail): `%%Summary:` alone only
-recovers a `Capability`'s `description` and `parameters`. Two more
-fields — `example` (a hand-picked illustrative call, not derivable
-from the generic stack-effect comment) and `load` (a per-*file*
-prerequisite `run` chain, currently a hard-coded Rust match) — need
-their own tags (`%%Example:`, file-level `%%Requires:`) or stay
-hand-written regardless of how good the rest of this mechanism gets.
-`availability`/`kind` are probably safe to derive but that's an
-assumption, not verified here.
+recovers a `Capability`'s `description` and `parameters`. Three more
+fields need their own tags or stay hand-written, not "probably
+derivable" as an earlier pass here guessed: `example` (a hand-picked
+illustrative call, not derivable from the generic stack-effect
+comment); `load` (a per-*file* prerequisite `run` chain, currently a
+hard-coded Rust match); and `kind` — **guessed derivable from binding
+shape, wrong, caught by a sixth review round**: `pgcard` (a
+`Template`) and `pkribbon` (a `Procedure`) are both bound with plain
+`def`, so "how a name is bound" doesn't actually distinguish them —
+`kind` is a categorical judgment call, not a syntactic fact, and needs
+its own explicit tag per entry (folded into `%%Summary:`'s own tag,
+e.g. `%%Summary(template):`, or a separate `%%Kind:`) like `example`
+and `load`. `availability` is the one field still plausibly a safe
+constant to derive from `source` alone (`"library"` for everything
+`lib/*.ps`-sourced today) — an assumption, not verified here, but at
+least not contradicted by a concrete counterexample the way `kind`
+was.
 
 **Rejected:** full free-text parsing of the existing prose without a
 new summary tag. The risk isn't that it fails loudly (a botched parse
@@ -334,16 +359,23 @@ each actually buys:
   the diff check on the PR's merge base, and handle the plain
   `push: main` trigger, which has no base to diff at all) when the
   diff touches none of `.rs`/`Cargo.toml`/`Cargo.lock` **and no
-  Rust-tool-config file** — a fourth review round caught the first
-  three-file version as incomplete: `rustfmt.toml`, `clippy.toml`,
-  `rust-toolchain.toml`, and `.cargo/config.toml` can each change what
-  `fmt`/`clippy` actually check with zero `.rs`/`Cargo.toml` lines
-  touched. None of the four exist in this repo today (confirmed:
-  `find . -maxdepth 2 -iname 'rustfmt.toml' -o -iname 'clippy.toml' -o
-  -iname 'rust-toolchain*' -o -iname '.cargo'` found nothing) — the
-  skip condition needs to name them anyway, so it doesn't quietly stay
-  broken the day one is added. Worth doing on its own merits even
-  though the win is modest.
+  Rust-tool-config file, every filename each tool actually recognizes**
+  — caught incomplete twice, across two review rounds: a fourth round
+  flagged `rustfmt.toml`/`clippy.toml`/`rust-toolchain.toml`/
+  `.cargo/config.toml` as missing entirely; a sixth round then flagged
+  that each of those tools accepts more than one filename —
+  `rustfmt.toml` *or* `.rustfmt.toml`, `clippy.toml` *or*
+  `.clippy.toml`, `rust-toolchain.toml` *or* extensionless
+  `rust-toolchain`, `.cargo/config.toml` *or* legacy `.cargo/config` —
+  and a diff introducing the alias form, not the canonical one, would
+  still slip past a condition that only names the canonical filenames.
+  None of these exist in this repo today (confirmed: `find . -maxdepth
+  2 -iname 'rustfmt.toml' -o -iname '.rustfmt.toml' -o -iname
+  'clippy.toml' -o -iname '.clippy.toml' -o -iname 'rust-toolchain*'
+  -o -iname '.cargo'` found nothing) — the skip condition needs to name
+  every variant anyway, so it doesn't quietly stay broken the day one
+  is added. Worth doing on its own merits even though the win is
+  modest.
 - **Larger, blocked on touchpoint 2**: once Phase A/B ship and are
   proven to catch what `cargo test` catches today, a narrower path
   becomes possible — but narrower than *today's* full gate, not as
@@ -529,17 +561,20 @@ not a measurement):
   without a new file-level tag (`%%Requires:`, say, naming the
   prerequisite `run` chain once per file rather than per procedure).
   `availability` is `"library"` for every entry sourced from `lib/*.ps`
-  today, so it's plausibly a safe constant to derive from `kind`/
-  `source` alone rather than author-supplied — but that's an
-  assumption to verify against every existing entry before treating it
-  as free, not something checked here. `kind` (`Procedure` vs. `Dial`
-  vs. `Template`) is inferable from *how* a name is bound (`def` of a
-  proc vs. a plain value) with real but not source-comment-derived
-  confidence. So the honest claim is: `description`+`parameters` reach
-  zero hand-written lines; `example` and `load` each need their own new
-  tag (`%%Example:`, `%%Requires:`) or stay manual; `availability`/
-  `kind` are probably derivable but unverified here — not the uniform
-  "0 hand-written lines" a first draft claimed.
+  today, so it's plausibly a safe constant to derive from `source`
+  alone rather than author-supplied — but that's an assumption to
+  verify against every existing entry before treating it as free, not
+  something checked here. `kind` (`Procedure` vs. `Dial` vs.
+  `Template`) is **not** reliably inferable from binding shape — a
+  guess this document made and a later review round disproved: `pkoil`
+  and `pgcard` (a page template, `CapabilityKind::Template`) are both
+  bound with plain `def` of a procedure, so "how the name is bound"
+  can't actually tell them apart. `kind` needs its own explicit tag per
+  entry, same as `example`/`load`. So the honest claim is:
+  `description`+`parameters` reach zero hand-written lines; `example`,
+  `load`, and `kind` each need their own new tag or stay manual;
+  `availability` is probably derivable but unverified here — not the
+  uniform "0 hand-written lines" a first draft claimed.
 - `tests/paintkit.rs` — its actual 50 lines (`git diff b4dcbe4 16eff60
   -- tests/paintkit.rs`) are three tests, not a uniform block: 29 lines
   (`oil_validation_and_safety`, four malformed-input cases each
@@ -597,9 +632,11 @@ have to land first.
   property it has today, just deriving both classifications
   (`%%Summary:`/`%%Internal:`) from the source instead of maintaining
   two independent hand-written lists — with the caveat that `%%Summary:`
-  only covers a `Capability`'s `description`/`parameters`; `example`
-  and the per-file `load` chain need their own tags
-  (`%%Example:`/`%%Requires:`) or stay hand-written regardless.
+  only covers a `Capability`'s `description`/`parameters`; `example`,
+  `kind` (not reliably inferable from binding shape — `pgcard` and
+  `pkribbon` are both plain `def`, one's a `Template` and one's a
+  `Procedure`), and the per-file `load` chain each need their own tag
+  or stay hand-written regardless.
 - **What does PS-native verification need, and is it one-time or
   recurring?** Phase A (a `%%SelfTest` convention + `--selftest` CLI
   mode) needs no new interpreter primitive and is genuinely one-time;
@@ -608,9 +645,11 @@ have to land first.
   also one-time, not per-feature, and covers the remaining 5.
 - **Can CI detect a PS-only diff and run narrower?** Yes for
   `fmt`/`clippy` today, for any diff touching none of
-  `.rs`/`Cargo.toml`/`Cargo.lock`/a Rust-tool-config file (`rustfmt.toml`,
-  `clippy.toml`, `rust-toolchain.toml`, `.cargo/config.toml` — none
-  exist in this repo today, but the condition should name them anyway)
+  `.rs`/`Cargo.toml`/`Cargo.lock`/a Rust-tool-config file, every
+  filename variant each tool recognizes (`rustfmt.toml`/`.rustfmt.toml`,
+  `clippy.toml`/`.clippy.toml`, `rust-toolchain.toml`/`rust-toolchain`,
+  `.cargo/config.toml`/`.cargo/config` — none exist in this repo today,
+  but the condition should name every variant anyway)
   (small win, ≈7s of ≈106s, real and doable now — the manifest/lockfile
   stay in the condition alongside `.rs`, since a dependency-version or
   feature-flag change can surface a new `clippy` lint with no `.rs`
@@ -741,8 +780,8 @@ follow-up implementer should read those, not stop at this summary.
 3. **CI diff-shape detection** (touchpoint 3, full detail above): the
    small `fmt`/`clippy` skip is independently shippable now, for any
    diff touching none of `.rs`/`Cargo.toml`/`Cargo.lock`/a
-   Rust-tool-config file (`rustfmt.toml`/`clippy.toml`/
-   `rust-toolchain.toml`/`.cargo/config.toml`); `cargo build` stays
+   Rust-tool-config file, every filename variant each tool recognizes
+   (see touchpoint 3 above); `cargo build` stays
    required regardless (the embedded catalog/self-test content changes
    with the PS diff). The `cargo test` Rust-suite replacement is
    blocked on issue 2's Phase A/B landing *and* on migrating every
