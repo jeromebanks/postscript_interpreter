@@ -81,11 +81,22 @@ maintained in parallel with it.
 
 **What this doesn't solve on its own:** the round-2 Codex finding on
 PR #76 — `pkribbon` shipped without being registered in
-`src/capabilities.rs` at all — was a real gap this mechanism would
-close by construction (a `%%Summary:`-tagged proc *can't* ship
-uncataloged, there's no separate registration step to forget). Worth
-naming as direct evidence for this touchpoint, not just a hypothetical
-benefit.
+`src/capabilities.rs` — is evidence for this touchpoint, but not for
+the reason first assumed. `tests/capabilities.rs`'s cross-check
+mechanism already existed at the time (added in PR #74, issue #39) —
+it did not fail to exist. What actually happened: adding
+`lib/paintkit.ps` as a *new sibling file* required hand-writing a
+*second* thing beyond the catalog entries — a near-duplicate
+`paintkit_names_match_the_catalog_exactly` test function
+(`tests/capabilities.rs`, 19 lines, structurally identical to
+`pagekit_names_match_the_catalog_exactly` just above it) — and that
+step is exactly as easy to skip or defer as the catalog registration
+itself. A generic, file-enumerating generator closes both gaps at
+once: a brand-new `lib/*.ps` file gets covered by the same one
+cross-check the moment it exists, with no new per-file test function
+to remember either. That's a stronger claim than "a tagged proc can't
+ship uncataloged" — it's "a new *file* can't ship unchecked," which is
+the shape of the actual miss.
 
 **Rejected:** full free-text parsing of the existing prose without a
 new summary tag. The risk isn't that it fails loudly (a botched parse
@@ -270,23 +281,34 @@ not a measurement):
   plus the existing `/Key (default D)` lines in `pkoil`'s own header
   comment are all that's needed; `--capabilities` picks it up from a
   rebuild, no `ENTRIES` row to write.
-  `tests/paintkit.rs` — **0 Rust lines**, replaced by a `%%SelfTest`
-  block in `lib/paintkit.ps` itself (Phase A covers validation-guard
-  checks like round 2/5/6/7's findings above; Phase B's pixel-sample
-  op would be needed for anything like `pkoil`'s own equivalent of the
-  "hole" or "width tracks pressure" checks, if it has them) run via
-  `pscat --selftest lib/paintkit.ps`.
+- `tests/paintkit.rs` — its actual 50 lines (`git diff b4dcbe4 16eff60
+  -- tests/paintkit.rs`) are three tests, not a uniform block: 29 lines
+  (`oil_validation_and_safety`, four malformed-input cases each
+  asserting a specific error name) are Phase-A-expressible today, no
+  new operator — the same `stopped`+error-name pattern verified above
+  against `pkribbon`, since PostScript's `$error` dict already exposes
+  which guard fired, not just that one did. The other 21 lines
+  (`oil_renders_loaded_impasto`, `oil_determinism_fixed_seed`) call
+  `ink_count` — a rendered-pixel measurement — and stay Rust-dependent
+  until Phase B's pixel-sample operator exists. So for this real
+  feature the honest split is **~29 lines → 0 Rust (Phase A alone)**,
+  **~21 lines → 0 Rust only after Phase B**, not a uniform "delete all
+  50" claim.
 - CI: `fmt`/`clippy` skipped (diff touches no `.rs`); `cargo build &&
   cargo test` replaced by `pscat --selftest` against a cached binary —
   the ≈58s dominant cost gone, along with the toolchain/cache-restore
   overhead around it.
 
 Net: the PS-only work itself (335 lines) is exactly as much PS as
-before — this was never going to shrink, and shouldn't. What
-disappears is the 132 lines of Rust that existed purely to keep a
-catalog in sync and prove the PS correct, plus the CI minutes spent
-proving it via a full Rust rebuild. None of that is built yet; all
-three follow-ups below are what would have to land first.
+before — this was never going to shrink, and shouldn't. Of the 132
+Rust lines, 82 (the catalog entry) and 29 of the 50 test lines
+(validation guards) reach zero after Phase A + touchpoint 1 alone; the
+remaining 21 test lines (the two pixel-measurement checks) need Phase
+B as well. So the realistic near-term floor for a feature shaped like
+`pkoil` is **~111 of 132 Rust lines gone**, not all 132, until Phase B
+ships — still the majority of the touchpoint-1/2 cost, with the exact
+remainder identified rather than assumed away. None of this is built
+yet; all three follow-ups below are what would have to land first.
 
 ## Answering the issue's questions to settle
 
@@ -320,10 +342,42 @@ three follow-ups below are what would have to land first.
   `pscat --selftest` instead of the full `cargo` gate; that's a change
   to make when Phase A/B land, not now.
 
+## Which touchpoints does this issue address directly?
+
+None. All three need a follow-up: touchpoint 1 needs a new doc-comment
+tag and a parser that doesn't exist; touchpoint 2 needs either a new
+CLI mode (Phase A) or a new interpreter operator (Phase B); touchpoint
+3's only piece with no dependency on the other two — skipping
+`fmt`/`clippy` for a `.rs`-free diff — is real but measured at ≈7s of
+a ≈106s job, and a required-status-check mistake in a CI change is
+exactly the kind of hard-to-reverse-if-wrong risk not worth taking
+inside a spike PR whose actual deliverable is this decision record.
+Bug-catching value is not weakened by any of this: of the 18 real
+defects tabulated above, 12 are covered by mechanisms already shipped
+(`--lint`) or proposed with no new operator (Phase A's `stopped`-based
+checks), 5 more are covered once Phase B's pixel-sample operator
+lands, and 1 (`pathforall`'s interpreter bug) is permanently out of
+reach for PS-native testing and stays exactly where it is today, in
+`tests/pathforall.rs`, gs-pinned.
+
+**Open question for whichever follow-up lands `%%Summary:`/
+`%%SelfTest`:** `%%`-prefixed comments are DSC structured comments,
+already meaningfully parsed by this repo (`%%Title:`/`%%For:` feed PDF
+`/Info`, issue #8) and by Ghostscript's own DSC parser. Two new tags in
+that same namespace is a real decision, not a free choice, and needs
+picking deliberately — a non-DSC prefix (`%!Summary:`/`%!SelfTest`, or
+`% @summary`/`% @selftest`) avoids the collision entirely and is
+probably the safer default; noted here so the follow-up implementer
+doesn't have to rediscover it.
+
 ## Follow-up issues
 
 Three, mirroring #46 → #47's one-recommendation-to-one-issue shape,
-sized by what's actually needed:
+sized by what's actually needed. Not filed as GitHub issues by this
+spike — stating which follow-ups are needed is this issue's own
+acceptance criterion; filing them is left to whoever picks this
+document up next, same as #46 left #47's filing to a human/agent
+follow-up rather than filing it itself.
 
 1. **Doc-comment-driven capabilities catalog** (touchpoint 1): a new
    `%%Summary:` tag, `include_str!`-based build-time parsing, and a
