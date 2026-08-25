@@ -2463,7 +2463,10 @@ fn oil_renders_loaded_impasto() {
     it.run_str("0 0 0 setrgbcolor 7 srand newpath 20 100 moveto 180 100 lineto << /Width 14 /Ridges 8 >> pkoil")
         .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
     // A loaded oil stroke should put ink on the centerline
-    assert!(ink_count(&it) > 200, "oil should paint a solid impasto band");
+    assert!(
+        ink_count(&it) > 200,
+        "oil should paint a solid impasto band"
+    );
 }
 
 #[test]
@@ -2486,10 +2489,22 @@ fn oil_validation_and_safety() {
         let e = it.run_str(src).unwrap_err();
         format!("{}", it.error_report(&e))
     }
-    assert!(err("newpath 0 0 moveto 100 0 lineto << /Width 0 >> pkoil").contains("pkoil-width-must-be-positive"));
-    assert!(err("newpath 0 0 moveto 100 0 lineto << /Ridges 0 >> pkoil").contains("pkoil-ridges-must-be-1-to-40"));
-    assert!(err("newpath 0 0 moveto 100 0 lineto << /Ridges 41 >> pkoil").contains("pkoil-ridges-must-be-1-to-40"));
-    assert!(err("newpath 0 0 moveto 2000 0 lineto << /Width 14 /Ridges 40 /Pitch 0.5 >> pkoil").contains("pkoil-deposit-count-exceeds-safety-limit"));
+    assert!(
+        err("newpath 0 0 moveto 100 0 lineto << /Width 0 >> pkoil")
+            .contains("pkoil-width-must-be-positive")
+    );
+    assert!(
+        err("newpath 0 0 moveto 100 0 lineto << /Ridges 0 >> pkoil")
+            .contains("pkoil-ridges-must-be-1-to-40")
+    );
+    assert!(
+        err("newpath 0 0 moveto 100 0 lineto << /Ridges 41 >> pkoil")
+            .contains("pkoil-ridges-must-be-1-to-40")
+    );
+    assert!(
+        err("newpath 0 0 moveto 2000 0 lineto << /Width 14 /Ridges 40 /Pitch 0.5 >> pkoil")
+            .contains("pkoil-deposit-count-exceeds-safety-limit")
+    );
 }
 
 #[test]

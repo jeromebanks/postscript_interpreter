@@ -1723,23 +1723,22 @@
         1 1 poRidges {
             /pori exch def
             /poevenfrac pori 0.5 sub poRidges div def
-            /pooff poevenfrac 0.5 sub 2 mul pohalfspread mul pohalfspread 0.15 mul pkjit add def
-            /porw poRidgeWidth poWidthJitter poRidgeWidth mul pkjit add def
-            porw poRidgeWidth 0.05 mul lt { /porw poRidgeWidth 0.05 mul def } if
-            % edge pickup darkens outermost ridges slightly
-            /poedgefrac poevenfrac 0.5 sub abs 2 mul def
-            /poshade 1 poevenfrac 0.5 sub abs 0.4 gt { poEdgePickup 0.5 mul neg } { 0 } ifelse poColorJitter pkjit add add def
-            pobasecolor poshade 1 add shade setrgbcolor
-            % walk subpaths
             /posi 0 def /porunstart 0 def
             {
                 posi pon ge { exit } if
                 poraw posi get 5 get /poae exch def
                 poae 1 and 1 eq { /porunstart posi def } if
-                poae 2 and 2 eq { pooff porw porunstart posi porad } if
+                poae 2 and 2 eq {
+                    /pooff poevenfrac 0.5 sub 2 mul pohalfspread mul pohalfspread 0.15 mul pkjit add def
+                    /porw poRidgeWidth poWidthJitter poRidgeWidth mul pkjit add def
+                    porw poRidgeWidth 0.05 mul lt { /porw poRidgeWidth 0.05 mul def } if
+                    /poshade 1 poevenfrac 0.5 sub abs 0.4 gt { poEdgePickup 0.5 mul neg } { 0 } ifelse poColorJitter pkjit add add def
+                    pobasecolor poshade shade setrgbcolor
+                    pooff porw porunstart posi porad
+                    pobasecolor aload pop setrgbcolor
+                } if
                 /posi posi 1 add def
             } loop
-            pobasecolor aload pop setrgbcolor
         } for
         % 3. highlight on + side
         poHighlight 0 gt {
