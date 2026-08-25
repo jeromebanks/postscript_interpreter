@@ -1,0 +1,96 @@
+%!PS-Adobe-3.0
+%%Title: Watercolor spike -- Approach A: pure PostScript (issue #46)
+%%BoundingBox: 0 0 620 620
+%%EndComments
+
+% Approach A prototype for the watercolor architecture spike (issue
+% #46): real overlap-color-mixing using nothing but nested `clip`
+% (a pure intersection operator, PLRM Level 1 -- no boolean-geometry
+% library needed, since intersecting N clips *is* the AND of their N
+% regions) plus #41's pkribbon for a hand-painted brush edge and a
+% light noise-scatter paper grain. No renderer changes, no PostScript
+% operator additions, no external tools -- and, unlike Approaches B/C,
+% every mark here is verified against real Ghostscript (see
+% WATERCOLOR.md's portability section).
+%
+%   pscat --page 620x620 docs/watercolor_prototypes/approach_a_pure_ps.ps \
+%       --png docs/watercolor_prototypes/approach_a_pure_ps.png
+%
+% Ghostscript check (plain PS, no pscat-specific operators used):
+%   gs -dNOPAUSE -dBATCH -sDEVICE=png16m \
+%       -sOutputFile=/tmp/gs_check.png \
+%       docs/watercolor_prototypes/approach_a_pure_ps.ps
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+(docs/watercolor_prototypes/common_gesture.ps) run
+
+1 1 1 setrgbcolor
+0 0 620 620 rectfill
+
+% --- paper grain, painted first so it shows in the gaps between washes
+% (and *only* in the gaps -- an opaque wash necessarily hides whatever
+% grain sits underneath it, which is the honest limit this technique
+% hits: real watercolor paper shows through a translucent wash, this
+% doesn't). Plain scatter, no noise2 field needed for isotropic grain.
+7 srand
+0.82 0.79 0.74 setrgbcolor
+0 1 900 {
+    pop
+    newpath
+    frnd 620 mul frnd 620 mul 1.0 frnd 0.5 mul add 0 360 arc
+    closepath fill
+} for
+
+% --- base washes: three full, opaque circles. Painted in a fixed
+% order (1, 2, 3) that would normally mean 2 and 3 occlude whatever
+% they overlap -- that's the naive-layering problem the issue's "Why"
+% names. The nested-clip pass below repaints every overlap region with
+% its own blended color, so the final result doesn't depend on this
+% order; it's here only so there's no gap while nothing has painted an
+% overlap region yet.
+Circ1 circpath Color1 setcolor fill
+Circ2 circpath Color2 setcolor fill
+Circ3 circpath Color3 setcolor fill
+
+% arrA arrB colorArr paintpair -   repaint arrA's intersection with
+% arrB using colorArr. `clip` intersects with whatever's already
+% clipped, so two clips in a row is exactly "inside A and inside B" --
+% no path-boolean library needed for this shape of problem.
+/paintpair {
+    /col exch def /arrB exch def /arrA exch def
+    gsave
+        arrA circpath clip
+        arrB circpath clip
+        col setcolor
+        0 0 620 620 rectfill
+    grestore
+} def
+
+% arrA arrB arrC colorArr painttriple -   same idea, three clips deep.
+/painttriple {
+    /col exch def /arrC exch def /arrB exch def /arrA exch def
+    gsave
+        arrA circpath clip
+        arrB circpath clip
+        arrC circpath clip
+        col setcolor
+        0 0 620 620 rectfill
+    grestore
+} def
+
+Circ1 Circ2 Color12 paintpair
+Circ1 Circ3 Color13 paintpair
+Circ2 Circ3 Color23 paintpair
+Circ1 Circ2 Circ3 Color123 painttriple
+
+% --- brush-edge outlines (issue #41's pkribbon): trace each circle's
+% own boundary as a closed centerline. pkribbon fills a closed
+% subpath as two concentric loops (its own documented contract), so
+% this reads as a wet ink ring rather than a flat vector circle.
+3 srand
+Circ1 circpath Edge1 setcolor << /Width 5 /Jitter 3 >> pkribbon
+Circ2 circpath Edge2 setcolor << /Width 5 /Jitter 3 >> pkribbon
+Circ3 circpath Edge3 setcolor << /Width 5 /Jitter 3 >> pkribbon
+
+showpage
