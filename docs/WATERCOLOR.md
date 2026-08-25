@@ -261,6 +261,28 @@ don't:
   output is gone — no `--svg`/`--pdf` equivalent exists or could exist
   for this technique, unlike Approach B's PNG-only-*for-now* gap.
 
+## Runtime cost, measured
+
+Wall-clock, this 620×620 scene, this machine (M-series Mac, release
+builds), median of three runs:
+
+| Approach | What was timed | Time |
+|---|---|---|
+| A (pure PS) | `pscat --page 620x620 approach_a_pure_ps.ps --png` — full render: 900 grain stipples, 3 base fills, 4 nested-clip region fills, 3 `pkribbon` edges | ~30ms |
+| B (alpha ext.) | The compositing operation itself, isolated from `cargo test`'s own build-check/harness overhead (running the compiled test binary directly) — 3 alpha-blended fills | <10ms, unmeasurable above noise |
+| C (raster post-pass) | `python3 watercolor_approach_c_post_process.py in.png out.png`, wall time including Python interpreter startup and the NumPy import — the actual cost a caller pays per invocation | ~110-160ms |
+
+A and B are the same order of magnitude — expected, since B's alpha
+fill is mechanically the same `tiny-skia` fill-path call as A's opaque
+one, just with one extra byte in the paint. **C is 3-5x slower even at
+this small page size and even measuring only the post-process step in
+isolation** (not pscat's own render time to produce C's input, and not
+process-spawn/shell-out overhead a real integration would add on top).
+That gap widens with page size, since C's cost is per-pixel
+(warp + blur + grain touch every pixel) while A/B's cost is per-region/
+per-fill. This is a secondary point in B's favor, not the primary one
+(the pooling finding above is), but it's consistent with it.
+
 ## Answering the issue's questions to settle
 
 - **Which effects can remain portable to Ghostscript?** Approach A's
@@ -368,11 +390,21 @@ three belong in the first version.
   `ghostscript_accepts_*` coverage is achievable for alpha-bearing
   content via the PDF path, or whether that verification strategy is
   explicitly waived for this one feature.
+- **Reproducibility/provenance, the criterion #46 is required to
+  settle for #47:** under Approach B, provenance is just the pscat
+  version plus the program source and its `srand` seed — the same
+  contract every other artkit/paintkit primitive already has, since
+  alpha is a deterministic renderer parameter with no external state.
+  There is no tool version, no shell command, and no filesystem
+  dependency to capture, unlike Approach C (rejected above precisely
+  because that bookkeeping is real, uncaptured work here).
 - No fluid/diffusion PDE solver, no watercolor library/preset (that's
   #47's actual implementation work), no site/gallery wiring — all
   explicitly out of scope for this spike, per its own acceptance
   criteria.
 
-This decision, and the contract sketch above, has been posted to #47
-as a comment per #46's acceptance criterion to update it if scope or
-dependencies change.
+This decision, and the contract sketch above, has been posted to
+[#47](https://github.com/jeromebanks/postscript_interpreter/issues/47#issuecomment-5414870305)
+as a comment, per #46's acceptance criterion to update it since this
+spike adds a hard new requirement to its scope (SVG/PDF export
+alongside the alpha operator, not after).

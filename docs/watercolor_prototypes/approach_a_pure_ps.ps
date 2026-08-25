@@ -16,8 +16,12 @@
 %   pscat --page 620x620 docs/watercolor_prototypes/approach_a_pure_ps.ps \
 %       --png docs/watercolor_prototypes/approach_a_pure_ps.png
 %
-% Ghostscript check (plain PS, no pscat-specific operators used):
-%   gs -dNOPAUSE -dBATCH -sDEVICE=png16m \
+% Ghostscript check (plain PS, no pscat-specific operators used;
+% -dNOSAFER is needed only because this program `run`s two sibling
+% library files by relative path -- gs's default SAFER sandbox blocks
+% that with /invalidfileaccess, same as it would block any multi-file
+% PostScript program, not something specific to this file):
+%   gs -dNOPAUSE -dBATCH -dNOSAFER -sDEVICE=png16m \
 %       -sOutputFile=/tmp/gs_check.png \
 %       docs/watercolor_prototypes/approach_a_pure_ps.ps
 
