@@ -355,6 +355,15 @@ renders eight examples in both and compares block-downsampled output).
    target should promote those seams into a neutral display list
    first — the design note in `src/pdf.rs` says why that wasn't
    done at two.
+4. Watercolor (issue #47, gated on the architecture spike in issue
+   #46): read `docs/WATERCOLOR.md` before starting — it recommends a
+   small `alpha: f32` field on `GraphicsState` (already prototyped as
+   `pub(crate)`-only in `src/gfx.rs`'s `tests::
+   watercolor_prototype_b_alpha_sample`, not yet a public operator) as
+   the primary mechanism, plus the SVG/PDF export work that prototype
+   deliberately left undone, and names a real gs-portability gap (no
+   PostScript-callable alpha operator in gs 10.07.1) to document rather
+   than paper over.
 
 ## Gotchas for the next implementer
 

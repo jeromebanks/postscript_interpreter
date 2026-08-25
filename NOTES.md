@@ -3,6 +3,62 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Watercolor rendering architecture spike (issue #46, 2026-08-25)
+
+Closes issue #46: a time-boxed architecture spike comparing three ways
+to get watercolor-like transparency, pooling, and bloom out of pscat,
+recorded as a decision document, `docs/WATERCOLOR.md`, with matched
+rendered samples of the same three-circle Venn scene
+(`docs/watercolor_prototypes/common_gesture.ps`) under each approach.
+
+Recommends Approach B -- a small renderer-level alpha extension -- as
+the primary mechanism for #47, with Approach A's technique (nested
+`clip` intersection for exact overlap-region recoloring, no boolean-
+geometry library needed) kept available as a portable fallback for
+small hand-composed scenes, and Approach C (an external raster post-
+pass) explicitly not built as a standalone pipeline. The write-up
+covers all six of the issue's "questions to settle" and sketches the
+public contract #47 should build against (an alpha field on
+`GraphicsState`, SVG `fill-opacity`/PDF `ExtGState ca`/`CA` export,
+at least `/Multiply` as a blend mode) -- posted to #47 as a comment
+per this issue's own acceptance criterion.
+
+Two findings only showed up by actually running the prototypes, not
+by reasoning about the architecture in the abstract: gs 10.07.1 has no
+PostScript-callable alpha operator at all (`.setfillconstantalpha`,
+`.setopacityalpha`, `.setstrokeconstantalpha`, checked directly and
+recorded in `docs/watercolor_prototypes/gs_alpha_check.ps`) -- a
+watercolor medium built on Approach B would be the first paintkit-
+adjacent feature that doesn't render under plain `gs file.ps`, unlike
+every paintkit preset so far (#41-#44's `ghostscript_accepts_*`
+tests). And a raster post-pass (Approach C) over an *already-opaque*
+render cannot recover pigment-pooling -- there was never any
+transparency information in the flattened PNG for a filter to work
+with -- which pushes a real Option-C implementation toward exporting
+separate alpha-bearing layers for external compositing, a materially
+bigger undertaking than "pipe the render through a blur."
+
+Approach B's prototype (`gfx::tests::watercolor_prototype_b_alpha_sample`
+in `src/gfx.rs`) deliberately does not add a public operator: #47's
+own acceptance criteria assign the public contract to #47, and a
+PNG-only `setalpha` merged now would make `--svg`/`--pdf` silently
+diverge the moment a program used it (the same bug class NOTES.md
+already records fixing for stroke/PDF under issue #8). Instead the new
+`alpha: f32` field on `GraphicsState` is `pub(crate)` -- reachable
+from nowhere in the PostScript language, snapshotted by `gsave`/
+`grestore` for free like every other paint attribute since it lives on
+the state struct they already clone -- and exercised only by a single
+`#[ignore]`d unit test that drives `Gfx` directly and writes
+`docs/watercolor_prototypes/approach_b_alpha_ext.png` on demand
+(`cargo test --release watercolor_prototype_b_alpha_sample --
+--ignored`). `cargo test` skips it by default; `cargo build`/`clippy`/
+`fmt` cover it like any other code in the crate.
+
+Deliberately out of scope, per the issue's own scope note: no fluid/
+diffusion PDE simulation, no watercolor library or preset (#47's
+actual implementation work), no site/gallery wiring, no SVG/PDF alpha
+export (sketched as a #47 requirement, not built here).
+
 ## A spray-paint deposition brush (issue #44, 2026-08-24)
 
 Closes issue #44, the fourth of the painterly-brush series (#42-#53):

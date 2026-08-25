@@ -1,0 +1,10 @@
+%!PS
+% Referenced from WATERCOLOR.md's Approach B section: checks whether
+% this machine's Ghostscript exposes any PostScript-callable alpha
+% operator. Run with:
+%   gs -dNOPAUSE -dBATCH -dNOSAFER -q -sDEVICE=nullpage gs_alpha_check.ps
+(.setfillconstantalpha: ) print /.setfillconstantalpha where {pop (yes)}{(no)} ifelse print (\n) print
+(.setopacityalpha: ) print /.setopacityalpha where {pop (yes)}{(no)} ifelse print (\n) print
+(.setstrokeconstantalpha: ) print /.setstrokeconstantalpha where {pop (yes)}{(no)} ifelse print (\n) print
+(setalpha: ) print /setalpha where {pop (yes)}{(no)} ifelse print (\n) print
+quit
