@@ -319,13 +319,22 @@ each actually buys:
   blocks every PS-only PR from merging, the opposite of the goal; base
   the diff check on the PR's merge base, and handle the plain
   `push: main` trigger, which has no base to diff at all) when the
-  diff touches no `.rs`/`Cargo.toml`/`Cargo.lock`. Worth doing on its
-  own merits even though the win is modest.
+  diff touches none of `.rs`/`Cargo.toml`/`Cargo.lock` **and no
+  Rust-tool-config file** — a fourth review round caught the first
+  three-file version as incomplete: `rustfmt.toml`, `clippy.toml`,
+  `rust-toolchain.toml`, and `.cargo/config.toml` can each change what
+  `fmt`/`clippy` actually check with zero `.rs`/`Cargo.toml` lines
+  touched. None of the four exist in this repo today (confirmed:
+  `find . -maxdepth 2 -iname 'rustfmt.toml' -o -iname 'clippy.toml' -o
+  -iname 'rust-toolchain*' -o -iname '.cargo'` found nothing) — the
+  skip condition needs to name them anyway, so it doesn't quietly stay
+  broken the day one is added. Worth doing on its own merits even
+  though the win is modest.
 - **Larger, blocked on touchpoint 2**: once Phase A/B ship and are
   proven to catch what `cargo test` catches today, a narrower path
   becomes possible — but narrower than *today's* full gate, not as
-  narrow as "skip `cargo build` entirely." Six corrections to that
-  first draft, caught across three rounds of cross-model review rather
+  narrow as "skip `cargo build` entirely." Seven corrections to that
+  first draft, caught across four rounds of cross-model review rather
   than shipped as written:
   - **Still needs a fresh `cargo build`, not a cached binary.**
     Touchpoint 1's catalog is `include_str!`-embedded — compile-time,
@@ -368,38 +377,64 @@ each actually buys:
     paths the
     replacement checks actually cover — realistically `lib/**/*.ps`
     only — not an absence-of-`.rs` heuristic.
-  - **Must invoke `--lint`, not just `--selftest` — a fifth
-    correction.** A `%%SelfTest` block only runs `stopped`-based
-    assertions (that's Phase A's whole definition above). Three of the
-    ten defects credited to "no new interpreter primitive" — rows 9,
-    11, 12 in touchpoint 2's table — are caught by `--lint`'s existing
-    blank-page heuristic specifically, a separate mechanism `--selftest`
-    never invokes on its own. A narrow-path command that runs only
-    `pscat --selftest` (as an earlier draft of this recommendation
-    specified) silently drops those three regression classes even
-    though they're real today. The narrow path is `cargo build` +
-    `pscat --lint` + `pscat --selftest` + the extracted gs-check
-    scripts, not `--selftest` alone.
-  - **Gated on migrating each library's existing coverage, not just on
-    Phase A/B existing as a mechanism — a sixth correction.** Landing
-    the self-test CLI and pixel operator doesn't retroactively cover
-    what `tests/graph.rs`, `tests/dataviz.rs`, `tests/etching.rs`, and
-    every other library's dedicated Rust suite already exercises for
-    *that* library. A `lib/graph.ps`-only diff under the narrow path
-    would skip all of `tests/graph.rs` unless graph.ps's own coverage
-    has actually been migrated into `%%SelfTest` blocks first. The
-    narrow path can only apply, library by library, once that
-    library's migration has landed — not the moment Phase A/B exist in
-    the abstract.
+  - **Must invoke a *strict* lint mode against a rendering driver, not
+    plain `--lint` against the library file — a fifth correction, wrong
+    twice over the way touchpoint 1's directory-discovery point was.**
+    First cut: "run `pscat --lint` alongside `--selftest`." Two things
+    wrong with that, both caught by a fourth review round: (1) `--lint`
+    findings are advisory by explicit design (`src/main.rs`'s
+    `report_lint`: "doesn't affect the exit code, since a finding is
+    advisory, not fatal" — `finish_headless` returns success
+    regardless) — `pscat --lint` on a program with a real blank-page
+    regression still exits 0, so nothing in this narrow path would
+    actually *fail* on rows 9/11/12's defect class without a new
+    strict/CI mode (`--lint --strict`, say, returning nonzero on any
+    finding) that doesn't exist yet — a small addition Phase A's scope
+    needs to include, not something `--lint` already does. (2) `--lint`
+    has to run against something that renders: `lib/*.ps` files
+    intentionally draw nothing on load (`src/lint.rs`'s own module docs)
+    — `pscat --lint lib/paintkit.ps` alone has no rendering content to
+    judge blank or not, and a dependent library like `pagekit.ps` needs
+    its own prerequisite `run` sequence loaded first (the same
+    `load_sequence` problem `src/capabilities.rs` already solves for a
+    different purpose) before anything paints at all. Phase A's actual
+    scope is a strict lint mode plus a defined set of rendering
+    drivers (one per library, analogous to `ghostscript_accepts_*`'s
+    own driver snippets) with their load sequences specified — not
+    "point `--lint` at the source file."
+  - **Gated on migrating every transitive dependent, not just the
+    changed library itself — a sixth correction.** `lib/pagekit.ps`/
+    `lib/paintkit.ps`/the style packs all depend on `lib/artkit.ps`;
+    marking `artkit.ps` alone "migrated" and applying the narrow path
+    to an `artkit.ps`-only diff is unsafe if any of *its* dependents
+    still only have Rust coverage — a regression in `artkit.ps` that
+    breaks `paintkit.ps` has no self-test to catch it if `paintkit.ps`
+    hasn't been migrated too, even though `artkit.ps` itself has. The
+    narrow path's eligibility rule is "every transitively-dependent
+    library has migrated coverage," not "the one library the diff
+    touches has" — falling back to full `cargo test` whenever that
+    isn't true yet.
+  - **Landing the self-test CLI and pixel operator doesn't
+    retroactively cover any library — a seventh correction, the
+    original form of the sixth.** What `tests/graph.rs`,
+    `tests/dataviz.rs`, `tests/etching.rs`, and every other library's
+    dedicated Rust suite already exercises for *that* library stays
+    Rust-only until someone actually migrates it into `%%SelfTest`
+    blocks. A `lib/graph.ps`-only diff under the narrow path would skip
+    all of `tests/graph.rs` unless graph.ps's own coverage has been
+    migrated first — the narrow path can only apply, library by
+    library (subject to the transitive-dependent rule just above), once
+    that migration has landed, not the moment Phase A/B exist as a
+    mechanism in the abstract.
 
-  With those six corrections, the win is real but smaller than the
+  With those seven corrections, the win is real but smaller than the
   first draft claimed: `clippy` (≈7s) plus most of `cargo test`'s ≈58s
-  minus whatever the self-test/lint/gs-check pass itself costs — not
-  the full ≈58s, and not `cargo build`'s ≈8s at all. Doing any of this
-  before touchpoint 2 exists, before a library's migration lands, or
-  without these corrections, would still mean shipping a PS-only PR
-  with *less* verification than it gets today, which the issue's own
-  acceptance criteria rule out.
+  minus whatever the self-test/strict-lint/gs-check pass itself costs —
+  not the full ≈58s, and not `cargo build`'s ≈8s at all. Doing any of
+  this before touchpoint 2 exists, before every transitively-dependent
+  library's migration lands, or without these corrections, would still
+  mean shipping a PS-only PR with *less* verification than it gets
+  today, which the issue's own acceptance criteria rule out.
 
 **Not rejected, not weakened:** `tests/golden.rs`/`tests/corpus.rs`
 stay exactly as-is — they verify the interpreter's own gs-parity
@@ -428,10 +463,27 @@ not a measurement):
 - `lib/paintkit.ps` — 226 lines, unchanged. It's the feature; nothing
   proposed here touches library code itself.
 - `examples/paintkit_oil_demo.ps` — 109 lines, unchanged, same reason.
-- `src/capabilities.rs` — **0 hand-written lines.** A `%%Summary:` tag
-  plus the existing `/Key (default D)` lines in `pkoil`'s own header
-  comment are all that's needed; `--capabilities` picks it up from a
-  rebuild, no `ENTRIES` row to write.
+- `src/capabilities.rs` — **not 0 hand-written lines outright; the
+  claim needed narrowing, caught by a fourth review round.** The real
+  `pkoil` entry (`src/capabilities.rs:1222-1299`) carries five fields:
+  `description`, `parameters` (name/description/default), `source`,
+  `example`, and `availability`. `%%Summary:` plus `/Key (default D)`
+  lines recover the first two — genuinely automatic. `example` (here,
+  `"newpath ... << /Width 16 /Ridges 12 /Load 0.9 >> pkoil"`) is a
+  hand-picked, illustrative call with good default values, not
+  something the generic `opts pkoil -` stack-effect comment contains
+  or implies — it needs its own tag (`%%Example:`, say) or stays
+  hand-written. `availability` is `"library"` for every entry sourced
+  from `lib/*.ps` today, so it's plausibly a safe constant to derive
+  from `kind`/`source` alone rather than author-supplied — but that's
+  an assumption to verify against every existing entry before treating
+  it as free, not something checked here. `kind` (`Procedure` vs.
+  `Dial` vs. `Template`) is inferable from *how* a name is bound (`def`
+  of a proc vs. a plain value) with real but not source-comment-derived
+  confidence. So the honest claim is: `description`+`parameters` reach
+  zero hand-written lines; `example` needs a new tag or stays manual;
+  `availability`/`kind` are probably derivable but unverified here —
+  not the uniform "0 hand-written lines" a first draft claimed.
 - `tests/paintkit.rs` — its actual 50 lines (`git diff b4dcbe4 16eff60
   -- tests/paintkit.rs`) are three tests, not a uniform block: 29 lines
   (`oil_validation_and_safety`, four malformed-input cases each
@@ -458,14 +510,17 @@ not a measurement):
 
 Net: the PS-only work itself (335 lines) is exactly as much PS as
 before — this was never going to shrink, and shouldn't. Of the 132
-Rust lines, 82 (the catalog entry) and 29 of the 50 test lines
+Rust lines: most of the 82-line catalog entry (its `description` and
+`parameters`, the bulk of the entry) plus 29 of the 50 test lines
 (validation guards) reach zero after Phase A + touchpoint 1 alone; the
-remaining 21 test lines (the two pixel-measurement checks) need Phase
-B as well. So the realistic near-term floor for a feature shaped like
-`pkoil` is **~111 of 132 Rust lines gone**, not all 132, until Phase B
-ships — still the majority of the touchpoint-1/2 cost, with the exact
-remainder identified rather than assumed away. None of this is built
-yet; all three follow-ups below are what would have to land first.
+entry's `example` field needs its own new tag or stays hand-written
+either way; and the remaining 21 test lines (the two pixel-measurement
+checks) need Phase B as well. So the realistic near-term floor for a
+feature shaped like `pkoil` is *most* of 111 of the 132 Rust lines
+gone — a real majority, not a precise count, since `example`'s
+share of the 82 isn't sized here — not all 132, until Phase B ships.
+None of this is built yet; all three follow-ups below are what would
+have to land first.
 
 ## Answering the issue's questions to settle
 
@@ -486,10 +541,13 @@ yet; all three follow-ups below are what would have to land first.
   also one-time, not per-feature, and covers the remaining 5.
 - **Can CI detect a PS-only diff and run narrower?** Yes for
   `fmt`/`clippy` today, for any diff touching none of
-  `.rs`/`Cargo.toml`/`Cargo.lock` (small win, ≈7s of ≈106s, real and
-  doable now — the manifest/lockfile stay in the condition alongside
-  `.rs`, since a dependency-version or feature-flag change can surface
-  a new `clippy` lint with no `.rs` text changed at all). Not for
+  `.rs`/`Cargo.toml`/`Cargo.lock`/a Rust-tool-config file (`rustfmt.toml`,
+  `clippy.toml`, `rust-toolchain.toml`, `.cargo/config.toml` — none
+  exist in this repo today, but the condition should name them anyway)
+  (small win, ≈7s of ≈106s, real and doable now — the manifest/lockfile
+  stay in the condition alongside `.rs`, since a dependency-version or
+  feature-flag change can surface a new `clippy` lint with no `.rs`
+  text changed at all). Not for
   `cargo build` — the embedded catalog/self-test content changes with
   the PS diff, so a fresh build stays required regardless of Phase
   A/B. `cargo test`'s Rust suite can shrink once Phase A/B exist *and*
