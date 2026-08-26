@@ -149,6 +149,28 @@ the two halves *after* splitting off `(default ...)` -- `/Width
 default) both produced silently-accepted malformed rows -- now
 rejected.
 
+**Round 3 caught the sharpest gap of the three: a tag block could be
+silently dropped in its entirety, with no error at all.** Every check
+up to this point validated tags *once they'd been attached* to a
+discovered `/name ... def` binding -- but `collect_tag_block` only
+ever looks upward from a definition `find_top_level_defs` actually
+found. A tag block sitting above a binding shape that scanner doesn't
+discover (the exact `% @kind: Palette` above `Palettes /foo [...]
+put` case round 2's `@kind: Palette` rejection was meant to catch) is
+never reached by that walk at all -- `parse_kind`'s rejection panic
+never fires, because nothing ever calls it for that block. The tag
+text just sits there, inert, and the entry it documents never gets
+generated. Fixed by tracking every non-`@requires` tag line found
+anywhere in a migrated file against the set actually consumed by some
+discovered binding's tag block, and failing the build on any leftover
+-- reattaches the existing kind-rejection panics to *every* misplaced
+or undiscoverable tag, not just the ones lucky enough to sit above a
+`def`. Verified against the exact scenario Codex described: an
+`% @kind: Palette` block placed above a real `Palettes /faux [...]
+put` line in an already-migrated file now fails the build with a
+clear "not attached to any discovered binding" message, restoring
+cleanly once removed.
+
 Verified empirically, not just asserted: a probe file with one
 untagged `/name { } def` and no `LEGACY_FILES` entry fails `cargo
 build` with a clear message; dropping `@example` from `pkoil` fails

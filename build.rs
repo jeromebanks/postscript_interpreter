@@ -286,15 +286,26 @@ fn parse_file(rel: &str, text: &str) -> ParsedFile {
 
     // Every tag-shaped line must use a known tag word -- an
     // unrecognized `@word` is silently-dropped data otherwise, the
-    // exact drift this mechanism exists to prevent.
+    // exact drift this mechanism exists to prevent. Also record every
+    // non-`@requires` tag line's 0-indexed position, so the "was this
+    // tag actually attached to a discovered binding" check below (a
+    // third round of Codex review on PR #97: a tag block sitting above
+    // a binding shape `find_top_level_defs` doesn't discover -- e.g.
+    // `% @kind: Palette` above `Palettes /foo [...] put` -- is never
+    // reached by `collect_tag_block`'s upward walk, so it was silently
+    // dropped instead of failing loudly) has something to check against.
+    let mut all_tag_lines: BTreeSet<usize> = BTreeSet::new();
     for (i, line) in lines.iter().enumerate() {
-        if let Some((word, _)) = tag_line(line)
-            && !KNOWN_TAGS.contains(&word.as_str())
-        {
-            panic!(
-                "build.rs: {rel}:{}: unknown tag `@{word}` -- known tags: {KNOWN_TAGS:?}",
-                i + 1
-            );
+        if let Some((word, _)) = tag_line(line) {
+            if !KNOWN_TAGS.contains(&word.as_str()) {
+                panic!(
+                    "build.rs: {rel}:{}: unknown tag `@{word}` -- known tags: {KNOWN_TAGS:?}",
+                    i + 1
+                );
+            }
+            if word != "requires" {
+                all_tag_lines.insert(i);
+            }
         }
     }
 
@@ -315,6 +326,7 @@ fn parse_file(rel: &str, text: &str) -> ParsedFile {
 
     let mut entries = Vec::new();
     let mut internal_names = Vec::new();
+    let mut consumed_tag_lines: BTreeSet<usize> = BTreeSet::new();
 
     for (name, start_line) in defs {
         let block = collect_tag_block(&lines, start_line);
@@ -327,10 +339,14 @@ fn parse_file(rel: &str, text: &str) -> ParsedFile {
             );
         }
 
-        let is_internal = block.iter().any(|(w, _)| w == "internal");
+        for (line_idx, ..) in &block {
+            consumed_tag_lines.insert(*line_idx);
+        }
+
+        let is_internal = block.iter().any(|(_, w, _)| w == "internal");
         let has_public_tag = block
             .iter()
-            .any(|(w, _)| matches!(w.as_str(), "kind" | "summary" | "example" | "param"));
+            .any(|(_, w, _)| matches!(w.as_str(), "kind" | "summary" | "example" | "param"));
 
         if is_internal {
             if has_public_tag {
@@ -347,7 +363,7 @@ fn parse_file(rel: &str, text: &str) -> ParsedFile {
         let mut summary = None;
         let mut example = None;
         let mut params = Vec::new();
-        for (word, val) in &block {
+        for (_, word, val) in &block {
             match word.as_str() {
                 "kind" => {
                     if kind.is_some() {
@@ -406,6 +422,22 @@ fn parse_file(rel: &str, text: &str) -> ParsedFile {
             example,
             params,
         });
+    }
+
+    let orphaned: Vec<usize> = all_tag_lines
+        .difference(&consumed_tag_lines)
+        .copied()
+        .collect();
+    if let Some(&line_idx) = orphaned.first() {
+        panic!(
+            "build.rs: {rel}:{}: `% @...` tag not attached to any top-level `/name ... def` \
+             binding find_top_level_defs discovered -- either the tag is misplaced (not \
+             directly, contiguously above a `def`), or it documents a binding shape this \
+             build.rs doesn't discover yet (a palette's `Palettes /name [...] put`, a Type 3 \
+             face's `/Name Dict definefont pop`) and needs that discovery added first, not just \
+             a tag on top of it.",
+            line_idx + 1
+        );
     }
 
     ParsedFile {
@@ -498,11 +530,18 @@ fn parse_param(rel: &str, owner: &str, line: usize, val: &str) -> (String, Strin
 }
 
 /// Walks upward from just above `start_line` (1-indexed), collecting
-/// the contiguous run of `% @...` lines in top-to-bottom order. Stops
-/// at the first line that isn't a tag line -- old prose sitting
-/// directly above (no blank-line separator required) is never
-/// accidentally included, since it doesn't start with `@`.
-fn collect_tag_block(lines: &[&str], start_line: usize) -> Vec<(String, String)> {
+/// the contiguous run of `% @...` lines in top-to-bottom order, each
+/// tagged with its 0-indexed line number so the caller can track which
+/// tag lines actually got attached to a discovered binding (see
+/// [`parse_file`]'s "every tag line must be consumed" check -- a tag
+/// block sitting above a binding shape `find_top_level_defs` doesn't
+/// discover, e.g. `Palettes /foo [...] put`, is never even reached by
+/// this walk, and would otherwise be silently dropped with no error,
+/// caught by a third round of Codex review on PR #97). Stops at the
+/// first line that isn't a tag line -- old prose sitting directly
+/// above (no blank-line separator required) is never accidentally
+/// included, since it doesn't start with `@`.
+fn collect_tag_block(lines: &[&str], start_line: usize) -> Vec<(usize, String, String)> {
     let mut block = Vec::new();
     if start_line < 2 {
         return block;
@@ -510,8 +549,8 @@ fn collect_tag_block(lines: &[&str], start_line: usize) -> Vec<(String, String)>
     let mut i = start_line as isize - 2; // 0-indexed line just above start_line
     while i >= 0 {
         match tag_line(lines[i as usize]) {
-            Some(tag) => {
-                block.push(tag);
+            Some((word, val)) => {
+                block.push((i as usize, word, val));
                 i -= 1;
             }
             None => break,
