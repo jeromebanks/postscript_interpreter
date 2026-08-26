@@ -195,23 +195,34 @@ have very different costs to replace.**
    today — replacing this tier needs one-time new Rust: a pixel/coverage
    -sampling operator exposed to PS.
 2. **`ghostscript_accepts_*`** — concatenates the library source plus a
-   driver snippet, shells out to `gs`, asserts exit 0. No golden image,
-   no pixel comparison, no pscat-specific state. This is a shell script
-   wearing a `#[test]` attribute; it's in Rust purely because that's
-   where the test suite lives, not because it needs to be. **This is
-   an immediately-extractable win, not follow-up work** — a
-   `scripts/gs_check.sh <file.ps> <driver>` invoked directly (from a
-   PS-only CI path, or by hand) does the identical check with zero
-   Rust. **Correction, caught by a third round of cross-model review:**
-   these are not "one per library file" (16 total across the whole test
-   suite, `grep -rn '^fn ghostscript_accepts' tests/*.rs`) — 7 alone
-   live in `tests/paintkit.rs`, each exercising a *distinct* driver
-   (`pkribbon` vs. `pknib` vs. `pkdry` vs. `pkspray`, plus separate
-   checks against the actual dry/nib/spray demo files) against the same
-   `paintkit.ps`. Extraction must preserve every existing driver as its
-   own script invocation, not collapse them to one check per source
-   file — doing the latter would silently drop the nib/dry/spray/demo
-   acceptance scenarios the moment `paintkit.ps` changes.
+   driver snippet, shells out to `gs`. This is a shell script wearing a
+   `#[test]` attribute; it's in Rust purely because that's where the
+   test suite lives, not because it needs to be. **This is an
+   immediately-extractable win, not follow-up work** — a `scripts/
+   gs_check.sh <file.ps> <driver>` invoked directly (from a PS-only CI
+   path, or by hand) does the identical check with zero Rust.
+   **Two corrections, caught across two later review rounds — this
+   family is less uniform than the first pass here treated it.**
+   (1) These are not "one per library file" (16 total across the whole
+   test suite, `grep -rn '^fn ghostscript_accepts' tests/*.rs`) — 7
+   alone live in `tests/paintkit.rs`, each exercising a *distinct*
+   driver (`pkribbon` vs. `pknib` vs. `pkdry` vs. `pkspray`, plus
+   separate checks against the actual dry/nib/spray demo files) against
+   the same `paintkit.ps`. Extraction must preserve every existing
+   driver as its own script invocation, not collapse them to one check
+   per source file — doing the latter would silently drop the
+   nib/dry/spray/demo acceptance scenarios the moment `paintkit.ps`
+   changes. (2) They're not uniformly exit-code-only either:
+   `ghostscript_accepts_artkit` (`tests/artkit.rs`) runs a driver that
+   prints a `GSTILES <n>` line, parses it back out of `gs`'s stdout,
+   and asserts `n` falls in a `[200, 260]` sanity band — a real
+   semantic check on `gs`'s own tiling output, not just "did it error."
+   A `gs_check.sh` that only asserts exit 0 would let exactly the
+   regression this test targets (a tile-count blowup or collapse) pass
+   silently on an artkit-only PR. Extraction needs to inventory each
+   test's actual assertion and preserve it — some genuinely are
+   exit-code-only, at least one isn't, and a uniform script can't tell
+   the difference without checking.
 
 **Classifying all 18 real defects Codex's seven review rounds on PR #76
 found** (read from `gh pr view 76 --comments` in full, not just round
@@ -236,13 +247,13 @@ each other later in this document:
 | 11 | 4 | Exact-pitch-multiple stroke renders blank | `--lint`'s blank-page check — **today** |
 | 12 | 4 | Undersampled closed path renders blank | `--lint`'s blank-page check — **today** |
 | 13 | 4 | Coordinate coincidence misclassifies closure | pixel-sample op (new) |
-| 14 | 5 | Packed-array `/Pressure` wrongly rejected | `stopped` — **today** |
+| 14 | 5 | Packed-array `/Pressure` wrongly rejected | real `gs` only — **see below** |
 | 15 | 5 | Out-of-range taper unvalidated | `stopped` — **today** |
 | 16 | 6 | `atan(0,0)` crash on coincident endpoints | `stopped` — **today** |
 | 17 | 6 | `pathforall` missing implicit moveto after `closepath` | **interpreter bug — Rust/gs-parity only** |
 | 18 | 7 | Executable-array value options not rejected | `stopped` — **today** |
 
-Ten of eighteen (5–6, 9–12, 14–16, 18) need **no new interpreter work
+Nine of eighteen (5–6, 9–12, 15–16, 18) need **no new interpreter work
 at all** — PostScript's own `stopped`/`errordict` already catches a
 validation guard firing or not firing, and `--lint`'s existing
 blank-page heuristic (issue #17, already shipped) already catches a
@@ -257,13 +268,33 @@ built a release `pscat` and ran
 against real `lib/paintkit.ps` — prints `caught it`; the same driver
 with a well-formed `<< /Width 8 >>` call does not trigger `stopped`,
 confirming the mechanism actually discriminates instead of
-always-catching. One (#7) disappears by construction once touchpoint 1
-lands. One (#17) is a genuine interpreter defect that only Rust-level
-(here, `tests/pathforall.rs`, gs-pinned) testing catches — direct
-evidence for the issue's own acceptance criterion that
-interpreter-level gs-parity testing must not go away. Five (1–4, 13)
-are the geometry/rendering-correctness class that needs the new
-pixel-sample operator.
+always-catching.
+
+**Row 14 is a special case, misclassified in a first pass and caught
+by a tenth review round: it cannot be exercised under `pscat`-run
+`stopped` at all, only under real `gs`.** The defect was `/Pressure`
+wrongly rejected once its value has type `packedarraytype` — but
+`pscat` doesn't actually implement packing: `tests/paintkit.rs`'s own
+`setpacking_true_does_not_break_pressure_validation` confirms directly
+(comment and code both) that `true setpacking { } type` stays
+`arraytype` under `pscat`, never `packedarraytype`. A `%%SelfTest`
+block run by `pscat --selftest` — no matter how it's written — can
+never produce the type this defect is actually about, so it can't
+regression-test row 14 at all. What *does* cover it, today and after
+every proposed follow-up: `ghostscript_accepts_paintkit`'s own driver,
+run under real `gs` (where `setpacking` genuinely changes the type),
+already exercises this path — the same extracted-gs-check mechanism
+touchpoint 2 keeps regardless. Row 14 was never actually part of the
+9-`stopped`+1-touchpoint1 count above; it was always covered by the
+gs-check retention, just mislabeled here.
+
+One (#7) disappears by construction once touchpoint 1 lands. One
+(#17) is a genuine interpreter defect that only Rust-level (here,
+`tests/pathforall.rs`, gs-pinned) testing catches — direct evidence
+for the issue's own acceptance criterion that interpreter-level
+gs-parity testing must not go away. Five (1–4, 13) are the
+geometry/rendering-correctness class that needs the new pixel-sample
+operator.
 
 **#8 was misclassified in a first pass and corrected by cross-model
 review, twice.** Round 1 caught that a demo which paints ink but never
@@ -293,25 +324,39 @@ mechanism proposed here does" bucket, but at far lower severity.
 
 **Recommendation:** a follow-up issue, phased. **Phase A is two
 mechanisms, not one — stating them separately here specifically
-because a seventh review round caught the combined "10 of 18" figure
-drifting, in a later summary, into sounding like the first mechanism
-alone gets there:**
+because a seventh review round caught the combined figure drifting, in
+a later summary, into sounding like the first mechanism alone gets
+there:**
 - **Phase A, mechanism 1** (small, no new operator): a `%%SelfTest`
   doc-comment convention wrapping `stopped`-based assertions, plus a
   `pscat --selftest file.ps` CLI mode that runs a file's self-check
   blocks and exits non-zero on any failure, printing which assertion
-  failed. Covers 7 of 18 on its own (rows 5-6, 10, 14-16, 18).
+  failed. Covers 6 of 18 on its own (rows 5-6, 10, 15-16, 18) — **not
+  7, and not row 14**: a tenth review round caught that row 14 (a
+  packed-array `/Pressure` value) can't be exercised under `pscat`'s
+  own `stopped` at all, since `pscat` doesn't implement packing in the
+  first place (`tests/paintkit.rs`'s own
+  `setpacking_true_does_not_break_pressure_validation` confirms this
+  directly) — only real `gs` can produce the type this defect is
+  about, so row 14 is covered by the retained gs-check mechanism
+  below, not by this one.
 - **Phase A, mechanism 2** (also small, also no new operator): a
   *strict* `--lint` mode — today's `--lint` findings are advisory and
   don't fail the process (`src/main.rs`'s `report_lint`) — run against
   a defined set of per-library rendering drivers with their load
   sequences specified (a bare `lib/*.ps` file draws nothing on load,
-  so `--lint` alone has nothing to judge without one). Covers 3 more
-  (rows 9, 11, 12).
+  so `--lint` alone has nothing to judge without one), **each expected
+  -nonblank scenario on its own page** (`--lint`'s blank-page check is
+  per-page; a multi-case driver sharing one page lets one passing case
+  mask another's regression — a ninth-round-caught gap). Covers 3
+  more (rows 9, 11, 12).
 
-Together, not either alone, Phase A covers 10 of 18 real defect
-classes found on the one PR this repo has the deepest review history
-for, entirely in PS/CLI, no gs or new interpreter primitive required.
+Together, not either alone, Phase A covers 9 of 18 real defect classes
+found on the one PR this repo has the deepest review history for,
+entirely in PS/CLI, no gs or new interpreter primitive required. (Row
+14 brings the total genuinely covered — by Phase A plus what's already
+retained — to 10, not 9; see the classification section above for the
+full accounting.)
 - **Phase B** (real new Rust, one-time): a pixel/coverage-sampling
   operator (e.g. `x y currentluma`, or a coverage-at-point query) so a
   `%%SelfTest` block can also assert "this region has ink" / "this
@@ -685,18 +730,21 @@ have to land first.
   `Procedure`), and the per-file `load` chain each need their own tag
   or stay hand-written regardless.
 - **What does PS-native verification need, and is it one-time or
-  recurring?** Phase A is two mechanisms, not one, and the 10-of-18
+  recurring?** Phase A is two mechanisms, not one, and the 9-of-18
   figure is their sum, not either alone — worth restating precisely
   since a seventh review round caught this claim drifting toward
   implying `%%SelfTest`/`--selftest` alone gets there: `%%SelfTest` +
-  `--selftest` (`stopped`-based assertions, no new operator) covers 7
-  of 18; a *strict* `--lint` mode run against defined rendering
-  drivers (today's `--lint` is advisory and a bare `lib/*.ps` file
-  renders nothing, so this is real added scope, not "just call
-  `--lint`") covers 3 more, rows 9/11/12. Both together, not either
-  alone, is genuinely one-time and needs no new interpreter primitive.
-  Phase B (a pixel-sample operator) is also one-time, not per-feature,
-  and covers the remaining 5.
+  `--selftest` (`stopped`-based assertions, no new operator) covers 6
+  of 18 (not row 14, which needs real `gs` regardless — a tenth-round
+  finding, `pscat` never produces the `packedarraytype` value that
+  defect is about); a *strict* `--lint` mode run against defined
+  rendering drivers, one scenario per page (today's `--lint` is
+  advisory and a bare `lib/*.ps` file renders nothing, so this is real
+  added scope, not "just call `--lint`") covers 3 more, rows 9/11/12.
+  Both together, not either alone, is genuinely one-time and needs no
+  new interpreter primitive. Phase B (a pixel-sample operator) covers 5
+  more; row 14 is covered separately, by the already-existing,
+  retained gs-check mechanism, not by anything new.
 - **Can CI detect a PS-only diff and run narrower?** Yes for
   `fmt`/`clippy` today, for any diff touching none of
   `.rs`/`Cargo.toml`/`Cargo.lock`/a Rust-tool-config file, every
@@ -773,14 +821,17 @@ exactly the kind of hard-to-reverse-if-wrong risk not worth taking
 inside a spike PR whose actual deliverable is this decision record.
 Bug-catching value is not weakened by any of this: of the 18 real
 defects tabulated above, 11 need no new interpreter operator — 3
-already caught by `--lint` today, 7 by PostScript's own
-`stopped`/`errordict` today, and 1 (#7) by touchpoint 1's catalog
-mechanism — 5 more are covered once Phase B's pixel-sample operator
-lands, and 2 (#8, `showpage` omission; #17, `pathforall`'s interpreter
-bug) stay in the "cross-model review catches this, nothing proposed
-here automates it" bucket — #17 permanently (an interpreter defect,
-Rust/gs-parity-only by nature, `tests/pathforall.rs`, gs-pinned), #8
-because the cheap automated fix false-positives on real committed
+already caught by `--lint` today, 6 by PostScript's own
+`stopped`/`errordict` today, 1 (#7) by touchpoint 1's catalog
+mechanism, and 1 (row 14) already caught by real `gs`, retained
+unchanged (it can't be exercised under `pscat`'s own `stopped` at all
+— `pscat` doesn't implement packing) — 5 more are covered once Phase
+B's pixel-sample operator lands, and 2 (#8, `showpage` omission; #17,
+`pathforall`'s interpreter bug) stay in the "cross-model review
+catches this, nothing proposed here automates it" bucket — #17
+permanently (an interpreter defect, Rust/gs-parity-only by nature,
+`tests/pathforall.rs`, gs-pinned), #8 because the cheap automated fix
+false-positives on real committed
 demos (`examples/sweep_demo.ps`, `examples/walkpath_demo.ps` — see
 touchpoint 2 above) and a safe one needs its own small design.
 
@@ -837,9 +888,13 @@ follow-up implementer should read those, not stop at this summary.
    `lib/*.ps` file draws nothing on load) and Phase B (a pixel-sample
    operator), plus extracting every existing `ghostscript_accepts_*`
    driver (not one per source file — several files have more than one
-   distinct driver) into standalone scripts. Phase A is independently
-   shippable and should land first — it's the larger share of the
-   defect classes found (10 of 18) for the smaller cost.
+   distinct driver, and extraction must preserve each test's actual
+   assertion, not just its exit code — `ghostscript_accepts_artkit`
+   parses a `GSTILES` count and checks a numeric sanity band, it
+   doesn't just check `gs` didn't error) into standalone scripts. Phase
+   A is independently shippable and should land first — it's the
+   larger share of the defect classes found (9 of 18, or 10 counting
+   row 14's already-retained gs-check coverage) for the smaller cost.
 3. **CI diff-shape detection** (touchpoint 3, full detail above): the
    small `fmt`/`clippy` skip is independently shippable now, for any
    diff touching none of `.rs`/`Cargo.toml`/`Cargo.lock`/a
