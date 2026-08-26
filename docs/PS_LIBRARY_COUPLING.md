@@ -400,9 +400,9 @@ each actually buys:
 - **Larger, blocked on touchpoint 2**: once Phase A/B ship and are
   proven to catch what `cargo test` catches today, a narrower path
   becomes possible — but narrower than *today's* full gate, not as
-  narrow as "skip `cargo build` entirely." Eight corrections to that
-  first draft, caught across five rounds of cross-model review rather
-  than shipped as written:
+  narrow as "skip `cargo build` entirely." Eight corrections (one with
+  three parts) to that first draft, caught across seven rounds of
+  cross-model review rather than shipped as written:
   - **Still needs a fresh `cargo build`, not a cached binary.**
     Touchpoint 1's catalog is `include_str!`-embedded — compile-time,
     not runtime. A cached `pscat` from before this PR still contains
@@ -468,7 +468,25 @@ each actually buys:
     scope is a strict lint mode plus a defined set of rendering
     drivers (one per library, analogous to `ghostscript_accepts_*`'s
     own driver snippets) with their load sequences specified — not
-    "point `--lint` at the source file."
+    "point `--lint` at the source file." (3) **A ninth-round finding on
+    top of the first two: the blank-page check is per-*page*, not
+    per-*scenario*, and a multi-case driver has to respect that
+    granularity or the isolation is fake.** `check_blank_pages`
+    (`src/lint.rs`) asks "does this page have any ink," one verdict per
+    page. `ghostscript_accepts_paintkit`'s own driver already draws six
+    different `pkribbon` calls on one page — a plausible template for a
+    library's rendering driver here — but if rows 9/11/12's regressions
+    (a specific short-stroke/exact-pitch/undersampled-path case
+    rendering blank) are drawn as *one case among several* on a shared
+    page, a different case's ink on that same page masks the failing
+    one entirely: the page has ink, `--lint --strict` sees nothing
+    wrong, and the specific regression the original Rust test caught
+    ships silently. The per-page mechanism itself is fine — it just
+    needs one `showpage` per scenario that must independently be
+    non-blank, not one page carrying several. A driver design that
+    reuses `ghostscript_accepts_*`'s combined-page snippets wholesale,
+    without splitting scenario-by-scenario for the lint pass
+    specifically, does not actually restore rows 9/11/12's coverage.
   - **Gated on migrating every transitive dependent, not just the
     changed library itself — a sixth correction.** `lib/pagekit.ps`/
     `lib/paintkit.ps`/the style packs all depend on `lib/artkit.ps`;
@@ -613,9 +631,11 @@ not a measurement):
   `Cargo.lock`); `cargo build` still runs (this diff changes
   `lib/paintkit.ps`'s embedded content, so a cached binary would
   validate against stale catalog/self-test source — corrected above);
-  `cargo test`'s Rust suite replaced by `pscat --lint` + `pscat
-  --selftest` (both — `--lint` alone catches the blank-page class,
-  `--selftest` alone doesn't) over *every migrated* library's
+  `cargo test`'s Rust suite replaced by strict `pscat --lint` (plain
+  `--lint` is advisory and doesn't fail on a finding — the strict mode
+  from touchpoint 2 above is load-bearing here, not optional) + `pscat
+  --selftest` (both — strict `--lint` alone catches the blank-page
+  class, `--selftest` alone doesn't) over *every migrated* library's
   self-checks (not just `paintkit.ps` — it has no dependents among the
   sibling libraries today, but the narrow path can't assume that in
   general), every extracted gs-check driver for gs-acceptance, and
