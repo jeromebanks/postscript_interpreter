@@ -105,14 +105,29 @@ calls `font::catalog_entries()` — the same function `--fonts` and
 independently drift from what the interpreter can actually reach.
 There's no static font list here to go stale.
 
-Everything else (Type 3 faces, palettes, templates, procedures) is
-hand-maintained in `capabilities.rs`'s `ENTRIES` table, because
-PostScript has no docstring convention this module could parse for
-descriptions or calling conventions — those are prose, written once at
-registration time. `load` is the one derived field among these: it's
-computed from `(kind, source)` by `load_sequence`, not duplicated per
-entry, so a page template and a style-pack procedure both get the
-right `(lib/artkit.ps) run ...` prefix from one place.
+Everything else (Type 3 faces, palettes, templates, procedures) comes
+from one of two places, depending on whether its `.ps` file has been
+migrated to the `% @...` doc-comment tag convention (issue #94):
+
+- **Migrated** (`lib/paintkit.ps` so far): `build.rs` parses
+  `% @kind:`/`% @summary:`/`% @example:`/`% @param:`/`% @internal`/
+  `% @requires:` tags directly out of the `.ps` source at build time
+  and generates the catalog rows into
+  `$OUT_DIR/capabilities_generated.rs`, spliced into `capabilities.rs`
+  via `include!`. `load` comes from the file's `@requires` tag (the
+  prerequisite `run` chain) plus its own `(source) run`, rather than a
+  Rust match arm. See `build.rs`'s own module docs for the full tag
+  grammar and its loud-failure guarantees — a missing tag, an unknown
+  `@word`, or a whole new untagged `lib/*.ps` file fails `cargo build`
+  itself, not just a later test.
+- **Not yet migrated** (everything else): hand-maintained in
+  `capabilities.rs`'s `ENTRIES` table, same as before issue #94 —
+  PostScript has no docstring convention that predates this issue, so
+  those descriptions/calling conventions are prose, written once at
+  registration time. `load` is the one derived field among these: it's
+  computed from `(kind, source)` by `load_sequence`, not duplicated
+  per entry, so a page template and a style-pack procedure both get
+  the right `(lib/artkit.ps) run ...` prefix from one place.
 
 Two Type 3 faces — `HandScript` (`lib/handscript.ps`, Stage 13) and
 `HangulScript` (`lib/hangul.ps`, issue #6) — predate the `lib/fonts/`
@@ -159,6 +174,15 @@ every key on the operand stack in one pass, read back in Rust as a
 set and compared.
 
 ## Registering a new capability
+
+**In a migrated file** (`lib/paintkit.ps` so far): add `% @kind:`/
+`% @summary:`/`% @example:` (plus `% @param:` lines, if any) directly
+above the new `/name ... def`, or `% @internal` if it's a private
+helper — see `build.rs`'s module docs for the exact grammar. `cargo
+build` fails until one of those is done; no `capabilities.rs` edit
+needed at all.
+
+**In an unmigrated file:**
 
 1. Add the code to its `.ps` file as normal.
 2. Add an `Entry` to `capabilities.rs`'s `ENTRIES`, in the section

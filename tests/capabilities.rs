@@ -16,7 +16,6 @@ use std::process::Command;
 use pscat::Interp;
 use pscat::capabilities::{
     self, ARTKIT_INTERNAL, CapabilityKind, HANDSCRIPT_INTERNAL, HANGUL_INTERNAL, PAGEKIT_INTERNAL,
-    PAINTKIT_INTERNAL,
 };
 
 fn names_by(kind: CapabilityKind, source: &str) -> BTreeSet<String> {
@@ -149,22 +148,121 @@ fn pagekit_names_match_the_catalog_exactly() {
     assert_name_sets_match("lib/pagekit.ps", &pagekit_specific, &expected);
 }
 
+/// Runs the same forward/reverse name cross-check as the per-file
+/// tests above, but generically, over every file `capabilities::
+/// migrated_files()` reports -- so migrating the *next* `lib/*.ps`
+/// file to the `% @...` tag convention gets this protection
+/// automatically, with no new hand-written test function to remember.
+/// That's the actual gap `docs/PS_LIBRARY_COUPLING.md` (issue #94's
+/// spec) calls out: a near-duplicate per-file test is exactly as easy
+/// to forget as the catalog registration itself. `build.rs` only
+/// guarantees a new file gets *noticed* (tagged or in `LEGACY_FILES`)
+/// -- per-*name* coverage for a migrated file still rests on its
+/// tokenizer being right, and this is the independent ground truth
+/// (a real `Interp`'s `userdict`) that catches it if not.
 #[test]
-fn paintkit_names_match_the_catalog_exactly() {
-    let mut base_it = Interp::new();
-    load(&mut base_it, "lib/artkit.ps");
-    let artkit_baseline = userdict_names(&mut base_it);
+fn every_migrated_file_names_match_the_catalog_exactly() {
+    for mf in capabilities::migrated_files() {
+        let mut base_it = Interp::new();
+        if !mf.requires.is_empty() {
+            base_it.run_str(mf.requires).unwrap_or_else(|e| {
+                panic!(
+                    "{}: @requires {:?} failed: {}",
+                    mf.source,
+                    mf.requires,
+                    base_it.error_report(&e)
+                )
+            });
+        }
+        let baseline = userdict_names(&mut base_it);
 
-    let mut it = Interp::new();
-    load(&mut it, "lib/artkit.ps");
-    load(&mut it, "lib/paintkit.ps");
-    let all = userdict_names(&mut it);
-    let paintkit_specific: BTreeSet<String> = all.difference(&artkit_baseline).cloned().collect();
+        let mut it = Interp::new();
+        if !mf.requires.is_empty() {
+            it.run_str(mf.requires).unwrap_or_else(|e| {
+                panic!(
+                    "{}: @requires {:?} failed: {}",
+                    mf.source,
+                    mf.requires,
+                    it.error_report(&e)
+                )
+            });
+        }
+        load(&mut it, mf.source);
+        let all = userdict_names(&mut it);
+        let file_specific: BTreeSet<String> = all.difference(&baseline).cloned().collect();
 
-    let mut expected = names_by(CapabilityKind::Procedure, "lib/paintkit.ps");
-    expected.extend(PAINTKIT_INTERNAL.iter().map(|s| s.to_string()));
+        // Palettes are `Palettes /name [...] put` dict mutations, not
+        // `def`s, so they never land in userdict -- same exclusion
+        // style_pack_names_match_the_catalog_exactly above makes (no
+        // migrated file defines a palette yet, but this stays correct
+        // if/when one does).
+        let mut expected: BTreeSet<String> = capabilities::catalog()
+            .into_iter()
+            .filter(|c| c.source == mf.source && c.kind != CapabilityKind::Palette)
+            .map(|c| c.name)
+            .collect();
+        expected.extend(mf.internal_names.iter().map(|s| s.to_string()));
 
-    assert_name_sets_match("lib/paintkit.ps", &paintkit_specific, &expected);
+        assert_name_sets_match(mf.source, &file_specific, &expected);
+    }
+}
+
+/// `lib/paintkit.ps` is the first file migrated to the `% @...`
+/// doc-comment tag convention (issue #94) -- `paintkit_names_match_the
+/// _catalog_exactly` above already proves every name round-trips, but
+/// that name-set check alone wouldn't catch a `build.rs` parser bug
+/// that gets a *value* wrong (e.g. an off-by-one in the `@requires`
+/// splice, or a `@param` default parsed from the wrong side of
+/// `(default ...)`) while still producing the right set of names. This
+/// checks specific field values directly against what `lib/paintkit.ps`'s
+/// tags actually say.
+#[test]
+fn generated_paintkit_entries_have_the_right_fields() {
+    let caps = capabilities::catalog();
+
+    let pkoil = caps
+        .iter()
+        .find(|c| c.name == "pkoil" && c.source == "lib/paintkit.ps")
+        .expect("pkoil in the generated catalog");
+    assert!(pkoil.kind == CapabilityKind::Procedure);
+    assert_eq!(pkoil.load, "(lib/artkit.ps) run (lib/paintkit.ps) run");
+    assert_eq!(
+        pkoil.example,
+        "newpath ... << /Width 16 /Ridges 12 /Load 0.9 >> pkoil"
+    );
+    let width = pkoil
+        .parameters
+        .iter()
+        .find(|p| p.name == "Width")
+        .expect("pkoil has a /Width parameter");
+    assert_eq!(width.default, Some("14"));
+
+    let pkflat = caps
+        .iter()
+        .find(|c| c.name == "pkflat" && c.source == "lib/paintkit.ps")
+        .expect("pkflat in the generated catalog");
+    assert!(pkflat.kind == CapabilityKind::Procedure);
+    assert_eq!(pkflat.load, "(lib/artkit.ps) run (lib/paintkit.ps) run");
+    assert!(pkflat.parameters.is_empty());
+
+    // `/Density`'s @param description has its own parenthesized aside
+    // ("(0 renders nothing)") before the trailing `(default ...)` --
+    // pins that `parse_param`'s `rfind("(default ")` picks the
+    // *trailing* parenthetical, not the first one, and doesn't let it
+    // leak into either field.
+    let pkspray = caps
+        .iter()
+        .find(|c| c.name == "pkspray" && c.source == "lib/paintkit.ps")
+        .expect("pkspray in the generated catalog");
+    let density = pkspray
+        .parameters
+        .iter()
+        .find(|p| p.name == "Density")
+        .expect("pkspray has a /Density parameter");
+    assert_eq!(density.default, Some("30"));
+    assert!(density.description.ends_with(
+        "(0 renders nothing); uncapped, bounded by the deposit-budget safety limit instead"
+    ));
 }
 
 /// `lib/handscript.ps`/`lib/hangul.ps` are standalone (no artkit

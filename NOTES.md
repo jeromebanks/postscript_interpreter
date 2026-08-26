@@ -3,6 +3,122 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Doc-comment-driven capabilities catalog (issue #94, 2026-08-25)
+
+Closes issue #94, the first of #92's `docs/PS_LIBRARY_COUPLING.md`
+("Touchpoint 1") follow-ups: replaces `src/capabilities.rs`'s
+hand-maintained `Entry` rows with ones generated at build time from
+new `% @...` doc-comment tags in `lib/*.ps` source, for files that
+opt in.
+
+Tag prefix is `% @tag:` (e.g. `% @summary:`), not `%%` -- this repo's
+existing DSC comments already feed PDF `/Info` (`%%Title:`/`%%For:`)
+and Ghostscript's own DSC parser reads `%%`, so a new `%%`-prefixed tag
+risked colliding with both; `%!` was also ruled out as too close to
+the `%!PS-Adobe-3.0` interpreter shebang. `% @tag:` can't collide with
+either. Six tags: `@kind`/`@summary`/`@example`/`@param` (0+) per
+top-level definition, `@internal` as the alternative to that set for a
+deliberately private helper, and `@requires` once per file for the
+prerequisite `run` chain (replacing `capabilities.rs`'s hardcoded
+`load_sequence` match arm per source file).
+
+`build.rs` (new) reads `lib/*.ps` from disk at build time -- a normal
+build-script filesystem read, not a wasm-runtime one -- and
+code-generates fully-resolved Rust (`GeneratedEntry` rows, one
+`*_INTERNAL` const per migrated file) into
+`$OUT_DIR/capabilities_generated.rs`, `include!`'d into
+`capabilities.rs`. No `include_str!` needed: by the time the wasm
+target compiles, the generated file is already literal string data,
+same as any other `static`. Verified directly with `cargo build --lib
+--target wasm32-unknown-unknown` (0 errors, pre-existing unrelated
+`font.rs` warnings only).
+
+A file is "migrated" iff it contains at least one `% @...` tag
+anywhere; every `lib/*.ps` file `build.rs` discovers (`lib/*.ps` plus
+one level into `lib/styles/`; `lib/fonts/` stays a separate,
+live-enumerated mechanism) must be either migrated -- then every
+top-level definition needs `@internal` or a full tag set, enforced
+strictly -- or listed in `build.rs`'s own `LEGACY_FILES` allowlist,
+with the two states cross-checked against each other. A file in
+neither bucket, including a brand-new untouched one, fails `cargo
+build` immediately -- closes the "new sibling file silently
+uncataloged" gap `docs/PS_LIBRARY_COUPLING.md` calls mandatory, since
+nothing today catches a wholly-new `lib/*.ps` file that isn't one of
+the six kinds `tests/capabilities.rs` already has a dedicated test
+for. Also enforced at build time: an unrecognized `@word` (a typo)
+fails the build rather than silently dropping data, and `@kind: Font`
+is explicitly rejected (fonts are enumerated live from
+`font::catalog_entries`, never tag-driven).
+
+That's the *file*-level guarantee -- a migrated or newly-tagged file
+gets noticed. Per-*name* coverage within a migrated file still rests
+on `build.rs`'s tokenizer being right, with no independent ground
+truth of its own; closed at the test level instead, generically, by
+`tests/capabilities.rs`'s new `every_migrated_file_names_match_the_
+catalog_exactly` (below) rather than a new hand-written per-file test
+each time a file migrates.
+
+Migration scope this issue: `lib/paintkit.ps` only (8 public
+procedures, 19 internal helpers, all `CapabilityKind::Procedure` --
+matches the coupling doc's own worked example, `pkoil`). Every other
+`lib/*.ps` file stays on the hand-written `ENTRIES`/`*_INTERNAL` path,
+unchanged -- explicitly allowed by the issue's acceptance criteria
+("a defined migration subset, if staged"). `Palette` entries are
+deferred for a structural reason, not deferred effort: they're
+`Palettes /name [...] put` dict-literal mutations, not `/name ... def`
+bindings, so they need a different discovery mechanism in `build.rs`
+than the depth-tracked `def`-scanner this issue built (which does
+already handle `Template`/`Dial` generically, alongside `Procedure`,
+for whenever `lib/pagekit.ps`/a style pack migrates next).
+
+Parameters come from a new structured `@param: /Name text (default D)`
+tag, not by parsing the existing free-text `/Key description (default
+D)` legend blocks the coupling doc's own touchpoint-1 finding
+describes as "wraps across lines, contains cross-references and
+caveats mid-sentence" -- a deliberate deviation from the doc's literal
+suggestion ("keep parsing `/Key ... (default D)`"), lower-risk since
+it avoids a prose parser and the doc's own required-tag list doesn't
+mandate reusing that exact convention. The old itemized legend blocks
+in `lib/paintkit.ps` were trimmed (not just added to) to avoid two
+sources of truth for the same defaults, keeping the genuinely
+non-derivable behavioral caveats (validation strictness, degenerate
+-case fallbacks) as flowing prose pointing at the `@param` tags for the
+actual values -- matching the coupling doc's own "replacing, not
+adding to" framing for what a migrated file's line count should do.
+
+Added two tests to `tests/capabilities.rs`, replacing the old
+per-file `paintkit_names_match_the_catalog_exactly` (deleted -- fully
+subsumed, see below): `every_migrated_file_names_match_the_catalog_
+exactly` runs the same forward/reverse `Interp`-vs-catalog name
+cross-check generically over `capabilities::migrated_files()` (a new
+`build.rs`-generated list of `(source, @requires chain, internal
+names)`, one entry per migrated file), so migrating the *next*
+`lib/*.ps` file gets this protection automatically -- no new
+hand-written per-file test function to remember, closing the
+name-level half of the "new file forgotten" gap the same way
+`build.rs`'s own `LEGACY_FILES` check closes the file-level half.
+`generated_paintkit_entries_have_the_right_fields` checks specific
+field *values* directly (kind/load/example/param defaults, including
+a `/Density` case with a parenthesized aside before its trailing
+`(default ...)`, to pin that `parse_param`'s `rfind` picks the right
+one) -- the generic name check alone wouldn't catch a parser bug that
+gets a value wrong while still producing the right name set.
+
+Verified empirically, not just asserted: a probe file with one
+untagged `/name { } def` and no `LEGACY_FILES` entry fails `cargo
+build` with a clear message; dropping `@example` from `pkoil` fails
+the build the same way; a typo'd `@exemple` tag fails the build;
+`@kind: Font` fails the build. All four restore to a clean build
+immediately after.
+
+Deferred, not solved here: migrating the rest of `lib/*.ps`
+(`artkit.ps`/`pagekit.ps`/the four style packs/`handscript.ps`/
+`hangul.ps`) -- the mechanism is generic enough to handle
+`Template`/`Dial` today, `Palette` needs new discovery logic first.
+The other two `docs/PS_LIBRARY_COUPLING.md` follow-ups (PS-native
+self-check convention, CI diff-shape detection) are untouched,
+independent of this one per the issue's own "Dependencies" section.
+
 ## Reducing PS-library-only coupling to Rust/CI/Ghostscript (issue #92, 2026-08-25)
 
 Closes issue #92: a time-boxed architecture spike into the three
