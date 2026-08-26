@@ -364,6 +364,21 @@ renders eight examples in both and compares block-downsampled output).
    deliberately left undone, and names a real gs-portability gap (no
    PostScript-callable alpha operator in gs 10.07.1) to document rather
    than paper over.
+5. Shrinking PS-library-only coupling to Rust/CI/gs (architecture
+   spike in issue #92): **read `docs/PS_LIBRARY_COUPLING.md` in full
+   before starting any of its three follow-ups (a doc-comment-driven
+   capabilities catalog, a phased PS-native verification path, CI
+   diff-shape detection) — do not work from a summary of it, including
+   this one.** That document itself needed eight rounds of cross-model
+   review to converge (mostly the same failure mode each time: a
+   correction made in one section not propagating to a shorter
+   restatement elsewhere, including in an earlier version of this very
+   HANDOFF.md entry) — a short paraphrase here is exactly the kind of
+   restatement that risks going stale the next time the source document
+   is revised. If you need the shape before opening the file: three
+   follow-up issues, none built yet, each phased/corrected in ways that
+   matter (a naive read of any one paragraph in isolation has
+   repeatedly proven wrong in review). Read the whole thing.
 
 ## Gotchas for the next implementer
 

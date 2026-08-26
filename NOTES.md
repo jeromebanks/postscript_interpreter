@@ -3,6 +3,59 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Reducing PS-library-only coupling to Rust/CI/Ghostscript (issue #92, 2026-08-25)
+
+Closes issue #92: a time-boxed architecture spike into the three
+Rust/CI/Ghostscript coupling points a new `lib/*.ps` primitive touches
+today, recorded as a decision document, `docs/PS_LIBRARY_COUPLING.md`.
+Same shape as #46's spike: recommends architectures for three
+follow-up implementation issues (a doc-comment-driven capabilities
+catalog, a PS-native `%%SelfTest`/`--selftest` verification path, and
+CI diff-shape detection), implements none of them.
+
+The most consequential finding reverses the spike's own first-pass
+assumption: `ci.yml` has no explicit Ghostscript install step, which
+first looked like proof `gs`-dependent checks silently skip on CI.
+Checking real CI logs (`gh run view --log` on PR #86) showed the
+opposite -- macOS GHA runner images ship `gs` preinstalled, and every
+`ghostscript_accepts_*`/`golden`/`corpus` test genuinely runs on every
+PR today. Caught before it was written down as a headline claim, not
+after.
+
+Classified all 18 real defects found across all seven rounds of Codex
+review on PR #76 (issue #41, `pkribbon` -- read in full via `gh pr
+view 76 --comments`, not just round 1) against what would actually
+catch each one: 10 of 18 need no new interpreter work at all
+(PostScript's existing `stopped`/`errordict`, or `--lint`'s existing
+blank-page heuristic), verified directly by running a `stopped`-wrapped
+malformed-input call against real `lib/paintkit.ps` on a locally built
+release binary and confirming it discriminates (catches the bad call,
+doesn't fire on a well-formed one); a further one closes by
+construction once the capabilities-catalog follow-up lands. Five need
+a new one-time pixel-sample operator, scoped as a follow-up's "Phase
+B." The remaining two stay uncovered by anything proposed -- one
+(`pathforall`'s missing implicit moveto after `closepath`) a genuine
+interpreter bug only Rust/gs-parity testing caught, direct evidence
+for keeping `tests/golden.rs`/`tests/corpus.rs` exactly as-is per the
+issue's own acceptance criteria; the other (a demo missing `showpage`)
+a real but low-severity gap whose cheap automated fix turned out to
+false-positive on two already-committed demos, caught in a second
+round of cross-model review on this very PR and withdrawn rather than
+shipped.
+
+Worked example: `pkoil` (issue #45, PR #86)'s real diff was 467 lines,
+335 PS / 132 Rust (82 in `src/capabilities.rs`, 50 in
+`tests/paintkit.rs`) against a ≈106s CI job dominated by `cargo test`
+(≈58s) more than `clippy`+`fmt` (≈7s combined, measured from the same
+run's per-step timings) -- the 132 Rust lines are what the three
+follow-ups target; the PS side's core logic doesn't shrink, but isn't
+perfectly flat either, since the projected mechanism adds new
+`%%Summary:`/`%%Requires:`/`%%Example:`/`%%SelfTest` content (a real,
+unsized-here cost the write-up initially left out, caught in review --
+see `docs/PS_LIBRARY_COUPLING.md`'s worked-example section for the
+detail rather than trusting this summary, which has itself needed
+correcting more than once).
+
 ## Watercolor rendering architecture spike (issue #46, 2026-08-25)
 
 Closes issue #46: a time-boxed architecture spike comparing three ways
