@@ -387,9 +387,15 @@ renders eight examples in both and compares block-downsampled output).
    four style packs/`handscript.ps`/`hangul.ps` — is itchy-when-you-
    get-to-it follow-up work, not a filed issue. The mechanism already
    handles `Template`/`Dial` generically (same `/name ... def`
-   discovery as `Procedure`, including the `/name /othername def`
-   Dial-bound-to-a-name-literal shape `lib/styles/*.ps` uses — a real
-   parser bug there was caught and fixed by Codex review on PR #97).
+   discovery as `Procedure`) — including `lib/styles/*.ps`'s
+   `/name /othername def` shape (a Dial bound to another name literal,
+   e.g. `/spmetal /brass def`) and `bind def`, both needing a real
+   redesign of the definition-name tokenizer to get right, not a
+   one-line fix — two rounds of Codex review on PR #97 caught two
+   different ways a "which literal is the name" heuristic broke on
+   real `lib/styles/steampunk.ps` code; see `build.rs`'s
+   `find_top_level_defs` docs and NOTES.md's issue #94 entry for the
+   full story before touching that function again.
    Two kinds still need new discovery logic before their file can
    migrate: `Palette` (`Palettes /name [...] put` dict-literal
    mutations, not `def` bindings) and `Type3Face` (`/Name Dict

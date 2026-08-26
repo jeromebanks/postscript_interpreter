@@ -20,14 +20,18 @@
 //! shebang) -- `% @tag:` can't collide with either.
 //!
 //! Recognized tags:
-//! - `% @kind: Procedure|Dial|Template|Palette` -- per entry. `Font`
-//!   and `Type3Face` are explicitly rejected: fonts are enumerated
-//!   live from `font::catalog_entries` (never tag-driven), and a
-//!   Type 3 face binds with `/Name Dict definefont pop`, not
-//!   `/name ... def` -- [`find_top_level_defs`] wouldn't ever see a
-//!   tag placed above one (Codex review, PR #97). Migrating
-//!   `lib/handscript.ps`/`lib/hangul.ps` needs `definefont` discovery
-//!   added here first.
+//! - `% @kind: Procedure|Dial|Template` -- per entry, the three kinds
+//!   [`find_top_level_defs`]'s `/name ... def` discovery can actually
+//!   see. `Font`, `Type3Face`, and `Palette` are explicitly rejected,
+//!   each for its own reason (Codex review, PR #97, two rounds):
+//!   fonts are enumerated live from `font::catalog_entries`, never
+//!   tag-driven; a Type 3 face binds with `/Name Dict definefont pop`,
+//!   not `/name ... def` (see `lib/handscript.ps`/`hangul.ps`); a
+//!   palette is registered with `Palettes /name [...] put`, a dict
+//!   mutation, not a `def` binding either (see `lib/artkit.ps`/the
+//!   style packs). Migrating a file that needs one of these kinds
+//!   requires adding the matching discovery to this file first --
+//!   accepting the tag without it would silently drop the entry.
 //! - `% @summary: <one-line description>` -- per entry
 //! - `% @example: <ps code>` -- per entry
 //! - `% @param: /Name description text (default D)` -- 0+ per entry
@@ -413,7 +417,7 @@ fn parse_file(rel: &str, text: &str) -> ParsedFile {
 
 fn parse_kind(rel: &str, name: &str, line: usize, val: &str) -> String {
     match val {
-        "Procedure" | "Dial" | "Template" | "Palette" => val.to_string(),
+        "Procedure" | "Dial" | "Template" => val.to_string(),
         "Font" => panic!(
             "build.rs: {rel}: `/{name}` (line {line}): @kind: Font is not supported here -- \
              Font capabilities are enumerated live from font::catalog_entries(), not tag-driven \
@@ -426,9 +430,17 @@ fn parse_kind(rel: &str, name: &str, line: usize, val: &str) -> String {
              so no tag placed above it would ever be picked up. Migrating handscript.ps/\
              hangul.ps needs definefont discovery added to build.rs first (Codex review, PR #97)."
         ),
+        "Palette" => panic!(
+            "build.rs: {rel}: `/{name}` (line {line}): @kind: Palette is not supported yet -- \
+             a palette is registered with `Palettes /name [...] put`, a dict mutation, not a \
+             `/name ... def` binding, so find_top_level_defs never sees it and a tag placed \
+             above one is silently never consumed (Codex review, PR #97). Migrating a file with \
+             palette entries (artkit.ps/pagekit.ps/the style packs) needs `put` discovery added \
+             to build.rs first."
+        ),
         other => panic!(
             "build.rs: {rel}: `/{name}` (line {line}): unrecognized @kind value {other:?} -- \
-             expected one of Procedure, Dial, Template, Palette."
+             expected one of Procedure, Dial, Template."
         ),
     }
 }
@@ -462,6 +474,24 @@ fn parse_param(rel: &str, owner: &str, line: usize, val: &str) -> (String, Strin
         let default = rest[start + "(default ".len()..rest.len() - 1]
             .trim()
             .to_string();
+        // `rest` being non-empty (checked above) doesn't mean *either*
+        // half survives the split non-empty -- `/Width (default 6)`
+        // has no text before the parenthetical (empty description),
+        // and `/Width text (default )` has nothing inside it (empty
+        // default). Both produced a silently-accepted malformed row
+        // before this check (Codex review, PR #97, round 2).
+        if desc.is_empty() {
+            panic!(
+                "build.rs: {rel}: `/{owner}` (line {line}): @param `/{pname}` has no description \
+                 before its `(default ...)`"
+            );
+        }
+        if default.is_empty() {
+            panic!(
+                "build.rs: {rel}: `/{owner}` (line {line}): @param `/{pname}` has an empty \
+                 `(default )`"
+            );
+        }
         return (pname.to_string(), desc, Some(default));
     }
     (pname.to_string(), rest.to_string(), None)
@@ -491,17 +521,57 @@ fn collect_tag_block(lines: &[&str], start_line: usize) -> Vec<(String, String)>
     block
 }
 
+/// One depth-0 PostScript object as `find_top_level_defs` sees it --
+/// either a `/name` literal (with the line it appeared on) or anything
+/// else (a bare executable name like `Palettes`/`put`, a number, a
+/// bool, or a balanced `{}`/`[]`/`<<>>` group collapsed to a single
+/// object once its closer brings depth back to 0).
+#[derive(Clone)]
+enum TopLevelObject {
+    Name(String, usize),
+    Opaque,
+}
+
+/// Pushes `obj` onto `window`, a 2-slot sliding window over the most
+/// recent depth-0 objects (`window[0]` = second-to-last, `window[1]` =
+/// most recent) -- see [`find_top_level_defs`] for why this replaces a
+/// simpler "last/first name wins" heuristic.
+fn push_object(window: &mut [Option<TopLevelObject>; 2], obj: TopLevelObject) {
+    window[0] = window[1].take();
+    window[1] = Some(obj);
+}
+
 /// Scans the whole file for top-level `/name ... def` (or `bind def`)
 /// sequences -- a definition occurring at brace/bracket/dict-literal
 /// depth 0. Comments are stripped and `(...)` string contents blanked
 /// out first (per line, with string/comment state carried across line
 /// boundaries) so braces or `%` inside a string or comment can't
 /// perturb depth tracking or get mistaken for code.
+///
+/// `def` pops exactly two objects off the (virtual, depth-0) stack:
+/// `key value def`. A 2-slot sliding window over *every* depth-0
+/// object -- not just `/name` tokens -- models that directly: when
+/// `def` fires, the key is whatever occupied the window's older slot.
+/// This is deliberately not "the last (or first) `/name` token seen
+/// since the previous `def`" -- both of those heuristics were tried
+/// and broke on real code, caught across two rounds of Codex review on
+/// PR #97: "last name wins" mis-cataloged `/spmetal /brass def` (a
+/// Dial bound to another name literal) as `brass`; the fix, "first
+/// name wins, ignore later ones," then mis-cataloged the *next*
+/// definition when an unrelated bare-token statement intervened --
+/// `lib/styles/steampunk.ps` executes `Palettes /brass [...] put`
+/// (pushing a stray `/brass` that "first name wins" never released)
+/// immediately before `/spmetal /brass def`, so it kept naming that
+/// definition `brass` too. Treating every depth-0 token as filling a
+/// window slot -- opaque tokens included, so `Palettes`/`put` correctly
+/// flush the stale `/brass` out of the window -- gets both cases right
+/// regardless of what came before, verified against both real lines
+/// with a standalone tokenizer probe.
 fn find_top_level_defs(text: &str) -> Vec<(String, usize)> {
     let mut defs = Vec::new();
     let mut depth: i32 = 0;
     let mut in_string: i32 = 0;
-    let mut pending: Option<(String, usize)> = None;
+    let mut window: [Option<TopLevelObject>; 2] = [None, None];
 
     for (line_idx, raw_line) in text.lines().enumerate() {
         let line_no = line_idx + 1;
@@ -547,6 +617,13 @@ fn find_top_level_defs(text: &str) -> Vec<(String, usize)> {
                 }
                 "}" | "]" | ">>" => {
                     depth -= 1;
+                    // A balanced group closing back to depth 0 is one
+                    // opaque object on the virtual stack -- push it so
+                    // it correctly displaces whatever named object
+                    // preceded it, same as any other depth-0 token.
+                    if depth == 0 {
+                        push_object(&mut window, TopLevelObject::Opaque);
+                    }
                     continue;
                 }
                 _ => {}
@@ -554,24 +631,36 @@ fn find_top_level_defs(text: &str) -> Vec<(String, usize)> {
             if depth != 0 {
                 continue;
             }
-            if let Some(name) = tok.strip_prefix('/') {
-                // Only the *first* literal name after the previous `def`
-                // becomes the candidate -- a later one, before `def`
-                // fires, is part of the value being bound, not a new
-                // binding (e.g. `/spmetal /brass def`, a Dial bound to
-                // another name literal: the second `/brass` must not
-                // overwrite `pending` and get cataloged as the defined
-                // name instead of `spmetal`. Confirmed a real pattern in
-                // `lib/styles/steampunk.ps`/`scifi.ps`, caught by Codex
-                // review on PR #97).
-                if pending.is_none() && !name.is_empty() {
-                    pending = Some((name.to_string(), line_no));
+            if tok == "def" {
+                match window[0].take() {
+                    Some(TopLevelObject::Name(name, def_line)) => {
+                        defs.push((name, def_line));
+                    }
+                    _ => panic!(
+                        "build.rs: line {line_no}: `def` with no `/name` two positions back on \
+                         the depth-0 stack -- this is a shape find_top_level_defs doesn't \
+                         understand (not plain `/key value def`); it needs a look, not a guess."
+                    ),
                 }
-            } else if tok == "def"
-                && let Some(def) = pending.take()
-            {
-                defs.push(def);
+                window = [None, None];
+                continue;
             }
+            if tok == "bind" {
+                // `{proc} bind proc` pops one object and pushes the
+                // same one back (mutated in place) -- transparent to
+                // the window, not a new object. Not exercised by any
+                // `lib/*.ps` file today (`bind def` doesn't appear),
+                // but this file's own doc comments above claim support
+                // for it, so it should actually work.
+                continue;
+            }
+            if let Some(name) = tok.strip_prefix('/')
+                && !name.is_empty()
+            {
+                push_object(&mut window, TopLevelObject::Name(name.to_string(), line_no));
+                continue;
+            }
+            push_object(&mut window, TopLevelObject::Opaque);
         }
     }
 

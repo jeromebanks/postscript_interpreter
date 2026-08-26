@@ -104,22 +104,50 @@ a `/Density` case with a parenthesized aside before its trailing
 one) -- the generic name check alone wouldn't catch a parser bug that
 gets a value wrong while still producing the right name set.
 
-Codex review on PR #97 caught four real defects, all fixed before
-merge: `find_top_level_defs`'s "last literal before `def`" heuristic
-mis-parsed `/name /othername def` (a Dial bound to another name
-literal, e.g. `lib/styles/steampunk.ps`'s `/spmetal /brass def`) --
-cataloged the value's name instead of the binding's, confirmed against
-that exact real line with a standalone tokenizer probe before and
-after the fix; `@kind: Type3Face` was accepted but unreachable in
-practice, since a Type 3 face binds with `/Name Dict definefont pop`,
-not `/name ... def` -- now explicitly rejected, same as `@kind: Font`,
-until `definefont` discovery is added; `@summary:`/`@example:`/
-`@param:` with an empty value (after trim) satisfied the
-required-tag check while producing an unusable entry -- now rejected;
-and nothing caught a stale hand-written `ENTRIES` row left behind
-after a file migrates, producing a silent duplicate catalog row past
+Codex review on PR #97 caught eight real defects across two rounds,
+all fixed before merge. Round 1: `@kind: Type3Face` was accepted but
+unreachable (a Type 3 face binds with `/Name Dict definefont pop`, not
+`/name ... def`, so a tag above one is never seen) -- now explicitly
+rejected, same as `@kind: Font`, until `definefont` discovery is
+added; `@summary:`/`@example:`/`@param:` with an empty value (after
+trim) satisfied the required-tag check while producing an unusable
+entry -- now rejected; a stale hand-written `ENTRIES` row left behind
+after a file migrates would silently duplicate a catalog row past
 every `BTreeSet`-based cross-check -- closed by a new
 `catalog_has_no_duplicate_entries` test.
+
+Round 2, all in `find_top_level_defs` (the tag-block/def-name
+tokenizer) and its consumers, needed a genuine redesign, not another
+patch -- two rounds of "make the heuristic pick the right literal"
+each broke on a different real line before landing on the actual fix:
+the original "last name literal before `def` wins" mis-cataloged
+`/spmetal /brass def` (a Dial bound to another name literal, e.g.
+`lib/styles/steampunk.ps`) as `brass`; the round-1 fix, "first name
+wins, ignore later ones," then mis-cataloged the *next* definition
+when an unrelated bare-token statement intervened -- that same file's
+`Palettes /brass [...] put` immediately before `/spmetal /brass def`
+left a stale `/brass` the "first name" rule never released, so it
+named that definition `brass` too. The actual fix treats `def` as
+popping two objects off a virtual depth-0 stack (`key value def`) and
+tracks a 2-slot sliding window over *every* depth-0 token -- opaque
+ones (`Palettes`, `put`, numbers, closed bracket groups) included, not
+just `/name` literals -- so unrelated statements correctly flush stale
+candidates instead of leaving them to leak into the next `def`.
+Verified against both real `lib/styles/steampunk.ps` lines together,
+in sequence, with a standalone tokenizer probe (plus `bind def`, which
+this file's own doc comments already claimed to support but nothing
+exercised -- confirmed working too). Same round: `@kind: Palette` was
+also accepted but unreachable, same shape as the `Type3Face` gap
+(`Palettes /name [...] put` is a dict mutation, not a `def`) -- now
+rejected the same way; the duplicate-row test's `(name, kind, source)`
+key let a stale row under a *different* kind than its generated
+replacement slip through as "distinct" -- narrowed to `(name, source)`,
+since one PS name in one source can't legitimately have two kinds; and
+`parse_param` validated its whole `@param` value was non-empty but not
+the two halves *after* splitting off `(default ...)` -- `/Width
+(default 6)` (empty description) and `/Width text (default )` (empty
+default) both produced silently-accepted malformed rows -- now
+rejected.
 
 Verified empirically, not just asserted: a probe file with one
 untagged `/name { } def` and no `LEGACY_FILES` entry fails `cargo

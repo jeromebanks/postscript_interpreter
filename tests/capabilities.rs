@@ -363,18 +363,26 @@ fn type3_faces_are_actually_defined_after_loading() {
 /// still emitted it twice.
 #[test]
 fn catalog_has_no_duplicate_entries() {
+    // Keyed by (name, source), not (name, kind, source): one PS name
+    // in one source file can't legitimately have two different kinds,
+    // so including `kind` in the key would let a stale hand-written
+    // row masquerading under a different kind than its generated
+    // replacement (e.g. (foo, Dial, src) vs (foo, Procedure, src))
+    // slip past this check as two "distinct" entries (Codex review,
+    // PR #97, round 2) -- the payload would still emit the same
+    // binding twice.
     let caps = capabilities::catalog();
     let mut seen = BTreeSet::new();
     let mut dupes = Vec::new();
     for c in &caps {
-        let key = (c.name.clone(), c.kind.as_str(), c.source.clone());
+        let key = (c.name.clone(), c.source.clone());
         if !seen.insert(key.clone()) {
             dupes.push(key);
         }
     }
     assert!(
         dupes.is_empty(),
-        "duplicate (name, kind, source) catalog rows: {dupes:?}"
+        "duplicate (name, source) catalog rows: {dupes:?}"
     );
 }
 
