@@ -20,7 +20,14 @@
 //! shebang) -- `% @tag:` can't collide with either.
 //!
 //! Recognized tags:
-//! - `% @kind: Procedure|Dial|Template|Palette|Type3Face` -- per entry
+//! - `% @kind: Procedure|Dial|Template|Palette` -- per entry. `Font`
+//!   and `Type3Face` are explicitly rejected: fonts are enumerated
+//!   live from `font::catalog_entries` (never tag-driven), and a
+//!   Type 3 face binds with `/Name Dict definefont pop`, not
+//!   `/name ... def` -- [`find_top_level_defs`] wouldn't ever see a
+//!   tag placed above one (Codex review, PR #97). Migrating
+//!   `lib/handscript.ps`/`lib/hangul.ps` needs `definefont` discovery
+//!   added here first.
 //! - `% @summary: <one-line description>` -- per entry
 //! - `% @example: <ps code>` -- per entry
 //! - `% @param: /Name description text (default D)` -- 0+ per entry
@@ -352,12 +359,22 @@ fn parse_file(rel: &str, text: &str) -> ParsedFile {
                             "build.rs: {rel}: `/{name}` (line {start_line}) has duplicate @summary"
                         );
                     }
+                    if val.trim().is_empty() {
+                        panic!(
+                            "build.rs: {rel}: `/{name}` (line {start_line}): @summary has no value"
+                        );
+                    }
                     summary = Some(val.clone());
                 }
                 "example" => {
                     if example.is_some() {
                         panic!(
                             "build.rs: {rel}: `/{name}` (line {start_line}) has duplicate @example"
+                        );
+                    }
+                    if val.trim().is_empty() {
+                        panic!(
+                            "build.rs: {rel}: `/{name}` (line {start_line}): @example has no value"
                         );
                     }
                     example = Some(val.clone());
@@ -396,15 +413,22 @@ fn parse_file(rel: &str, text: &str) -> ParsedFile {
 
 fn parse_kind(rel: &str, name: &str, line: usize, val: &str) -> String {
     match val {
-        "Procedure" | "Dial" | "Template" | "Palette" | "Type3Face" => val.to_string(),
+        "Procedure" | "Dial" | "Template" | "Palette" => val.to_string(),
         "Font" => panic!(
             "build.rs: {rel}: `/{name}` (line {line}): @kind: Font is not supported here -- \
              Font capabilities are enumerated live from font::catalog_entries(), not tag-driven \
              (see tests/capabilities.rs::fonts_agree_with_available_fonts)."
         ),
+        "Type3Face" => panic!(
+            "build.rs: {rel}: `/{name}` (line {line}): @kind: Type3Face is not supported yet -- \
+             find_top_level_defs only discovers `/name ... def` bindings, and a Type 3 face is \
+             bound with `/Name Dict definefont pop` instead (see lib/handscript.ps/hangul.ps), \
+             so no tag placed above it would ever be picked up. Migrating handscript.ps/\
+             hangul.ps needs definefont discovery added to build.rs first (Codex review, PR #97)."
+        ),
         other => panic!(
             "build.rs: {rel}: `/{name}` (line {line}): unrecognized @kind value {other:?} -- \
-             expected one of Procedure, Dial, Template, Palette, Type3Face."
+             expected one of Procedure, Dial, Template, Palette."
         ),
     }
 }
@@ -425,6 +449,12 @@ fn parse_param(rel: &str, owner: &str, line: usize, val: &str) -> (String, Strin
              after the name"
         ),
     };
+    if pname.is_empty() {
+        panic!("build.rs: {rel}: `/{owner}` (line {line}): @param has an empty `/Name`");
+    }
+    if rest.is_empty() {
+        panic!("build.rs: {rel}: `/{owner}` (line {line}): @param `/{pname}` has no description");
+    }
     if let Some(start) = rest.rfind("(default ")
         && rest.ends_with(')')
     {
@@ -525,7 +555,16 @@ fn find_top_level_defs(text: &str) -> Vec<(String, usize)> {
                 continue;
             }
             if let Some(name) = tok.strip_prefix('/') {
-                if !name.is_empty() {
+                // Only the *first* literal name after the previous `def`
+                // becomes the candidate -- a later one, before `def`
+                // fires, is part of the value being bound, not a new
+                // binding (e.g. `/spmetal /brass def`, a Dial bound to
+                // another name literal: the second `/brass` must not
+                // overwrite `pending` and get cataloged as the defined
+                // name instead of `spmetal`. Confirmed a real pattern in
+                // `lib/styles/steampunk.ps`/`scifi.ps`, caught by Codex
+                // review on PR #97).
+                if pending.is_none() && !name.is_empty() {
                     pending = Some((name.to_string(), line_no));
                 }
             } else if tok == "def"

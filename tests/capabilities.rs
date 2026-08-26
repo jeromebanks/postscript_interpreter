@@ -352,6 +352,32 @@ fn type3_faces_are_actually_defined_after_loading() {
     }
 }
 
+/// Guards a real gap Codex review found on PR #97 (issue #94): once a
+/// file migrates to the `% @...` tag convention, its old hand-written
+/// rows in `ENTRIES` must actually be deleted, not just left alongside
+/// the new `GENERATED_ENTRIES` rows -- `capabilities::catalog()`
+/// concatenates both, so a forgotten stale row produces a duplicate
+/// (name, kind, source) triple. Every other cross-check here converts
+/// to a `BTreeSet` before comparing, so a duplicate would pass all of
+/// them silently while `--capabilities`/`describe_art_capabilities`
+/// still emitted it twice.
+#[test]
+fn catalog_has_no_duplicate_entries() {
+    let caps = capabilities::catalog();
+    let mut seen = BTreeSet::new();
+    let mut dupes = Vec::new();
+    for c in &caps {
+        let key = (c.name.clone(), c.kind.as_str(), c.source.clone());
+        if !seen.insert(key.clone()) {
+            dupes.push(key);
+        }
+    }
+    assert!(
+        dupes.is_empty(),
+        "duplicate (name, kind, source) catalog rows: {dupes:?}"
+    );
+}
+
 /// Every catalog font alias -- both the curated `ALIASES` table and
 /// the implicit `-Regular`-stripped ones (issue #39's third
 /// cross-model review round: a catalog holding only

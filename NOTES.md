@@ -104,6 +104,23 @@ a `/Density` case with a parenthesized aside before its trailing
 one) -- the generic name check alone wouldn't catch a parser bug that
 gets a value wrong while still producing the right name set.
 
+Codex review on PR #97 caught four real defects, all fixed before
+merge: `find_top_level_defs`'s "last literal before `def`" heuristic
+mis-parsed `/name /othername def` (a Dial bound to another name
+literal, e.g. `lib/styles/steampunk.ps`'s `/spmetal /brass def`) --
+cataloged the value's name instead of the binding's, confirmed against
+that exact real line with a standalone tokenizer probe before and
+after the fix; `@kind: Type3Face` was accepted but unreachable in
+practice, since a Type 3 face binds with `/Name Dict definefont pop`,
+not `/name ... def` -- now explicitly rejected, same as `@kind: Font`,
+until `definefont` discovery is added; `@summary:`/`@example:`/
+`@param:` with an empty value (after trim) satisfied the
+required-tag check while producing an unusable entry -- now rejected;
+and nothing caught a stale hand-written `ENTRIES` row left behind
+after a file migrates, producing a silent duplicate catalog row past
+every `BTreeSet`-based cross-check -- closed by a new
+`catalog_has_no_duplicate_entries` test.
+
 Verified empirically, not just asserted: a probe file with one
 untagged `/name { } def` and no `LEGACY_FILES` entry fails `cargo
 build` with a clear message; dropping `@example` from `pkoil` fails

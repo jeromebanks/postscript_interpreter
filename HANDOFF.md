@@ -387,10 +387,17 @@ renders eight examples in both and compares block-downsampled output).
    four style packs/`handscript.ps`/`hangul.ps` — is itchy-when-you-
    get-to-it follow-up work, not a filed issue. The mechanism already
    handles `Template`/`Dial` generically (same `/name ... def`
-   discovery as `Procedure`); `Palette` entries need new discovery
-   logic first, since they're `Palettes /name [...] put` dict-literal
-   mutations, not `def` bindings. Migrating a file needs no new test
-   either — `tests/capabilities.rs`'s `every_migrated_file_names_
+   discovery as `Procedure`, including the `/name /othername def`
+   Dial-bound-to-a-name-literal shape `lib/styles/*.ps` uses — a real
+   parser bug there was caught and fixed by Codex review on PR #97).
+   Two kinds still need new discovery logic before their file can
+   migrate: `Palette` (`Palettes /name [...] put` dict-literal
+   mutations, not `def` bindings) and `Type3Face` (`/Name Dict
+   definefont pop`, not `/name ... def` either — `@kind: Type3Face` is
+   explicitly rejected by `build.rs` until this exists, so
+   `handscript.ps`/`hangul.ps` can't migrate yet regardless of
+   `Palette`). Migrating a file needs no new test either —
+   `tests/capabilities.rs`'s `every_migrated_file_names_
    match_the_catalog_exactly` cross-checks every file
    `capabilities::migrated_files()` reports, generically.
 
