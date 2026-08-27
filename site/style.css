@@ -69,6 +69,29 @@ th { color: var(--dim); font-weight: 600; }
 .card .body { padding: 10px 14px 0; }
 .card .body b { display: block; margin-bottom: 3px; }
 .card .body span { color: var(--dim); font-size: 13px; }
+.reference-comparison {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 18px;
+  margin: 20px 0 34px;
+}
+.reference-comparison figure {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  background: var(--panel);
+}
+.reference-comparison img {
+  width: 100%;
+  height: min(68vw, 620px);
+  display: block;
+  object-fit: contain;
+  background: #0b1820;
+}
+.reference-comparison figcaption { padding: 10px 2px 0; }
+.reference-comparison figcaption b { display: block; margin-bottom: 3px; }
+.reference-comparison figcaption span { color: var(--dim); font-size: 13px; }
 
 .hero { display: flex; gap: 14px; margin: 26px 0; }
 .hero img {
