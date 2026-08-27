@@ -13,7 +13,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT="$ROOT/_site"
 
 rm -rf "$OUT"
-mkdir -p "$OUT/assets/renders" "$OUT/examples"
+mkdir -p "$OUT/assets/renders" "$OUT/assets/references" "$OUT/examples"
 
 # 1. the authored pages
 cp "$ROOT"/site/*.html "$ROOT"/site/style.css "$OUT/"
@@ -34,6 +34,7 @@ done
 # 4. renders — gallery stills are pre-rendered in the repo; examples
 # render here at their canonical sizes (BoundingBox where declared).
 cp "$ROOT"/gallery/renders/*.png "$OUT/assets/renders/"
+cp "$ROOT"/gallery/references/* "$OUT/assets/references/"
 cp "$ROOT/lib/fonts/specimen.png" "$OUT/assets/renders/font_library.png"
 cp "$ROOT/lib/fonts/specimen2.png" "$OUT/assets/renders/font_library2.png"
 cp "$ROOT/fonts/catalog/specimen-1.png" "$OUT/assets/renders/font_catalog1.png"

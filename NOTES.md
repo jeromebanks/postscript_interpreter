@@ -3,6 +3,33 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Mochi in Denim Blue — pkoil gallery portrait (issue #100, 2026-08-27)
+
+Closes the gallery deliverable deferred from issue #45 with a
+reference-based oil portrait rather than another parameter specimen.
+`gallery/mochi_denim_blue.ps` builds a golden Pomeranian from broad,
+overlapping `pkoil` planes, then uses narrower ridges for coat direction,
+`pkdry` for broken fan-brush contour edges, and crisp conventional fills
+only at the eyes and nose where likeness needs focus. The denim-blue
+ground echoes the source photograph but turns its folds into cross-woven
+canvas strokes. Seed 27 fixes every paint deposition.
+
+The exact 3000×4000 source photograph is checked in at
+`gallery/references/mochi.jpg`; `gallery/README.md` and the Pages gallery
+compare it explicitly with the interpretation, naming both the preserved
+identity anchors and the deliberate simplifications. The 1440×1800
+supersampled still is committed at `gallery/renders/mochi_denim_blue.png`,
+registered with all three `gallery/show.sh` arrays, and copied to Pages by
+the existing render wildcard. `scripts/build_site.sh` now also publishes
+gallery reference assets under `assets/references/`; the portrait remains
+out of the wasm playground because `paintkit.ps` is a filesystem-loaded
+dependency, not a self-contained program.
+
+Deliberately deferred: no attempt to trace the photograph, synthesize
+individual hairs, or claim physical oil/pigment simulation. This is a
+stylized vector impasto study whose recognizability comes from selected
+proportions, markings, and focal detail.
+
 ## Reducing PS-library-only coupling to Rust/CI/Ghostscript (issue #92, 2026-08-25)
 
 Closes issue #92: a time-boxed architecture spike into the three
