@@ -32,6 +32,21 @@ overridden per line through the font's scratch dict.
 | Plum Branch in Ink | `plum_branch.ps` | (issues #40/#41) A sumi-e plum-blossom branch where variable width is the whole point: every stroke — trunk, forking branches, grass at the foot, even the background wash — is one bezier or turtle centerline walked by artkit's `walkpath` and filled by paintkit's `pkribbon`, a quadratic pressure curve narrowing each branch to a brush-lifted point, independent start/end tapers on the grass blades, jitter for a loaded-ink edge |
 | Flying White: Reeds at Dusk | `flying_white_reeds.ps` | (issue #80) A wetland at dusk built around paintkit's `pkdry` dry-bristle brush (issue #43): reed stalks each a loaded base and a drier, more broken tip sharing an endpoint, plus a broken reflection on the water and thin dry-brush mist in the sky — the same primitive at three different scales, over a banded `mix3` dusk-palette gradient |
 | Fugitive Pigments | `fugitive_pigments.ps` | (issue #84) A poetry broadside — an original poem on impermanence, typeset in Palatino under a title spray-stenciled through its own `charpath`. The paintkit brushes are the whole illustration: the milky way is `pkspray` cloud and star-dust passes along two shared bezier centerlines, the moon wears a spray halo, the horizon glow is spray hugging a line, the reeds are `pknib` tapers with spray-dab seed heads, and the field is `pkdry` broken texture |
+| Mochi in Denim Blue | `mochi_denim_blue.ps` | (issue #100) A close-cropped portrait study from `references/mochi.jpg`: broad overlapping `pkoil` masses model an orange-sable Pomeranian against a scraped denim-blue canvas, `pkdry` breaks the silhouette into a furry edge, and selectively crisp eyes and nose hold the likeness |
+
+## Reference portrait study
+
+`references/mochi.jpg` is the original 3000×4000 photograph used for
+**Mochi in Denim Blue**. The painting preserves the reference's most
+recognizable anchors — upright ears, orange-sable and cream markings,
+oversized reflective eyes, compact charcoal nose, and surrounding denim
+blue — while deliberately simplifying individual hairs into directional
+loaded-brush masses. The photograph's close framing becomes a centered
+canvas portrait; the exact clothing folds become a cross-woven painted
+ground. The result is an interpretation, not a traced or photorealistic
+copy: `pkoil` supplies the wet planes and bristle ridges, while `pkdry`
+softens selected contour passages like a fan brush dragged through wet
+paint.
 
 ## Viewing the gallery
 
