@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pscat charts — paper-ready data visualization</title>
+<link rel="stylesheet" href="style.css">
+<style>
+#chart-play { display:flex; flex-wrap:wrap; gap:18px; padding:18px 24px; }
+#chart-left { flex:1 1 520px; min-width:320px; }
+#chart-right { flex:1 1 360px; display:flex; justify-content:center; align-items:start; }
+#chart-left textarea { width:100%; height:420px; font:13px/1.5 ui-monospace,monospace; padding:10px; background:var(--panel); color:var(--ink); border:1px solid var(--edge); border-radius:6px; }
+#chart-controls { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:10px; }
+#chart-controls select, #chart-controls button { padding:6px 10px; }
+#chart-err { color:#e8a1bb; min-height:1.2em; margin-top:8px; white-space:pre-wrap; font-size:13px; }
+canvas#chart-page { border:1px solid var(--edge); background:#fff; max-width:100%; height:auto; }
+.small { color:var(--dim); font-size:13px; }
+</style>
+</head>
+<body>
+<header>
+  <a class="brand" href="index.html">pscat</a>
+  <nav>
+    <a href="index.html">Home</a>
+    <a href="playground.html">Playground</a>
+    <a class="here" href="charts.html">Charts</a>
+    <a href="gallery.html">Gallery</a>
+    <a href="fonts.html">Fonts</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="extending.html">Extending</a>
+    <a href="javascript.html">JavaScript</a>
+    <a href="agents.html">Agents</a>
+    <a href="https://github.com/jeromebanks/postscript_interpreter">GitHub</a>
+  </nav>
+</header>
+<main class="wide">
+<h1>Charts — paper-ready data visualization</h1>
+<p class="sub">Interactive demos of <code>lib/graph.ps</code> (function and surface plotting) and <code>lib/dataviz.ps</code> (bar / line / area / scatter / pie). Pick a preset, edit the data or function, press Run. The PostScript source below is complete and self-contained — no <code>(lib/...) run</code> needed in the browser; copy it verbatim into a file with <code>(lib/graph.ps) run</code> / <code>(lib/dataviz.ps) run</code> for paper use. See <code>.claude/skills/psviz</code> for the agent-authoring guide.</p>
+</main>
+<div id="chart-play">
+  <div id="chart-left">
+    <select id="preset"></select>
+    <textarea id="chart-src" spellcheck="false"></textarea>
+    <div id="chart-controls">
+      <button id="chart-run">Run</button>
+      <label>speed <input id="chart-speed" type="range" min="1" max="4000" value="400"></label>
+      <span id="chart-status" class="small"></span>
+    </div>
+    <div id="chart-err"></div>
+    <p class="small">Presets are plain, white-background figures suitable for papers. Edit the array <code>[ ... ]</code> or the <code>{ ... }</code> proc and re-run. For local files, add <code>(lib/graph.ps) run</code> or <code>(lib/dataviz.ps) run</code> at the top and render with <code>pscat --png out.png file.ps</code>.</p>
+  </div>
+  <div id="chart-right"><canvas id="chart-page" width="612" height="792"></canvas></div>
+</div>
+<script type="module">
+import { Pscat } from './pscat.js';
+
+const presets = {
+  "graph — sine + trend (plotfn)": `%!PS
+%%BoundingBox: 0 0 612 480
+1 1 1 setrgbcolor clippath fill
+% --- lib/graph.ps inlined subset (frame + plotfn + axes) ---
+/GraphFrame 8 dict def
+/setframe { GraphFrame begin /ph exch def /pw exch def /py exch def /px exch def /y1 exch def /x1 exch def /y0 exch def /x0 exch def end } def
+/gmapx { GraphFrame begin x0 sub x1 x0 sub div pw mul px add end } def
+/gmapy { GraphFrame begin y0 sub y1 y0 sub div ph mul py add end } def
+/gmoveto { exch gmapx exch gmapy moveto } def
+/glineto { exch gmapx exch gmapy lineto } def
+/plotfn { /gpfn exch def /gpn exch def /gpx1 exch def /gpx0 exch def 0 1 gpn { /gpi exch def /gpx gpx0 gpx1 gpx0 sub gpi gpn div mul add def gpx gpfn /gpy exch def gpx gpy gpi 0 eq { gmoveto } { glineto } ifelse } for } def
+/axes { /gptlen exch def /gpny exch def /gpnx exch def GraphFrame begin px pw py ph end /gpph exch def /gppy exch def /gppw exch def /gppx exch def gppx gppy moveto gppx gppw add gppy lineto gppx gppw add gppy gpph add lineto gppx gppy gpph add lineto closepath 0 1 gpnx { /gpi exch def /gptx gppx gppw gpi mul gpnx div add def gptx gppy moveto gptx gppy gptlen sub lineto } for 0 1 gpny { /gpj exch def /gpty gppy gpph gpj mul gpny div add def gppx gpty moveto gppx gptlen sub gpty lineto } for } def
+/showctr { /tky exch def /tkx exch def /tks exch def tkx tks stringwidth pop 2 div sub tky moveto tks show } def
+0.12 0.12 0.14 setrgbcolor
+/Palatino-Bold findfont 14 scalefont setfont (sine + trend) 306 450 showctr
+0 -1.6 720 1.6 72 120 468 260 setframe
+0.6 0.66 0.72 setrgbcolor 0.5 setlinewidth newpath 4 4 6 axes stroke
+0.12 0.12 0.14 setrgbcolor 1.4 setlinewidth newpath 0 720 360 { dup sin exch 360 div 0.3 mul add } plotfn stroke
+showpage
+`,
+  "graph — Lissajous (plotparam)": `%!PS
+%%BoundingBox: 0 0 500 500
+1 1 1 setrgbcolor clippath fill
+/GraphFrame 8 dict def
+/setframe { GraphFrame begin /ph exch def /pw exch def /py exch def /px exch def /y1 exch def /x1 exch def /y0 exch def /x0 exch def end } def
+/gmapx { GraphFrame begin x0 sub x1 x0 sub div pw mul px add end } def
+/gmapy { GraphFrame begin y0 sub y1 y0 sub div ph mul py add end } def
+/gmoveto { exch gmapx exch gmapy moveto } def
+/glineto { exch gmapx exch gmapy lineto } def
+/plotparam { /gpfn exch def /gpn exch def /gpt1 exch def /gpt0 exch def 0 1 gpn { /gpi exch def /gpt gpt0 gpt1 gpt0 sub gpi gpn div mul add def gpt gpfn gpi 0 eq { gmoveto } { glineto } ifelse } for } def
+/axes { /gptlen exch def /gpny exch def /gpnx exch def GraphFrame begin px pw py ph end /gpph exch def /gppy exch def /gppw exch def /gppx exch def gppx gppy moveto gppx gppw add gppy lineto gppx gppw add gppy gpph add lineto gppx gppy gpph add lineto closepath 0 1 gpnx { /gpi exch def /gptx gppx gppw gpi mul gpnx div add def gptx gppy moveto gptx gppy gptlen sub lineto } for 0 1 gpny { /gpj exch def /gpty gppy gpph gpj mul gpny div add def gppx gpty moveto gppx gptlen sub gpty lineto } for } def
+-1.1 -1.1 1.1 1.1 50 50 400 400 setframe
+0.65 0.66 0.72 setrgbcolor 0.6 setlinewidth newpath 4 4 6 axes stroke
+0.12 0.12 0.14 setrgbcolor 1.4 setlinewidth newpath 0 360 300 { dup 3 mul sin exch 2 mul sin } plotparam stroke
+showpage
+`,
+  "dataviz — bar chart": `%!PS
+%%BoundingBox: 0 0 612 400
+1 1 1 setrgbcolor clippath fill
+/DVFrame 6 dict def
+/setdvframe { DVFrame begin /ph exch def /pw exch def /py exch def /px exch def /y1 exch def /y0 exch def end } def
+/dvmapy { DVFrame begin y0 sub y1 y0 sub div ph mul py add end } def
+/dvcatx { DVFrame begin exch 0.5 add exch div pw mul px add end } def
+/dvbarw { /dvfgap exch def /dvfn exch def DVFrame begin pw end dvfn div 1 dvfgap sub mul } def
+/DVColors [ [0.90 0.35 0.30] [0.25 0.55 0.75] [0.30 0.70 0.50] [0.95 0.75 0.30] [0.65 0.45 0.85] [0.35 0.75 0.75] ] def
+/dvcolor { DVColors exch DVColors length mod get aload pop } def
+/barchart { /dbproc exch def /dbgap exch def /dbvals exch def /dbn dbvals length def 0 1 dbn 1 sub { /dbi exch def /dbv dbvals dbi get def /dbx dbi dbn dvcatx def /dbw dbn dbgap dvbarw def /dby0 0 dvmapy def /dby1 dbv dvmapy def dbi dbv dbproc setrgbcolor newpath dbx dbw 2 div sub dby0 moveto dbx dbw 2 div add dby0 lineto dbx dbw 2 div add dby1 lineto dbx dbw 2 div sub dby1 lineto closepath fill } for } def
+/dvaxes { /dvtlen exch def /dvny exch def /dvnx exch def DVFrame begin px pw py ph end /dvph exch def /dvpy exch def /dvpw exch def /dvpx exch def dvpx dvpy moveto dvpx dvpw add dvpy lineto dvpx dvpw add dvpy dvph add lineto dvpx dvpy dvph add lineto closepath 0 1 dvnx { /dvi exch def /dvx dvpx dvpw dvi mul dvnx div add def dvx dvpy moveto dvx dvpy dvtlen sub lineto } for 0 1 dvny { /dvj exch def /dvy dvpy dvph dvj mul dvny div add def dvpx dvy moveto dvpx dvtlen sub dvy lineto } for } def
+0 0 24 72 320 468 170 setdvframe
+newpath [8 15 12 19 14 22 17] 0.22 { pop dvcolor } barchart
+0.6 0.66 0.72 setrgbcolor 0.6 setlinewidth newpath 7 4 5 dvaxes stroke
+showpage
+`,
+  "dataviz — line chart": `%!PS
+%%BoundingBox: 0 0 612 400
+1 1 1 setrgbcolor clippath fill
+/DVFrame 6 dict def
+/setdvframe { DVFrame begin /ph exch def /pw exch def /py exch def /px exch def /y1 exch def /y0 exch def end } def
+/dvmapy { DVFrame begin y0 sub y1 y0 sub div ph mul py add end } def
+/dvcatx { DVFrame begin exch 0.5 add exch div pw mul px add end } def
+/linechart { /dlvals exch def /dln dlvals length def 0 1 dln 1 sub { /dli exch def /dlv dlvals dli get def /dlx dli dln dvcatx def /dly dlv dvmapy def dli 0 eq { dlx dly moveto } { dlx dly lineto } ifelse } for } def
+/dvaxes { /dvtlen exch def /dvny exch def /dvnx exch def DVFrame begin px pw py ph end /dvph exch def /dvpy exch def /dvpw exch def /dvpx exch def dvpx dvpy moveto dvpx dvpw add dvpy lineto dvpx dvpw add dvpy dvph add lineto dvpx dvpy dvph add lineto closepath 0 1 dvnx { /dvi exch def /dvx dvpx dvpw dvi mul dvnx div add def dvx dvpy moveto dvx dvpy dvtlen sub lineto } for 0 1 dvny { /dvj exch def /dvy dvpy dvph dvj mul dvny div add def dvpx dvy moveto dvpx dvtlen sub dvy lineto } for } def
+0 0 18 72 320 468 170 setdvframe
+0.15 0.45 0.75 setrgbcolor 1.4 setlinewidth newpath [4 6 5 9 7 11 9 13 10] linechart stroke
+0.6 0.66 0.72 setrgbcolor 0.6 setlinewidth newpath 9 4 5 dvaxes stroke
+showpage
+`,
+  "dataviz — pie / donut": `%!PS
+%%BoundingBox: 0 0 500 400
+1 1 1 setrgbcolor clippath fill
+/DVColors [ [0.90 0.35 0.30] [0.25 0.55 0.75] [0.30 0.70 0.50] [0.95 0.75 0.30] [0.65 0.45 0.85] [0.35 0.75 0.75] ] def
+/dvcolor { DVColors exch DVColors length mod get aload pop } def
+/dvsum { 0 exch { add } forall } def
+/piechart { /dpproc exch def /dpir exch def /dpr exch def /dpcy exch def /dpcx exch def /dpvals exch def /dptotal dpvals dvsum def /dpang 90 def 0 1 dpvals length 1 sub { /dpi exch def /dpv dpvals dpi get def /dpsweep dpv dptotal div 360 mul def dpi dpv dpproc setrgbcolor newpath dpcx dpcy moveto dpcx dpcy dpr dpang dpsweep add 90 sub arc dpir 0 gt { dpcx dpcy dpir dpang dpsweep add 90 sub dpang 90 sub arcn closepath } { closepath } ifelse fill /dpang dpang dpsweep sub def } for } def
+[28 22 18 14 10 8] 250 200 110 0 { pop dvcolor } piechart
+showpage
+`,
+  "dataviz — scatter": `%!PS
+%%BoundingBox: 0 0 612 400
+1 1 1 setrgbcolor clippath fill
+/DVScatterFrame 8 dict def
+/setscatterframe { DVScatterFrame begin /ph exch def /pw exch def /py exch def /px exch def /y1 exch def /x1 exch def /y0 exch def /x0 exch def end } def
+/scatterchart { /dsproc exch def /dsr exch def /dspoints exch def dspoints { aload pop /dsy exch def /dsx exch def /dsi exch def dsi dsx dsy dsproc setrgbcolor newpath DVScatterFrame begin x0 sub x1 x0 sub div pw mul px add y0 sub y1 y0 sub div ph mul py add dsr 0 360 arc fill end } forall } def
+/DVColors [ [0.90 0.35 0.30] [0.25 0.55 0.75] [0.30 0.70 0.50] [0.95 0.75 0.30] [0.65 0.45 0.85] ] def
+/dvcolor { DVColors exch DVColors length mod get aload pop } def
+0 1 4 { /i exch def i 5 div setgray newpath i 5 div 10 mul 10 10 50 50 400 300 setscatterframe } for
+0 0 10 10 50 50 400 300 setscatterframe
+newpath [[1 2] [2 5.5] [3 3.2] [4 7.8] [5 4.5] [6 8.2] [7 3.8] [8 6.9]] 4 { pop pop dvcolor } scatterchart
+0.6 0.66 0.72 setrgbcolor 0.6 setlinewidth newpath 50 50 moveto 450 50 lineto 50 50 moveto 50 350 lineto stroke
+showpage
+`,
+};
+
+const sel = document.getElementById('preset');
+const src = document.getElementById('chart-src');
+const runBtn = document.getElementById('chart-run');
+const canvas = document.getElementById('chart-page');
+const err = document.getElementById('chart-err');
+const status = document.getElementById('chart-status');
+const speed = document.getElementById('chart-speed');
+for (const k of Object.keys(presets)) {
+  const o = document.createElement('option'); o.value=k; o.textContent=k; sel.appendChild(o);
+}
+sel.value = Object.keys(presets)[0];
+src.value = presets[sel.value];
+
+const ps = await Pscat.load();
+let raf=0;
+function pageSize(s){ const m=s.match(/%%BoundingBox:\s*0\s+0\s+(\d+)\s+(\d+)/); return m?[Number(m[1]),Number(m[2])]:[612,792]; }
+function start(){
+  cancelAnimationFrame(raf); err.textContent='';
+  const [w,h]=pageSize(src.value);
+  let steps=0;
+  try{ ps.begin(src.value,w,h); }catch(e){ err.textContent=String(e); return; }
+  const frame=()=>{
+    const more=ps.step(Number(speed.value));
+    steps+=Number(speed.value);
+    ps.paintTo(canvas);
+    if(more===1){ status.textContent=`running… ${steps.toLocaleString()} steps`; raf=requestAnimationFrame(frame); }
+    else if(more===-1){ err.textContent=ps.error; status.textContent='stopped on error'; }
+    else status.textContent='done';
+  };
+  raf=requestAnimationFrame(frame);
+}
+runBtn.addEventListener('click', start);
+sel.addEventListener('change', ()=>{ src.value=presets[sel.value]; start(); });
+start();
+</script>
+</body>
+</html>
