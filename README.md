@@ -391,6 +391,8 @@ both `artkit.ps` and `graph.ps`. `examples/dataviz.ps` is a six-panel
 specimen sheet; the gallery's Field Notes pairs a bar chart and a line
 chart on one shared category axis (weekly sightings against a
 temperature trend) alongside a species-mix donut.
+For papers and documents, both libraries have plain, paper-ready counterparts distinct from the stylized gallery pieces: `examples/graph_paper.ps` (a single framed `plotfn` figure with axes and labels) and `examples/dataviz_paper.ps` (bar, line, pie and scatter panels on one white page). An interactive counterpart lives at `site/charts.html` (mirroring `site/playground.html` but scoped to these two libs — pick a preset, edit the data or function, see it render live), and agents have a dedicated skill at `.claude/skills/psviz/SKILL.md` (alongside `pscat`/`psart`) that teaches the calling conventions and copy-paste templates so a data-visualization request goes straight to `graph.ps`/`dataviz.ps` instead of the generative-art loop.
+
 
 ```postscript
 (lib/dataviz.ps) run
