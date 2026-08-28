@@ -13,10 +13,11 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT="$ROOT/_site"
 
 rm -rf "$OUT"
-mkdir -p "$OUT/assets/renders" "$OUT/assets/references" "$OUT/examples"
+mkdir -p "$OUT/assets/renders" "$OUT/assets/references" "$OUT/examples" "$OUT/lib"
 
 # 1. the authored pages
 cp "$ROOT"/site/*.html "$ROOT"/site/style.css "$OUT/"
+cp "$ROOT"/lib/graph.ps "$ROOT"/lib/dataviz.ps "$OUT/lib/"
 
 # 2. the browser build
 "$ROOT/scripts/build_wasm.sh"
@@ -57,5 +58,7 @@ render examples/specimen.ps 612x792
 render examples/postcard.ps 612x792
 render examples/type3_ransom.ps 612x792
 render examples/handwriting.ps 612x792
+render examples/graph_paper.ps 612x792
+render examples/dataviz_paper.ps 612x792
 
 echo "site assembled: $OUT ($(du -sh "$OUT" | cut -f1))"
