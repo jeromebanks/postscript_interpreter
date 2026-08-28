@@ -124,7 +124,14 @@ fn main() {
         let text = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("build.rs: failed to read {rel}: {e}"));
 
-        let is_migrated = text.lines().any(|l| tag_line(l).is_some());
+        // String-aware, matching parse_file's own scan below -- a
+        // legacy file whose only `% @...`-shaped line sits inside a
+        // multiline string must not be misdetected as migrated (round
+        // 6 of Codex review on PR #97).
+        let is_migrated = text
+            .lines()
+            .zip(lines_starting_in_string(&text))
+            .any(|(l, in_string)| !in_string && tag_line(l).is_some());
 
         if !is_migrated {
             if !legacy_remaining.remove(rel.as_str()) {
@@ -648,6 +655,15 @@ fn lines_starting_in_string(text: &str) -> Vec<bool> {
     starts_in_string
 }
 
+/// Sentinel character `find_top_level_defs` inserts into its cleaned
+/// per-line buffer where a literal string closes, so the token loop
+/// (the only place tracking bracket `depth`) can treat the string as
+/// one depth-0 object in the correct left-to-right order relative to
+/// other tokens on the line -- a control character that can't appear
+/// in real PostScript source, so it's unambiguous as a marker.
+const STRING_CLOSE_MARK: char = '\u{1}';
+const STRING_CLOSE_MARK_STR: &str = "\u{1}";
+
 /// One depth-0 PostScript object as `find_top_level_defs` sees it --
 /// either a `/name` literal (with the line it appeared on) or anything
 /// else (a bare executable name like `Palettes`/`put`, a number, a
@@ -714,6 +730,23 @@ fn find_top_level_defs(text: &str) -> Vec<(String, usize)> {
                     in_string += 1;
                 } else if c == ')' {
                     in_string -= 1;
+                    if in_string == 0 {
+                        // A literal string closing back to zero string
+                        // nesting is one object on the virtual
+                        // depth-0 stack, exactly like a balanced
+                        // {}/[]/<<>> group -- mark it with a sentinel
+                        // so the token loop below (the only place that
+                        // knows the current bracket `depth`) can
+                        // push_object for it in the correct left-to-
+                        // right order relative to other tokens on this
+                        // line, only when not itself nested inside a
+                        // bracket group (round 6 of Codex review on PR
+                        // #97: `/label (text) def` previously panicked
+                        // -- nothing marked the string as the object
+                        // `def` needed two positions back).
+                        clean.push(STRING_CLOSE_MARK);
+                        clean.push(' ');
+                    }
                 }
                 continue;
             }
@@ -748,6 +781,16 @@ fn find_top_level_defs(text: &str) -> Vec<(String, usize)> {
                     // opaque object on the virtual stack -- push it so
                     // it correctly displaces whatever named object
                     // preceded it, same as any other depth-0 token.
+                    if depth == 0 {
+                        push_object(&mut window, TopLevelObject::Opaque);
+                    }
+                    continue;
+                }
+                STRING_CLOSE_MARK_STR => {
+                    // See the sentinel's insertion point above -- only
+                    // an object if this string wasn't itself nested
+                    // inside a bracket group (that case is already
+                    // covered by the group's own closer above).
                     if depth == 0 {
                         push_object(&mut window, TopLevelObject::Opaque);
                     }
