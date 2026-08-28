@@ -324,6 +324,24 @@ fn parse_file(rel: &str, text: &str) -> ParsedFile {
 
     let defs = find_top_level_defs(text);
 
+    // Two top-level defs sharing one physical line (`/a 1 def /b 2
+    // def`) get the same start_line from find_top_level_defs, so
+    // collect_tag_block's upward walk from that line would attach the
+    // one preceding tag block to both -- b silently inheriting a's
+    // kind/summary/example/params (round 4 of Codex review on PR #97).
+    // Reject it outright rather than guess which def the block was
+    // meant for.
+    let mut seen_lines: BTreeSet<usize> = BTreeSet::new();
+    for (name, start_line) in &defs {
+        if !seen_lines.insert(*start_line) {
+            panic!(
+                "build.rs: {rel}:{start_line}: multiple top-level definitions on one line \
+                 (`/{name}` and another) -- each top-level definition needs its own line so a \
+                 `% @...` tag block above it can be attributed unambiguously."
+            );
+        }
+    }
+
     let mut entries = Vec::new();
     let mut internal_names = Vec::new();
     let mut consumed_tag_lines: BTreeSet<usize> = BTreeSet::new();
