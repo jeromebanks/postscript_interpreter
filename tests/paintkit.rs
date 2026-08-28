@@ -2530,3 +2530,403 @@ fn spray_degenerate_point_honors_endpoint_bursts() {
         "endpoint bursts must apply to a single-point subpath: plain {plain} burst {burst}"
     );
 }
+
+// --- pkwash / pkpaper: the watercolor medium (issue #47) -------------
+//
+// Two things separate these from the presets above and drive what's
+// asserted here. First, they're the only ones that depend on a pscat
+// operator Ghostscript doesn't have (`setalpha`), so the *fallback*
+// path — flattening each mark against white when `pkalphaok` is false
+// — is a first-class code path with its own tests, not an afterthought.
+// Second, their randomness comes from the section's own generator
+// rather than `rand`, so /Seed reproducibility and the caller's-stream
+// default are both directly checkable.
+
+fn wash_pixmap(src: &str) -> Interp {
+    let mut it = fresh(200, 200);
+    it.run_str(src)
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    it
+}
+
+fn pixels(it: &Interp) -> Vec<u8> {
+    it.gfx().pixmap.data().to_vec()
+}
+
+const BLOB: &str = "newpath 100 100 60 0 360 arc closepath";
+
+#[test]
+fn a_wash_is_translucent_not_opaque() {
+    // The same blob, filled flat and washed. The wash has to land
+    // strictly between the paper and the solid color, in the middle of
+    // the shape where no wobble or rim reaches.
+    let flat = wash_pixmap(&format!("0 0 0 setrgbcolor {BLOB} fill"));
+    let washed = wash_pixmap(&format!(
+        "0 0 0 setrgbcolor {BLOB} << /Alpha 0.3 /Layers 1 /Wet 0 /Bloom 0 /Seed 1 >> pkwash"
+    ));
+    let at = |it: &Interp| it.gfx().pixmap.pixel(100, 100).expect("pixel").red();
+    assert_eq!(at(&flat), 0, "a plain fill is opaque");
+    let w = at(&washed);
+    assert!(w > 20 && w < 230, "wash should be translucent, got {w}");
+}
+
+#[test]
+fn layers_build_up_darker() {
+    let at = |n: u32| {
+        let it = wash_pixmap(&format!(
+            "0 0 0 setrgbcolor {BLOB} << /Alpha 0.25 /Layers {n} /Wet 0 /Bloom 0 /Seed 2 >> pkwash"
+        ));
+        it.gfx().pixmap.pixel(100, 100).expect("pixel").red()
+    };
+    let (one, two, four) = (at(1), at(2), at(4));
+    assert!(two < one, "two layers darker than one: {two} vs {one}");
+    assert!(four < two, "four layers darker than two: {four} vs {two}");
+}
+
+#[test]
+fn the_same_seed_paints_the_same_pixels() {
+    let run = |seed: u32| {
+        pixels(&wash_pixmap(&format!(
+            "0 0 0 setrgbcolor {BLOB} \
+             << /Alpha 0.3 /Layers 3 /Wet 8 /Bloom 0.5 /Grain 0.4 /Seed {seed} >> pkwash"
+        )))
+    };
+    assert_eq!(run(7), run(7), "same seed, same pixels");
+    assert_ne!(run(7), run(8), "a different seed should differ");
+}
+
+/// Without /Seed a wash follows the caller's own `srand`, like every
+/// other preset in this file — *and* it consumes only that stream, so
+/// the wash's texture can't depend on how much randomness ran before
+/// it beyond that one draw.
+#[test]
+fn without_a_seed_the_wash_follows_the_callers_srand() {
+    let run = |seed: u32| {
+        pixels(&wash_pixmap(&format!(
+            "{seed} srand 0 0 0 setrgbcolor {BLOB} \
+             << /Alpha 0.3 /Wet 8 /Bloom 0.5 >> pkwash"
+        )))
+    };
+    assert_eq!(run(5), run(5));
+    assert_ne!(run(5), run(6));
+}
+
+/// /Seed must not move the caller's own `rand` stream, which is what
+/// lets an artist re-roll one wash without redrawing the rest of the
+/// piece. (The obvious `rrand`/`srand` save-restore implementation
+/// would pass this test but break under `--sweep-seed`; see the
+/// section header in lib/paintkit.ps for why it isn't used.)
+#[test]
+fn a_seeded_wash_leaves_the_callers_rand_stream_alone() {
+    let mut it = fresh(200, 200);
+    it.run_str("3 srand rand rand rand").expect("baseline");
+    let baseline: Vec<String> = it.operand_stack().iter().map(|o| o.repr()).collect();
+
+    let mut it = fresh(200, 200);
+    it.run_str(&format!(
+        "3 srand rand \
+         0 0 0 setrgbcolor {BLOB} << /Alpha 0.3 /Grain 0.5 /Seed 99 >> pkwash \
+         rand rand"
+    ))
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let after: Vec<String> = it.operand_stack().iter().map(|o| o.repr()).collect();
+    assert_eq!(baseline, after, "a /Seed wash consumed the caller's stream");
+}
+
+#[test]
+fn bloom_darkens_the_edge_relative_to_the_middle() {
+    let it = wash_pixmap(&format!(
+        "0 0 0 setrgbcolor {BLOB} \
+         << /Alpha 0.25 /Layers 1 /Wet 0 /Bloom 1 /BloomWidth 10 /Seed 3 >> pkwash"
+    ));
+    let middle = it.gfx().pixmap.pixel(100, 100).expect("pixel").red();
+    // Just inside the rim, on the horizontal through the center.
+    let rim = it.gfx().pixmap.pixel(46, 100).expect("pixel").red();
+    assert!(
+        rim < middle,
+        "rim {rim} should be darker than middle {middle}"
+    );
+}
+
+#[test]
+fn wet_pushes_the_boundary_off_the_path() {
+    // A dry wash stays inside the circle; a very wet one reaches past
+    // it. Sampled a few points outside the nominal radius.
+    let outside_ink = |wet: u32| {
+        let it = wash_pixmap(&format!(
+            "0 0 0 setrgbcolor {BLOB} \
+             << /Alpha 0.6 /Layers 2 /Wet {wet} /Bloom 0 /Seed 4 >> pkwash"
+        ));
+        let pm = &it.gfx().pixmap;
+        (0..360)
+            .step_by(3)
+            .filter(|deg| {
+                let a = (*deg as f32).to_radians();
+                let x = (100.0 + 64.0 * a.cos()) as u32;
+                let y = (100.0 + 64.0 * a.sin()) as u32;
+                pm.pixel(x, y).map(|p| p.red() < 240).unwrap_or(false)
+            })
+            .count()
+    };
+    assert_eq!(outside_ink(0), 0, "a dry wash stays on its path");
+    assert!(outside_ink(14) > 5, "a wet wash should wander outside");
+}
+
+#[test]
+fn multiply_washes_commute_and_normal_ones_do_not() {
+    // Sampled in the middle of the overlap rather than over the whole
+    // pixmap: an antialiased boundary pixel is a partial-coverage
+    // blend whose *coverage* still depends on paint order, so
+    // commutativity is a statement about the composited color, not
+    // about every pixel of the raster.
+    let overlap = |blend: &str, reversed: bool| {
+        let a = "0.9 0.8 0.2 setrgbcolor newpath 80 100 45 0 360 arc closepath";
+        let b = "0.2 0.4 0.8 setrgbcolor newpath 120 100 45 0 360 arc closepath";
+        let opts = format!("<< /Alpha 0.5 /Layers 1 /Wet 0 /Bloom 0 /Blend /{blend} /Seed 6 >>");
+        let (first, second) = if reversed { (b, a) } else { (a, b) };
+        let it = wash_pixmap(&format!("{first} {opts} pkwash {second} {opts} pkwash"));
+        let p = it.gfx().pixmap.pixel(100, 100).expect("pixel");
+        (p.red(), p.green(), p.blue())
+    };
+    assert_eq!(overlap("Multiply", false), overlap("Multiply", true));
+    assert_ne!(overlap("Normal", false), overlap("Normal", true));
+}
+
+#[test]
+fn grain_adds_marks_inside_the_wash() {
+    let ink = |grain: &str| {
+        let it = wash_pixmap(&format!(
+            "0 0 0 setrgbcolor {BLOB} \
+             << /Alpha 0.2 /Layers 1 /Wet 0 /Bloom 0 /Grain {grain} /Seed 5 >> pkwash"
+        ));
+        ink_count(&it)
+    };
+    assert!(ink("0.9") > ink("0"), "granulation should darken the wash");
+}
+
+#[test]
+fn an_empty_path_is_a_no_op() {
+    let mut it = fresh(120, 120);
+    it.run_str("0 0 0 setrgbcolor newpath << /Alpha 0.5 >> pkwash")
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(ink_count(&it), 0, "an empty path should draw nothing");
+}
+
+#[test]
+fn pkwash_rejects_malformed_options() {
+    // Validation happens before the path is looked at, so an empty
+    // path still has to reject a bad dict — the same trap pknib hit.
+    for bad in [
+        "<< /Alpha 2 >>",
+        "<< /Alpha -1 >>",
+        "<< /Alpha { 0.5 } >>",
+        "<< /Layers 0 >>",
+        "<< /Layers 9 >>",
+        "<< /Wet -1 >>",
+        "<< /Bloom 1.5 >>",
+        "<< /BloomWidth 0 >>",
+        "<< /Grain 2 >>",
+        "<< /Blend /Screen >>",
+        "<< /Pitch 0 >>",
+        "<< /Pitch -2 >>",
+    ] {
+        let mut it = fresh(60, 60);
+        assert!(
+            it.run_str(&format!("newpath {bad} pkwash")).is_err(),
+            "{bad} should have been rejected"
+        );
+    }
+}
+
+#[test]
+fn pkwash_bounds_its_own_work() {
+    // A pitch fine enough to blow the boundary-sample budget must be
+    // refused before anything is drawn, not discovered halfway
+    // through — the same doctrine as pkdry's and pkspray's deposit
+    // budgets.
+    let mut it = fresh(400, 400);
+    let err = it.run_str(
+        "0 0 0 setrgbcolor newpath 200 200 190 0 360 arc closepath \
+         << /Alpha 0.3 /Pitch 0.01 >> pkwash",
+    );
+    assert!(err.is_err(), "an unbounded sample count should be refused");
+    assert_eq!(ink_count(&it), 0, "and nothing should have been drawn");
+}
+
+#[test]
+fn pkpaper_lays_a_ground_and_validates() {
+    let mut it = fresh(120, 120);
+    it.run_str("0 0 120 120 << /Tone [0.9 0.85 0.8] /Grain 0.4 /Seed 3 >> pkpaper")
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let p = it.gfx().pixmap.pixel(60, 60).expect("pixel");
+    assert!(p.red() > 150 && p.red() < 250, "toned, not white or black");
+
+    for bad in [
+        "<< /Tone [0.9 0.85] >>",
+        "<< /Tone 0.9 >>",
+        "<< /Grain 2 >>",
+        "<< /Alpha -1 >>",
+        "<< /Depth 3 >>",
+        "<< /Fiber 2 >>",
+        "<< /Blend /Screen >>",
+    ] {
+        let mut it = fresh(60, 60);
+        assert!(
+            it.run_str(&format!("0 0 60 60 {bad} pkpaper")).is_err(),
+            "{bad} should have been rejected"
+        );
+    }
+
+    // A degenerate rectangle draws nothing rather than erroring.
+    let mut it = fresh(60, 60);
+    it.run_str("10 10 0 40 << >> pkpaper")
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(ink_count(&it), 0);
+}
+
+/// The documented fallback for interpreters without `setalpha`. Forcing
+/// `pkalphaok` false is exactly what a Ghostscript run does on its own,
+/// so this exercises the same branch `gs` takes without needing `gs`.
+#[test]
+fn the_no_alpha_fallback_still_paints_a_recognizable_wash() {
+    let src = format!(
+        "0 0 0 setrgbcolor {BLOB} \
+         << /Alpha 0.3 /Layers 3 /Wet 6 /Bloom 0.5 /Seed 8 >> pkwash"
+    );
+    let real = wash_pixmap(&src);
+    let mut fb = fresh(200, 200);
+    fb.run_str("/pkalphaok false def").expect("force fallback");
+    fb.run_str(&src)
+        .unwrap_or_else(|e| panic!("{}", fb.error_report(&e)));
+
+    let mid = |it: &Interp| it.gfx().pixmap.pixel(100, 100).expect("pixel").red();
+    // Same build-up in the middle: three 0.3 passes over white paper
+    // flatten to the same value the compositor arrives at.
+    assert!(
+        mid(&real).abs_diff(mid(&fb)) <= 6,
+        "fallback {} vs real {}",
+        mid(&fb),
+        mid(&real)
+    );
+    assert!(ink_count(&fb) > 0, "the fallback still paints");
+}
+
+/// What the fallback provably *cannot* do, asserted so the gap stays a
+/// documented limitation rather than a surprise: paint underneath a
+/// wash shows through with real alpha and is hidden without it.
+#[test]
+fn the_no_alpha_fallback_cannot_show_what_is_underneath() {
+    let src = format!(
+        "1 0 0 setrgbcolor newpath 0 0 moveto 200 0 lineto 200 200 lineto 0 200 lineto \
+           closepath fill \
+         0 0 1 setrgbcolor {BLOB} \
+         << /Alpha 0.4 /Layers 1 /Wet 0 /Bloom 0 /Seed 9 >> pkwash"
+    );
+    let real = wash_pixmap(&src);
+    let mut fb = fresh(200, 200);
+    fb.run_str("/pkalphaok false def").expect("force fallback");
+    fb.run_str(&src)
+        .unwrap_or_else(|e| panic!("{}", fb.error_report(&e)));
+
+    // Green is the channel that tells the two apart. The red ground is
+    // (1,0,0) and the wash is (0,0,1) at 0.4: composited for real, the
+    // green stays at the ground's 0; flattened against white instead,
+    // it comes out at the paper's own 0.6.
+    let green = |it: &Interp| it.gfx().pixmap.pixel(100, 100).expect("pixel").green();
+    assert!(
+        green(&real) < 20,
+        "with real alpha the wash composites over the red ground, got {}",
+        green(&real)
+    );
+    assert!(
+        green(&fb) > 100,
+        "the flattened fallback paints as if the ground were white — \
+         the documented limitation; got {}",
+        green(&fb)
+    );
+}
+
+/// `lib/paintkit.ps` itself must still load and run under real
+/// Ghostscript, alpha section included: the file is one `run`, so a
+/// parse or definition-time error in the watercolor section would take
+/// every other preset in it down too. What this asserts is that gs
+/// *accepts and draws* the fallback, not that gs renders watercolor —
+/// flattening against white is visibly wrong the moment a wash sits
+/// over `pkpaper`'s ground or two washes overlap. Verified alpha output
+/// goes through `--pdf` (tests/pdf.rs), not through `gs file.ps`.
+#[test]
+fn ghostscript_accepts_paintkit_wash_via_the_fallback() {
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let artkit = std::fs::read_to_string("lib/artkit.ps").expect("artkit");
+    let paintkit = std::fs::read_to_string("lib/paintkit.ps").expect("paintkit");
+    let driver = "true setpacking 3 srand \
+        0 0 300 200 << /Grain 0.5 /Seed 2 >> pkpaper \
+        0.2 0.3 0.7 setrgbcolor \
+        newpath 90 100 50 0 360 arc closepath \
+        << /Alpha 0.3 /Layers 3 /Wet 7 /Bloom 0.6 /Grain 0.4 /Seed 3 >> pkwash \
+        0.8 0.3 0.2 setrgbcolor \
+        newpath 160 100 50 0 360 arc closepath \
+        << /Alpha 0.3 /Layers 2 /Wet 5 /Blend /Multiply /Seed 4 >> pkwash";
+    let dir = std::env::temp_dir().join(format!("pscat-paintkit-wash-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let combined = dir.join("paintkit_wash_gs.ps");
+    std::fs::write(
+        &combined,
+        format!("{artkit}\n{paintkit}\n{driver}\nshowpage\n"),
+    )
+    .expect("write");
+    let status = std::process::Command::new("gs")
+        .args([
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g300x200",
+            "-r72",
+            "-o/dev/null",
+        ])
+        .arg(&combined)
+        .status()
+        .expect("run gs");
+    assert!(
+        status.success(),
+        "gs rejected paintkit's watercolor section"
+    );
+}
+
+#[test]
+fn ghostscript_accepts_the_actual_wash_demo_file() {
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let status = std::process::Command::new("gs")
+        .args([
+            // -dNOSAFER because the demo `run`s lib/artkit.ps and
+            // lib/paintkit.ps itself, same as the sibling demo-file
+            // checks above.
+            "-dNOSAFER",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g620x820",
+            "-r72",
+            "-o/dev/null",
+            "examples/paintkit_wash_demo.ps",
+        ])
+        .status()
+        .expect("run gs");
+    assert!(status.success(), "gs rejected the wash demo");
+}

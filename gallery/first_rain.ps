@@ -1,0 +1,231 @@
+%!PS-Adobe-3.0
+%%Title: First Rain — a river valley in layered watercolor washes
+%%Creator: pscat — issue #47, paintkit's watercolor medium
+%%BoundingBox: 0 0 760 560
+%%EndComments
+
+% Everything you can see here except the reeds is one primitive:
+% paintkit's `pkwash` (issue #47), filling a path as a translucent
+% wash whose boundary wanders off the geometry it was given. The
+% picture is built the way a watercolor actually is -- palest and
+% wettest first, each later wash darker, drier and tighter, laid over
+% paint that is already down and showing through it.
+%
+% That showing-through is the whole point, and it is why this piece
+% needs pscat's `setalpha` rather than the nested-clip trick issue
+% #46's spike measured as the pure-PostScript ceiling: five receding
+% ridges over a three-band sky is far past the handful of regions that
+% technique can express, and every ridge's color here comes from the
+% renderer compositing it over whatever it overlaps, not from a blend
+% color guessed in advance. Under an interpreter without `setalpha`
+% (real Ghostscript) the whole valley falls back to flat opaque shapes
+% -- recognizable, but the depth is gone. See docs/WATERCOLOR.md.
+%
+%   pscat --page 760x560 --speed 500 gallery/first_rain.ps
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+
+47 srand
+
+/W 760 def
+/H 560 def
+% The painted block sits inside the sheet, so the paper -- its tone,
+% its grain, its fibers -- stays visible around it and the washes' own
+% wet edges deckle into that margin instead of running off the page.
+/M 36 def
+/L M 6 sub def                                   % block left/bottom
+/R W M sub 6 add def                             % block right
+/T H M sub 6 add def                             % block top
+
+% --- the paper ---------------------------------------------------------
+
+0 0 W H << /Tone [0.978 0.971 0.953] /Grain 0.6 /Fiber 0.25 /Seed 9 >> pkpaper
+
+% base amp wob -        (a wobbly horizon line as the current path,
+%                        closed downward to the foot of the block: one
+%                        ridge silhouette)
+% Three sine terms with seeded phases, sampled every 8 points. The
+% ridge is deliberately *smooth* -- pkwash's own wet boundary is what
+% roughens it, and pre-roughening the geometry only fights that.
+/frwob { 360 mul } def
+/ridge {
+    /rgwob exch def /rgamp exch def /rgbase exch def
+    /rgp1 frnd frwob def
+    /rgp2 frnd frwob def
+    /rgp3 frnd frwob def
+    newpath
+    L M 20 sub moveto
+    L 8 R {
+        /rgx exch def
+        rgx
+        rgbase
+        rgx rgwob mul rgp1 add sin rgamp mul add
+        rgx rgwob 2.3 mul mul rgp2 add sin rgamp 0.45 mul mul add
+        rgx rgwob 4.7 mul mul rgp3 add sin rgamp 0.2 mul mul add
+        lineto
+    } for
+    R M 20 sub lineto
+    closepath
+} def
+
+% x0 y0 x1 y1 -         (a rectangular wet region)
+/band {
+    /bdy1 exch def /bdx1 exch def /bdy0 exch def /bdx0 exch def
+    newpath bdx0 bdy0 moveto bdx1 bdy0 lineto bdx1 bdy1 lineto
+    bdx0 bdy1 lineto closepath
+} def
+
+% --- the sky: three wet bands, laid wettest first ----------------------
+
+0.44 0.54 0.63 setrgbcolor
+L 360 R T band
+<< /Alpha 0.17 /Layers 3 /Wet 20 /Bloom 0.3 /Seed 11 >> pkwash
+
+0.6 0.65 0.68 setrgbcolor
+L 305 R 430 band
+<< /Alpha 0.13 /Layers 2 /Wet 24 /Bloom 0.25 /Seed 12 >> pkwash
+
+% The break in the weather: warm light along the horizon, wet enough
+% that its edge dissolves into the grey above it.
+0.9 0.76 0.5 setrgbcolor
+L 290 R 358 band
+<< /Alpha 0.22 /Layers 2 /Wet 22 /Bloom 0.2 /Seed 13 >> pkwash
+
+% A pale sun behind it all, barely there.
+0.98 0.93 0.74 setrgbcolor
+newpath 585 432 44 0 360 arc closepath
+<< /Alpha 0.34 /Layers 2 /Wet 5 /Bloom 0.45 /Seed 14 >> pkwash
+
+% --- the rain: a slanting veil across the left of the sky ---------------
+
+% Its foot runs well below the horizon on purpose: the ridges are
+% painted over it, so the veil's only edge left in the picture is the
+% slanting one, and the rain reads as falling rather than as a shape.
+0.5 0.55 0.62 setrgbcolor
+newpath
+  L 40 sub T 30 add moveto
+  330 T 30 add lineto
+  170 180 lineto
+  L 130 sub 180 lineto
+closepath
+% /Bloom 0 deliberately: pooling is what makes an edge *legible*, and
+% the one thing a curtain of rain must not have is a legible edge.
+<< /Alpha 0.1 /Layers 2 /Wet 34 /Bloom 0 /Seed 15 >> pkwash
+
+% --- the ridges: five ranges, receding ----------------------------------
+%
+% Each is darker, drier and less wet-edged than the one behind it --
+% the standard watercolor recession, and each one's color is the
+% renderer compositing it over the sky and over the ranges already
+% down, not a color picked to look like the sum.
+
+0.56 0.61 0.68 setrgbcolor
+352 16 0.9 ridge
+<< /Alpha 0.22 /Layers 2 /Wet 9 /Bloom 0.4 /Seed 21 >> pkwash
+
+0.45 0.52 0.6 setrgbcolor
+326 22 1.4 ridge
+<< /Alpha 0.26 /Layers 2 /Wet 7 /Bloom 0.45 /Seed 22 >> pkwash
+
+0.34 0.43 0.49 setrgbcolor
+296 26 0.7 ridge
+<< /Alpha 0.32 /Layers 2 /Wet 6 /Bloom 0.5 /Grain 0.3 /Seed 23 >> pkwash
+
+0.24 0.33 0.36 setrgbcolor
+262 20 1.9 ridge
+<< /Alpha 0.36 /Layers 2 /Wet 4 /Bloom 0.55 /Grain 0.5 /Seed 24 >> pkwash
+
+0.15 0.22 0.23 setrgbcolor
+228 14 1.1 ridge
+<< /Alpha 0.44 /Layers 2 /Wet 3 /Bloom 0.6 /Grain 0.6 /Seed 25 >> pkwash
+
+% --- the river ----------------------------------------------------------
+
+0.54 0.62 0.66 setrgbcolor
+L M 20 sub R 226 band
+<< /Alpha 0.13 /Layers 2 /Wet 10 /Bloom 0.18 /Seed 31 >> pkwash
+
+% Reflected ridge, dragged downward and softened.
+0.28 0.37 0.4 setrgbcolor
+L 150 R 224 band
+<< /Alpha 0.11 /Layers 2 /Wet 14 /Bloom 0.1 /Seed 32 >> pkwash
+
+% Broken light on the water: thin, pale, nearly horizontal slivers,
+% faint enough to read as reflected sky rather than as paint.
+0.97 0.94 0.86 setrgbcolor
+0 1 5 {
+    /si exch def
+    /sy 88 si 22 mul add def
+    /sx 110 frnd 380 mul add def
+    /sw 60 frnd 170 mul add def
+    sx sy sx sw add sy 1.8 frnd 2.2 mul add add band
+    << /Alpha 0.2 /Layers 1 /Wet 2 /Bloom 0.1 /Seed 40 si add >> pkwash
+} for
+
+% A drag or two of current, dark and dry, to keep the river from
+% reading as one flat panel.
+0.22 0.3 0.32 setrgbcolor
+0 1 2 {
+    /si exch def
+    /sy 118 si 34 mul add def
+    /sx 60 frnd 320 mul add def
+    sx sy sx 130 frnd 260 mul add add sy 3 frnd 4 mul add add band
+    << /Alpha 0.1 /Layers 1 /Wet 4 /Bloom 0.3 /Seed 60 si add >> pkwash
+} for
+
+% --- the near bank and its reeds ----------------------------------------
+
+0.15 0.21 0.19 setrgbcolor
+50 9 0.5 ridge
+<< /Alpha 0.5 /Layers 2 /Wet 5 /Bloom 0.5 /Grain 0.7 /Seed 51 >> pkwash
+
+% Reeds. `pkribbon` fills like anything else, so the wash alpha set
+% here reaches it untouched -- a loaded brush drawn wet, not a
+% different mechanism bolted on. Two passes: a wetter, paler stand
+% behind a drier, darker one, the way a bank actually reads.
+/reeds {                                         % alpha r g b count -
+    /rdn exch def /rdb exch def /rdg exch def /rdr exch def
+    /rda exch def
+    gsave
+        pkalphaok { rda setalpha } if
+        rdr rdg rdb setrgbcolor
+        1 1 rdn {
+            pop
+            /rx L 20 add frnd R L sub 40 sub mul add def
+            % Heights biased short by squaring the draw, so a few
+            % stalks stand well clear of a crowd of low ones rather
+            % than the whole stand coming out the same picket height.
+            /rt frnd dup mul def
+            /rh 22 rt 78 mul add def
+            /rlean frnd 44 mul 22 sub rt 0.6 mul 0.4 add mul def
+            /rfoot 44 frnd 10 mul add def
+            newpath
+            rx rfoot moveto
+            rx rlean 0.4 mul add rfoot rh 0.55 mul add
+            rx rlean 0.85 mul add rfoot rh 0.85 mul add
+            rx rlean add rfoot rh add
+            curveto
+            <<
+              /Width 4 frnd 3.5 mul add
+              /Pressure { pktaper }
+              /EndCap /pointed
+              /Jitter 0.4
+            >> pkribbon
+        } for
+    grestore
+} def
+
+0.3 0.31 0.41 0.37 46 reeds
+0.62 0.1 0.16 0.14 30 reeds
+
+% --- the title, in the paper margin -------------------------------------
+
+gsave
+    pkalphaok { 0.75 setalpha } if
+    0.24 0.28 0.3 setrgbcolor
+    /Palatino-Italic findfont 20 scalefont setfont
+    M 505 moveto (First Rain) show
+grestore
+
+showpage
