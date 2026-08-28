@@ -5,7 +5,7 @@ description: Create paper-ready data visualizations with lib/graph.ps and lib/da
 
 # psviz — paper-ready charts with pscat
 
-Use `lib/graph.ps` (function/surface plotting) and `lib/dataviz.ps` (categorical charts) to produce attractive, embeddable figures. Both libs define into the current dict on `(lib/...) run`, draw nothing on load, and run unchanged in Ghostscript — sibling libs to `lib/artkit.ps`, no dependency on each other.
+Use `lib/graph.ps` (function/surface plotting) and `lib/dataviz.ps` (categorical charts) to produce attractive, embeddable figures. Both libs define into the current dict on `(lib/...) run`, draw nothing on load, and run unchanged in Ghostscript when file access is permitted (see Pitfalls — SAFER) — sibling libs to `lib/artkit.ps`, no dependency on each other.
 
 ## When to use which
 
@@ -94,6 +94,7 @@ showpage
 
 ## Pitfalls
 
+- Ghostscript SAFER (the default since 9.50) blocks `(lib/...) run` with `/invalidfileaccess`. Allow file access with `--permit-file-read` or a search path, e.g. `gs --permit-file-read=lib --permit-file-read=examples -I lib -dBATCH -dNOPAUSE -sDEVICE=png16m -g612x792 -o out.png file.ps`, or `gs -dNOSAFER -dBATCH ...` if appropriate for your environment.
 - Don't use `(lib/...) run` in browser/wasm presets — the wasm build has no filesystem. Inline the needed procs or fetch the lib text and prepend at runtime (see `site/charts.html`).
 - Wrap `setrgbcolor`/`dvcolor` callbacks in `gsave/newpath ... grestore` only if you also manage the path; the drivers already call the color proc before `newpath`.
 - `barchart`/`linechart` share `setdvframe`; don't mix with `setscatterframe` without resetting.
@@ -102,7 +103,7 @@ showpage
 ## Paper checklist
 
 - White page (`1 1 1 setrgbcolor clippath fill`), Palatino or Helvetica labels, `showctr` for centered titles.
-- `pscat --page 612x792 --png out.png file.ps` + `gs -dBATCH -dNOPAUSE -sDEVICE=png16m -g612x792 -o gs.png file.ps` both succeed.
+- `pscat --page 612x792 --png out.png file.ps` + `gs --permit-file-read=lib --permit-file-read=examples -I lib -dBATCH -dNOPAUSE -sDEVICE=png16m -g612x792 -o gs.png file.ps` both succeed (or `gs -dNOSAFER -dBATCH ...` — SAFER blocks `(lib/...) run` by default; see Pitfalls).
 - Keep the figure self-contained with `%%BoundingBox` and a one-line `%%Title`.
 
 See `lib/graph.ps` and `lib/dataviz.ps` headers for the full procedure list, and `examples/graph_paper.ps` / `examples/dataviz_paper.ps` for complete paper-ready pages.
