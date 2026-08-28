@@ -447,7 +447,20 @@ fn parse_file(rel: &str, text: &str) -> ParsedFile {
                     }
                     example = Some(val.clone());
                 }
-                "param" => params.push(parse_param(rel, &name, start_line, val)),
+                "param" => {
+                    let p = parse_param(rel, &name, start_line, val);
+                    if params
+                        .iter()
+                        .any(|(pname, ..): &(String, String, Option<String>)| *pname == p.0)
+                    {
+                        panic!(
+                            "build.rs: {rel}: `/{name}` (line {start_line}) has duplicate \
+                             @param `/{}`",
+                            p.0
+                        );
+                    }
+                    params.push(p);
+                }
                 "requires" => {} // file-level; already consumed above
                 other => unreachable!("filtered by the known-tag check above: {other}"),
             }
