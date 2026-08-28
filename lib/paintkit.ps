@@ -2057,6 +2057,11 @@ systemdict /setalpha known /pkalphaok exch def
     pwgrain 0 lt pwgrain 1 gt or { pkwash-grain-must-be-0-to-1 } if
 
     /pwblend pwopts /Blend /Normal pkgetdef def
+    % The executable-value guard has to come *before* the first bare
+    % `pwblend` reference, not after: a name bound to a procedure
+    % auto-executes on bare reference (pkgetdef's own header documents
+    % the trap), so checking the value first would already have run it.
+    /pwblend load xcheck { pkwash-blend-must-not-be-a-procedure } if
     pwblend /Normal ne pwblend /Multiply ne and
         { pkwash-blend-must-be-Normal-or-Multiply } if
 
@@ -2238,6 +2243,10 @@ systemdict /setalpha known /pkalphaok exch def
     /pvx exch def
 
     /pvtone pvopts /Tone [0.965 0.95 0.915] pkgetdef def
+    % Before any bare `pvtone`, and before the type check specifically:
+    % a procedure *is* arraytype, so the type check alone would accept
+    % one -- after having already executed it on the bare reference.
+    /pvtone load xcheck { pkpaper-tone-must-not-be-a-procedure } if
     pvtone type /arraytype ne { pkpaper-tone-must-be-an-array } if
     pvtone length 3 ne { pkpaper-tone-must-have-three-components } if
 
@@ -2258,6 +2267,7 @@ systemdict /setalpha known /pkalphaok exch def
     pvfiber 0 lt pvfiber 1 gt or { pkpaper-fiber-must-be-0-to-1 } if
 
     /pvblend pvopts /Blend /Normal pkgetdef def
+    /pvblend load xcheck { pkpaper-blend-must-not-be-a-procedure } if
     pvblend /Normal ne pvblend /Multiply ne and
         { pkpaper-blend-must-be-Normal-or-Multiply } if
 

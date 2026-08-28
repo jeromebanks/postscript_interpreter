@@ -77,9 +77,27 @@ impl SvgRecorder {
         }
     }
 
-    /// Register the whole clip chain, return the group-open prefix and
-    /// the matching close suffix for one painted element.
-    fn clip_wrappers(&mut self, chain: &Chain) -> (String, String) {
+    /// Register the whole clip chain, return the group-open prefix, the
+    /// matching close suffix, and whatever of `blend_style` the wrappers
+    /// didn't absorb (i.e. all of it when there is no chain, so the
+    /// caller puts it on the painted element itself).
+    ///
+    /// `mix-blend-mode` goes on the *outermost* wrapper rather than on
+    /// the element, and this is load-bearing rather than stylistic. A
+    /// non-`none` `clip-path` establishes a stacking context, so an
+    /// element declaring the blend *inside* the group composites
+    /// against transparent black instead of against the page — i.e.
+    /// renders plain source-over, silently diverging from the raster.
+    /// **Confirmed empirically, not reasoned about**: the same scene
+    /// (a Multiply fill inside a circular clip over a yellow ground)
+    /// exported both ways and rasterized in Chrome gives rgb(51,92,46)
+    /// — exactly pscat's own raster — with the declaration on the
+    /// group, and rgb(51,102,230), the unblended blue, with it on the
+    /// element. That case is reachable by default, not exotic:
+    /// `lib/paintkit.ps`'s `pkwash` paints its edge pooling and its
+    /// granulation inside a `clip`. Opacity stays on the element: it's
+    /// a paint attribute and doesn't interact with isolation.
+    fn clip_wrappers(&mut self, chain: &Chain, blend_style: &str) -> (String, String, String) {
         let mut ids = Vec::new();
         let mut node = chain.clone();
         while let Some(n) = node {
@@ -104,38 +122,37 @@ impl SvgRecorder {
             node = n.parent.clone();
         }
         let mut open = String::new();
-        for id in &ids {
-            let _ = write!(open, "<g clip-path=\"url(#c{id})\">");
+        for (i, id) in ids.iter().enumerate() {
+            // i == 0 is the outermost emitted group, the one that
+            // composites into the page.
+            let style = if i == 0 { blend_style } else { "" };
+            let _ = write!(open, "<g clip-path=\"url(#c{id})\"{style}>");
         }
-        (open, "</g>".repeat(ids.len()))
+        let leftover = if ids.is_empty() { blend_style } else { "" };
+        (open, "</g>".repeat(ids.len()), leftover.to_string())
     }
 
-    /// The `fill-opacity`/`stroke-opacity`/`mix-blend-mode` attributes
-    /// for one painted element (issue #47). Empty for opaque
-    /// source-over, so a program that never touches `setalpha`/
-    /// `setblendmode` exports exactly the SVG it did before.
-    ///
-    /// `mix-blend-mode` blends an element against its backdrop within
-    /// the nearest stacking context. The clip wrappers this exporter
-    /// emits are plain `<g clip-path=…>` with no opacity, filter, or
-    /// `isolation` — none of which SVG treats as creating a stacking
-    /// context — so a blended element still composites against the
-    /// page, matching what the rasterizer did.
-    fn composite_attrs(c: Composite, stroking: bool) -> String {
-        let mut out = String::new();
-        if c.alpha < 1.0 {
-            let _ = write!(
-                out,
-                " {}-opacity=\"{}\"",
-                if stroking { "stroke" } else { "fill" },
-                fmt_f32(c.alpha),
-            );
+    /// The `fill-opacity`/`stroke-opacity` attribute for one painted
+    /// element (issue #47). Empty at full opacity, so a program that
+    /// never touches `setalpha` exports exactly the SVG it did before.
+    /// The blend mode is *not* here — see `clip_wrappers` for where it
+    /// goes and why.
+    fn opacity_attr(c: Composite, stroking: bool) -> String {
+        if c.alpha >= 1.0 {
+            return String::new();
         }
-        match c.blend {
-            BlendMode::Normal => {}
-            BlendMode::Multiply => out.push_str(" style=\"mix-blend-mode:multiply\""),
+        format!(
+            " {}-opacity=\"{}\"",
+            if stroking { "stroke" } else { "fill" },
+            fmt_f32(c.alpha),
+        )
+    }
+
+    fn blend_style(blend: BlendMode) -> &'static str {
+        match blend {
+            BlendMode::Normal => "",
+            BlendMode::Multiply => " style=\"mix-blend-mode:multiply\"",
         }
-        out
     }
 
     fn color(rgb: (f32, f32, f32)) -> String {
@@ -151,13 +168,13 @@ impl SvgRecorder {
         comp: Composite,
         chain: &Chain,
     ) {
-        let (open, close) = self.clip_wrappers(chain);
+        let (open, close, leftover) = self.clip_wrappers(chain, Self::blend_style(comp.blend));
         let _ = write!(
             self.body,
-            "{open}<path d=\"{d}\" fill=\"{}\" fill-rule=\"{}\"{}/>{close}",
+            "{open}<path d=\"{d}\" fill=\"{}\" fill-rule=\"{}\"{}{leftover}/>{close}",
             Self::color(rgb),
             Self::rule_attr(rule),
-            Self::composite_attrs(comp, false),
+            Self::opacity_attr(comp, false),
         );
     }
 
@@ -174,7 +191,7 @@ impl SvgRecorder {
         comp: Composite,
         chain: &Chain,
     ) {
-        let (open, close) = self.clip_wrappers(chain);
+        let (open, close, leftover) = self.clip_wrappers(chain, Self::blend_style(comp.blend));
         let cap = match cap {
             tiny_skia::LineCap::Round => "round",
             tiny_skia::LineCap::Square => "square",
@@ -198,11 +215,11 @@ impl SvgRecorder {
         let _ = write!(
             self.body,
             "{open}<path d=\"{d}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" \
-             stroke-linecap=\"{cap}\" stroke-linejoin=\"{join}\" stroke-miterlimit=\"{}\"{extra}{}/>{close}",
+             stroke-linecap=\"{cap}\" stroke-linejoin=\"{join}\" stroke-miterlimit=\"{}\"{extra}{}{leftover}/>{close}",
             Self::color(rgb),
             fmt_f32(width),
             fmt_f32(miter_limit),
-            Self::composite_attrs(comp, true),
+            Self::opacity_attr(comp, true),
         );
     }
 
@@ -210,7 +227,11 @@ impl SvgRecorder {
     /// W×H source raster, `t` the device transform mapping source
     /// pixel coordinates to device space.
     pub(crate) fn image(&mut self, png: &[u8], w: usize, h: usize, t: [f32; 6], chain: &Chain) {
-        let (open, close) = self.clip_wrappers(chain);
+        // No blend style: `image`/`imagemask` don't go through
+        // `Gfx::paint()` at all, so alpha and blend never reached them
+        // in the raster either (documented gap, issue #47) -- passing
+        // one here would make the SVG *more* translucent than the PNG.
+        let (open, close, _) = self.clip_wrappers(chain, "");
         let _ = write!(
             self.body,
             "{open}<image width=\"{w}\" height=\"{h}\" preserveAspectRatio=\"none\" \
@@ -369,11 +390,11 @@ impl SvgRecorder {
                 );
             }
         }
-        let (open, close) = self.clip_wrappers(chain);
+        let (open, close, leftover) = self.clip_wrappers(chain, Self::blend_style(comp.blend));
         let _ = write!(
             self.body,
-            "{open}<path d=\"{region_d}\" fill=\"url(#g{id})\"{}/>{close}",
-            Self::composite_attrs(comp, false),
+            "{open}<path d=\"{region_d}\" fill=\"url(#g{id})\"{}{leftover}/>{close}",
+            Self::opacity_attr(comp, false),
         );
     }
 

@@ -266,3 +266,60 @@ fn shfill_region_carries_alpha_too() {
         "{svg}"
     );
 }
+
+/// The seam that made the blend mode ride the clip group rather than
+/// the painted element: `lib/paintkit.ps`'s `pkwash` paints its edge
+/// pooling and its granulation *inside* a `clip`, so a clipped blended
+/// mark is the default case, not an exotic one. Declaring
+/// `mix-blend-mode` on the element blends against the clip group's own
+/// isolated backdrop rather than against the page, and renders plain
+/// source-over — verified in Chrome, which gives the unblended blue
+/// rgb(51,102,230) for the element placement and pscat's own
+/// rgb(51,92,46) for this one (see `clip_wrappers`'s doc comment).
+#[test]
+fn a_clipped_blend_declares_the_mode_on_the_group_not_the_element() {
+    let pages = svg_pages(
+        "/Multiply setblendmode
+         newpath 20 20 moveto 80 20 lineto 80 80 lineto 20 80 lineto closepath clip
+         newpath 10 10 moveto 90 10 lineto 50 90 lineto closepath fill",
+    );
+    let svg = &pages[0];
+    assert!(
+        svg.contains("<g clip-path=\"url(#c0)\" style=\"mix-blend-mode:multiply\">"),
+        "{svg}"
+    );
+    // ...and not also on the path inside it, which would double-declare.
+    let after_group = svg
+        .split("style=\"mix-blend-mode:multiply\">")
+        .nth(1)
+        .expect("group opened");
+    assert!(!after_group.contains("mix-blend-mode"), "{svg}");
+}
+
+/// Only the outermost wrapper carries it: an inner group would blend
+/// against its parent group rather than against the page.
+#[test]
+fn nested_clips_declare_the_blend_only_once() {
+    let pages = svg_pages(
+        "/Multiply setblendmode
+         newpath 20 20 moveto 80 20 lineto 80 80 lineto 20 80 lineto closepath clip
+         newpath 30 30 moveto 70 30 lineto 70 70 lineto 30 70 lineto closepath clip
+         newpath 10 10 moveto 90 10 lineto 50 90 lineto closepath fill",
+    );
+    let svg = &pages[0];
+    assert_eq!(svg.matches("mix-blend-mode").count(), 1, "{svg}");
+}
+
+/// Images never went through the paint pipeline, so they must not pick
+/// up a blend mode in SVG that the raster didn't apply.
+#[test]
+fn images_carry_no_blend_mode() {
+    let pages = svg_pages(
+        "/Multiply setblendmode
+         10 10 translate 80 80 scale
+         2 2 8 [2 0 0 -2 0 2] {<00ff ff00>} image",
+    );
+    let svg = &pages[0];
+    assert!(svg.contains("<image"), "{svg}");
+    assert!(!svg.contains("mix-blend-mode"), "{svg}");
+}

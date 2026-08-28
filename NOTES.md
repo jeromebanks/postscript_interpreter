@@ -26,8 +26,15 @@ straight into the pixmap; that gap is documented at the field, at the
 operator, in README, and in the tests rather than quietly left.
 
 Export, both required before merge per the spike's own scope cut:
-`--svg` emits `fill-opacity`/`stroke-opacity` and
-`style="mix-blend-mode:multiply"`; `--pdf` carries an `ExtGState`
+`--svg` emits `fill-opacity`/`stroke-opacity` on the painted element and
+`style="mix-blend-mode:multiply"` on the *outermost clip wrapper* — a
+non-`none` `clip-path` establishes a stacking context, so a blend
+declared inside the group composites against transparent black and
+renders plain source-over. Confirmed in Chrome rather than reasoned
+about: the same clipped-Multiply scene gives pscat's own rgb(51,92,46)
+with the group placement and the unblended rgb(51,102,230) with the
+element placement. `pkwash` paints its bloom and grain inside a `clip`,
+so this is the default path, not an edge case. `--pdf` carries an `ExtGState`
 registry deduped by content with a per-page reference list (the same
 shape the image XObject machinery already had), inline in each page's
 `/Resources`. Both emit *nothing* at the defaults, so a program that

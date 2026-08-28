@@ -2727,6 +2727,7 @@ fn pkwash_rejects_malformed_options() {
         "<< /BloomWidth 0 >>",
         "<< /Grain 2 >>",
         "<< /Blend /Screen >>",
+        "<< /Blend { /Multiply } >>",
         "<< /Pitch 0 >>",
         "<< /Pitch -2 >>",
     ] {
@@ -2764,11 +2765,13 @@ fn pkpaper_lays_a_ground_and_validates() {
     for bad in [
         "<< /Tone [0.9 0.85] >>",
         "<< /Tone 0.9 >>",
+        "<< /Tone { [0.9 0.8 0.7] } >>",
         "<< /Grain 2 >>",
         "<< /Alpha -1 >>",
         "<< /Depth 3 >>",
         "<< /Fiber 2 >>",
         "<< /Blend /Screen >>",
+        "<< /Blend { /Multiply } >>",
     ] {
         let mut it = fresh(60, 60);
         assert!(
@@ -2929,4 +2932,38 @@ fn ghostscript_accepts_the_actual_wash_demo_file() {
         .status()
         .expect("run gs");
     assert!(status.success(), "gs rejected the wash demo");
+}
+
+/// The watercolor section's generator is a Schrage-decomposed minimal
+/// standard LCG specifically so its intermediate products stay inside
+/// 32-bit signed range and the sequence is therefore identical under
+/// Ghostscript, whose integers are 32-bit and whose `mul` silently
+/// promotes to real on overflow. That claim is load-bearing — it's the
+/// stated reason for not using `rand` — so it's pinned to the actual
+/// values here rather than left as a comment. Confirmed against gs
+/// 10.07.1 directly; the two extreme seeds are the wrap-around and
+/// fixed-point cases the seeding step exists to handle.
+#[test]
+fn the_wash_generator_matches_ghostscripts_arithmetic() {
+    let mut it = fresh(60, 60);
+    it.run_str("1000 pwsrand 1 1 8 { pop pwrand 1000000 mul cvi } for")
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let got: Vec<String> = it.operand_stack().iter().map(|o| o.repr()).collect();
+    assert_eq!(
+        got,
+        [
+            "7834", "669325", "360927", "108782", "300004", "178145", "91660", "543581"
+        ]
+    );
+
+    // The most negative representable integer must reduce without
+    // overflowing (`mod` before `abs`, not after), and 0 must not land
+    // on the Lehmer generator's one fixed point.
+    let mut it = fresh(60, 60);
+    it.run_str(
+        "-2147483648 pwsrand pwrand 1000000 mul cvi          0 pwsrand pwrand 1000000 mul cvi",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let got: Vec<String> = it.operand_stack().iter().map(|o| o.repr()).collect();
+    assert_eq!(got, ["23", "7"]);
 }
