@@ -1839,17 +1839,29 @@
 % Scratch prefix pw- (pkwash) and pv- (pkpaper) -- deliberately
 % distinct from pk-/pn-/pb-/pz-/po-, see the file header.
 
+% Whether the operators *exist*, as opposed to whether this library
+% should *use* them -- two questions that look like one until someone
+% sets the `pkalphaok` dial below to false by hand. Then they diverge,
+% and everything that neutralizes ambient compositing has to key off
+% this one: forcing the fallback in pscat is a request to preview what
+% Ghostscript does, and gs cannot have an ambient `setalpha` leaking
+% into the preview because gs has no `setalpha` at all (Codex review,
+% PR #109). Immutable; nothing here ever assigns it again.
+%
 % Written probe-first with `exch def` rather than the more obvious
-% `/pkalphaok systemdict /setalpha known def`: build.rs's tag scanner
-% models the depth-0 stack with a two-slot window, so a `def` whose key
-% sits four objects back reads `/setalpha` as the name being defined
-% (a real limitation of that parser, of the same family as issue #104's,
-% not a quirk of this line). It stays on one line so the tag block below
-% is still directly above the `def`, which the scanner also requires.
+% `/name systemdict /setalpha known def`: build.rs's tag scanner models
+% the depth-0 stack with a two-slot window, so a `def` whose key sits
+% four objects back reads `/setalpha` as the name being defined (a real
+% limitation of that parser, of the same family as issue #104's, not a
+% quirk of this line). It stays on one line so the tag block is still
+% directly above the `def`, which the scanner also requires.
+% @internal
+systemdict /setalpha known /pwhasalpha exch def
+
 % @kind: Dial
-% @summary: True when the running interpreter has pscat's setalpha operator, so pkwash/pkpaper can composite for real; false under plain Ghostscript, where they fall back to flattening each mark against white. Probed once at load; set it false by hand to preview the fallback.
+% @summary: Whether pkwash/pkpaper composite for real. Set at load from whether pscat's setalpha operator exists; false under plain Ghostscript, where they fall back to flattening each mark against white. Set it false by hand to preview that fallback here.
 % @example: pkalphaok { (real alpha) } { (flattened fallback) } ifelse print
-systemdict /setalpha known /pkalphaok exch def
+/pkalphaok pwhasalpha def
 
 % Set once the fallback has announced itself, so a piece with fifty
 % washes prints the diagnostic once rather than fifty times.
@@ -2176,13 +2188,22 @@ systemdict /setalpha known /pkalphaok exch def
 
         currentrgbcolor /pwb exch def /pwg exch def /pwr exch def
         gsave
-        % Set the mode unconditionally, not only when it's /Multiply: a
-        % caller who left `/Multiply setblendmode` in force would
-        % otherwise get a Multiply wash out of `/Blend /Normal`, making
-        % a documented option depend on incoming graphics state (Codex
-        % review, PR #109). Inside the gsave, so the caller's own mode
-        % comes back either way.
-        pkalphaok { pwblend setblendmode } if
+        % Neutralize first, then opt in. Neutralizing keys off
+        % `pwhasalpha` (do the operators exist?) rather than
+        % `pkalphaok` (should this wash use them?), so a forced-fallback
+        % preview is a faithful one: gs has no ambient alpha or blend to
+        % inherit, so neither may this. Then, when the wash really is
+        % compositing, its own /Blend is set unconditionally rather than
+        % only when it's /Multiply -- a caller who left
+        % `/Multiply setblendmode` in force would otherwise get a
+        % Multiply wash out of `/Blend /Normal`, making a documented
+        % option depend on incoming graphics state (Codex review,
+        % PR #109, rounds 2 and 4). All inside the gsave, so the
+        % caller's own state comes back either way.
+        pwhasalpha {
+            1 setalpha /Normal setblendmode
+            pkalphaok { pwblend setblendmode } if
+        } if
 
         % The layers. pwcum tracks the coverage already laid down, which
         % the alpha path ignores (the renderer is doing the real
@@ -2361,8 +2382,11 @@ systemdict /setalpha known /pkalphaok exch def
         % caller had set. /Alpha and /Blend are documented as *grain*
         % options, so inheriting an ambient `setalpha`/`setblendmode`
         % here would make the paper itself translucent with nothing in
-        % the contract saying so (Codex review, PR #109).
-        pkalphaok { 1 setalpha /Normal setblendmode } if
+        % the contract saying so. Keyed off `pwhasalpha`, not
+        % `pkalphaok`, so it also holds in a forced-fallback preview --
+        % see that dial's own header (Codex review, PR #109, rounds 3
+        % and 4).
+        pwhasalpha { 1 setalpha /Normal setblendmode } if
         newpath
         pvx pvy moveto pvw 0 rlineto 0 pvh rlineto pvw neg 0 rlineto
         closepath

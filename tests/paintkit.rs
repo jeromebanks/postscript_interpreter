@@ -3116,3 +3116,37 @@ fn the_bloom_rim_ignores_an_inherited_dash() {
     };
     assert_eq!(rim("[6 6] 0 setdash"), rim(""));
 }
+
+/// Forcing `/pkalphaok false` is a request to preview what Ghostscript
+/// does, and gs has no `setalpha` for an ambient value to leak out of —
+/// so the preview must not inherit one either. Neutralizing therefore
+/// keys off whether the operators *exist* (`pwhasalpha`), not off
+/// whether this library is using them (`pkalphaok`), which are the same
+/// question until someone moves the dial (Codex review, PR #109).
+#[test]
+fn a_forced_fallback_preview_ignores_ambient_compositing() {
+    let fallback = |prelude: &str| {
+        let mut it = fresh(200, 200);
+        it.run_str("/pkalphaok false def").expect("force fallback");
+        it.run_str(&format!(
+            "{prelude} \
+             0 0 200 200 << /Tone [0.9 0.85 0.8] /Grain 0.3 /Seed 2 >> pkpaper \
+             0 0 0 setrgbcolor {BLOB} \
+             << /Alpha 0.3 /Layers 2 /Wet 4 /Bloom 0.5 /Grain 0.3 /Seed 3 >> pkwash"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        pixels(&it)
+    };
+    let plain = fallback("");
+    assert_eq!(fallback("0.2 setalpha"), plain, "ambient alpha leaked in");
+    assert_eq!(
+        fallback("/Multiply setblendmode"),
+        plain,
+        "ambient blend mode leaked in"
+    );
+    assert_eq!(
+        fallback("0.2 setalpha /Multiply setblendmode"),
+        plain,
+        "ambient compositing leaked in"
+    );
+}
