@@ -283,6 +283,13 @@ struct ParsedFile {
 
 fn parse_file(rel: &str, text: &str) -> ParsedFile {
     let lines: Vec<&str> = text.lines().collect();
+    // A line that begins inside an unterminated `(...)` string is
+    // string content, not a comment -- a `% @...`-shaped line in that
+    // position must never be read as a tag (round 5 of Codex review on
+    // PR #97: a multiline string with such a content line was
+    // otherwise misclassified). Mirrors find_top_level_defs's own
+    // per-character string tracking.
+    let starts_in_string = lines_starting_in_string(text);
 
     // Every tag-shaped line must use a known tag word -- an
     // unrecognized `@word` is silently-dropped data otherwise, the
@@ -296,6 +303,9 @@ fn parse_file(rel: &str, text: &str) -> ParsedFile {
     // dropped instead of failing loudly) has something to check against.
     let mut all_tag_lines: BTreeSet<usize> = BTreeSet::new();
     for (i, line) in lines.iter().enumerate() {
+        if starts_in_string[i] {
+            continue;
+        }
         if let Some((word, _)) = tag_line(line) {
             if !KNOWN_TAGS.contains(&word.as_str()) {
                 panic!(
@@ -311,6 +321,9 @@ fn parse_file(rel: &str, text: &str) -> ParsedFile {
 
     let mut requires: Option<String> = None;
     for (i, line) in lines.iter().enumerate() {
+        if starts_in_string[i] {
+            continue;
+        }
         if let Some((word, val)) = tag_line(line)
             && word == "requires"
         {
@@ -347,7 +360,7 @@ fn parse_file(rel: &str, text: &str) -> ParsedFile {
     let mut consumed_tag_lines: BTreeSet<usize> = BTreeSet::new();
 
     for (name, start_line) in defs {
-        let block = collect_tag_block(&lines, start_line);
+        let block = collect_tag_block(&lines, &starts_in_string, start_line);
 
         if block.is_empty() {
             panic!(
@@ -359,6 +372,16 @@ fn parse_file(rel: &str, text: &str) -> ParsedFile {
 
         for (line_idx, ..) in &block {
             consumed_tag_lines.insert(*line_idx);
+        }
+
+        if let Some((line_idx, _, val)) = block.iter().find(|(_, w, _)| w == "internal")
+            && !val.is_empty()
+        {
+            panic!(
+                "build.rs: {rel}:{}: `@internal` takes no value (got `{val}`) -- it's a bare \
+                 marker, not a kind label; use `% @kind:` for public API instead.",
+                line_idx + 1
+            );
         }
 
         let is_internal = block.iter().any(|(_, w, _)| w == "internal");
@@ -558,17 +581,29 @@ fn parse_param(rel: &str, owner: &str, line: usize, val: &str) -> (String, Strin
 /// caught by a third round of Codex review on PR #97). Stops at the
 /// first line that isn't a tag line -- old prose sitting directly
 /// above (no blank-line separator required) is never accidentally
-/// included, since it doesn't start with `@`.
-fn collect_tag_block(lines: &[&str], start_line: usize) -> Vec<(usize, String, String)> {
+/// included, since it doesn't start with `@`. `starts_in_string[i]`
+/// (from [`lines_starting_in_string`]) also stops the walk, since a
+/// line beginning inside an unterminated string is string content,
+/// not a comment, however `% @`-shaped it looks (round 5 of Codex
+/// review on PR #97).
+fn collect_tag_block(
+    lines: &[&str],
+    starts_in_string: &[bool],
+    start_line: usize,
+) -> Vec<(usize, String, String)> {
     let mut block = Vec::new();
     if start_line < 2 {
         return block;
     }
     let mut i = start_line as isize - 2; // 0-indexed line just above start_line
     while i >= 0 {
-        match tag_line(lines[i as usize]) {
+        let idx = i as usize;
+        if starts_in_string[idx] {
+            break;
+        }
+        match tag_line(lines[idx]) {
             Some((word, val)) => {
-                block.push((i as usize, word, val));
+                block.push((idx, word, val));
                 i -= 1;
             }
             None => break,
@@ -576,6 +611,41 @@ fn collect_tag_block(lines: &[&str], start_line: usize) -> Vec<(usize, String, S
     }
     block.reverse();
     block
+}
+
+/// Returns, for each 0-indexed line, whether that line begins already
+/// inside an unterminated `(...)` string carried over from a previous
+/// line -- the same per-character `(`/`)`/backslash-escape/`%`-comment
+/// tracking [`find_top_level_defs`] uses to blank string contents
+/// before scanning for code, kept separate here since the two callers
+/// need different outputs (a depth-0 object stream there, a per-line
+/// boolean here) from the same underlying scan.
+fn lines_starting_in_string(text: &str) -> Vec<bool> {
+    let mut starts_in_string = Vec::new();
+    let mut in_string: i32 = 0;
+    for raw_line in text.lines() {
+        starts_in_string.push(in_string > 0);
+        let mut chars = raw_line.chars();
+        while let Some(c) = chars.next() {
+            if in_string > 0 {
+                if c == '\\' {
+                    chars.next();
+                } else if c == '(' {
+                    in_string += 1;
+                } else if c == ')' {
+                    in_string -= 1;
+                }
+                continue;
+            }
+            if c == '%' {
+                break;
+            }
+            if c == '(' {
+                in_string += 1;
+            }
+        }
+    }
+    starts_in_string
 }
 
 /// One depth-0 PostScript object as `find_top_level_defs` sees it --
