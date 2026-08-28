@@ -1599,10 +1599,10 @@
     /porsingle porstart porend eq def
     /porstate poLoad poroll def
     /porwasoff true def
-    /pori porstart def
+    /poradi porstart def
     {
-        pori porend gt { exit } if
-        poraw pori get dup 0 get /porpx exch def dup 1 get /porpy exch def dup 2 get /porpang exch def 4 get /porsp exch def
+        poradi porend gt { exit } if
+        poraw poradi get dup 0 get /porpx exch def dup 1 get /porpy exch def dup 2 get /porpang exch def 4 get /porsp exch def
         porsingle {
             /porex porpx poroff pkjit add def
             /porey porpy poroff pkjit add def
@@ -1610,7 +1610,7 @@
             /porex porpx porpang 90 add cos poroff mul add def
             /porey porpy porpang 90 add sin poroff mul add def
         } ifelse
-        pori porstart gt {
+        poradi porstart gt {
             porstate {
                 poDropout porsp poWidth div mul poroll { /porstate false def } if
             } {
@@ -1623,7 +1623,7 @@
             porwasoff not { << /Width porw /Jitter poJitter /Pitch poPitch >> pkribbon } if
         } ifelse
         /porwasoff porstate not def
-        /pori pori 1 add def
+        /poradi poradi 1 add def
     } loop
     porstate { << /Width porw /Jitter poJitter /Pitch poPitch >> pkribbon } if
 } def
