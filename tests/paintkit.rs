@@ -2739,19 +2739,58 @@ fn pkwash_rejects_malformed_options() {
     }
 }
 
+/// A pitch fine enough to blow the boundary-sample budget must be
+/// refused *before* anything is walked or drawn — the same doctrine as
+/// pkdry's and pkspray's deposit budgets.
+///
+/// The pitch here is deliberately absurd (0.0001 on a ~1200-point
+/// perimeter is 12 million stops). Counting first and checking after —
+/// the shape this originally had — passes a check at `/Pitch 0.01` and
+/// still hangs at this one, because the counting walk *is* the
+/// unbounded work; the wall-clock bound below is what actually
+/// distinguishes the two implementations (Codex review, PR #109).
 #[test]
-fn pkwash_bounds_its_own_work() {
-    // A pitch fine enough to blow the boundary-sample budget must be
-    // refused before anything is drawn, not discovered halfway
-    // through — the same doctrine as pkdry's and pkspray's deposit
-    // budgets.
+fn pkwash_bounds_its_own_work_before_doing_any_of_it() {
+    let mut it = fresh(400, 400);
+    let started = std::time::Instant::now();
+    let err = it.run_str(
+        "0 0 0 setrgbcolor newpath 200 200 190 0 360 arc closepath \
+         << /Alpha 0.3 /Pitch 0.0001 >> pkwash",
+    );
+    let elapsed = started.elapsed();
+    assert!(err.is_err(), "an unbounded sample count should be refused");
+    assert_eq!(ink_count(&it), 0, "and nothing should have been drawn");
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "the budget must be arithmetic, not discovered by walking: took {elapsed:?}"
+    );
+}
+
+/// The same doctrine for the granulation budget, which used to be
+/// checked after the layers and the bloom had already been painted: a
+/// rejected wash has to leave the canvas untouched, not half-finished.
+#[test]
+fn a_rejected_grain_budget_leaves_the_canvas_clean() {
     let mut it = fresh(400, 400);
     let err = it.run_str(
         "0 0 0 setrgbcolor newpath 200 200 190 0 360 arc closepath \
-         << /Alpha 0.3 /Pitch 0.01 >> pkwash",
+         << /Alpha 0.5 /Wet 4000 /Grain 1 >> pkwash",
     );
-    assert!(err.is_err(), "an unbounded sample count should be refused");
-    assert_eq!(ink_count(&it), 0, "and nothing should have been drawn");
+    assert!(err.is_err(), "an unbounded grain count should be refused");
+    assert_eq!(
+        ink_count(&it),
+        0,
+        "no layer or bloom should have been painted first"
+    );
+}
+
+/// And for `pkpaper`, whose grain check sat after its tone fill.
+#[test]
+fn a_rejected_pkpaper_grain_budget_leaves_the_canvas_clean() {
+    let mut it = fresh(400, 400);
+    let err = it.run_str("0 0 4000 4000 << /Grain 1 /Tone [0.2 0.2 0.2] >> pkpaper");
+    assert!(err.is_err(), "an unbounded grain count should be refused");
+    assert_eq!(ink_count(&it), 0, "the tone fill should not have landed");
 }
 
 #[test]

@@ -2075,13 +2075,26 @@ systemdict /setalpha known /pkalphaok exch def
 
     pwwarn
 
-    % Pass 0: arc length. `sp` sums to each subpath's true length
-    % whatever pitch it was walked at, so a coarse walk measures the
-    % path as exactly as a fine one would, for a fraction of the calls.
+    % Pass 0: arc length and subpath count. `sp` sums to each subpath's
+    % true length whatever pitch it was walked at, so a coarse walk
+    % measures the path as exactly as a fine one would, for a fraction
+    % of the calls.
+    %
+    % Even this pass is O(length/8), so it carries its own abort: a
+    % path long enough to blow that bound would take an unbounded time
+    % just to *measure*, before any of the budgets below could ever
+    % have their say. Raising from inside the callback unwinds the walk
+    % immediately -- walkpath has no early-exit of its own (Codex
+    % review, PR #109).
     /pwlen 0 def
+    /pwsubs 0 def
+    /pwmeas 0 def
     8 {
-        pop /pwsp exch def pop pop pop pop
+        /pwae exch def /pwsp exch def pop pop pop pop
         /pwlen pwlen pwsp add def
+        pwae 1 and 1 eq { /pwsubs pwsubs 1 add def } if
+        /pwmeas pwmeas 1 add def
+        pwmeas 40000 gt { pkwash-path-too-long-for-safety-limit } if
     } walkpath
 
     % A default pitch derived from the path's own size: a wash is a
@@ -2101,14 +2114,23 @@ systemdict /setalpha known /pkalphaok exch def
     /pwpitch load xcheck { pkwash-pitch-must-not-be-a-procedure } if
     pwpitch 0 le { pkwash-pitch-must-be-positive } if
 
-    % Pass 1: count, and bound the work before any of it happens.
+    % The budget is enforced *arithmetically*, from the length already
+    % measured, before any walk at `pwpitch` happens. Counting first and
+    % checking after -- the obvious shape, and what this did originally
+    % -- doesn't bound anything: at `/Pitch 0.0001` the counting walk
+    % itself is the unbounded work, and the check it eventually reaches
+    % never runs (Codex review, PR #109). walkpath emits about
+    % length/pitch stops plus a guaranteed first and last per subpath.
+    pwlen pwpitch div pwsubs 2 mul add 1 add 20000 gt
+        { pkwash-boundary-sample-count-exceeds-safety-limit } if
+
+    % Pass 1: the exact count, now bounded by construction, for the
+    % preallocation below.
     /pwcount 0 def
     pwpitch {
         pop pop pop pop pop pop
         /pwcount pwcount 1 add def
     } walkpath
-    pwcount 20000 gt
-        { pkwash-boundary-sample-count-exceeds-safety-limit } if
 
     % Pass 2: collect into a preallocated array -- count, then fill, the
     % only shape that survives walkpath's cross-subpath stack discipline
@@ -2121,6 +2143,33 @@ systemdict /setalpha known /pkalphaok exch def
     } walkpath
 
     pwcount 0 gt {
+        % The granulation region and its budget are both settled here,
+        % before the first fill. Deriving them from the *source* path's
+        % bbox inflated by the largest displacement a boundary can take
+        % (the wobble is normalized to at most /Wet, the per-layer
+        % offset to at most 0.3 of it) rather than from a built
+        % boundary is what makes that possible -- and it means a
+        % rejected grain count leaves the canvas untouched, instead of
+        % aborting on top of layers and bloom already painted (Codex
+        % review, PR #109). The scatter is clipped to the wash either
+        % way, so a slightly generous region costs nothing but a few
+        % rejected candidate points.
+        pathbbox
+        /pwy1 exch def /pwx1 exch def /pwy0 exch def /pwx0 exch def
+        /pwinf pwwet 1.3 mul 1 add def
+        /pwx0 pwx0 pwinf sub def
+        /pwy0 pwy0 pwinf sub def
+        /pwx1 pwx1 pwinf add def
+        /pwy1 pwy1 pwinf add def
+        % One mark per ~14 square points at /Grain 1 -- dense enough to
+        % read as tooth in the paper rather than as scattered dots.
+        /pwn
+            pwgrain pwx1 pwx0 sub mul pwy1 pwy0 sub mul 14 div
+            truncate cvi
+        def
+        pwn 0 lt { /pwn 0 def } if
+        pwn 120000 gt { pkwash-grain-count-exceeds-safety-limit } if
+
         currentrgbcolor /pwb exch def /pwg exch def /pwr exch def
         gsave
         pkalphaok pwblend /Multiply eq and { /Multiply setblendmode } if
@@ -2166,18 +2215,6 @@ systemdict /setalpha known /pkalphaok exch def
         % fill, not a fill per dot.
         pwgrain 0 gt {
             newpath pwbuild
-            pathbbox
-            /pwy1 exch def /pwx1 exch def /pwy0 exch def /pwx0 exch def
-            % One mark per ~14 square points at /Grain 1 -- dense enough
-            % to read as tooth in the paper rather than as scattered
-            % dots, and bounded below by the budget check right after.
-            /pwn
-                pwgrain pwx1 pwx0 sub mul pwy1 pwy0 sub mul 14 div
-                truncate cvi
-            def
-            pwn 0 lt { /pwn 0 def } if
-            pwn 120000 gt
-                { pkwash-grain-count-exceeds-safety-limit } if
             pwn 0 gt {
                 gsave
                     clip
@@ -2282,6 +2319,16 @@ systemdict /setalpha known /pkalphaok exch def
         /pvtr pvtone 0 get def
         /pvtg pvtone 1 get def
         /pvtb pvtone 2 get def
+
+        % Settled before the tone fill, not after it: a budget checked
+        % once the ground is already down leaves a half-painted canvas
+        % behind on rejection, which is exactly what the pre-draw
+        % validation contract this file states is supposed to prevent
+        % (Codex review, PR #109).
+        /pvn pvgrain pvw pvh mul mul 55 div truncate cvi def
+        pvn 0 lt { /pvn 0 def } if
+        pvn 60000 gt { pkpaper-grain-count-exceeds-safety-limit } if
+
         gsave
         newpath
         pvx pvy moveto pvw 0 rlineto 0 pvh rlineto pvw neg 0 rlineto
@@ -2290,9 +2337,6 @@ systemdict /setalpha known /pkalphaok exch def
         fill
 
         pvgrain 0 gt pvalpha 0 gt and {
-            /pvn pvgrain pvw pvh mul mul 55 div truncate cvi def
-            pvn 60000 gt
-                { pkpaper-grain-count-exceeds-safety-limit } if
             pvn 0 gt {
                 % A grain mark is the tone darkened by /Depth. With real
                 % alpha that's painted at /Alpha over the ground; in the
