@@ -102,7 +102,7 @@ showpage
 /DVColors [ [0.90 0.35 0.30] [0.25 0.55 0.75] [0.30 0.70 0.50] [0.95 0.75 0.30] [0.65 0.45 0.85] [0.35 0.75 0.75] ] def
 /dvcolor { DVColors exch DVColors length mod get aload pop } def
 /barchart { /dbproc exch def /dbgap exch def /dbvals exch def /dbn dbvals length def 0 1 dbn 1 sub { /dbi exch def /dbv dbvals dbi get def /dbx dbi dbn dvcatx def /dbw dbn dbgap dvbarw def /dby0 0 dvmapy def /dby1 dbv dvmapy def dbi dbv dbproc setrgbcolor newpath dbx dbw 2 div sub dby0 moveto dbx dbw 2 div add dby0 lineto dbx dbw 2 div add dby1 lineto dbx dbw 2 div sub dby1 lineto closepath fill } for } def
-/dvaxes { /dvtlen exch def /dvny exch def /dvnx exch def DVFrame begin px pw py ph end /dvph exch def /dvpy exch def /dvpw exch def /dvpx exch def dvpx dvpy moveto dvpx dvpw add dvpy lineto dvpx dvpw add dvpy dvph add lineto dvpx dvpy dvph add lineto closepath 0 1 dvnx { /dvi exch def /dvx dvpx dvpw dvi mul dvnx div add def dvx dvpy moveto dvx dvpy dvtlen sub lineto } for 0 1 dvny { /dvj exch def /dvy dvpy dvph dvj mul dvny div add def dvpx dvy moveto dvpx dvtlen sub dvy lineto } for } def
+/dvaxes { /dvtlen exch def /dvny exch def /dvnx exch def DVFrame begin px pw py ph end /dvph exch def /dvpy exch def /dvpw exch def /dvpx exch def dvpx dvpy moveto dvpx dvpw add dvpy lineto dvpx dvpw add dvpy dvph add lineto dvpx dvpy dvph add lineto closepath 0 1 dvnx 1 sub { /dvi exch def /dvx dvi dvnx dvcatx def dvx dvpy moveto dvx dvpy dvtlen sub lineto } for 0 1 dvny { /dvj exch def /dvy dvpy dvph dvj mul dvny div add def dvpx dvy moveto dvpx dvtlen sub dvy lineto } for } def
 0 24 72 320 468 170 setdvframe
 newpath [8 15 12 19 14 22 17] 0.22 { pop dvcolor } barchart
 0.6 0.66 0.72 setrgbcolor 0.6 setlinewidth newpath 7 4 5 dvaxes stroke
@@ -116,7 +116,7 @@ showpage
 /dvmapy { DVFrame begin y0 sub y1 y0 sub div ph mul py add end } def
 /dvcatx { DVFrame begin exch 0.5 add exch div pw mul px add end } def
 /linechart { /dlvals exch def /dln dlvals length def 0 1 dln 1 sub { /dli exch def /dlv dlvals dli get def /dlx dli dln dvcatx def /dly dlv dvmapy def dli 0 eq { dlx dly moveto } { dlx dly lineto } ifelse } for } def
-/dvaxes { /dvtlen exch def /dvny exch def /dvnx exch def DVFrame begin px pw py ph end /dvph exch def /dvpy exch def /dvpw exch def /dvpx exch def dvpx dvpy moveto dvpx dvpw add dvpy lineto dvpx dvpw add dvpy dvph add lineto dvpx dvpy dvph add lineto closepath 0 1 dvnx { /dvi exch def /dvx dvpx dvpw dvi mul dvnx div add def dvx dvpy moveto dvx dvpy dvtlen sub lineto } for 0 1 dvny { /dvj exch def /dvy dvpy dvph dvj mul dvny div add def dvpx dvy moveto dvpx dvtlen sub dvy lineto } for } def
+/dvaxes { /dvtlen exch def /dvny exch def /dvnx exch def DVFrame begin px pw py ph end /dvph exch def /dvpy exch def /dvpw exch def /dvpx exch def dvpx dvpy moveto dvpx dvpw add dvpy lineto dvpx dvpw add dvpy dvph add lineto dvpx dvpy dvph add lineto closepath 0 1 dvnx 1 sub { /dvi exch def /dvx dvi dvnx dvcatx def dvx dvpy moveto dvx dvpy dvtlen sub lineto } for 0 1 dvny { /dvj exch def /dvy dvpy dvph dvj mul dvny div add def dvpx dvy moveto dvpx dvtlen sub dvy lineto } for } def
 0 18 72 320 468 170 setdvframe
 0.15 0.45 0.75 setrgbcolor 1.4 setlinewidth newpath [4 6 5 9 7 11 9 13 10] linechart stroke
 0.6 0.66 0.72 setrgbcolor 0.6 setlinewidth newpath 9 4 5 dvaxes stroke
@@ -155,7 +155,7 @@ showpage
 /dvmapy { DVFrame begin y0 sub y1 y0 sub div ph mul py add end } def
 /dvcatx { DVFrame begin exch 0.5 add exch div pw mul px add end } def
 /areachart { /davals exch def /dan davals length def 0 1 dan 1 sub { /dai exch def /dav davals dai get def dai dan dvcatx dav dvmapy dai 0 eq { moveto } { lineto } ifelse } for dan 0 gt { dan 1 sub dan dvcatx 0 dvmapy lineto 0 dan dvcatx 0 dvmapy lineto closepath } if } def
-/dvaxes { /dvtlen exch def /dvny exch def /dvnx exch def DVFrame begin px pw py ph end /dvph exch def /dvpy exch def /dvpw exch def /dvpx exch def dvpx dvpy moveto dvpx dvpw add dvpy lineto dvpx dvpw add dvpy dvph add lineto dvpx dvpy dvph add lineto closepath 0 1 dvnx { /dvi exch def /dvx dvpx dvpw dvi mul dvnx div add def dvx dvpy moveto dvx dvpy dvtlen sub lineto } for 0 1 dvny { /dvj exch def /dvy dvpy dvph dvj mul dvny div add def dvpx dvy moveto dvpx dvtlen sub dvy lineto } for } def
+/dvaxes { /dvtlen exch def /dvny exch def /dvnx exch def DVFrame begin px pw py ph end /dvph exch def /dvpy exch def /dvpw exch def /dvpx exch def dvpx dvpy moveto dvpx dvpw add dvpy lineto dvpx dvpw add dvpy dvph add lineto dvpx dvpy dvph add lineto closepath 0 1 dvnx 1 sub { /dvi exch def /dvx dvi dvnx dvcatx def dvx dvpy moveto dvx dvpy dvtlen sub lineto } for 0 1 dvny { /dvj exch def /dvy dvpy dvph dvj mul dvny div add def dvpx dvy moveto dvpx dvtlen sub dvy lineto } for } def
 0 0 12 72 320 468 170 setdvframe
 0.30 0.60 0.45 setrgbcolor newpath [3 7 4 9 6 10 5 8] areachart fill
 0.6 0.66 0.72 setrgbcolor 0.6 setlinewidth newpath 8 4 5 dvaxes stroke
