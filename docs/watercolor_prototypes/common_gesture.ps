@@ -1,0 +1,72 @@
+% common_gesture.ps -- shared scene data for the watercolor
+% architecture spike (issue #46).
+%
+% Three overlapping washes arranged as a Venn diagram: enough overlap
+% area to test real pigment-pooling/transparency, few enough regions
+% (2^3 = 8, one empty) that Approach A's nested-clip technique stays
+% tractable by hand. Every prototype in this directory renders these
+% same three circles and colors so the three-way comparison is
+% apples-to-apples:
+%
+% - approach_a_pure_ps.ps `run`s this file directly.
+% - Approach B has no PostScript source (it's a Rust-only prototype,
+%   deliberately not wired to any operator -- see WATERCOLOR.md); its
+%   test in src/gfx.rs hardcodes the same Circ1/Circ2/Circ3/Color1-3
+%   numbers below in a comment noting the mirror. There's no shared
+%   build between Rust and PostScript here, so the numbers are
+%   transcribed by hand, not `run`.
+% - Approach C post-processes Approach A's rendered PNG, so it
+%   inherits the same scene for free.
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+
+% [cx cy r], in the 620x620 page approach_a_pure_ps.ps renders at.
+/Circ1 [ 260 380 150 ] def   % warm yellow wash
+/Circ2 [ 380 380 150 ] def   % crimson wash
+/Circ3 [ 320 280 150 ] def   % ultramarine wash
+
+/Color1 [ 0.95 0.85 0.25 ] def
+/Color2 [ 0.85 0.20 0.25 ] def
+/Color3 [ 0.15 0.35 0.75 ] def
+
+% Darker/desaturated variants used for Approach A's pkribbon brush
+% edges -- not derived from Color1-3 by any formula, just chosen to
+% read as "wet ink line" against the wash beneath it.
+/Edge1 [ 0.75 0.65 0.10 ] def
+/Edge2 [ 0.65 0.05 0.10 ] def
+/Edge3 [ 0.05 0.15 0.55 ] def
+
+% [cx cy r] circpath -   builds a closed circular current path.
+/circpath {
+    aload pop
+    /circr exch def /circy exch def /circx exch def
+    newpath
+    circx circy circr 0 360 arc
+    closepath
+} def
+
+% [r g b] setcolor -   convenience for the color arrays above.
+/setcolor { aload pop setrgbcolor } def
+
+% arrA arrB mix2 arrOut -   naive element-wise average. Not a pigment
+% model (real subtractive mixing needs at least a Kubelka-Munk-style
+% reflectance blend) -- documented in WATERCOLOR.md as Approach A's
+% honest limitation: this is the best two opaque colors can be made to
+% look "mixed" without real compositing math, chosen by hand once and
+% baked in, not computed by the renderer the way Approach B's alpha
+% blend is.
+/mix2 {
+    aload pop /b3 exch def /b2 exch def /b1 exch def
+    aload pop /a3 exch def /a2 exch def /a1 exch def
+    [ a1 b1 add 2 div  a2 b2 add 2 div  a3 b3 add 2 div ]
+} def
+
+/Color12 Color1 Color2 mix2 def
+/Color13 Color1 Color3 mix2 def
+/Color23 Color2 Color3 mix2 def
+/Color123 [
+    Color1 0 get Color2 0 get add Color3 0 get add 3 div
+    Color1 1 get Color2 1 get add Color3 1 get add 3 div
+    Color1 2 get Color2 2 get add Color3 2 get add 3 div
+] def

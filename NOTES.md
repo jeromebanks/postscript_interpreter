@@ -3,6 +3,142 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Mochi in Denim Blue — pkoil gallery portrait (issue #100, 2026-08-27)
+
+Closes the gallery deliverable deferred from issue #45 with a
+reference-based oil portrait rather than another parameter specimen.
+`gallery/mochi_denim_blue.ps` builds a golden Pomeranian from broad,
+overlapping `pkoil` planes, then uses narrower ridges for coat direction,
+`pkdry` for broken fan-brush contour edges, and crisp conventional fills
+only at the eyes and nose where likeness needs focus. The denim-blue
+ground echoes the source photograph but turns its folds into cross-woven
+canvas strokes. Seed 27 fixes every paint deposition.
+
+The exact 3000×4000 source photograph is checked in at
+`gallery/references/mochi.jpg`; `gallery/README.md` and the Pages gallery
+compare it explicitly with the interpretation, naming both the preserved
+identity anchors and the deliberate simplifications. The 1440×1800
+supersampled still is committed at `gallery/renders/mochi_denim_blue.png`,
+registered with all three `gallery/show.sh` arrays, and copied to Pages by
+the existing render wildcard. `scripts/build_site.sh` now also publishes
+gallery reference assets under `assets/references/`; the portrait remains
+out of the wasm playground because `paintkit.ps` is a filesystem-loaded
+dependency, not a self-contained program.
+
+Deliberately deferred: no attempt to trace the photograph, synthesize
+individual hairs, or claim physical oil/pigment simulation. This is a
+stylized vector impasto study whose recognizability comes from selected
+proportions, markings, and focal detail.
+
+## Reducing PS-library-only coupling to Rust/CI/Ghostscript (issue #92, 2026-08-25)
+
+Closes issue #92: a time-boxed architecture spike into the three
+Rust/CI/Ghostscript coupling points a new `lib/*.ps` primitive touches
+today, recorded as a decision document, `docs/PS_LIBRARY_COUPLING.md`.
+Same shape as #46's spike: recommends architectures for three
+follow-up implementation issues (a doc-comment-driven capabilities
+catalog, a PS-native `%%SelfTest`/`--selftest` verification path, and
+CI diff-shape detection), implements none of them.
+
+The most consequential finding reverses the spike's own first-pass
+assumption: `ci.yml` has no explicit Ghostscript install step, which
+first looked like proof `gs`-dependent checks silently skip on CI.
+Checking real CI logs (`gh run view --log` on PR #86) showed the
+opposite -- macOS GHA runner images ship `gs` preinstalled, and every
+`ghostscript_accepts_*`/`golden`/`corpus` test genuinely runs on every
+PR today. Caught before it was written down as a headline claim, not
+after.
+
+Classified all 18 real defects found across all seven rounds of Codex
+review on PR #76 (issue #41, `pkribbon` -- read in full via `gh pr
+view 76 --comments`, not just round 1) against what would actually
+catch each one: 10 of 18 need no new interpreter work at all
+(PostScript's existing `stopped`/`errordict`, or `--lint`'s existing
+blank-page heuristic), verified directly by running a `stopped`-wrapped
+malformed-input call against real `lib/paintkit.ps` on a locally built
+release binary and confirming it discriminates (catches the bad call,
+doesn't fire on a well-formed one); a further one closes by
+construction once the capabilities-catalog follow-up lands. Five need
+a new one-time pixel-sample operator, scoped as a follow-up's "Phase
+B." The remaining two stay uncovered by anything proposed -- one
+(`pathforall`'s missing implicit moveto after `closepath`) a genuine
+interpreter bug only Rust/gs-parity testing caught, direct evidence
+for keeping `tests/golden.rs`/`tests/corpus.rs` exactly as-is per the
+issue's own acceptance criteria; the other (a demo missing `showpage`)
+a real but low-severity gap whose cheap automated fix turned out to
+false-positive on two already-committed demos, caught in a second
+round of cross-model review on this very PR and withdrawn rather than
+shipped.
+
+Worked example: `pkoil` (issue #45, PR #86)'s real diff was 467 lines,
+335 PS / 132 Rust (82 in `src/capabilities.rs`, 50 in
+`tests/paintkit.rs`) against a ≈106s CI job dominated by `cargo test`
+(≈58s) more than `clippy`+`fmt` (≈7s combined, measured from the same
+run's per-step timings) -- the 132 Rust lines are what the three
+follow-ups target; the PS side's core logic doesn't shrink, but isn't
+perfectly flat either, since the projected mechanism adds new
+`%%Summary:`/`%%Requires:`/`%%Example:`/`%%SelfTest` content (a real,
+unsized-here cost the write-up initially left out, caught in review --
+see `docs/PS_LIBRARY_COUPLING.md`'s worked-example section for the
+detail rather than trusting this summary, which has itself needed
+correcting more than once).
+
+## Watercolor rendering architecture spike (issue #46, 2026-08-25)
+
+Closes issue #46: a time-boxed architecture spike comparing three ways
+to get watercolor-like transparency, pooling, and bloom out of pscat,
+recorded as a decision document, `docs/WATERCOLOR.md`, with matched
+rendered samples of the same three-circle Venn scene
+(`docs/watercolor_prototypes/common_gesture.ps`) under each approach.
+
+Recommends Approach B -- a small renderer-level alpha extension -- as
+the primary mechanism for #47, with Approach A's technique (nested
+`clip` intersection for exact overlap-region recoloring, no boolean-
+geometry library needed) kept available as a portable fallback for
+small hand-composed scenes, and Approach C (an external raster post-
+pass) explicitly not built as a standalone pipeline. The write-up
+covers all six of the issue's "questions to settle" and sketches the
+public contract #47 should build against (an alpha field on
+`GraphicsState`, SVG `fill-opacity`/PDF `ExtGState ca`/`CA` export,
+at least `/Multiply` as a blend mode) -- posted to #47 as a comment
+per this issue's own acceptance criterion.
+
+Two findings only showed up by actually running the prototypes, not
+by reasoning about the architecture in the abstract: gs 10.07.1 has no
+PostScript-callable alpha operator at all (`.setfillconstantalpha`,
+`.setopacityalpha`, `.setstrokeconstantalpha`, checked directly and
+recorded in `docs/watercolor_prototypes/gs_alpha_check.ps`) -- a
+watercolor medium built on Approach B would be the first paintkit-
+adjacent feature that doesn't render under plain `gs file.ps`, unlike
+every paintkit preset so far (#41-#44's `ghostscript_accepts_*`
+tests). And a raster post-pass (Approach C) over an *already-opaque*
+render cannot recover pigment-pooling -- there was never any
+transparency information in the flattened PNG for a filter to work
+with -- which pushes a real Option-C implementation toward exporting
+separate alpha-bearing layers for external compositing, a materially
+bigger undertaking than "pipe the render through a blur."
+
+Approach B's prototype (`gfx::tests::watercolor_prototype_b_alpha_sample`
+in `src/gfx.rs`) deliberately does not add a public operator: #47's
+own acceptance criteria assign the public contract to #47, and a
+PNG-only `setalpha` merged now would make `--svg`/`--pdf` silently
+diverge the moment a program used it (the same bug class NOTES.md
+already records fixing for stroke/PDF under issue #8). Instead the new
+`alpha: f32` field on `GraphicsState` is `pub(crate)` -- reachable
+from nowhere in the PostScript language, snapshotted by `gsave`/
+`grestore` for free like every other paint attribute since it lives on
+the state struct they already clone -- and exercised only by a single
+`#[ignore]`d unit test that drives `Gfx` directly and writes
+`docs/watercolor_prototypes/approach_b_alpha_ext.png` on demand
+(`cargo test --release watercolor_prototype_b_alpha_sample --
+--ignored`). `cargo test` skips it by default; `cargo build`/`clippy`/
+`fmt` cover it like any other code in the crate.
+
+Deliberately out of scope, per the issue's own scope note: no fluid/
+diffusion PDE simulation, no watercolor library or preset (#47's
+actual implementation work), no site/gallery wiring, no SVG/PDF alpha
+export (sketched as a #47 requirement, not built here).
+
 ## A spray-paint deposition brush (issue #44, 2026-08-24)
 
 Closes issue #44, the fourth of the painterly-brush series (#42-#53):

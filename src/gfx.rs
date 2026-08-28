@@ -346,6 +346,16 @@ impl ColorSpace {
 pub struct GraphicsState {
     pub ctm: Transform,
     pub rgb: (f32, f32, f32),
+    /// Fill/stroke alpha, 0.0..1.0. **Not a public operator** -- this
+    /// is issue #46's watercolor-spike prototype for Approach B
+    /// ("small renderer-level extension for opacity/blending"),
+    /// exercised only by `tests::watercolor_prototype_b_alpha_sample`
+    /// below. It exists to produce a real rendered sample for the
+    /// spike's decision record, not to ship as a language feature --
+    /// #47 owns the actual public contract (which also needs SVG/PDF
+    /// alpha export; this prototype is PNG-only). See
+    /// `docs/WATERCOLOR.md`.
+    pub(crate) alpha: f32,
     /// Set implicitly by the color operators and explicitly by
     /// setcolorspace, per the PLRM; the Level 2 image dict form and
     /// setcolor read it.
@@ -446,6 +456,7 @@ impl Gfx {
             state: GraphicsState {
                 ctm: base_ctm,
                 rgb: (0.0, 0.0, 0.0),
+                alpha: 1.0,
                 colorspace: ColorSpace::Gray,
                 line_width: 1.0,
                 flatness: 1.0,
@@ -664,7 +675,12 @@ impl Gfx {
     fn paint(&self) -> Paint<'static> {
         let mut paint = Paint::default();
         let (r, g, b) = self.state.rgb;
-        paint.set_color_rgba8(to_u8(r), to_u8(g), to_u8(b), 255);
+        // `alpha` defaults to 1.0 (255) for every ordinary render --
+        // this only diverges from opaque when the #46 spike test below
+        // pokes `state_mut().alpha` directly, since there's no
+        // PostScript operator that can reach it (see the field's doc
+        // comment on GraphicsState).
+        paint.set_color_rgba8(to_u8(r), to_u8(g), to_u8(b), to_u8(self.state.alpha));
         paint.anti_alias = true;
         paint
     }
@@ -1232,6 +1248,7 @@ impl Gfx {
         self.state = GraphicsState {
             ctm: self.base_ctm,
             rgb: (0.0, 0.0, 0.0),
+            alpha: 1.0,
             colorspace: ColorSpace::Gray,
             line_width: 1.0,
             flatness: 1.0,
@@ -1562,4 +1579,59 @@ fn clamp01(v: f64) -> f32 {
 
 fn to_u8(v: f32) -> u8 {
     (v * 255.0).round() as u8
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Issue #46's watercolor architecture spike, Approach B: the
+    /// same three-circle Venn scene as
+    /// `docs/watercolor_prototypes/common_gesture.ps`'s Circ1/Circ2/
+    /// Circ3 and Color1/Color2/Color3 (transcribed by hand below --
+    /// there's no shared build between Rust and PostScript here),
+    /// rendered with real alpha compositing instead of Approach A's
+    /// hand-averaged nested-clip blend colors. `#[ignore]`d because it
+    /// writes a file as a side effect and exists to regenerate
+    /// `docs/watercolor_prototypes/approach_b_alpha_ext.png` on
+    /// demand, not to run under ordinary `cargo test`:
+    ///
+    ///   cargo test --release watercolor_prototype_b_alpha_sample -- --ignored
+    #[test]
+    #[ignore = "writes docs/watercolor_prototypes/approach_b_alpha_ext.png; issue #46 spike prototype, not a regression test"]
+    fn watercolor_prototype_b_alpha_sample() {
+        let mut gfx = Gfx::new(620, 620).expect("620x620 pixmap");
+
+        // (cx, cy, r, r, g, b) -- mirrors common_gesture.ps's
+        // Circ1/Circ2/Circ3 and Color1/Color2/Color3.
+        let circles: [[f64; 6]; 3] = [
+            [260.0, 380.0, 150.0, 0.95, 0.85, 0.25],
+            [380.0, 380.0, 150.0, 0.85, 0.20, 0.25],
+            [320.0, 280.0, 150.0, 0.15, 0.35, 0.75],
+        ];
+
+        gfx.set_rgb(1.0, 1.0, 1.0);
+        gfx.moveto(0.0, 0.0);
+        gfx.lineto(620.0, 0.0).unwrap();
+        gfx.lineto(620.0, 620.0).unwrap();
+        gfx.lineto(0.0, 620.0).unwrap();
+        gfx.closepath();
+        gfx.fill(FillRule::Winding);
+
+        for &[cx, cy, r, cr, cg, cb] in &circles {
+            gfx.newpath();
+            gfx.arc(cx, cy, r, 0.0, 360.0, true).expect("arc");
+            gfx.closepath();
+            gfx.set_rgb(cr, cg, cb);
+            // Real alpha compositing -- tiny-skia (already a
+            // dependency) does the overlap math here, unlike Approach
+            // A's hand-averaged blend colors.
+            gfx.state_mut().alpha = 0.55;
+            gfx.fill(FillRule::Winding);
+        }
+
+        gfx.pixmap
+            .save_png("docs/watercolor_prototypes/approach_b_alpha_ext.png")
+            .expect("save prototype png");
+    }
 }

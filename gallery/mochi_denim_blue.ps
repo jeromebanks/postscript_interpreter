@@ -1,0 +1,287 @@
+%!PS-Adobe-3.0
+%%Title: Mochi in Denim Blue — an oil study
+%%Creator: Codex with pscat paintkit
+%%BoundingBox: 0 0 720 900
+%%EndComments
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+27 srand
+
+% A close-cropped oil study after Mochi's reference photograph. Broad
+% Reference: gallery/references/mochi.jpg (the original 3000x4000 photo).
+% pkoil marks establish the canvas, skull, and coat before the features;
+% smaller loaded marks pull fur across those masses. Crispness is saved
+% for the eyes and nose, as it would be in an alla-prima student portrait.
+
+% --- palette ---------------------------------------------------------------
+/denim0 [0.035 0.105 0.155] def
+/denim1 [0.055 0.19  0.28 ] def
+/denim2 [0.085 0.29  0.40 ] def
+/denim3 [0.16  0.39  0.50 ] def
+/umber  [0.20  0.115 0.065] def
+/sienna [0.42  0.235 0.105] def
+/russet [0.61  0.335 0.135] def
+/ochre  [0.79  0.505 0.205] def
+/honey  [0.90  0.655 0.335] def
+/gold   [0.95  0.765 0.47 ] def
+/cream  [0.965 0.885 0.69 ] def
+/light  [1.0   0.965 0.82 ] def
+/ink    [0.025 0.028 0.027] def
+/iris   [0.105 0.095 0.075] def
+/steel  [0.31  0.48  0.55 ] def
+/rose   [0.50  0.22  0.19 ] def
+
+% --- paint helpers ---------------------------------------------------------
+% The caller constructs a centerline path, then supplies color/width/ridges.
+/oilpaint { % color width ridges -> -
+    /opr exch def /opw exch def /opc exch def
+    gsave
+    opc aload pop setrgbcolor
+    << /Width opw /Ridges opr
+       /RidgeWidth opw 0.14 mul /RidgeSpread 0.82
+       /WidthJitter 0.38 /Load 0.91 /Dropout 0.11
+       /ColorJitter 0.07 /EdgePickup 0.16
+       /Highlight 0.13 /Shadow 0.11 /Jitter 0.55 >> pkoil
+    grestore
+} def
+
+/softoil { % color width -> -
+    /sow exch def /soc exch def
+    gsave
+    soc aload pop setrgbcolor
+    << /Width sow /Ridges 5
+       /RidgeWidth sow 0.22 mul /RidgeSpread 0.68
+       /WidthJitter 0.24 /Load 0.96 /Dropout 0.05
+       /ColorJitter 0.035 /EdgePickup 0.08
+       /Highlight 0.08 /Shadow 0.08 /Jitter 0.35 >> pkoil
+    grestore
+} def
+
+/drymark { % color width bristles -> -
+    /dmb exch def /dmw exch def /dmc exch def
+    gsave
+    dmc aload pop setrgbcolor
+    << /Width dmw /Bristles dmb /BristleWidth dmw 0.075 mul
+       /Spread 0.94 /Load 0.70 /Dropout 0.31
+       /ColorJitter 0.06 /Jitter 0.45 /Pitch 3 >> pkdry
+    grestore
+} def
+
+/efill { % cx cy rx ry color -> -
+    /ec exch def /ery exch def /erx exch def /ey exch def /ex exch def
+    gsave ec aload pop setrgbcolor ex ey translate erx ery scale
+    newpath 0 0 1 0 360 arc closepath fill grestore
+} def
+
+/estroke { % cx cy rx ry color width -> -
+    /ew exch def /ec exch def /ery exch def /erx exch def /ey exch def /ex exch def
+    gsave ec aload pop setrgbcolor ew setlinewidth ex ey translate erx ery scale
+    newpath 0 0 1 0 360 arc closepath stroke grestore
+} def
+
+% Whole sitter silhouette. The ears are separate closed subpaths behind a
+% round, fox-like Pomeranian head, letting one clip hold all the wet paint.
+/portraitpath {
+    newpath
+    155 602 moveto 112 720 116 834 212 794 curveto
+    258 774 275 722 281 665 curveto closepath
+    439 665 moveto 445 722 462 774 508 794 curveto
+    604 834 608 720 565 602 curveto closepath
+    360 748 moveto
+    506 750 611 646 606 505 curveto
+    602 382 552 263 463 210 curveto
+    411 178 309 178 257 210 curveto
+    168 263 118 382 114 505 curveto
+    109 646 214 750 360 748 curveto closepath
+} def
+
+% --- the primed canvas: denim ground with visible weave and scraped light --
+denim0 aload pop setrgbcolor clippath fill
+
+0 1 12 {
+    /ci exch def
+    newpath -80 ci 78 mul 28 add moveto
+    220 ci 78 mul 12 add 510 ci 78 mul 58 add 800 ci 78 mul 20 add curveto
+    ci 3 mod 0 eq { denim2 } { ci 3 mod 1 eq { denim1 } { denim3 } ifelse } ifelse
+    82 5 oilpaint
+} for
+
+% Cross-weave catches: incomplete dry strokes keep the ground canvas-like.
+0 1 16 {
+    /wi exch def
+    newpath wi 52 mul -70 add -30 moveto
+    wi 52 mul 130 add 300 lineto
+    wi 52 mul 20 sub 620 lineto
+    denim3 10 10 drymark
+} for
+
+% A loose pale halo, like turpentine-thinned underpaint left around the head.
+newpath 80 510 moveto 180 760 540 800 654 520 curveto
+denim3 108 softoil
+newpath 90 430 moveto 165 240 548 220 636 430 curveto
+denim1 94 softoil
+
+% --- block in the sitter, wet-on-wet inside one silhouette clip ------------
+gsave
+portraitpath clip
+ochre aload pop setrgbcolor clippath fill
+
+% Ears and crown: broad planes, deliberately not airbrushed.
+newpath 132 772 moveto 182 826 225 790 270 690 curveto umber 84 7 oilpaint
+newpath 588 772 moveto 538 826 495 790 450 690 curveto umber 84 7 oilpaint
+newpath 145 760 moveto 185 785 215 758 245 688 curveto sienna 48 6 oilpaint
+newpath 575 760 moveto 535 785 505 758 475 688 curveto sienna 48 6 oilpaint
+
+% Forehead: strokes converge toward the bridge, matching the fur grain.
+newpath 205 692 moveto 250 646 300 590 332 510 curveto russet 78 9 oilpaint
+newpath 282 735 moveto 310 660 338 590 352 500 curveto honey 76 9 oilpaint
+newpath 360 746 moveto 365 666 366 582 360 492 curveto gold 70 9 oilpaint
+newpath 438 735 moveto 410 660 382 590 368 500 curveto honey 76 9 oilpaint
+newpath 515 692 moveto 470 646 420 590 388 510 curveto russet 78 9 oilpaint
+
+% Temple and cheek masses. Their diagonals make the face feel brushed around
+% the skull rather than assembled from flat geometric pieces.
+newpath 135 600 moveto 190 585 228 530 256 464 curveto sienna 82 8 oilpaint
+newpath 585 600 moveto 530 585 492 530 464 464 curveto sienna 82 8 oilpaint
+newpath 132 500 moveto 184 468 218 412 250 338 curveto ochre 92 9 oilpaint
+newpath 588 500 moveto 536 468 502 412 470 338 curveto russet 92 9 oilpaint
+newpath 153 385 moveto 218 355 258 294 292 228 curveto honey 86 8 oilpaint
+newpath 567 385 moveto 502 355 462 294 428 228 curveto ochre 86 8 oilpaint
+
+% Central bridge and muzzle underpainting.
+newpath 340 620 moveto 350 540 352 445 354 350 curveto gold 58 8 oilpaint
+newpath 380 620 moveto 370 540 368 445 366 350 curveto honey 52 7 oilpaint
+newpath 235 350 moveto 285 322 322 298 350 272 curveto cream 88 7 oilpaint
+newpath 485 350 moveto 435 322 398 298 370 272 curveto cream 88 7 oilpaint
+newpath 272 245 moveto 320 216 400 214 448 246 curveto light 58 7 oilpaint
+
+% Scumbled coat variation: narrow deposits ride over the broad wet blocks.
+0 1 22 {
+    /fi exch def
+    /fx 150 fi 19 mul add def
+    /fy 665 fi 7 mod 25 mul sub def
+    /fang fx 360 sub 0.18 mul 270 add def
+    /flen 92 fi 5 mod 13 mul add def
+    newpath fx fy moveto
+    fx flen fang cos mul add fy flen fang sin mul add lineto
+    fi 4 mod 0 eq { cream } { fi 4 mod 1 eq { gold } { fi 4 mod 2 eq { honey } { russet } ifelse } ifelse } ifelse
+    17 7 drymark
+} for
+
+grestore
+
+% --- broken silhouette edges -----------------------------------------------
+% Dry, curved passes kiss the contour as a painter's loaded fan brush would.
+% They read as one furry boundary rather than a row of isolated hair symbols.
+newpath 136 690 moveto 146 758 177 803 221 778 curveto
+honey 18 20 drymark
+newpath 584 690 moveto 574 758 543 803 499 778 curveto
+russet 18 20 drymark
+newpath 120 572 moveto 112 468 128 355 194 270 curveto
+gold 19 22 drymark
+newpath 600 572 moveto 608 468 592 355 526 270 curveto
+honey 19 22 drymark
+newpath 153 350 moveto 178 300 215 248 264 215 curveto
+cream 15 18 drymark
+newpath 567 350 moveto 542 300 505 248 456 215 curveto
+gold 15 18 drymark
+
+% --- eye sockets, painted as curved dark marks before the glossy eyes -------
+newpath 205 518 moveto 244 552 304 548 329 505 curveto umber 34 7 oilpaint
+newpath 391 505 moveto 416 548 476 552 515 518 curveto umber 34 7 oilpaint
+newpath 205 475 moveto 244 444 302 447 325 485 curveto sienna 24 6 oilpaint
+newpath 395 485 moveto 418 447 476 444 515 475 curveto sienna 24 6 oilpaint
+
+% Large, slightly asymmetric Pomeranian eyes from the reference.
+267 492 61 66 umber efill
+267 492 49 57 ink efill
+453 492 58 63 umber efill
+453 492 47 54 ink efill
+
+% Cool reflected denim in the lower iris, then warm inner glints.
+263 478 31 29 [0.055 0.105 0.12] efill
+457 478 29 27 [0.045 0.085 0.095] efill
+252 510 21 25 iris efill
+442 510 20 24 iris efill
+
+% Window reflections: clustered, irregular highlights make the gaze alive.
+247 520 12 15 light efill
+265 528 6 8 [0.74 0.90 0.94] efill
+236 503 4 7 [0.42 0.72 0.79] efill
+435 518 11 14 light efill
+451 526 5 7 [0.70 0.88 0.92] efill
+425 501 4 6 [0.38 0.66 0.73] efill
+282 466 5 4 [0.48 0.39 0.29] efill
+468 467 5 4 [0.48 0.39 0.29] efill
+
+% A few loaded lid accents integrate the clean eye shapes into the paint.
+newpath 220 536 moveto 256 560 304 551 321 516 curveto umber 5.5 4 oilpaint
+newpath 399 516 moveto 416 551 464 560 500 536 curveto umber 5.5 4 oilpaint
+
+% --- muzzle: radiating cream bristles around a compact charcoal nose --------
+newpath 250 382 moveto 286 356 320 342 350 330 curveto cream 54 7 oilpaint
+newpath 470 382 moveto 434 356 400 342 370 330 curveto cream 54 7 oilpaint
+newpath 274 318 moveto 310 300 337 292 356 288 curveto light 38 6 oilpaint
+newpath 446 318 moveto 410 300 383 292 364 288 curveto cream 38 6 oilpaint
+
+% Nose silhouette: broad wedge with softened lower corners.
+gsave
+ink aload pop setrgbcolor
+newpath 310 357 moveto
+330 372 390 372 410 357 curveto
+412 330 394 304 365 296 curveto
+336 304 308 329 310 357 curveto closepath fill
+grestore
+
+% Nose impasto: blue-grey top plane and a warm reflected lower plane.
+newpath 326 351 moveto 350 361 378 360 396 348 curveto steel 13 5 oilpaint
+newpath 334 317 moveto 350 308 378 309 391 320 curveto [0.11 0.095 0.085] 10 5 oilpaint
+339 351 8 6 [0.78 0.88 0.88] efill
+328 341 3 3 light efill
+
+% Philtrum and quiet closed mouth: Mochi is alert, not cartoon-smiling.
+newpath 360 298 moveto 360 282 359 270 357 258 curveto ink 5 4 oilpaint
+newpath 357 258 moveto 341 251 326 252 314 258 curveto ink 4.2 4 oilpaint
+newpath 357 258 moveto 373 251 389 252 403 259 curveto ink 4.2 4 oilpaint
+newpath 337 249 moveto 354 242 372 243 386 250 curveto rose 3.2 4 oilpaint
+
+% Chin light, broken into paint rather than a geometric bib.
+newpath 280 235 moveto 324 212 396 210 442 236 curveto light 30 7 oilpaint
+newpath 305 215 moveto 350 195 388 197 416 215 curveto cream 22 6 oilpaint
+
+% --- whiskers: restrained pale ribbons over the wet muzzle ------------------
+/whisk { % x y ang len -> -
+    /wl exch def /wa exch def /wy exch def /wx exch def
+    /wmx wx wl 0.55 mul wa cos mul add def
+    /wmy wy wl 0.55 mul wa sin mul add 4 add def
+    /wex wx wl wa cos mul add def
+    /wey wy wl wa sin mul add def
+    gsave
+    [0.87 0.84 0.74] aload pop setrgbcolor
+    newpath wx wy moveto
+    wmx wmy wmx wmy wex wey curveto
+    << /Width 1.25 /Ridges 2 /RidgeWidth 0.5 /Load 0.92
+       /Dropout 0.05 /ColorJitter 0.03 /Highlight 0.08 /Shadow 0.05 >> pkoil
+    grestore
+} def
+
+0 1 3 {
+    /q exch def
+    314 q 4 mul sub 306 q 9 mul sub 192 q 7 mul add 112 q 9 mul add whisk
+    406 q 4 mul add 306 q 9 mul sub -12 q 7 mul sub 112 q 9 mul add whisk
+} for
+
+% Tiny tear catches from the photograph.
+newpath 289 431 moveto 285 421 lineto [0.72 0.83 0.82] 2.2 2 oilpaint
+newpath 431 431 moveto 435 422 lineto [0.72 0.83 0.82] 2.0 2 oilpaint
+
+% --- painted signature ------------------------------------------------------
+light 0.84 shade setrgbcolor
+/Palatino-Italic findfont 16 scalefont setfont
+(MOCHI — denim blue study) 474 34 moveto show
+newpath 468 27 moveto 685 27 lineto
+[0.72 0.60 0.38] 2.4 3 oilpaint
+
+showpage
+%%EOF

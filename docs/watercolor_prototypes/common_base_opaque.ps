@@ -1,0 +1,25 @@
+%!PS-Adobe-3.0
+%%Title: Watercolor spike -- bare opaque base for Approach C (issue #46)
+%%BoundingBox: 0 0 620 620
+%%EndComments
+
+% The plainest possible render of the shared scene: three flat,
+% opaque, unblended circles, no grain, no brush edges. Approach C
+% starts from this (not from Approach A's already-finished render)
+% because the point of the raster post-pass is to show what it alone
+% adds -- diffusion-like bleed and paper grain -- on top of the
+% cheapest possible vector base, the same way Approach B's alpha test
+% isolates just the compositing mechanism rather than reusing
+% Approach A's finishing touches.
+
+(lib/artkit.ps) run
+(docs/watercolor_prototypes/common_gesture.ps) run
+
+1 1 1 setrgbcolor
+0 0 620 620 rectfill
+
+Circ1 circpath Color1 setcolor fill
+Circ2 circpath Color2 setcolor fill
+Circ3 circpath Color3 setcolor fill
+
+showpage
