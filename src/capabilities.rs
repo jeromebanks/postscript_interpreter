@@ -19,21 +19,38 @@
 //! Fonts are enumerated live from [`crate::font::catalog_entries`] —
 //! there's no static font list here to drift from what `findfont` can
 //! actually reach. Everything else (Type 3 faces, palettes, templates,
-//! procedures) is PostScript source with no docstring convention this
-//! module could parse, so their metadata — description, calling
-//! convention, source file — is hand-maintained in [`ENTRIES`] below.
-//! What keeps *that* from silently drifting is `tests/capabilities.rs`,
-//! which actually loads each `.ps` source into a real `Interp` and
-//! checks the name set both ways: every cataloged name must still be
-//! defined there, and every name the file defines must be either
-//! cataloged or listed in one of the `INTERNAL_*` allowlists below
-//! (scratch helpers and internal state, not part of the public API).
-//! **Registering a new capability**: add an [`Entry`] to the matching
-//! section of [`ENTRIES`]; if it's a deliberately private helper
-//! instead, add its name to the relevant `INTERNAL_*` list. Either way
-//! `cargo test capabilities` fails until one of those is done, so a
-//! newly added public name in `lib/artkit.ps`/`lib/styles/*`/
-//! `lib/pagekit.ps` can't ship silently uncataloged.
+//! procedures) is PostScript source, metadata for which comes from one
+//! of two places depending on whether its `.ps` file has been migrated
+//! to the `% @...` doc-comment tag convention (issue #94):
+//!
+//! - **Migrated** (`lib/paintkit.ps` so far): `build.rs` parses
+//!   `% @kind:`/`% @summary:`/`% @example:`/`% @param:`/`% @internal`/
+//!   `% @requires:` tags directly out of the `.ps` source at build
+//!   time and generates [`GeneratedEntry`] rows plus the matching
+//!   `*_INTERNAL` constant into `$OUT_DIR/capabilities_generated.rs`
+//!   (spliced in below via `include!`) — zero hand-written Rust for a
+//!   new tagged procedure in a migrated file. See `build.rs`'s own
+//!   module docs for the full tag grammar and the loud-failure
+//!   guarantees (a missing tag, or a whole new untagged `lib/*.ps`
+//!   file, fails `cargo build`, not just a later test).
+//! - **Not yet migrated** (everything else): hand-maintained in
+//!   [`ENTRIES`] below, same as before this issue. What keeps *that*
+//!   from silently drifting is `tests/capabilities.rs`, which actually
+//!   loads each `.ps` source into a real `Interp` and checks the name
+//!   set both ways: every cataloged name must still be defined there,
+//!   and every name the file defines must be either cataloged or
+//!   listed in one of the `INTERNAL_*` allowlists below (scratch
+//!   helpers and internal state, not part of the public API).
+//!   **Registering a new capability**: add an [`Entry`] to the
+//!   matching section of [`ENTRIES`]; if it's a deliberately private
+//!   helper instead, add its name to the relevant `INTERNAL_*` list.
+//!   Either way `cargo test capabilities` fails until one of those is
+//!   done, so a newly added public name in `lib/artkit.ps`/
+//!   `lib/styles/*`/`lib/pagekit.ps` can't ship silently uncataloged.
+//!
+//! Both paths feed the same `catalog()` output and the same
+//! `tests/capabilities.rs` cross-check — migrating a file changes
+//! *where* its metadata comes from, not what's verified about it.
 //!
 //! Most procedures take positional PostScript stack arguments, not
 //! named ones — there's nothing here as clean as a template's
@@ -75,7 +92,7 @@ pub enum CapabilityKind {
 }
 
 impl CapabilityKind {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             CapabilityKind::Font => "font",
             CapabilityKind::Type3Face => "type3_face",
@@ -151,7 +168,6 @@ fn load_sequence(kind: CapabilityKind, source: &str) -> String {
         _ => match source {
             s if s == ARTKIT => "(lib/artkit.ps) run".to_string(),
             s if s == PAGEKIT => "(lib/artkit.ps) run (lib/pagekit.ps) run".to_string(),
-            s if s == PAINTKIT => "(lib/artkit.ps) run (lib/paintkit.ps) run".to_string(),
             s if s == STEAMPUNK => "(lib/artkit.ps) run (lib/styles/steampunk.ps) run".to_string(),
             s if s == PSYCHEDELIC => {
                 "(lib/artkit.ps) run (lib/styles/psychedelic.ps) run".to_string()
@@ -195,7 +211,6 @@ impl Entry {
 
 const ARTKIT: &str = "lib/artkit.ps";
 const PAGEKIT: &str = "lib/pagekit.ps";
-const PAINTKIT: &str = "lib/paintkit.ps";
 const STEAMPUNK: &str = "lib/styles/steampunk.ps";
 const PSYCHEDELIC: &str = "lib/styles/psychedelic.ps";
 const SCIFI: &str = "lib/styles/scifi.ps";
@@ -236,37 +251,12 @@ pub const ARTKIT_INTERNAL: &[&str] = &[
 /// the three shared helpers (`pggetdef`/`pgzfitmax`/`pgframe`).
 pub const PAGEKIT_INTERNAL: &[&str] = &["pggetdef", "pgzfitmax", "pgframe"];
 
-/// Top-level names `lib/paintkit.ps` defines beyond `pkribbon`/`pknib`/
-/// `pkdry`/`pkspray` and the three `/Pressure` presets (`pkflat`/
-/// `pktaper`/`pkbell`, cataloged separately since they're documented,
-/// directly referenceable by name): the dict-default reader, the
-/// internal ribbon-construction helpers (edge offsetting, cap/loop
-/// building, taper/half-width math), `pknib`'s own travel-angle
-/// sampling helpers (issue #42), `pkdry`'s per-bristle dash-run helper
-/// and clamped-probability roll (issue #43), and `pkspray`'s particle
-/// generator, burst-cluster helper, and clamped-probability roll
-/// (issue #44).
-pub const PAINTKIT_INTERNAL: &[&str] = &[
-    "pkgetdef",
-    "pktaperf",
-    "pkhalfwat",
-    "pkjit",
-    "pkedge",
-    "pkdot",
-    "pkloop",
-    "pkopenrun",
-    "pkbuildrun",
-    "pkscanclosed",
-    "pbroll",
-    "pnangleat",
-    "pnpressure",
-    "pbdashrun",
-    "pzpdot",
-    "pzburstcluster",
-    "pzroll",
-    "poroll",
-    "porad",
-];
+// `PAINTKIT_INTERNAL` used to be hand-maintained here, alongside the
+// (also since-removed) `lib/paintkit.ps` rows in `ENTRIES` below.
+// `lib/paintkit.ps` is now the first file migrated to the `% @...`
+// doc-comment tag convention (issue #94) -- `build.rs` parses its
+// tags and generates both `PAINTKIT_INTERNAL` and the paintkit rows
+// of the catalog into `GENERATED_ENTRIES` (see the `include!` below).
 
 /// Top-level names `lib/handscript.ps` defines beyond `hs-write`/
 /// `hs-linecount`: `HandScriptDict` (the `definefont` template dict —
@@ -279,6 +269,64 @@ pub const HANDSCRIPT_INTERNAL: &[&str] = &["HandScriptDict", "HSLayout"];
 /// `/HangulScript` itself lives in `FontDirectory`) and `HGLayout`
 /// (internal line-wrap state).
 pub const HANGUL_INTERNAL: &[&str] = &["HangulDict", "HGLayout"];
+
+/// A catalog row produced by `build.rs` from `% @...` doc-comment tags
+/// (issue #94), parallel to [`Entry`] but with `load` precomputed by
+/// `build.rs` from the source file's `@requires` tag rather than
+/// derived at call time by [`load_sequence`] -- a genuinely new
+/// per-file `load` chain is a new `@requires` value in the `.ps`
+/// source, not a new Rust match arm. Kept as its own type rather than
+/// unifying with `Entry` to keep this migration's diff to the
+/// hand-written `ENTRIES` table at zero.
+struct GeneratedEntry {
+    name: &'static str,
+    kind: CapabilityKind,
+    description: &'static str,
+    parameters: &'static [Param],
+    source: &'static str,
+    load: &'static str,
+    example: &'static str,
+    availability: &'static str,
+}
+
+impl GeneratedEntry {
+    fn to_capability(&self) -> Capability {
+        Capability {
+            name: self.name.to_string(),
+            kind: self.kind,
+            description: self.description.to_string(),
+            parameters: self.parameters.to_vec(),
+            source: self.source.to_string(),
+            load: self.load.to_string(),
+            example: self.example.to_string(),
+            availability: self.availability.to_string(),
+        }
+    }
+}
+
+/// One migrated `lib/*.ps` file, as `build.rs` found it -- `source`,
+/// its `@requires` chain (the prerequisite `run` sequence, *not*
+/// including `source` itself), and its generated `*_INTERNAL` names.
+/// Exists so `tests/capabilities.rs` can run one generic cross-check
+/// against *every* migrated file without a new hand-written per-file
+/// test function each time one migrates -- the exact gap
+/// `docs/PS_LIBRARY_COUPLING.md` calls out (a near-duplicate
+/// `*_names_match_the_catalog_exactly` test is as easy to forget as
+/// the catalog registration itself). [`migrated_files`] returns the
+/// full list.
+pub struct MigratedFile {
+    pub source: &'static str,
+    pub requires: &'static str,
+    pub internal_names: &'static [&'static str],
+}
+
+include!(concat!(env!("OUT_DIR"), "/capabilities_generated.rs"));
+
+/// Every `lib/*.ps` file `build.rs` found tagged with the `% @...`
+/// doc-comment convention -- see [`MigratedFile`].
+pub fn migrated_files() -> &'static [MigratedFile] {
+    MIGRATED_FILES
+}
 
 macro_rules! entry {
     ($name:expr, $kind:expr, $desc:expr, $params:expr, $source:expr, $example:expr, $avail:expr) => {
@@ -960,342 +1008,6 @@ static ENTRIES: &[Entry] = &[
         &[],
         ARTKIT,
         "cx cy r (str) ctextctr -",
-        LIB
-    ),
-    // --- Procedures: lib/paintkit.ps (issue #41) ------------------------
-    // Unlike everything above, pkribbon takes one options dict with
-    // named, defaulted keys -- genuinely Param-shaped, same as a page
-    // template's content dict -- so parameters is populated for real.
-    entry!(
-        "pkribbon",
-        CapabilityKind::Procedure,
-        "Treats the current path as a centerline and fills a variable-width ribbon along it, built on walkpath. Color comes from whatever the caller already set.",
-        &[
-            Param {
-                name: "Width",
-                description: "Base width",
-                default: Some("6")
-            },
-            Param {
-                name: "Pitch",
-                description: "walkpath sampling pitch",
-                default: Some("Width*0.5, capped at 6")
-            },
-            Param {
-                name: "Pressure",
-                description: "{t -> mult} proc over normalized path progress (pkflat/pktaper/pkbell presets ship)",
-                default: Some("{ pkflat }")
-            },
-            Param {
-                name: "StartTaper",
-                description: "0..1 fraction of progress to ramp width in from the start, independent of Pressure",
-                default: Some("0")
-            },
-            Param {
-                name: "EndTaper",
-                description: "0..1 fraction of progress to ramp width out at the end, independent of Pressure",
-                default: Some("0")
-            },
-            Param {
-                name: "StartCap",
-                description: "/round, /flat, or /pointed",
-                default: Some("/round")
-            },
-            Param {
-                name: "EndCap",
-                description: "/round, /flat, or /pointed",
-                default: Some("/round")
-            },
-            Param {
-                name: "Jitter",
-                description: "Seeded edge displacement amount, deterministic under the caller's N srand",
-                default: Some("0")
-            },
-        ],
-        PAINTKIT,
-        "newpath ... << /Width 10 /Pressure { pktaper } >> pkribbon",
-        LIB
-    ),
-    entry!(
-        "pkflat",
-        CapabilityKind::Procedure,
-        "pkribbon's default /Pressure preset: constant width (t -> 1.0).",
-        &[],
-        PAINTKIT,
-        "t pkflat mult",
-        LIB
-    ),
-    entry!(
-        "pktaper",
-        CapabilityKind::Procedure,
-        "A pkribbon /Pressure preset: linear taper across the whole stroke (t -> t).",
-        &[],
-        PAINTKIT,
-        "t pktaper mult",
-        LIB
-    ),
-    entry!(
-        "pkbell",
-        CapabilityKind::Procedure,
-        "A pkribbon /Pressure preset: non-linear 0->1->0 hump, widest at the middle of the stroke.",
-        &[],
-        PAINTKIT,
-        "t pkbell mult",
-        LIB
-    ),
-    entry!(
-        "pknib",
-        CapabilityKind::Procedure,
-        "An angled-nib calligraphy preset built on pkribbon: mark width is driven by the angle between local path direction and a fixed nib angle, widest perpendicular to it and narrowing toward MinWidth parallel to it. The current path must be exactly one open subpath -- call once per stroke.",
-        &[
-            Param {
-                name: "Angle",
-                description: "Nib angle in degrees; perpendicular to it is widest, parallel narrows toward MinWidth",
-                default: Some("45")
-            },
-            Param {
-                name: "MinWidth",
-                description: "0..1 floor on the nib-angle response itself, before Pressure and the tapers multiply through",
-                default: Some("0.08")
-            },
-            Param {
-                name: "Width",
-                description: "Base width, forwarded to pkribbon",
-                default: Some("6")
-            },
-            Param {
-                name: "Pitch",
-                description: "walkpath sampling pitch, forwarded to pkribbon",
-                default: Some("Width*0.5, capped at 6")
-            },
-            Param {
-                name: "Pressure",
-                description: "{t -> mult} proc, multiplies with the nib-angle response rather than replacing it",
-                default: Some("{ pkflat }")
-            },
-            Param {
-                name: "StartTaper",
-                description: "0..1 fraction of progress to ramp width in from the start, forwarded to pkribbon",
-                default: Some("0")
-            },
-            Param {
-                name: "EndTaper",
-                description: "0..1 fraction of progress to ramp width out at the end, forwarded to pkribbon",
-                default: Some("0")
-            },
-            Param {
-                name: "StartCap",
-                description: "/round, /flat, or /pointed, forwarded to pkribbon",
-                default: Some("/round")
-            },
-            Param {
-                name: "EndCap",
-                description: "/round, /flat, or /pointed, forwarded to pkribbon",
-                default: Some("/round")
-            },
-            Param {
-                name: "Jitter",
-                description: "Seeded edge displacement amount, forwarded to pkribbon",
-                default: Some("0")
-            },
-        ],
-        PAINTKIT,
-        "newpath ... << /Width 16 /Angle 30 >> pknib",
-        LIB
-    ),
-    entry!(
-        "pkdry",
-        CapabilityKind::Procedure,
-        "A dry-bristle brush built on pkribbon: a bounded family of thin offset bristles scattered across the centerline, each broken into ink/no-ink runs by a seeded two-state Markov chain, ranging from a mostly loaded stroke to visibly broken dry-brush texture with no raster work.",
-        &[
-            Param {
-                name: "Width",
-                description: "Envelope width the bristles scatter across",
-                default: Some("6")
-            },
-            Param {
-                name: "Bristles",
-                description: "Bristle count; hard safety cap 1..100",
-                default: Some("18")
-            },
-            Param {
-                name: "Spread",
-                description: "0..1 fraction of Width the bristles scatter across, centered on the centerline",
-                default: Some("0.85")
-            },
-            Param {
-                name: "BristleWidth",
-                description: "Base width of each individual bristle's own mark",
-                default: Some("Width*0.12")
-            },
-            Param {
-                name: "WidthJitter",
-                description: "0..1 fraction of BristleWidth each bristle's own width randomly varies by",
-                default: Some("0.4")
-            },
-            Param {
-                name: "Load",
-                description: "Resume-contact rate per one Width of travel along the path",
-                default: Some("0.6")
-            },
-            Param {
-                name: "Dropout",
-                description: "Lose-contact rate per one Width of travel along the path",
-                default: Some("0.4")
-            },
-            Param {
-                name: "Jitter",
-                description: "Edge roughness, forwarded verbatim as each dash's own pkribbon Jitter; shares the Markov chain's random stream",
-                default: Some("0")
-            },
-            Param {
-                name: "Pitch",
-                description: "walkpath sampling pitch for the shared centerline pass",
-                default: Some("BristleWidth*0.6, capped at 6")
-            },
-            Param {
-                name: "ColorJitter",
-                description: "0..1 magnitude of small per-bristle color variation around the color active when pkdry is called",
-                default: Some("0.06")
-            },
-        ],
-        PAINTKIT,
-        "newpath ... << /Width 16 /Load 0.9 /Dropout 0.1 >> pkdry",
-        LIB
-    ),
-    entry!(
-        "pkspray",
-        CapabilityKind::Procedure,
-        "A spray-paint brush: seeded opaque particles deposited around each sampled centerline stop, thinning outward under a radial falloff, with an optional overspray mist past the nozzle edge and optional start/end trigger-dwell bursts. Total deposits track arc length (about Density per nozzle-diameter of travel) regardless of Pitch; deterministic under the caller's own srand; respects any active clip, so stencils are just clip before calling.",
-        &[
-            Param {
-                name: "Nozzle",
-                description: "Spray radius around the centerline",
-                default: Some("8")
-            },
-            Param {
-                name: "Density",
-                description: "Mean particles deposited per one nozzle-diameter of travel; uncapped, bounded by the deposit-budget safety limit instead",
-                default: Some("30")
-            },
-            Param {
-                name: "Falloff",
-                description: "0..1 how quickly density thins outward; three discrete levels (min-of-m-uniforms radial draws, m = 1 + truncate(2*Falloff))",
-                default: Some("0.5")
-            },
-            Param {
-                name: "Overspray",
-                description: "0..1 probability each particle escapes past the nozzle edge as half-size mist in the band [Nozzle, Nozzle*(1+Overspray)]",
-                default: Some("0.12")
-            },
-            Param {
-                name: "Speck",
-                description: "Mean particle diameter",
-                default: Some("1.4")
-            },
-            Param {
-                name: "Speckle",
-                description: "0..1 per-particle diameter variation, clamped to never go below 10% of Speck",
-                default: Some("0.35")
-            },
-            Param {
-                name: "Pitch",
-                description: "walkpath sampling pitch for the shared centerline pass",
-                default: Some("Nozzle*0.5, capped at 6")
-            },
-            Param {
-                name: "StartBurst",
-                description: "0..1 extra particles pooled at each subpath's first stop (trigger dwell)",
-                default: Some("0")
-            },
-            Param {
-                name: "EndBurst",
-                description: "0..1 extra particles pooled at each subpath's last stop (trigger dwell)",
-                default: Some("0")
-            },
-        ],
-        PAINTKIT,
-        "newpath ... << /Nozzle 12 /Density 40 >> pkspray",
-        LIB
-    ),
-    entry!(
-        "pkoil",
-        CapabilityKind::Procedure,
-        "A stylized oil-paint impasto preset built on pkribbon: layered pressure ribbons and bristle ridges suggesting a loaded brush, with restrained highlight/shadow edge lifts that read as paint thickness without any 3D height map or blending. Deterministic under the caller's own srand; bounded by Ridges * stops; respects clip like every other preset.",
-        &[
-            Param {
-                name: "Width",
-                description: "Envelope width the ridges scatter across",
-                default: Some("14")
-            },
-            Param {
-                name: "Pitch",
-                description: "walkpath sampling pitch for the shared centerline pass",
-                default: Some("Width*0.35, capped at 4")
-            },
-            Param {
-                name: "Ridges",
-                description: "Bristle ridge count; hard safety cap 1..40",
-                default: Some("12")
-            },
-            Param {
-                name: "RidgeSpread",
-                description: "0..1 fraction of Width the ridges scatter across, centered on the centerline",
-                default: Some("0.75")
-            },
-            Param {
-                name: "RidgeWidth",
-                description: "Base width of each ridge's own mark",
-                default: Some("Width*0.14")
-            },
-            Param {
-                name: "WidthJitter",
-                description: "0..1 fraction of RidgeWidth each ridge's own width randomly varies by",
-                default: Some("0.3")
-            },
-            Param {
-                name: "Load",
-                description: "Resume-contact rate per one Width of travel; high Load stays inked",
-                default: Some("0.85")
-            },
-            Param {
-                name: "Dropout",
-                description: "Lose-contact rate per one Width of travel",
-                default: Some("0.18")
-            },
-            Param {
-                name: "ColorJitter",
-                description: "0..1 per-ridge color variation magnitude around the caller's current color",
-                default: Some("0.08")
-            },
-            Param {
-                name: "EdgePickup",
-                description: "0..1 darker pickup at the envelope edges",
-                default: Some("0.15")
-            },
-            Param {
-                name: "Highlight",
-                description: "0..1 restrained highlight strength on one side",
-                default: Some("0.12")
-            },
-            Param {
-                name: "Shadow",
-                description: "0..1 restrained shadow strength on the opposite side",
-                default: Some("0.10")
-            },
-            Param {
-                name: "Pressure",
-                description: "{t -> mult} proc over normalized path progress, forwarded to the base ribbon",
-                default: Some("{ pkflat }")
-            },
-            Param {
-                name: "Jitter",
-                description: "Seeded edge displacement amount, forwarded to each dash's pkribbon Jitter",
-                default: Some("0")
-            },
-        ],
-        PAINTKIT,
-        "newpath ... << /Width 16 /Ridges 12 /Load 0.9 >> pkoil",
         LIB
     ),
     // --- Procedures: shapes ----------------------------------------------
@@ -2163,11 +1875,15 @@ static ENTRIES: &[Entry] = &[
     ),
 ];
 
-/// Builds the full catalog: [`ENTRIES`] plus every font `findfont` can
-/// currently reach (from [`font::catalog_entries`], so this can't
-/// disagree with `--fonts`/`resolve` about what's installed).
+/// Builds the full catalog: [`ENTRIES`] (hand-maintained, unmigrated
+/// files) plus [`GENERATED_ENTRIES`] (`build.rs`-parsed from `% @...`
+/// tags in migrated files -- `lib/paintkit.ps` so far, issue #94) plus
+/// every font `findfont` can currently reach (from
+/// [`font::catalog_entries`], so this can't disagree with
+/// `--fonts`/`resolve` about what's installed).
 pub fn catalog() -> Vec<Capability> {
     let mut caps: Vec<Capability> = ENTRIES.iter().map(Entry::to_capability).collect();
+    caps.extend(GENERATED_ENTRIES.iter().map(GeneratedEntry::to_capability));
     for f in font::catalog_entries() {
         let (description, availability) = match f.origin {
             font::FontOrigin::Builtin => (

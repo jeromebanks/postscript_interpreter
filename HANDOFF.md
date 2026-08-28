@@ -366,19 +366,46 @@ renders eight examples in both and compares block-downsampled output).
    than paper over.
 5. Shrinking PS-library-only coupling to Rust/CI/gs (architecture
    spike in issue #92): **read `docs/PS_LIBRARY_COUPLING.md` in full
-   before starting any of its three follow-ups (a doc-comment-driven
-   capabilities catalog, a phased PS-native verification path, CI
-   diff-shape detection) — do not work from a summary of it, including
-   this one.** That document itself needed eight rounds of cross-model
-   review to converge (mostly the same failure mode each time: a
-   correction made in one section not propagating to a shorter
-   restatement elsewhere, including in an earlier version of this very
-   HANDOFF.md entry) — a short paraphrase here is exactly the kind of
-   restatement that risks going stale the next time the source document
-   is revised. If you need the shape before opening the file: three
-   follow-up issues, none built yet, each phased/corrected in ways that
-   matter (a naive read of any one paragraph in isolation has
-   repeatedly proven wrong in review). Read the whole thing.
+   before starting either of its two remaining follow-ups (a phased
+   PS-native verification path, CI diff-shape detection) — do not work
+   from a summary of it, including this one.** That document itself
+   needed eight rounds of cross-model review to converge (mostly the
+   same failure mode each time: a correction made in one section not
+   propagating to a shorter restatement elsewhere, including in an
+   earlier version of this very HANDOFF.md entry) — a short paraphrase
+   here is exactly the kind of restatement that risks going stale the
+   next time the source document is revised. Read the whole thing.
+   The first follow-up, a doc-comment-driven capabilities catalog, is
+   done (issue #94): new `% @kind:`/`% @summary:`/`% @example:`/
+   `% @param:`/`% @internal`/`% @requires:` doc-comment tags in
+   `lib/*.ps`, parsed at build time by the new `build.rs` into
+   `src/capabilities.rs`'s catalog — see `build.rs`'s own module docs
+   for the tag grammar and NOTES.md's issue #94 entry for the full
+   story. Only `lib/paintkit.ps` is migrated so far (a deliberately
+   staged subset, matching the coupling doc's own worked example);
+   migrating the rest of `lib/*.ps` — `artkit.ps`/`pagekit.ps`/the
+   four style packs/`handscript.ps`/`hangul.ps` — is itchy-when-you-
+   get-to-it follow-up work, not a filed issue. The mechanism already
+   handles `Template`/`Dial` generically (same `/name ... def`
+   discovery as `Procedure`) — including `lib/styles/*.ps`'s
+   `/name /othername def` shape (a Dial bound to another name literal,
+   e.g. `/spmetal /brass def`) and `bind def`, both needing a real
+   redesign of the definition-name tokenizer to get right, not a
+   one-line fix — two rounds of Codex review on PR #97 caught two
+   different ways a "which literal is the name" heuristic broke on
+   real `lib/styles/steampunk.ps` code; see `build.rs`'s
+   `find_top_level_defs` docs and NOTES.md's issue #94 entry for the
+   full story before touching that function again.
+   Two kinds still need new discovery logic before their file can
+   migrate: `Palette` (`Palettes /name [...] put` dict-literal
+   mutations, not `def` bindings) and `Type3Face` (`/Name Dict
+   definefont pop`, not `/name ... def` either — `@kind: Type3Face` is
+   explicitly rejected by `build.rs` until this exists, so
+   `handscript.ps`/`hangul.ps` can't migrate yet regardless of
+   `Palette`). Migrating a file needs no new test either —
+   `tests/capabilities.rs`'s `every_migrated_file_names_
+   match_the_catalog_exactly` cross-checks every file
+   `capabilities::migrated_files()` reports, generically.
 
 ## Gotchas for the next implementer
 

@@ -2,6 +2,7 @@
 %%Title: paintkit.ps — pressure-sensitive ribbon strokes for artkit
 %%Creator: pscat — issue #41, the painterly-brush series' foundation
 %%EndComments
+% @requires: (lib/artkit.ps) run
 
 % A fifth sibling to graph.ps/dataviz.ps/etching.ps/pagekit.ps, but --
 % like pagekit -- it depends on lib/artkit.ps, specifically walkpath
@@ -38,44 +39,20 @@
 %   opts pkribbon -
 %
 % `opts` is a dict of optional keys (a sparse or empty dict still
-% renders -- a plain constant-width band):
-%
-%   /Width       base width (default 6). Must be > 0.
-%   /Pitch       walkpath sampling pitch (default Width*0.5, capped at
-%                6 so wide ribbons don't facet). Must be > 0.
-%   /Pressure    {t -> mult} proc, t = walkpath's normalized progress
-%                through the current subpath. Default `pkflat`
-%                (constant 1.0). Two more presets ship: `pktaper`
-%                (linear, t itself is the multiplier) and `pkbell`
-%                (non-linear, a 0->1->0 hump via `sin`). Reference a
-%                preset as `{ pktaper }`, or write an inline proc. Must
-%                actually be a procedure, checked with `xcheck`.
-%   /StartTaper  /EndTaper   0..1 fraction of progress over which
-%                width additionally ramps 0->1 at the very start/end,
-%                independent of and multiplicative with /Pressure --
-%                needed for a clean taper regardless of the pressure
-%                curve's own shape. Default 0 (no extra ramp).
-%   /StartCap    /EndCap     /round (default), /flat, or /pointed --
-%                any other value is rejected rather than silently
-%                falling through to /flat. A cap whose computed
-%                half-width is exactly 0 (taper or a zero-pressure
-%                endpoint) degrades to /pointed automatically rather
-%                than emitting a zero-radius arc (safe in both pscat
-%                and Ghostscript, but pointless).
-%   /Jitter      amount (default 0): each edge point is displaced
-%                along the local perpendicular by up to +/-amount,
-%                drawn from artkit's seeded `frnd` -- reproducible
-%                under the caller's own `N srand`, same doctrine as
-%                the rest of artkit (no library-owned seed). Skipped
-%                entirely at /pointed (or degenerate) tips, and not
-%                drawn at all when amount is 0 (so an unjittered call
-%                doesn't perturb the caller's rand sequence). An
-%                amount past Width/2 can push a point across the
-%                centerline to the far side; `fill`'s nonzero winding
-%                absorbs the resulting local self-crossing without
-%                error, but past that point "jitter" is closer to
-%                "noise" -- keep it well under Width/2 for a ribbon
-%                that still reads as one continuous band.
+% renders -- a plain constant-width band). See the `@param` tags
+% directly above `pkribbon`'s own definition below for the full
+% parameter list with defaults. A few caveats the terse tags don't
+% carry: /Pressure must actually be a procedure, checked with `xcheck`;
+% /StartCap and /EndCap reject any value other than /round, /flat, or
+% /pointed rather than silently falling through to /flat, though a cap
+% whose computed half-width is exactly 0 (taper or a zero-pressure
+% endpoint) degrades to /pointed automatically rather than emitting a
+% zero-radius arc (safe in both pscat and Ghostscript, but pointless);
+% and a /Jitter amount past Width/2 can push an edge point across the
+% centerline to the far side -- `fill`'s nonzero winding absorbs the
+% resulting local self-crossing without error, but past that point
+% "jitter" is closer to "noise" -- keep it well under Width/2 for a
+% ribbon that still reads as one continuous band.
 %
 % Color is deliberately not a key: `pkribbon` fills with whatever
 % color the caller already set (`setrgbcolor` et al.), same as any
@@ -138,6 +115,7 @@
 % wkmeasure: emit the previous subpath's flag on each new moveto
 % (skipped on the very first), then once more after the loop for the
 % last subpath.
+% @internal
 /pkscanclosed {
     /pkscclosed false def /pkscfirst true def
     [
@@ -159,6 +137,7 @@
 % any other proc by name in this file, so returning it as `pkgdef`
 % would silently invoke the default instead of yielding it. Reading it
 % back with `get` sidesteps that regardless of the default's type.
+% @internal
 /pkgetdef {                                      % dict key default -
     /pkgdef exch 1 array astore def
     /pkgkey exch def
@@ -170,8 +149,17 @@
 } def
 
 % --- pressure presets: t -> mult -------------------------------------
+% @kind: Procedure
+% @summary: pkribbon's default /Pressure preset: constant width (t -> 1.0).
+% @example: t pkflat mult
 /pkflat  { pop 1.0 } def                          % constant
+% @kind: Procedure
+% @summary: A pkribbon /Pressure preset: linear taper across the whole stroke (t -> t).
+% @example: t pktaper mult
 /pktaper { } def                                  % linear (t is the mult)
+% @kind: Procedure
+% @summary: A pkribbon /Pressure preset: non-linear 0->1->0 hump, widest at the middle of the stroke.
+% @example: t pkbell mult
 /pkbell  { 180 mul sin } def                      % non-linear 0->1->0 hump
 
 % t -> mult   (StartTaper/EndTaper ramp; reads pkstarttaper/pkendtaper)
@@ -183,6 +171,7 @@
 % round 1). Each ramp already evaluates to 1.0 (no constraint) outside
 % its own region, so the minimum is exactly "whichever ramp constrains
 % more here," continuous everywhere including the overlap.
+% @internal
 /pktaperf {
     /pktft exch def
     /pktfs
@@ -201,6 +190,7 @@
 } def
 
 % t -> halfwidth   (reads pkwidth/pkpressure/pktaperf's globals)
+% @internal
 /pkhalfwat {
     /pkht exch def
     pkwidth
@@ -210,10 +200,12 @@
 } def
 
 % amount -> offset in -amount..amount, deterministic under srand
+% @internal
 /pkjit { frnd 2 mul 1 sub mul } def
 
 % x y ang halfw side -> ex ey   (side: -1 right / +1 left of travel;
 % applies /Jitter along the perpendicular, skipped entirely at 0)
+% @internal
 /pkedge {
     /pkeside exch def /pkehw exch def /pkeang exch def
     /pkey exch def /pkex exch def
@@ -229,6 +221,7 @@
 % *ends of a path*; a lone point has no path to ramp along, and
 % applying them anyway could zero out the dot entirely (e.g. any
 % nonzero /StartTaper at t=0) for a caller who never asked for that.
+% @internal
 /pkdot {
     dup 0 get /pkdx exch def
     dup 1 get /pkdy exch def
@@ -245,6 +238,7 @@
 % nonzero fill and they add instead of one punching a hole in the
 % other -- confirmed empirically (a closed square rendered solid, no
 % ring) before this fix (Codex review, round 1).
+% @internal
 /pkloop {
     /pklrev exch def /pklside exch def /pklend exch def /pklstart exch def
     /pklfrom pklrev { pklend } { pklstart } ifelse def
@@ -273,6 +267,7 @@
 % collapse a real cap to a point under a large CTM, where a user-space
 % width like 0.002 can still be many device pixels wide (Codex review,
 % round 1).
+% @internal
 /pkopenrun {
     /pkoend exch def /pkostart exch def
 
@@ -371,6 +366,7 @@
 
 % start end closed pkbuildrun -   (one subpath's worth of walkpath stops;
 % closed comes from pkscanclosed, not inferred from coordinates)
+% @internal
 /pkbuildrun {
     /pkbrclosed exch def /pkbrend exch def /pkbrstart exch def
     % Coalesce a trailing sp==0 duplicate (the guaranteed end stop
@@ -423,6 +419,17 @@
 } def
 
 % opts pkribbon -
+% @kind: Procedure
+% @summary: Treats the current path as a centerline and fills a variable-width ribbon along it, built on walkpath. Color comes from whatever the caller already set.
+% @example: newpath ... << /Width 10 /Pressure { pktaper } >> pkribbon
+% @param: /Width Base width; must be > 0 (default 6)
+% @param: /Pitch walkpath sampling pitch; must be > 0 (default Width*0.5, capped at 6)
+% @param: /Pressure {t -> mult} proc over normalized path progress; must be a procedure (pkflat/pktaper/pkbell presets ship) (default { pkflat })
+% @param: /StartTaper 0..1 fraction of progress to ramp width in from the start, independent of Pressure (default 0)
+% @param: /EndTaper 0..1 fraction of progress to ramp width out at the end, independent of Pressure (default 0)
+% @param: /StartCap /round, /flat, or /pointed; any other value is rejected (default /round)
+% @param: /EndCap /round, /flat, or /pointed; any other value is rejected (default /round)
+% @param: /Jitter Seeded edge displacement amount, deterministic under the caller's own N srand (default 0)
 /pkribbon {
     /pkopts exch def
     % Value options (/Width here, and /Pitch/StartTaper/EndTaper/Jitter/
@@ -596,23 +603,16 @@
 % -edge/angled-cut refinement is a real, deliberately out-of-scope next
 % step for a later revision, not an oversight.
 %
-%   /Angle       nib angle in degrees (default 45). Perpendicular to
-%                Angle is widest; parallel to Angle narrows toward
-%                /MinWidth.
-%   /MinWidth    0..1 floor on the nib-angle response itself (not a
-%                floor on the final rendered width) -- the multiplier
-%                `|sin(travel - Angle)|` never drops below this before
-%                /Pressure and the tapers multiply through, modeling a
-%                real nib's own finite edge thickness rather than a
-%                mathematically perfect zero-width hairline. Default
-%                0.08.
-%   /Width, /Pitch, /Pressure, /StartTaper, /EndTaper, /StartCap,
-%                /EndCap, /Jitter -- forwarded to `pkribbon` verbatim;
-%                see its own docs. /Pressure (default `pkflat`)
-%                multiplies with the nib-angle response rather than
-%                replacing it, the same kind of composition
-%                /StartTaper//EndTaper already have with /Pressure
-%                inside `pkribbon` itself.
+% See the `@param` tags directly above `pknib`'s own definition below
+% for the full parameter list with defaults. Two caveats the terse
+% tags don't carry: /MinWidth is a floor on the nib-angle response
+% itself (not a floor on the final rendered width) -- the multiplier
+% `|sin(travel - Angle)|` never drops below it before /Pressure and the
+% tapers multiply through, modeling a real nib's own finite edge
+% thickness rather than a mathematically perfect zero-width hairline;
+% and /Pressure multiplies with the nib-angle response rather than
+% replacing it, the same kind of composition /StartTaper//EndTaper
+% already have with /Pressure inside `pkribbon` itself.
 %
 % Implementation: a preliminary `walkpath` pass, at the same pitch
 % `pkribbon` would use, samples (t, travel angle) once per stop; a
@@ -632,6 +632,7 @@
 % values this pass already sampled.
 % Each pnangles entry is [t x y ang] -- x/y are needed only for the
 % two-sample chord fallback below, not the ordinary nearest-sample path.
+% @internal
 /pnangleat {                                      % t -> travel angle (degrees)
     /pnqt exch def
     pnangles 0 get
@@ -697,6 +698,7 @@
 % entirely in that case -- full response, same as if travel were
 % perfectly perpendicular to the nib -- so the dot's size tracks only
 % /Pressure, exactly like pkribbon's own undiminished pkdot.
+% @internal
 /pnpressure {
     /pnpt exch def
     pnangles length 1 eq
@@ -709,6 +711,19 @@
     pnpt pnuserpressure mul
 } def
 
+% @kind: Procedure
+% @summary: An angled-nib calligraphy preset built on pkribbon: mark width is driven by the angle between local path direction and a fixed nib angle, widest perpendicular to it and narrowing toward MinWidth parallel to it. The current path must be exactly one open subpath -- call once per stroke.
+% @example: newpath ... << /Width 16 /Angle 30 >> pknib
+% @param: /Angle Nib angle in degrees; perpendicular to it is widest, parallel narrows toward MinWidth (default 45)
+% @param: /MinWidth 0..1 floor on the nib-angle response itself, before Pressure and the tapers multiply through (default 0.08)
+% @param: /Width Base width, forwarded to pkribbon (default 6)
+% @param: /Pitch walkpath sampling pitch, forwarded to pkribbon (default Width*0.5, capped at 6)
+% @param: /Pressure {t -> mult} proc, multiplies with the nib-angle response rather than replacing it (default { pkflat })
+% @param: /StartTaper 0..1 fraction of progress to ramp width in from the start, forwarded to pkribbon (default 0)
+% @param: /EndTaper 0..1 fraction of progress to ramp width out at the end, forwarded to pkribbon (default 0)
+% @param: /StartCap /round, /flat, or /pointed, forwarded to pkribbon (default /round)
+% @param: /EndCap /round, /flat, or /pointed, forwarded to pkribbon (default /round)
+% @param: /Jitter Seeded edge displacement amount, forwarded to pkribbon (default 0)
 /pknib {
     /pnopts exch def
 
@@ -809,69 +824,35 @@
 % (walkpath's own degenerate single-point fallback -- see pkribbon's
 % own dot doc) all come for free.
 %
-%   opts pkdry -
-%
-%   /Width         envelope width the bristles scatter across (default
-%                  6). Must be > 0. Same role as pkribbon's /Width, but
-%                  here it bounds the *scatter*, not one mark's own
-%                  thickness -- see /BristleWidth for that.
-%   /Bristles      bristle count (default 18). Must be a whole number,
-%                  1..100 -- a hard safety cap chosen so even the cap
-%                  combined with a
-%                  long path at the default /Pitch stays in the
-%                  single-digit seconds (measured, see Performance
-%                  below), not unbounded. This alone doesn't bound
-%                  total ink deposits (a long path at a fine /Pitch
-%                  still multiplies out) -- see the deposit-budget
-%                  check below, the real limit the issue asks for.
-%   /Spread        0..1 fraction of Width the bristles scatter across,
-%                  centered on the centerline (default 0.85). Must be
-%                  0..1.
-%   /BristleWidth  base width of each individual bristle's own mark
-%                  (default Width*0.12). Must be > 0.
-%   /WidthJitter   0..1 fraction of BristleWidth that each bristle's
-%                  own width randomly varies by, one draw per bristle,
-%                  clamped to never go below 5% of BristleWidth
-%                  (default 0.4). Must be 0..1.
-%   /Load          the resume-contact rate: how readily a bristle
-%                  picks ink back up after a gap (default 0.6).
-%   /Dropout       the lose-contact rate: how readily a loaded bristle
-%                  skips contact (default 0.4).
-%                  Both /Load and /Dropout are expressed as a rate per
-%                  one /Width's worth of travel along the path, *not*
-%                  per raw walkpath sample -- scaled down to a
-%                  per-sample transition probability by (Pitch/Width),
-%                  clamped to 0..1, so the same numbers read as the
-%                  same dryness regardless of /Pitch. Both must be
-%                  0..1 (the rate itself, before that scaling).
-%                  Loaded: high Load, low Dropout. Very dry: low Load,
-%                  high Dropout. A subpath's very first sample rolls
-%                  initial contact with the raw (unscaled) Load
-%                  probability, not the Pitch-scaled per-step rate --
-%                  "does this bristle start loaded" is a one-time
-%                  boundary condition, not a rate along the path, and
-%                  it's the *only* roll a degenerate single-point
-%                  subpath (see below) ever gets.
-%   /Jitter        edge roughness, forwarded verbatim as each dash's
-%                  own pkribbon /Jitter (default 0). Shares the same
-%                  seeded random stream as the Markov chain above --
-%                  changing /Jitter from 0 reshuffles every downstream
-%                  on/off roll too, not just the edges, so two renders
-%                  that differ only in /Jitter will generally have a
-%                  *different breakup pattern*, not the same pattern
-%                  with rougher edges. Still fully deterministic under
-%                  the caller's own `N srand` either way.
-%   /Pitch         walkpath sampling pitch for the shared centerline
-%                  pass (default BristleWidth*0.6, capped at 6, same
-%                  shape as pkribbon's own default). Must be > 0.
-%   /ColorJitter   0..1 magnitude of small per-bristle color variation
-%                  (default 0.06): each bristle applies one `shade`
-%                  draw, k = 1 +/- ColorJitter, around whatever color
-%                  is active when pkdry is called (`currentrgbcolor`)
-%                  -- consistent with the rest of this file, color is
-%                  deliberately not a settable key here either. 0
-%                  disables the variation. Must be 0..1. The caller's
-%                  own current color is restored before pkdry returns.
+% See the `@param` tags directly above `pkdry`'s own definition below
+% for the full parameter list with defaults. Caveats the terse tags
+% don't carry: /Width bounds the bristle *scatter*, not one mark's own
+% thickness (see /BristleWidth for that); /Bristles is a hard safety
+% cap (1..100) chosen so even the cap combined with a long path at the
+% default /Pitch stays in the single-digit seconds (see Performance
+% below) -- it alone doesn't bound total ink deposits, see the
+% deposit-budget check further down for that. /Load and /Dropout are
+% both expressed as a rate per one /Width's worth of travel along the
+% path, *not* per raw walkpath sample -- scaled down to a per-sample
+% transition probability by (Pitch/Width), clamped to 0..1, so the same
+% numbers read as the same dryness regardless of /Pitch (loaded: high
+% Load, low Dropout; very dry: low Load, high Dropout). A subpath's
+% very first sample rolls initial contact with the raw (unscaled) Load
+% probability, not the Pitch-scaled per-step rate -- "does this bristle
+% start loaded" is a one-time boundary condition, not a rate along the
+% path, and it's the *only* roll a degenerate single-point subpath
+% (see below) ever gets. /Jitter shares the same seeded random stream
+% as the Markov chain above -- changing it from 0 reshuffles every
+% downstream on/off roll too, not just the edges, so two renders that
+% differ only in /Jitter will generally have a *different breakup
+% pattern*, not the same pattern with rougher edges; still fully
+% deterministic under the caller's own `N srand` either way.
+% /ColorJitter: each bristle applies one `shade` draw, k = 1 +/-
+% ColorJitter, around whatever color is active when pkdry is called
+% (`currentrgbcolor`) -- consistent with the rest of this file, color
+% is deliberately not a settable key here either. 0 disables the
+% variation; the caller's own current color is restored before pkdry
+% returns.
 %
 % Determinism: same doctrine as pkribbon -- no library-owned seed,
 % reproducible under the caller's own `N srand`.
@@ -937,6 +918,19 @@
 %
 % Scratch prefix pb- (pkdry/pbdashrun) -- deliberately distinct from
 % pk-/pn-, see the file header.
+% @kind: Procedure
+% @summary: A dry-bristle brush built on pkribbon: a bounded family of thin offset bristles scattered across the centerline, each broken into ink/no-ink runs by a seeded two-state Markov chain, ranging from a mostly loaded stroke to visibly broken dry-brush texture with no raster work.
+% @example: newpath ... << /Width 16 /Load 0.9 /Dropout 0.1 >> pkdry
+% @param: /Width Envelope width the bristles scatter across; must be > 0 (default 6)
+% @param: /Bristles Bristle count; must be a whole number, hard safety cap 1..100 (default 18)
+% @param: /Spread 0..1 fraction of Width the bristles scatter across, centered on the centerline (default 0.85)
+% @param: /BristleWidth Base width of each individual bristle's own mark; must be > 0 (default Width*0.12)
+% @param: /WidthJitter 0..1 fraction of BristleWidth each bristle's own width randomly varies by (default 0.4)
+% @param: /Load 0..1 resume-contact rate per one Width of travel along the path (default 0.6)
+% @param: /Dropout 0..1 lose-contact rate per one Width of travel along the path (default 0.4)
+% @param: /Jitter Edge roughness, forwarded verbatim as each dash's own pkribbon Jitter; shares the Markov chain's random stream (default 0)
+% @param: /Pitch walkpath sampling pitch for the shared centerline pass; must be > 0 (default BristleWidth*0.6, capped at 6)
+% @param: /ColorJitter 0..1 magnitude of small per-bristle color variation around the color active when pkdry is called (default 0.06)
 /pkdry {
     /pbopts exch def
 
@@ -1088,6 +1082,7 @@
 % certain" contract -- confirmed: seed 5659 with a single bristle drew
 % nothing at /Load 1 before this fix (Codex review). Used for every
 % probabilistic decision pbdashrun makes.
+% @internal
 /pbroll {
     dup 1 ge
         { pop true }
@@ -1126,6 +1121,7 @@
 % review). Reusing the same `pbpitch` already validated and budgeted
 % at the outer level keeps a dash's own internal resampling the same
 % order of magnitude as the stops it was built from.
+% @internal
 /pbdashrun {
     /pbdrend exch def /pbdrstart exch def
     /pbdrw exch def /pbdroff exch def
@@ -1233,48 +1229,26 @@
 % guaranteed-final-stop duplicate (walkpath's sp==0 coincidence case)
 % then naturally deposits nothing extra.
 %
-%   /Nozzle     spray radius around the centerline (default 8). Must
-%               be > 0.
-%   /Density    mean particles deposited per one nozzle-*diameter* of
-%               travel (default 30). Must be >= 0; 0 renders nothing.
-%               Uncapped by itself -- total deposits are bounded by
-%               the safety limit below instead, which sees Density
-%               directly.
-%   /Falloff    0..1 (default 0.5): how quickly particle density
-%               thins from the centerline outward. Implemented as a
-%               radial draw r = Nozzle * (minimum of m fresh frnd
-%               draws), m = 1 + truncate(2*Falloff): min-of-m-uniforms
-%               has radial density proportional to (1 - r/Nozzle)^(m-1)
-%               -- m=1 spreads particles uniformly *in radius* (areal
-%               density still rises mildly toward the center), m=2
-%               falls off linearly, m=3 quadratically. Three discrete
-%               levels, deliberately not interpolated: the jump at
-%               Falloff 0.5 changes the texture visibly but predictably,
-%               and keeping m integral keeps the draw count (and the
-%               deposit budget below) honest.
-%   /Overspray  0..1 (default 0.12): probability each particle escapes
-%               past its base radius as finer mist, placed uniformly in
-%               the band [R, R*(1+Overspray)] -- R is the particle's
-%               own base radius: the nozzle for ordinary particles,
-%               the bloomed Nozzle*(1+Burst*0.5) for burst/dab
-%               particles -- and drawn at half size. The escape roll is
-%               clamped at both ends the
-%               way pkdry's own probability rolls are (`pzroll`): frnd
-%               can return exactly 1.0, so a bare `frnd rate lt` would
-%               never escape at /Overspray 1.
-%   /Speck      mean particle diameter (default 1.4). Must be > 0.
-%   /Speckle    0..1 (default 0.35): per-particle diameter variation of
-%               up to +/-Speckle*Speck, clamped to never go below 10%
-%               of Speck (same clamp shape as pkdry's /WidthJitter).
-%   /Pitch      walkpath sampling pitch (default Nozzle*0.5, capped at
-%               6, same shape as every sibling). Must be > 0.
-%   /StartBurst /EndBurst   0..1 (default 0): extra particles pooled at
-%               each subpath's first/last stop -- trigger dwell before
-%               the hand starts moving / after it stops. Count is
-%               truncate(Burst * Density * 2) (a dwell of about two
-%               nozzle-diameters' worth of emission), scattered with
-%               the same radial profile over radius
-%               Nozzle*(1 + Burst*0.5) -- a dwelling nozzle blooms.
+% See the `@param` tags directly above `pkspray`'s own definition below
+% for the full parameter list with defaults. Caveats the terse tags
+% don't carry: /Falloff is implemented as a radial draw r = Nozzle *
+% (minimum of m fresh frnd draws), m = 1 + truncate(2*Falloff) --
+% min-of-m-uniforms has radial density proportional to
+% (1 - r/Nozzle)^(m-1) -- m=1 spreads particles uniformly *in radius*
+% (areal density still rises mildly toward the center), m=2 falls off
+% linearly, m=3 quadratically; three discrete levels, deliberately not
+% interpolated. /Overspray places an escaped particle uniformly in the
+% band [R, R*(1+Overspray)] -- R is the particle's own base radius: the
+% nozzle for ordinary particles, the bloomed Nozzle*(1+Burst*0.5) for
+% burst/dab particles -- drawn at half size, with the escape roll
+% clamped at both ends the way pkdry's own probability rolls are
+% (`pzroll`): frnd can return exactly 1.0, so a bare `frnd rate lt`
+% would never escape at /Overspray 1. /Speckle variation is clamped to
+% never go below 10% of Speck (same clamp shape as pkdry's
+% /WidthJitter). /StartBurst//EndBurst count is
+% truncate(Burst * Density * 2) (a dwell of about two nozzle-diameters'
+% worth of emission), scattered with the same radial profile over
+% radius Nozzle*(1 + Burst*0.5) -- a dwelling nozzle blooms.
 %
 % A degenerate single-point subpath (walkpath's atend=3 case) gets one
 % dab of truncate(Density*2) particles around the point -- without it,
@@ -1330,6 +1304,7 @@
 %
 % Scratch prefix pz- (pkspray/pzpdot/pzburstcluster/pzroll) --
 % deliberately distinct from pk-/pn-/pb-, see the file header.
+% @internal
 /pzroll {                                          % rate -> bool
 % Clamped probability roll: true with probability rate, certain at
 % rate >= 1, impossible at rate <= 0. Mirrors pkdry's pbroll -- artkit's
@@ -1346,6 +1321,7 @@
 % path; consumes this particle's randomness in the pinned order the
 % pkspray header documents. Reads the pzm/pzoverspray/pznozzle/
 % pzspeck/pzspeckle globals pkspray sets fresh on every call.)
+% @internal
 /pzpdot {
     /pzdbR exch def /pzdy exch def /pzdx exch def
     pzoverspray pzroll {
@@ -1382,12 +1358,25 @@
 
 % x y baseradius count pzburstcluster -   (count particles pooled
 % around one point: trigger-dwell bursts and the degenerate dab)
+% @internal
 /pzburstcluster {
     /pzbc exch def /pzbbR exch def /pzby exch def /pzbx exch def
     1 1 pzbc { pop pzbx pzby pzbbR pzpdot } for
 } def
 
 % opts pkspray -
+% @kind: Procedure
+% @summary: A spray-paint brush: seeded opaque particles deposited around each sampled centerline stop, thinning outward under a radial falloff, with an optional overspray mist past the nozzle edge and optional start/end trigger-dwell bursts.
+% @example: newpath ... << /Nozzle 12 /Density 40 >> pkspray
+% @param: /Nozzle Spray radius around the centerline; must be > 0 (default 8)
+% @param: /Density Mean particles deposited per one nozzle-diameter of travel; must be >= 0 (0 renders nothing); uncapped, bounded by the deposit-budget safety limit instead (default 30)
+% @param: /Falloff 0..1 how quickly density thins outward; three discrete levels (min-of-m-uniforms radial draws, m = 1 + truncate(2*Falloff)) (default 0.5)
+% @param: /Overspray 0..1 probability each particle escapes past the nozzle edge as half-size mist in the band [Nozzle, Nozzle*(1+Overspray)] (default 0.12)
+% @param: /Speck Mean particle diameter; must be > 0 (default 1.4)
+% @param: /Speckle 0..1 per-particle diameter variation, clamped to never go below 10% of Speck (default 0.35)
+% @param: /Pitch walkpath sampling pitch for the shared centerline pass; must be > 0 (default Nozzle*0.5, capped at 6)
+% @param: /StartBurst 0..1 extra particles pooled at each subpath's first stop (trigger dwell) (default 0)
+% @param: /EndBurst 0..1 extra particles pooled at each subpath's last stop (trigger dwell) (default 0)
 /pkspray {
     /pzopts exch def
 
@@ -1565,39 +1554,14 @@
 % 3D height map, fluid mixing, or blending. Pure vector fill, portable
 % to pscat and Ghostscript.
 %
-%   opts pkoil -
-%
-%   /Width         envelope width the ridges scatter across (default
-%                  14). Must be > 0. Same role as pkdry's /Width.
-%   /Pitch         walkpath sampling pitch (default Width*0.35, capped
-%                  at 4). Must be > 0.
-%   /Ridges        bristle ridge count (default 12). Must be whole
-%                  1..40 — hard cap so even at default Pitch on a long
-%                  stroke the work stays bounded (see Safety below).
-%   /RidgeSpread   0..1 fraction of Width ridges scatter across,
-%                  centered on the centerline (default 0.75). 0..1.
-%   /RidgeWidth    base width of each ridge's own mark (default
-%                  Width*0.14). Must be > 0.
-%   /WidthJitter   0..1 fraction of RidgeWidth each ridge's width
-%                  varies by (default 0.3). 0..1. Clamped to 5% floor.
-%   /Load          0..1 resume-contact rate (default 0.85). High load
-%                  means ridges stay inked; low load breaks up. 0..1.
-%   /Dropout       0..1 lose-contact rate (default 0.18). 0..1. Both
-%                  rates are per one Width of travel, scaled by
-%                  (sp/Width) per step like pkdry, same portability.
-%   /ColorJitter   0..1 per-ridge color variation via `shade` around
-%                  the caller's current color (default 0.08). 0..1.
-%   /EdgePickup    0..1 darker pickup at the envelope edges (default
-%                  0.15). 0..1. Implemented as subtle darkening of the
-%                  outermost ridges' shade, not a separate pass.
-%   /Highlight     0..1 restrained highlight strength (default 0.12).
-%                  Lighter lift on one side of each stroke. 0..1.
-%   /Shadow        0..1 restrained shadow strength (default 0.10).
-%                  Darker lift on the opposite side. 0..1.
-%   /Pressure      {t -> mult} proc (default pkflat). Must be a
-%                  procedure (xcheck + type check same as pkribbon).
-%   /Jitter        edge roughness forwarded to each dash's pkribbon
-%                  /Jitter (default 0). Shares the seeded rand stream.
+% See the `@param` tags directly above `pkoil`'s own definition below
+% for the full parameter list with defaults. Caveats the terse tags
+% don't carry: /Ridges is a hard cap (1..40) so even at default Pitch
+% on a long stroke the work stays bounded (see Safety below); /Load and
+% /Dropout are both per one Width of travel, scaled by (sp/Width) per
+% step like pkdry, same portability contract; /EdgePickup is
+% implemented as subtle darkening of the outermost ridges' shade, not a
+% separate pass.
 %
 % Determinism: no library seed, fully reproducible under the caller's
 % own `N srand`, same doctrine as pkribbon/pkdry/pkspray.
@@ -1623,11 +1587,13 @@
 % pk-/pn-/pb-/pz-, since pkoil calls pkribbon and would clobber pk*
 % names.
 %
+% @internal
 /poroll {
     dup 1 ge { pop true } { dup 0 le { pop false } { frnd exch lt } ifelse } ifelse
 } def
 
 % pooff porw porunstart porunend porad -
+% @internal
 /porad {
     /porend exch def /porstart exch def /porw exch def /poroff exch def
     /porsingle porstart porend eq def
@@ -1662,6 +1628,23 @@
     porstate { << /Width porw /Jitter poJitter /Pitch poPitch >> pkribbon } if
 } def
 
+% @kind: Procedure
+% @summary: A stylized oil-paint impasto preset built on pkribbon: layered pressure ribbons and bristle ridges suggesting a loaded brush, with restrained highlight/shadow edge lifts that read as paint thickness without any 3D height map or blending. Deterministic under the caller's own srand; bounded by Ridges * stops; respects clip like every other preset.
+% @example: newpath ... << /Width 16 /Ridges 12 /Load 0.9 >> pkoil
+% @param: /Width Envelope width the ridges scatter across; must be > 0 (default 14)
+% @param: /Pitch walkpath sampling pitch for the shared centerline pass; must be > 0 (default Width*0.35, capped at 4)
+% @param: /Ridges Bristle ridge count; must be a whole number, hard safety cap 1..40 (default 12)
+% @param: /RidgeSpread 0..1 fraction of Width the ridges scatter across, centered on the centerline (default 0.75)
+% @param: /RidgeWidth Base width of each ridge's own mark; must be > 0 (default Width*0.14)
+% @param: /WidthJitter 0..1 fraction of RidgeWidth each ridge's own width randomly varies by (default 0.3)
+% @param: /Load 0..1 resume-contact rate per one Width of travel; high Load stays inked (default 0.85)
+% @param: /Dropout 0..1 lose-contact rate per one Width of travel (default 0.18)
+% @param: /ColorJitter 0..1 per-ridge color variation magnitude around the caller's current color (default 0.08)
+% @param: /EdgePickup 0..1 darker pickup at the envelope edges (default 0.15)
+% @param: /Highlight 0..1 restrained highlight strength on one side (default 0.12)
+% @param: /Shadow 0..1 restrained shadow strength on the opposite side (default 0.10)
+% @param: /Pressure {t -> mult} proc over normalized path progress, forwarded to the base ribbon (default { pkflat })
+% @param: /Jitter Seeded edge displacement amount, forwarded to each dash's pkribbon Jitter (default 0)
 /pkoil {
     /poopts exch def
     /poWidth poopts /Width 14 pkgetdef def
