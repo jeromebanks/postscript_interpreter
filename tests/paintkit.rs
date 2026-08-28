@@ -3078,3 +3078,41 @@ fn pkpaper_tone_components_are_validated_individually() {
     it.run_str("0 0 60 60 << /Tone [1 0.8 0] >> pkpaper")
         .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
 }
+
+/// `pkpaper`'s ground is a ground: opaque and source-over whatever the
+/// caller had set. /Alpha and /Blend are documented as *grain* options,
+/// so an ambient `setalpha` used to make the paper itself translucent
+/// with nothing in the contract saying so (Codex review, PR #109).
+#[test]
+fn the_paper_ground_does_not_inherit_the_callers_compositing() {
+    let ground = |prelude: &str| {
+        let it = wash_pixmap(&format!(
+            "0 0 0 setrgbcolor newpath 0 0 moveto 200 0 lineto 200 200 lineto 0 200 lineto \
+               closepath fill \
+             {prelude} 0 0 200 200 << /Tone [0.9 0.85 0.8] /Grain 0 >> pkpaper"
+        ));
+        it.gfx().pixmap.pixel(100, 100).expect("pixel").red()
+    };
+    let plain = ground("");
+    assert!(plain > 200, "the ground covers the black under it: {plain}");
+    assert_eq!(ground("0.2 setalpha"), plain, "ambient alpha leaked in");
+    assert_eq!(
+        ground("/Multiply setblendmode"),
+        plain,
+        "ambient blend mode leaked in"
+    );
+}
+
+/// The bloom rim's whole job is to be continuous, so it must not
+/// inherit the caller's dash pattern — the one stroke in this section
+/// where that would be visible (Codex review, PR #109).
+#[test]
+fn the_bloom_rim_ignores_an_inherited_dash() {
+    let rim = |prelude: &str| {
+        pixels(&wash_pixmap(&format!(
+            "{prelude} 0 0 0 setrgbcolor {BLOB} \
+             << /Alpha 0.2 /Layers 1 /Wet 0 /Bloom 1 /BloomWidth 8 /Seed 21 >> pkwash"
+        )))
+    };
+    assert_eq!(rim("[6 6] 0 setdash"), rim(""));
+}

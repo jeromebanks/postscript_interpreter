@@ -2119,28 +2119,32 @@ systemdict /setalpha known /pkalphaok exch def
     % checking after -- the obvious shape, and what this did originally
     % -- doesn't bound anything: at `/Pitch 0.0001` the counting walk
     % itself is the unbounded work, and the check it eventually reaches
-    % never runs (Codex review, PR #109). walkpath emits about
-    % length/pitch stops plus a guaranteed first and last per subpath.
-    pwlen pwpitch div pwsubs 2 mul add 1 add 20000 gt
+    % never runs (Codex review, PR #109).
+    %
+    % walkpath emits floor(L/pitch)+1 regular stops per subpath plus at
+    % most one guaranteed endpoint, so length/pitch + 2 per subpath is a
+    % true upper bound (a sum of floors never exceeds the floor of the
+    % sum); the slack covers float rounding. Sizing the collection array
+    % from that bound rather than from an exact count is what lets this
+    % walk the path *twice* rather than three times -- parity with
+    % pkribbon and pkspray, which matters because walkpath's own
+    % per-segment traversal cost is paid once per pass.
+    /pwcap pwlen pwpitch div pwsubs 2 mul add 8 add truncate cvi def
+    pwcap 20000 gt
         { pkwash-boundary-sample-count-exceeds-safety-limit } if
 
-    % Pass 1: the exact count, now bounded by construction, for the
-    % preallocation below.
-    /pwcount 0 def
-    pwpitch {
-        pop pop pop pop pop pop
-        /pwcount pwcount 1 add def
-    } walkpath
-
-    % Pass 2: collect into a preallocated array -- count, then fill, the
+    % Collect into that preallocated array -- fill-as-you-walk is the
     % only shape that survives walkpath's cross-subpath stack discipline
-    % (same as pkribbon's pkraw and pkspray's pzraw).
-    /pwraw pwcount array def
+    % (same as pkribbon's pkraw and pkspray's pzraw). If the bound above
+    % were ever wrong, `put` raises rangecheck rather than corrupting
+    % anything.
+    /pwraw pwcap array def
     /pwci 0 def
     pwpitch {
         6 array astore pwraw pwci 3 -1 roll put
         /pwci pwci 1 add def
     } walkpath
+    /pwcount pwci def
 
     pwcount 0 gt {
         % The granulation region and its budget are both settled here,
@@ -2204,7 +2208,11 @@ systemdict /setalpha known /pkalphaok exch def
             newpath pwbuild
             gsave
                 clip
-                1 setlinejoin 1 setlinecap
+                % Cap, join, width *and* dash: an inherited dash pattern
+                % would turn the pooled edge into a dashed rim, and the
+                % rim is the one mark here whose whole job is to be
+                % continuous (Codex review, PR #109).
+                1 setlinejoin 1 setlinecap [] 0 setdash
                 newpath pwbuild
                 pwbloomw 2 mul setlinewidth
                 pwalpha pwbloom mul 0.55 mul pwmark
@@ -2349,6 +2357,12 @@ systemdict /setalpha known /pkalphaok exch def
         pvn 60000 gt { pkpaper-grain-count-exceeds-safety-limit } if
 
         gsave
+        % The ground is a ground: opaque and source-over, whatever the
+        % caller had set. /Alpha and /Blend are documented as *grain*
+        % options, so inheriting an ambient `setalpha`/`setblendmode`
+        % here would make the paper itself translucent with nothing in
+        % the contract saying so (Codex review, PR #109).
+        pkalphaok { 1 setalpha /Normal setblendmode } if
         newpath
         pvx pvy moveto pvw 0 rlineto 0 pvh rlineto pvw neg 0 rlineto
         closepath
