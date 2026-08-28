@@ -310,6 +310,33 @@ renders eight examples in both and compares block-downsampled output).
   off-center `ShadingType` 3 that fails that (valid PostScript; no
   such constraint exists there) isn't detected or worked around, so
   its SVG export can visibly diverge from the raster.
+- `setalpha`/`currentalpha` and `setblendmode`/`currentblendmode`
+  (issue #47) are **pscat extensions, not PLRM operators** — real
+  Ghostscript has no PostScript-callable alpha operator at all
+  (`.setfillconstantalpha`, `.setopacityalpha`,
+  `.setstrokeconstantalpha`, `setalpha` are all `where`-undefined on
+  gs 10.x; gs's transparency lives inside its PDF interpreter). Two
+  consequences worth knowing before touching either:
+    * **Alpha does not reach `image`/`imagemask`.** `src/image.rs`
+      blits samples straight into the pixmap rather than going through
+      `Gfx::paint()`, so a translucent `image` silently paints opaque.
+      Documented at the field, the operator, README and the tests;
+      closing it means teaching the image blitter about the graphics
+      state, not just adding a call.
+    * **A program using them will not render the same under plain `gs
+      file.ps`.** The verification route for alpha-bearing content is
+      `--pdf` plus gs rasterizing that PDF back (`tests/pdf.rs`'s
+      `alpha_survives_the_round_trip_through_gs`), which is stronger
+      than the `ghostscript_accepts_*` pattern, not weaker — it
+      compares pixels rather than exit status. `lib/paintkit.ps`'s
+      watercolor section carries a flatten-against-white fallback for
+      the `gs file.ps` path; see `docs/WATERCOLOR.md`.
+  Blend modes are deliberately just `Normal`/`Multiply`, on pscat's own
+  two-variant enum rather than a re-export of `tiny_skia::BlendMode`:
+  each variant has to map to tiny-skia, SVG's `mix-blend-mode` *and*
+  PDF's `ExtGState /BM`, and an exhaustive match on a local enum is
+  what makes adding a third mode fail to compile until all three
+  exporters learn about it.
 - `error_report`'s `Line: N` (issue #17) is best-effort, not exact
   source attribution: no `Object` carries a source position, so it
   reports the line of the most recent token scanned directly from the
@@ -442,6 +469,14 @@ renders eight examples in both and compares block-downsampled output).
   overwrites it). Any future caller that constructs more than one
   `Interp` in a long-running or high-iteration process should do the
   same.
+- `build.rs`'s `% @...` tag scanner models the depth-0 operand stack
+  with a **two-slot window**, so it only understands `def` whose key is
+  exactly two objects back. `/name systemdict /other known def` is read
+  as defining `/other` (issue #47 hit this; same family as issue #104's
+  open parser gaps). Write such a definition probe-first —
+  `systemdict /other known /name exch def`, all on one line so the tag
+  block stays directly above the `def` — or teach the scanner operator
+  arities, which is a real change, not a tweak.
 - tiny-skia `Transform::from_row(sx, ky, kx, sy, tx, ty)` matches the
   PS matrix order `[a b c d tx ty]` — `ops/matrix.rs` documents it;
   don't rediscover this the hard way.

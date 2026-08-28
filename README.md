@@ -498,11 +498,50 @@ pass, heavy overspray, the falloff levels, a word sprayed through a
 charpath stencil, a star sprayed through an arbitrary-path stencil,
 and a tag mark with bursts pooled at both ends.
 
+`pkwash` (issue #47) is the watercolor medium, and the one preset here
+that needs something from the interpreter rather than only from
+PostScript: it fills the current path as a *translucent* wash. Two new
+operators back it — `setalpha`/`currentalpha` and `setblendmode`/
+`currentblendmode` (`/Normal` or `/Multiply`), pscat extensions rather
+than PLRM operators, living on the graphics state so `gsave`/`grestore`
+snapshot them like any other paint attribute, and exported by `--svg`
+(`fill-opacity`/`stroke-opacity`, `mix-blend-mode`) and `--pdf` (an
+`ExtGState`'s `ca`/`CA`/`BM`) as well as `--png`. They reach fills,
+strokes, text and `shfill`; they do **not** reach `image`/`imagemask`,
+which blit their own samples. The wash itself is still pure vector
+geometry: `/Layers` translucent passes, each with its own boundary
+wobbled off the given path by `/Wet` (a harmonic ladder at integer
+multiples of path progress, so a closed boundary joins seamlessly),
+`/Bloom` edge pooling drawn as a stroke clipped to the wash so it
+can't leak outside, and optional `/Grain` granulation — no diffusion
+solver anywhere. `/Blend /Multiply` makes wash order commute, which
+plain source-over does not. `pkpaper` lays the ground it sits on: tone
+plus seeded grain and fibers. Both are deterministic under `/Seed`, or
+under the caller's own `srand` without one.
+
+This is also the first thing in this repo that does **not** render the
+same way under plain `gs file.ps`: Ghostscript has no
+PostScript-callable alpha operator at all. Rather than error there,
+`pkwash`/`pkpaper` probe for `setalpha` at load and fall back to
+painting each mark in its flattened-over-white equivalent — legible,
+but overlaps stop mixing. Verified alpha output goes through `--pdf`
+instead, which gs's own PDF interpreter renders correctly.
+`docs/WATERCOLOR.md` is the decision record behind all of it (issue
+#46's architecture spike), `examples/paintkit_wash_demo.ps` is the
+specimen sheet, and the gallery's First Rain is the piece.
+
 ```postscript
 (lib/artkit.ps) run
 (lib/paintkit.ps) run
 newpath 40 40 moveto 60 120 260 120 280 40 curveto
 << /Width 24 /Pressure { pktaper } >> pkribbon showpage
+```
+
+```postscript
+0 0 612 792 << /Grain 0.6 >> pkpaper            % the paper first
+0.2 0.35 0.7 setrgbcolor
+newpath 300 500 120 0 360 arc closepath
+<< /Alpha 0.3 /Layers 3 /Wet 8 /Bloom 0.6 >> pkwash   % then the wash
 ```
 
 ## The website
