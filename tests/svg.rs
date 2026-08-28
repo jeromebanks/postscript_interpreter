@@ -210,3 +210,59 @@ fn sh_gradient_local_coordinates_keep_full_precision() {
         "expected full-precision gradient-local coordinates: {svg}"
     );
 }
+
+/// Issue #47's alpha/blend export. The contract is symmetric with the
+/// PDF side (`tests/pdf.rs`): a program that asks for translucency
+/// gets it in the vector output too, and a program that doesn't gets
+/// exactly the document it got before the operators existed.
+#[test]
+fn alpha_becomes_fill_and_stroke_opacity() {
+    let pages = svg_pages(
+        "0.35 setalpha
+         newpath 10 10 moveto 90 10 lineto 50 90 lineto closepath fill
+         4 setlinewidth newpath 10 95 moveto 90 95 lineto stroke",
+    );
+    let svg = &pages[0];
+    assert!(svg.contains("fill-opacity=\"0.35\""), "{svg}");
+    assert!(svg.contains("stroke-opacity=\"0.35\""), "{svg}");
+}
+
+#[test]
+fn multiply_becomes_a_mix_blend_mode() {
+    let pages = svg_pages(
+        "/Multiply setblendmode
+         newpath 10 10 moveto 90 10 lineto 50 90 lineto closepath fill",
+    );
+    let svg = &pages[0];
+    assert!(svg.contains("style=\"mix-blend-mode:multiply\""), "{svg}");
+}
+
+#[test]
+fn opaque_normal_output_carries_no_compositing_attributes() {
+    let pages = svg_pages(
+        "newpath 10 10 moveto 90 10 lineto 50 90 lineto closepath fill
+         4 setlinewidth newpath 10 95 moveto 90 95 lineto stroke",
+    );
+    let svg = &pages[0];
+    assert!(!svg.contains("opacity"), "{svg}");
+    assert!(!svg.contains("mix-blend-mode"), "{svg}");
+}
+
+/// `shfill` isn't a flat fill, so its alpha rides the gradient's own
+/// element rather than `paint()`'s color — the seam most likely to be
+/// forgotten, and the one that would silently make `--svg` diverge
+/// from `--png` for a shaded wash.
+#[test]
+fn shfill_region_carries_alpha_too() {
+    let pages = svg_pages(
+        "0.5 setalpha
+         << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0]
+            /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >>
+         shfill",
+    );
+    let svg = &pages[0];
+    assert!(
+        svg.contains("fill=\"url(#g0)\" fill-opacity=\"0.5\""),
+        "{svg}"
+    );
+}

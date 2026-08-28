@@ -20,7 +20,7 @@ use std::rc::Rc;
 
 use tiny_skia::FillRule;
 
-use crate::gfx::ClipNode;
+use crate::gfx::{BlendMode, ClipNode, Composite};
 
 pub struct SvgRecorder {
     width: u32,
@@ -110,18 +110,54 @@ impl SvgRecorder {
         (open, "</g>".repeat(ids.len()))
     }
 
+    /// The `fill-opacity`/`stroke-opacity`/`mix-blend-mode` attributes
+    /// for one painted element (issue #47). Empty for opaque
+    /// source-over, so a program that never touches `setalpha`/
+    /// `setblendmode` exports exactly the SVG it did before.
+    ///
+    /// `mix-blend-mode` blends an element against its backdrop within
+    /// the nearest stacking context. The clip wrappers this exporter
+    /// emits are plain `<g clip-path=…>` with no opacity, filter, or
+    /// `isolation` — none of which SVG treats as creating a stacking
+    /// context — so a blended element still composites against the
+    /// page, matching what the rasterizer did.
+    fn composite_attrs(c: Composite, stroking: bool) -> String {
+        let mut out = String::new();
+        if c.alpha < 1.0 {
+            let _ = write!(
+                out,
+                " {}-opacity=\"{}\"",
+                if stroking { "stroke" } else { "fill" },
+                fmt_f32(c.alpha),
+            );
+        }
+        match c.blend {
+            BlendMode::Normal => {}
+            BlendMode::Multiply => out.push_str(" style=\"mix-blend-mode:multiply\""),
+        }
+        out
+    }
+
     fn color(rgb: (f32, f32, f32)) -> String {
         let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
         format!("#{:02x}{:02x}{:02x}", c(rgb.0), c(rgb.1), c(rgb.2))
     }
 
-    pub(crate) fn fill(&mut self, d: &str, rule: FillRule, rgb: (f32, f32, f32), chain: &Chain) {
+    pub(crate) fn fill(
+        &mut self,
+        d: &str,
+        rule: FillRule,
+        rgb: (f32, f32, f32),
+        comp: Composite,
+        chain: &Chain,
+    ) {
         let (open, close) = self.clip_wrappers(chain);
         let _ = write!(
             self.body,
-            "{open}<path d=\"{d}\" fill=\"{}\" fill-rule=\"{}\"/>{close}",
+            "{open}<path d=\"{d}\" fill=\"{}\" fill-rule=\"{}\"{}/>{close}",
             Self::color(rgb),
             Self::rule_attr(rule),
+            Self::composite_attrs(comp, false),
         );
     }
 
@@ -135,6 +171,7 @@ impl SvgRecorder {
         join: tiny_skia::LineJoin,
         miter_limit: f32,
         dash: Option<(&[f32], f32)>,
+        comp: Composite,
         chain: &Chain,
     ) {
         let (open, close) = self.clip_wrappers(chain);
@@ -161,10 +198,11 @@ impl SvgRecorder {
         let _ = write!(
             self.body,
             "{open}<path d=\"{d}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" \
-             stroke-linecap=\"{cap}\" stroke-linejoin=\"{join}\" stroke-miterlimit=\"{}\"{extra}/>{close}",
+             stroke-linecap=\"{cap}\" stroke-linejoin=\"{join}\" stroke-miterlimit=\"{}\"{extra}{}/>{close}",
             Self::color(rgb),
             fmt_f32(width),
             fmt_f32(miter_limit),
+            Self::composite_attrs(comp, true),
         );
     }
 
@@ -197,12 +235,14 @@ impl SvgRecorder {
     /// SVG's matrix(a b c d e f) is the same convention as the CTM's
     /// own [a b c d tx ty] (`ops/matrix.rs`), so `ctm` here is passed
     /// through as-is: `[sx, ky, kx, sy, tx, ty]`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn shfill(
         &mut self,
         kind: &ShKind,
         ctm: [f32; 6],
         stops: &[(f32, f32, f32, f32)],
         region_d: &str,
+        comp: Composite,
         chain: &Chain,
     ) {
         let id = self.next_grad;
@@ -332,7 +372,8 @@ impl SvgRecorder {
         let (open, close) = self.clip_wrappers(chain);
         let _ = write!(
             self.body,
-            "{open}<path d=\"{region_d}\" fill=\"url(#g{id})\"/>{close}",
+            "{open}<path d=\"{region_d}\" fill=\"url(#g{id})\"{}/>{close}",
+            Self::composite_attrs(comp, false),
         );
     }
 

@@ -228,3 +228,75 @@ fn no_dsc_comments_still_gets_producer_but_no_title() {
     assert!(!text.contains("/Title"));
     assert!(!text.contains("/Author"));
 }
+
+/// Issue #47's alpha/blend export, through the same
+/// rasterize-with-gs-and-compare gate every other PDF feature here
+/// goes through. This test is also the *answer* to the open question
+/// issue #46's spike left for #47 (`docs/WATERCOLOR.md`, "Public
+/// contract"): whether PDF-path verification can substitute for the
+/// `ghostscript_accepts_*` pattern for alpha-bearing content, given
+/// gs has no PostScript-callable alpha operator at all. It can, and
+/// it's strictly stronger — `ghostscript_accepts_*` only asserts gs
+/// doesn't error, while this asserts gs's own transparency
+/// implementation lands on the same pixels tiny-skia did.
+#[test]
+fn alpha_survives_the_round_trip_through_gs() {
+    if !gs_available() {
+        eprintln!("skipping pdf test: gs not installed");
+        return;
+    }
+    // Three overlapping translucent washes plus a translucent stroke,
+    // so both /ca (fill) and /CA (stroke) are exercised.
+    let src = b"0.55 setalpha
+        0.95 0.85 0.25 setrgbcolor newpath 200 300 120 0 360 arc closepath fill
+        0.85 0.20 0.25 setrgbcolor newpath 300 300 120 0 360 arc closepath fill
+        0.15 0.35 0.75 setrgbcolor newpath 250 220 120 0 360 arc closepath fill
+        0 0 0 setrgbcolor 12 setlinewidth
+        newpath 60 60 moveto 440 60 lineto stroke";
+    let (pdf, canvas) = pdf_and_canvas(src);
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains("/ExtGState"), "alpha needs an ExtGState");
+    assert!(text.contains("/ca 0.55"), "fill alpha");
+    assert!(text.contains("/CA 0.55"), "stroke alpha");
+    let theirs = gs_rasterize(&pdf, "alpha");
+    let mean = mean_block_diff(&canvas, &theirs);
+    assert!(mean < 6.0, "alpha diverges through gs: mean {mean:.2}");
+}
+
+#[test]
+fn multiply_blending_survives_the_round_trip_through_gs() {
+    if !gs_available() {
+        eprintln!("skipping pdf test: gs not installed");
+        return;
+    }
+    let src = b"/Multiply setblendmode 0.7 setalpha
+        0.95 0.85 0.25 setrgbcolor newpath 200 300 120 0 360 arc closepath fill
+        0.15 0.35 0.75 setrgbcolor newpath 300 300 120 0 360 arc closepath fill";
+    let (pdf, canvas) = pdf_and_canvas(src);
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(
+        text.contains("/BM /Multiply"),
+        "blend mode in the ExtGState"
+    );
+    let theirs = gs_rasterize(&pdf, "multiply");
+    let mean = mean_block_diff(&canvas, &theirs);
+    assert!(mean < 6.0, "Multiply diverges through gs: mean {mean:.2}");
+}
+
+/// The other half of the contract: a program that never asks for
+/// either one must produce a PDF with no transparency machinery in it
+/// at all, so existing output is unchanged rather than merely
+/// equivalent.
+#[test]
+fn ordinary_programs_get_no_extgstate() {
+    let (pdf, _) = pdf_and_canvas(
+        b"0 0 1 setrgbcolor newpath 10 10 moveto 90 10 lineto 50 90 lineto closepath fill
+          1 0 0 setrgbcolor 4 setlinewidth newpath 10 95 moveto 90 95 lineto stroke",
+    );
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(!text.contains("/ExtGState"), "no alpha, no ExtGState");
+    assert!(
+        !text.contains(" gs\n") && !text.contains(" gs "),
+        "no gs operator"
+    );
+}

@@ -339,6 +339,77 @@ impl ColorSpace {
     }
 }
 
+/// How a fill/stroke composites with what's already on the page —
+/// `setblendmode`/`currentblendmode` (issue #47). Deliberately just
+/// the two modes the watercolor contract needs, and deliberately
+/// pscat's own enum rather than a re-export of `tiny_skia::BlendMode`:
+/// every variant here has to map to *three* targets (tiny-skia, SVG's
+/// `mix-blend-mode`, PDF's `ExtGState` `/BM`), and an exhaustive match
+/// on a two-variant local enum is what makes adding a third mode fail
+/// to compile until all three exporters are taught about it.
+///
+/// `Multiply` matters to watercolor beyond looking right: unlike
+/// source-over, it's commutative, so a stack of washes reads the same
+/// regardless of the order they were laid down — the direct answer to
+/// the order-dependence `docs/WATERCOLOR.md` left open for this issue.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BlendMode {
+    /// Source-over: PostScript's ordinary compositing, and the default.
+    Normal,
+    /// Multiply the source and backdrop colors — darkens, never
+    /// lightens; white is the identity.
+    Multiply,
+}
+
+impl BlendMode {
+    /// The PostScript name `setblendmode` accepts and `currentblendmode`
+    /// hands back.
+    pub fn as_ps_name(self) -> &'static str {
+        match self {
+            BlendMode::Normal => "Normal",
+            BlendMode::Multiply => "Multiply",
+        }
+    }
+
+    /// `None` for any name that isn't a mode — the operator turns that
+    /// into a `rangecheck` rather than silently painting Normal, so a
+    /// typo can't quietly diverge from what the program asked for.
+    pub fn from_ps_name(name: &str) -> Option<BlendMode> {
+        match name {
+            "Normal" => Some(BlendMode::Normal),
+            "Multiply" => Some(BlendMode::Multiply),
+            _ => None,
+        }
+    }
+
+    fn to_skia(self) -> tiny_skia::BlendMode {
+        match self {
+            BlendMode::Normal => tiny_skia::BlendMode::SourceOver,
+            BlendMode::Multiply => tiny_skia::BlendMode::Multiply,
+        }
+    }
+}
+
+/// The alpha/blend pair a recorded paint carries into `--svg`/`--pdf`
+/// (issue #47) — bundled rather than threaded through the exporters'
+/// already-long per-element signatures as two more positional
+/// arguments.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct Composite {
+    pub(crate) alpha: f32,
+    pub(crate) blend: BlendMode,
+}
+
+impl Composite {
+    /// Opaque source-over — what every program that never touches
+    /// `setalpha`/`setblendmode` paints with. Both exporters emit
+    /// *nothing* for this case, so their output for such a program is
+    /// byte-identical to what it was before #47.
+    pub(crate) fn is_default(self) -> bool {
+        self.alpha >= 1.0 && self.blend == BlendMode::Normal
+    }
+}
+
 /// Everything `gsave`/`grestore` snapshots. The current path is part of
 /// the graphics state per the PLRM — that's what makes the
 /// `gsave fill grestore stroke` idiom work.
@@ -346,16 +417,27 @@ impl ColorSpace {
 pub struct GraphicsState {
     pub ctm: Transform,
     pub rgb: (f32, f32, f32),
-    /// Fill/stroke alpha, 0.0..1.0. **Not a public operator** -- this
-    /// is issue #46's watercolor-spike prototype for Approach B
-    /// ("small renderer-level extension for opacity/blending"),
-    /// exercised only by `tests::watercolor_prototype_b_alpha_sample`
-    /// below. It exists to produce a real rendered sample for the
-    /// spike's decision record, not to ship as a language feature --
-    /// #47 owns the actual public contract (which also needs SVG/PDF
-    /// alpha export; this prototype is PNG-only). See
-    /// `docs/WATERCOLOR.md`.
-    pub(crate) alpha: f32,
+    /// Fill/stroke alpha, 0.0..1.0 — `setalpha`/`currentalpha`, the
+    /// public contract issue #47 landed on top of issue #46's
+    /// watercolor spike (`docs/WATERCOLOR.md`). A pscat extension, not
+    /// a PLRM operator: real Ghostscript has no PostScript-callable
+    /// alpha operator at all (tested in the spike), so an alpha-bearing
+    /// program is the first thing here that doesn't render under plain
+    /// `gs file.ps` — see `lib/paintkit.ps`'s `pkwash` for the
+    /// flatten-against-white fallback that keeps such programs usable
+    /// there anyway.
+    ///
+    /// Applies to `fill`, `stroke`, glyph painting (`fill_path_direct`)
+    /// and `shfill`, and is exported by both `--svg` (`fill-opacity`/
+    /// `stroke-opacity`) and `--pdf` (an `ExtGState`'s `ca`/`CA`).
+    /// **It does not apply to `image`/`imagemask`**, which blit
+    /// straight into the pixmap (`crate::image`) instead of going
+    /// through `paint()` — a documented gap, not an oversight.
+    pub alpha: f32,
+    /// Blend mode for fill/stroke compositing — `setblendmode`/
+    /// `currentblendmode`, the other half of #47's contract. Same
+    /// reach and the same `image` gap as `alpha` above.
+    pub blend: BlendMode,
     /// Set implicitly by the color operators and explicitly by
     /// setcolorspace, per the PLRM; the Level 2 image dict form and
     /// setcolor read it.
@@ -457,6 +539,7 @@ impl Gfx {
                 ctm: base_ctm,
                 rgb: (0.0, 0.0, 0.0),
                 alpha: 1.0,
+                blend: BlendMode::Normal,
                 colorspace: ColorSpace::Gray,
                 line_width: 1.0,
                 flatness: 1.0,
@@ -675,14 +758,21 @@ impl Gfx {
     fn paint(&self) -> Paint<'static> {
         let mut paint = Paint::default();
         let (r, g, b) = self.state.rgb;
-        // `alpha` defaults to 1.0 (255) for every ordinary render --
-        // this only diverges from opaque when the #46 spike test below
-        // pokes `state_mut().alpha` directly, since there's no
-        // PostScript operator that can reach it (see the field's doc
-        // comment on GraphicsState).
+        // `alpha`/`blend` default to opaque source-over, so every
+        // ordinary render composites exactly as it did before issue
+        // #47 gave PostScript the operators that can move them.
         paint.set_color_rgba8(to_u8(r), to_u8(g), to_u8(b), to_u8(self.state.alpha));
+        paint.blend_mode = self.state.blend.to_skia();
         paint.anti_alias = true;
         paint
+    }
+
+    /// The current alpha/blend as the exporters want it.
+    fn composite(&self) -> Composite {
+        Composite {
+            alpha: self.state.alpha,
+            blend: self.state.blend,
+        }
     }
 
     /// Rc clone so the mask can outlive the `&mut self.pixmap` borrow.
@@ -720,12 +810,13 @@ impl Gfx {
             let mask = self.clip_mask();
             self.pixmap
                 .fill_path(&path, &paint, rule, Transform::identity(), mask.as_deref());
+            let comp = self.composite();
             if self.svg.is_some() {
                 let d = self.state.path.to_svg_data();
                 let rgb = self.state.rgb;
                 let chain = self.state.clip.as_ref().map(|c| c.node.clone());
                 if let Some(svg) = &mut self.svg {
-                    svg.fill(&d, rule, rgb, &chain);
+                    svg.fill(&d, rule, rgb, comp, &chain);
                 }
             }
             {
@@ -733,7 +824,7 @@ impl Gfx {
                 let chain = self.state.clip.as_ref().map(|c| c.node.clone());
                 let Gfx { pdf, state, .. } = self;
                 if let Some(pdf) = pdf {
-                    pdf.fill(&state.path, rule, rgb, &chain);
+                    pdf.fill(&state.path, rule, rgb, comp, &chain);
                 }
             }
             self.dirty = true;
@@ -912,11 +1003,24 @@ impl Gfx {
             None => self.page_rect_path(),
         };
         if let Some(skia_path) = path.to_skia() {
+            // A gradient carries its own shader rather than a flat
+            // color, so `paint()`'s alpha byte can't reach it —
+            // `apply_opacity` is the shader-side equivalent. Without
+            // this, `setalpha` would silently do nothing to `shfill`
+            // alone, exactly the per-target divergence issue #47
+            // exists to close (docs/WATERCOLOR.md's "public contract").
+            let mut shader = shader;
+            let alpha = self.state.alpha;
+            if alpha < 1.0 {
+                shader.apply_opacity(alpha);
+            }
             let paint = Paint {
                 shader,
                 anti_alias: true,
+                blend_mode: self.state.blend.to_skia(),
                 ..Default::default()
             };
+            let comp = self.composite();
             let mask = self.clip_mask();
             self.pixmap.fill_path(
                 &skia_path,
@@ -960,7 +1064,7 @@ impl Gfx {
                 // the whole page bounded only by the clip.
                 let region_d = path.to_svg_data();
                 if let Some(svg) = &mut self.svg {
-                    svg.shfill(&svg_kind, svg_ctm, &shading.stops, &region_d, &chain);
+                    svg.shfill(&svg_kind, svg_ctm, &shading.stops, &region_d, comp, &chain);
                 }
             }
             if self.pdf.is_some() {
@@ -994,7 +1098,7 @@ impl Gfx {
                 let chain = self.state.clip.as_ref().map(|c| c.node.clone());
                 let Gfx { pdf, .. } = self;
                 if let Some(pdf) = pdf {
-                    pdf.fill(&path, FillRule::Winding, avg, &chain);
+                    pdf.fill(&path, FillRule::Winding, avg, comp, &chain);
                 }
             }
             self.dirty = true;
@@ -1047,6 +1151,7 @@ impl Gfx {
             // exports. `fill`/`fill_path_direct` already get this
             // right by checking each recorder's own `Option`; match
             // that here.
+            let comp = self.composite();
             if self.svg.is_some() {
                 let d = self.state.path.to_svg_data();
                 let rgb = self.state.rgb;
@@ -1060,6 +1165,7 @@ impl Gfx {
                         join,
                         ml,
                         scaled_dash.as_ref().map(|(p, ph)| (p.as_slice(), *ph)),
+                        comp,
                         &chain,
                     );
                 }
@@ -1077,6 +1183,7 @@ impl Gfx {
                         join,
                         ml,
                         scaled_dash.as_ref().map(|(p, ph)| (p.as_slice(), *ph)),
+                        comp,
                         &chain,
                     );
                 }
@@ -1249,6 +1356,7 @@ impl Gfx {
             ctm: self.base_ctm,
             rgb: (0.0, 0.0, 0.0),
             alpha: 1.0,
+            blend: BlendMode::Normal,
             colorspace: ColorSpace::Gray,
             line_width: 1.0,
             flatness: 1.0,
@@ -1388,19 +1496,20 @@ impl Gfx {
                 Transform::identity(),
                 mask.as_deref(),
             );
+            let comp = self.composite();
             if self.svg.is_some() {
                 let d = path.to_svg_data();
                 let rgb = self.state.rgb;
                 let chain = self.state.clip.as_ref().map(|c| c.node.clone());
                 if let Some(svg) = &mut self.svg {
-                    svg.fill(&d, FillRule::Winding, rgb, &chain);
+                    svg.fill(&d, FillRule::Winding, rgb, comp, &chain);
                 }
             }
             if self.pdf.is_some() {
                 let rgb = self.state.rgb;
                 let chain = self.state.clip.as_ref().map(|c| c.node.clone());
                 if let Some(pdf) = &mut self.pdf {
-                    pdf.fill(path, FillRule::Winding, rgb, &chain);
+                    pdf.fill(path, FillRule::Winding, rgb, comp, &chain);
                 }
             }
             self.dirty = true;
@@ -1591,8 +1700,13 @@ mod tests {
     /// Circ3 and Color1/Color2/Color3 (transcribed by hand below --
     /// there's no shared build between Rust and PostScript here),
     /// rendered with real alpha compositing instead of Approach A's
-    /// hand-averaged nested-clip blend colors. `#[ignore]`d because it
-    /// writes a file as a side effect and exists to regenerate
+    /// hand-averaged nested-clip blend colors. Kept as-is after issue
+    /// #47 turned that prototype field into the public `setalpha`
+    /// operator: it still regenerates the image `docs/WATERCOLOR.md`
+    /// embeds, and poking the field directly (rather than routing
+    /// through the operator) is what keeps the sample a record of what
+    /// the *spike* rendered. `#[ignore]`d because it writes a file as a
+    /// side effect and exists to regenerate
     /// `docs/watercolor_prototypes/approach_b_alpha_ext.png` on
     /// demand, not to run under ordinary `cargo test`:
     ///
@@ -1633,5 +1747,97 @@ mod tests {
         gfx.pixmap
             .save_png("docs/watercolor_prototypes/approach_b_alpha_ext.png")
             .expect("save prototype png");
+    }
+
+    /// Paint one full-page rect and read back the pixel it produced.
+    fn painted(alpha: f32, blend: BlendMode, rgb: (f32, f32, f32)) -> (u8, u8, u8) {
+        let mut gfx = Gfx::new(8, 8).expect("pixmap");
+        gfx.state_mut().alpha = alpha;
+        gfx.state_mut().blend = blend;
+        gfx.set_rgb(rgb.0 as f64, rgb.1 as f64, rgb.2 as f64);
+        gfx.moveto(0.0, 0.0);
+        gfx.lineto(8.0, 0.0).expect("lineto");
+        gfx.lineto(8.0, 8.0).expect("lineto");
+        gfx.lineto(0.0, 8.0).expect("lineto");
+        gfx.closepath();
+        gfx.fill(FillRule::Winding);
+        let px = gfx.pixmap.pixel(4, 4).expect("pixel");
+        (px.red(), px.green(), px.blue())
+    }
+
+    #[test]
+    fn alpha_composites_against_the_page() {
+        // Black at 50% over the white page is mid grey, within the
+        // one-count slop premultiplied 8-bit round-tripping costs.
+        let (r, g, b) = painted(0.5, BlendMode::Normal, (0.0, 0.0, 0.0));
+        for c in [r, g, b] {
+            assert!(c.abs_diff(128) <= 2, "expected ~128, got {c}");
+        }
+        // The default is still fully opaque.
+        assert_eq!(painted(1.0, BlendMode::Normal, (0.0, 0.0, 0.0)), (0, 0, 0));
+    }
+
+    #[test]
+    fn multiply_is_order_independent_where_source_over_is_not() {
+        // Two opaque washes, laid down in both orders. Under Multiply
+        // the result is the same either way (the property `pkwash`'s
+        // /Blend key exists to give a painter); under source-over the
+        // last one laid down simply wins.
+        let paint_pair = |blend: BlendMode, first: (f32, f32, f32), second: (f32, f32, f32)| {
+            let mut gfx = Gfx::new(8, 8).expect("pixmap");
+            for rgb in [first, second] {
+                gfx.state_mut().blend = blend;
+                gfx.set_rgb(rgb.0 as f64, rgb.1 as f64, rgb.2 as f64);
+                gfx.newpath();
+                gfx.moveto(0.0, 0.0);
+                gfx.lineto(8.0, 0.0).expect("lineto");
+                gfx.lineto(8.0, 8.0).expect("lineto");
+                gfx.lineto(0.0, 8.0).expect("lineto");
+                gfx.closepath();
+                gfx.fill(FillRule::Winding);
+            }
+            let px = gfx.pixmap.pixel(4, 4).expect("pixel");
+            (px.red(), px.green(), px.blue())
+        };
+        let a = (1.0, 0.5, 0.0);
+        let b = (0.0, 0.5, 1.0);
+        assert_eq!(
+            paint_pair(BlendMode::Multiply, a, b),
+            paint_pair(BlendMode::Multiply, b, a),
+        );
+        assert_ne!(
+            paint_pair(BlendMode::Normal, a, b),
+            paint_pair(BlendMode::Normal, b, a),
+        );
+    }
+
+    #[test]
+    fn alpha_and_blend_ride_the_gsave_stack() {
+        let mut gfx = Gfx::new(8, 8).expect("pixmap");
+        gfx.gsave();
+        gfx.state_mut().alpha = 0.25;
+        gfx.state_mut().blend = BlendMode::Multiply;
+        gfx.grestore();
+        assert_eq!(gfx.state().alpha, 1.0);
+        assert_eq!(gfx.state().blend, BlendMode::Normal);
+    }
+
+    #[test]
+    fn initgraphics_resets_alpha_and_blend() {
+        let mut gfx = Gfx::new(8, 8).expect("pixmap");
+        gfx.state_mut().alpha = 0.25;
+        gfx.state_mut().blend = BlendMode::Multiply;
+        gfx.init_graphics();
+        assert_eq!(gfx.state().alpha, 1.0);
+        assert_eq!(gfx.state().blend, BlendMode::Normal);
+    }
+
+    #[test]
+    fn blend_mode_names_round_trip() {
+        for mode in [BlendMode::Normal, BlendMode::Multiply] {
+            assert_eq!(BlendMode::from_ps_name(mode.as_ps_name()), Some(mode));
+        }
+        assert_eq!(BlendMode::from_ps_name("Screen"), None);
+        assert_eq!(BlendMode::from_ps_name("multiply"), None);
     }
 }
