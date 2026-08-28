@@ -24,7 +24,7 @@
 (bar, line, and pie charts with lib/dataviz.ps — DVColors, dvaxes) 306 724 showctr
 
 % --- top: bar chart ---
-0 0 24 72 520 460 468 170 setdvframe
+0 24 72 520 468 170 setdvframe
 newpath [8 15 12 19 14 22 17] 0.22 { pop dvcolor } barchart
 0.55 0.56 0.60 setrgbcolor 0.6 setlinewidth
 newpath 7 4 5 dvaxes stroke
@@ -35,7 +35,7 @@ newpath 7 4 5 dvaxes stroke
 0 1 6 { /i exch def i 1 add 3 string cvs i 7 dvcatx 452 showctr } for
 
 % --- middle: line chart ---
-0 0 18 72 300 468 170 setdvframe
+0 18 72 300 468 170 setdvframe
 0.15 0.45 0.75 setrgbcolor 1.4 setlinewidth
 newpath [4 6 5 9 7 11 9 13 10] linechart stroke
 0.55 0.56 0.60 setrgbcolor 0.6 setlinewidth
