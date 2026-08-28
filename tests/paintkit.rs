@@ -3006,3 +3006,75 @@ fn the_wash_generator_matches_ghostscripts_arithmetic() {
     let got: Vec<String> = it.operand_stack().iter().map(|o| o.repr()).collect();
     assert_eq!(got, ["23", "7"]);
 }
+
+/// `/Blend` must mean what it says regardless of the graphics state it
+/// was called in. A caller who left `/Multiply setblendmode` in force
+/// used to get a Multiply wash out of `/Blend /Normal`, because the
+/// mode was only ever *set* for /Multiply and otherwise inherited
+/// (Codex review, PR #109).
+#[test]
+fn blend_does_not_inherit_the_callers_mode() {
+    let wash = |prelude: &str, blend: &str| {
+        pixels(&wash_pixmap(&format!(
+            "{prelude} 0.9 0.7 0.2 setrgbcolor \
+             newpath 0 0 moveto 200 0 lineto 200 200 lineto 0 200 lineto closepath fill \
+             0.2 0.4 0.9 setrgbcolor {BLOB} \
+             << /Alpha 0.5 /Layers 1 /Wet 0 /Bloom 0 /Blend /{blend} /Seed 12 >> pkwash"
+        )))
+    };
+    assert_eq!(
+        wash("/Multiply setblendmode", "Normal"),
+        wash("", "Normal"),
+        "an ambient Multiply leaked into a /Normal wash"
+    );
+    assert_eq!(
+        wash("/Normal setblendmode", "Multiply"),
+        wash("", "Multiply"),
+        "an ambient Normal suppressed a /Multiply wash"
+    );
+    assert_ne!(wash("", "Normal"), wash("", "Multiply"));
+}
+
+/// The caller's own blend mode has to survive the call, since `pkwash`
+/// only borrows it inside its own gsave.
+#[test]
+fn a_wash_restores_the_callers_blend_mode_and_alpha() {
+    let mut it = fresh(120, 120);
+    it.run_str(
+        "/Multiply setblendmode 0.4 setalpha \
+         0 0 0 setrgbcolor newpath 60 60 30 0 360 arc closepath \
+         << /Alpha 0.3 /Blend /Normal >> pkwash \
+         currentblendmode currentalpha",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let got: Vec<String> = it.operand_stack().iter().map(|o| o.repr()).collect();
+    // 0.4 widened back out of the f32 the graphics state stores, the
+    // same round-trip `currentgray` has always shown.
+    assert_eq!(got, ["/Multiply", "0.4000000059604645"]);
+}
+
+/// A malformed `/Tone` must raise, not *run*. `[{ ... } 0.8 0.7]` clears
+/// the array/type/length checks, and the procedure then executes the
+/// moment the name it was bound to is referenced — arbitrary side
+/// effects from a color option (Codex review, PR #109).
+#[test]
+fn pkpaper_tone_components_are_validated_individually() {
+    for bad in [
+        "[{ 0.9 } 0.8 0.7]",
+        "[0.9 { 0.8 } 0.7]",
+        "[0.9 0.8 (blue)]",
+        "[0.9 0.8 [0.7]]",
+    ] {
+        let mut it = fresh(60, 60);
+        assert!(
+            it.run_str(&format!("0 0 60 60 << /Tone {bad} >> pkpaper"))
+                .is_err(),
+            "/Tone {bad} should have been rejected"
+        );
+        assert_eq!(ink_count(&it), 0, "/Tone {bad} painted before rejecting");
+    }
+    // An integer component is still a number, and still fine.
+    let mut it = fresh(60, 60);
+    it.run_str("0 0 60 60 << /Tone [1 0.8 0] >> pkpaper")
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+}

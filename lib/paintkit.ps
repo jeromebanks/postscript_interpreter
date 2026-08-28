@@ -2172,7 +2172,13 @@ systemdict /setalpha known /pkalphaok exch def
 
         currentrgbcolor /pwb exch def /pwg exch def /pwr exch def
         gsave
-        pkalphaok pwblend /Multiply eq and { /Multiply setblendmode } if
+        % Set the mode unconditionally, not only when it's /Multiply: a
+        % caller who left `/Multiply setblendmode` in force would
+        % otherwise get a Multiply wash out of `/Blend /Normal`, making
+        % a documented option depend on incoming graphics state (Codex
+        % review, PR #109). Inside the gsave, so the caller's own mode
+        % comes back either way.
+        pkalphaok { pwblend setblendmode } if
 
         % The layers. pwcum tracks the coverage already laid down, which
         % the alpha path ignores (the renderer is doing the real
@@ -2286,6 +2292,19 @@ systemdict /setalpha known /pkalphaok exch def
     /pvtone load xcheck { pkpaper-tone-must-not-be-a-procedure } if
     pvtone type /arraytype ne { pkpaper-tone-must-be-an-array } if
     pvtone length 3 ne { pkpaper-tone-must-have-three-components } if
+    % The guards above cover the array; its *elements* need their own.
+    % `/Tone [{ erasepage 0.9 } 0.8 0.7]` passes every check above, and
+    % the procedure then runs the moment the name it gets bound to is
+    % referenced -- a malformed color option performing arbitrary side
+    % effects instead of raising a type error (Codex review, PR #109).
+    % `get` retrieves without executing, so the check itself is safe.
+    0 1 2 {
+        pvtone exch get
+        dup xcheck { pkpaper-tone-components-must-not-be-procedures } if
+        dup type dup /integertype ne exch /realtype ne and
+            { pkpaper-tone-components-must-be-numbers } if
+        pop
+    } for
 
     /pvgrain pvopts /Grain 0.5 pkgetdef def
     /pvgrain load xcheck { pkpaper-grain-must-not-be-a-procedure } if
@@ -2345,7 +2364,8 @@ systemdict /setalpha known /pkalphaok exch def
                 % approximate -- the fallback only loses fidelity where
                 % something *underneath* would have shown through.
                 pkalphaok {
-                    pvblend /Multiply eq { /Multiply setblendmode } if
+                    % Explicit, for the same reason as pkwash's above.
+                    pvblend setblendmode
                     pvalpha setalpha
                     pvtr 1 pvdepth sub mul
                     pvtg 1 pvdepth sub mul
