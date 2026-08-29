@@ -3187,8 +3187,14 @@ fn scpath_bounds_a_pathological_edge_count() {
     let err = scatter_err("newpath 0 0 moveto 1 1 25000 { pop 1 0.5 rlineto } for scpath");
     assert_eq!(err, "scpath-too-many-edges");
 
-    // Just under the ceiling still captures cleanly.
-    let got = eval("newpath 0 0 moveto 1 1 500 { pop 1 0.5 rlineto } for scpath /Edges get length");
+    // Just under the ceiling still captures cleanly. The path has to
+    // zigzag: a straight run of segments is collinear, encloses
+    // nothing, and is dropped along with its edges (see
+    // scpath_drops_the_edges_of_subpaths_it_ignores).
+    let got = eval(
+        "newpath 0 0 moveto 1 1 250 { pop 1 0.5 rlineto 1 -0.5 rlineto } for \
+         scpath /Edges get length",
+    );
     assert_eq!(
         got[0], "2004",
         "501 edges: 500 segments plus the implicit close"
@@ -3955,4 +3961,43 @@ fn scpath_keeps_a_thin_region_that_is_genuinely_not_collinear() {
          scpath /BBox get",
     );
     assert_eq!(got[0], "[0.0 0.0 100.0 100.0]");
+}
+
+#[test]
+fn scpath_drops_the_edges_of_subpaths_it_ignores() {
+    // Round nine, the completion of rounds seven and eight: those
+    // excluded an unfillable subpath from the *bounds* but left its
+    // segments in /Edges, so the measurement still integrated them. An
+    // out-and-back pair should cancel -- both crossings land on the
+    // same x at every height -- but only exactly, and at a coordinate
+    // like 1e9 the two computed crossings differ in their last bits,
+    // leaving a hair of width across an enormous span: a 10x10 square
+    // plus `0 0 moveto 1e9 1e9 lineto` measured 159.6 instead of 100.
+    let got = eval(
+        "newpath 0 0 moveto 10 0 lineto 10 10 lineto 0 10 lineto closepath \
+         0 0 moveto 1000000000 1000000000 lineto \
+         scpath dup /Edges get length 4 idiv exch dup scarea exch /BBox get",
+    );
+    assert_eq!(got[0], "4", "only the square's own four edges are kept");
+    assert_eq!(got[1], "100.0", "and only the square's area is measured");
+    assert_eq!(got[2], "[0.0 0.0 10.0 10.0]");
+
+    // A collinear run leaves nothing behind either.
+    let got = eval(
+        "newpath 0 0 moveto 10 0 lineto 10 10 lineto 0 10 lineto closepath \
+         500 500 moveto 600 600 lineto 700 700 lineto closepath \
+         scpath dup /Edges get length 4 idiv exch scarea",
+    );
+    assert_eq!(got[0], "4");
+    assert_eq!(got[1], "100.0");
+
+    // And a point far outside the real contour is outside the region,
+    // rather than landing on a stray edge's rounding.
+    let got = eval(
+        "newpath 0 0 moveto 10 0 lineto 10 10 lineto 0 10 lineto closepath \
+         0 0 moveto 1000000000 1000000000 lineto scpath /R exch def \
+         5 5 R scin  500 500 R scin",
+    );
+    assert_eq!(got[0], "true");
+    assert_eq!(got[1], "false");
 }

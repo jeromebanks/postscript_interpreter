@@ -1120,7 +1120,19 @@ end
             sqpy0 sqby0 lt { /sqby0 sqpy0 def } if
             sqpy1 sqby1 gt { /sqby1 sqpy1 def } if
         } ifelse
-    } if
+    } {
+        % Rejected: take its edges back out of the buffer too, not just
+        % its corner out of the bbox. An out-and-back pair *should*
+        % cancel -- both crossings land on the same x at every height --
+        % but only exactly, and at a coordinate like 1e9 the two
+        % computed crossings differ in their last bits, leaving a hair
+        % of width across an enormous span: a 10x10 square plus
+        % `0 0 moveto 1e9 1e9 lineto` measured 159.6 instead of 100
+        % (Codex review, round 9). Dropping the edges makes /Edges mean
+        % exactly what it should -- the segments that can affect the
+        % fill -- so `scin` and the edge ceiling agree with `scarea`.
+        /sqn sqpstart def
+    } ifelse
 } def
 
 /sqemit {                                        % x0 y0 x1 y1 -
@@ -1189,6 +1201,7 @@ end
 /sqmove {                                        % x y -   (subpath start)
     /sqmy exch def /sqmx exch def
     sqclose                                      % close the previous one
+    /sqpstart sqn def
     /sqpn 0 def
     /sqpfirst true def
     /sqpcol true def
@@ -1211,6 +1224,7 @@ end
     /sqhave false def
     /sqfirst true def
     /sqpfirst true def
+    /sqpstart 0 def
     /sqpn 0 def
     /sqpcol true def
     /sqpdx 0 def /sqpdy 0 def

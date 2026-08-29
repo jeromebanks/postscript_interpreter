@@ -237,6 +237,19 @@ an anisotropic CTM, since at identity `flattenpath`'s own coordinate
 quantization makes such a sliver genuinely flat before scpath ever
 sees it.
 
+**Round nine completed rounds seven and eight.** Those excluded an
+unfillable subpath from the *bounds* but left its segments in
+`/Edges`, so the measurement still integrated them. An out-and-back
+pair should cancel — both crossings land on the same x at every
+height — but only exactly, and at a coordinate like 1e9 the two
+computed crossings differ in their last bits, leaving a hair of width
+across an enormous span: a 10x10 square plus `0 0 moveto 1e9 1e9
+lineto` measured 159.6 instead of 100. A rejected subpath's edges are
+now rolled back out of the buffer too, which makes `/Edges` mean
+exactly what it should — the segments that can affect the fill — so
+`scin`, the edge ceiling, and `scarea` all agree about what the region
+is.
+
 **One finding dispositioned rather than fixed.** The same round noted
 that `clippath scpath` doesn't capture the true clip when several
 clips are nested — correctly, but the cause is this interpreter's
