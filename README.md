@@ -320,7 +320,17 @@ a carpet-driven starfield). A noise/flow-fields section adds `noise2`
 table), `curl2` (turns any scalar field into a unit-vector flow by
 taking its normalized perpendicular gradient), and `advect` (traces a
 particle through a vector field as a sequence of `lineto`s) — see gallery's
-Lodestone, iron filings curling around a magnetic stone. All of it
+Lodestone, iron filings curling around a magnetic stone. A scatter
+section is the area-shaped counterpart to `alongpath`: `screct` and
+`scpath` build a region from a rectangle or from the current path
+(flattened and closed the way `fill` sees it — `clippath scpath`
+captures the clip region), `scin` and `scarea` answer containment and
+area, and `scatter` places a caller-supplied mark across the region by
+fixed count or by density, with a `/Weight` procedure for non-uniform
+distributions, seeded scale and rotation variation, exact
+`/MinSpacing` enforcement, and a hard deposit budget (see gallery's
+Firefly Census, a night meadow in which every mark on the page is
+scattered rather than placed by hand). All of it
 deterministic under `srand`, all of it running unchanged in
 Ghostscript.
 

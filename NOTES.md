@@ -3,6 +3,100 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Deterministic scatter and distribution primitives for artkit (issue #48, 2026-08-29)
+
+The area-shaped counterpart to `alongpath`/`walkpath`: place a
+caller-supplied mark many times *across a region* instead of stringing
+it along a curve. Five public names in a new `lib/artkit.ps` section —
+`screct`/`scpath` build a region, `scin`/`scarea` interrogate one, and
+`scatter` places marks in it.
+
+**Regions are objects, not arguments.** `screct` takes a rectangle;
+`scpath` captures the current path — flattened and implicitly closed
+exactly as `fill` sees it, with the path left behind flattened
+(`alongpath`'s own contract), so `<shape> scpath ... stroke` can draw
+the region's outline afterwards. `clippath scpath` covers the issue's
+"clipping to an arbitrary current path" reading with no separate
+mechanism. Containment is a real crossing test over the captured
+edges, not a bounding-box approximation and not rasterizer clipping:
+candidates outside the shape are *rejected* rather than drawn and
+clipped, so `/Density` resolves against the shape's own area and the
+deposit budget isn't spent on invisible marks. `scin` answers under
+the nonzero winding rule by default (matching `fill`); a region's
+`/Rule` can be set to `/evenodd` (matching `eofill`), which is a
+genuine choice about what "inside" means for a donut rather than a
+detail to hard-code.
+
+**Placement.** `/Count` or `/Density` (mutually exclusive — checked by
+key *presence*, since a `known`-less check would see the `/Count`
+default and reject every `/Density` call), a `/Weight` procedure for
+non-uniform distributions, `/Scale` and `/Rotate` ranges handed to the
+mark, `/MinSpacing`, `/Seed`, `/Tries`, `/Budget`. The mark is called
+`x y scale angle`, and the count actually placed lands in the global
+`scplaced` rather than on the operand stack — a returned count is a
+`--lint` operand-leak trap waiting for the first caller who forgets to
+`pop` it.
+
+**Minimum spacing is exact, and cheap.** Dart-throwing against every
+placed mark is O(n²); instead each accepted mark goes into a sparse
+hash grid held in an ordinary PostScript dict, with cells of
+`MinSpacing/1.5` so a cell's diagonal (0.943·MinSpacing) can hold at
+most one mark and no per-cell capacity case arises. A candidate checks
+the 5×5 cell neighborhood, which provably covers the whole
+MinSpacing disc. Memory tracks the number of marks placed, not the
+region's size.
+
+**`/Seed` restores the stream it borrowed.** `rrand`/`srand`
+round-trips exactly in this interpreter *and* in Ghostscript (pinned
+by hand in both before the option was written), so a seeded scatter is
+reproducible regardless of what drew before it and doesn't perturb
+what draws after it — a bare `srand` would have made `/Seed` a hidden
+global side effect. Under `--sweep-seed` the sweep overrides the
+restore too, which is what a sweep is for.
+
+**Three scratch prefixes, deliberately.** `sc-` (scatter's loop), `sq-`
+(region capture), `si-` (containment). The natural way to write a
+non-uniform scatter is a `/Weight` proc that calls `scin` — which runs
+*inside* scatter's own placement loop, so a shared prefix would have
+corrupted the loop's bounds or options partway through. Caught in plan
+review before any code existed; `scatter_weight_may_itself_call_scin`
+pins it. A `/Mark` or `/Weight` that calls `scatter` again is the
+`gasket`/`carpet` nesting case: the library stays unwrapped, the
+caller wraps.
+
+**Bounds.** Every option is range- and type-checked before a single
+mark is drawn (paintkit's precedent: fail on the blank page, not
+halfway through one), a resolved count over `/Budget` is rejected,
+total work is bounded by `Count × Tries` with both capped, and
+`scpath` refuses a path past 20000 flattened edges — `scin` is linear
+in the edge count, so an unbounded path would make every candidate
+arbitrarily expensive.
+
+**Deliberately not built:** true Poisson-disk (Bridson) sampling —
+dart-throwing with a spacing grid is the placement primitive this
+issue asked for, not a sampler with a guaranteed fill quality; density
+*fields* as first-class objects, since `/Weight` plus `noise2` already
+composes into one (issue #19 was explicitly not a blocker); and any
+particle simulation. `alongpath` is untouched.
+
+**gs.** The section runs unchanged in Ghostscript — counts, areas, and
+rejections agree exactly — but *placements* do not: gs's `rand` is a
+different generator, so a seeded scatter is reproducible within each
+interpreter, not across the two. Documented in the section header
+rather than papered over, and the gs driver in `tests/artkit.rs`
+checks the count contract rather than pixel parity.
+
+**Demos.** `examples/scatter.ps` is a six-panel specimen (fixed count,
+one density over two region sizes, a `noise2` weight field, minimum
+spacing, a star as the region, one seed reproduced by two separate
+calls). `gallery/firefly_census.ps` is a night meadow in which every
+mark on the page is scattered and none placed by hand: a star field
+weighted by a Milky Way band times coherent noise, hill stipple
+scattered into the silhouette's own `scpath` outline, min-spaced grass
+whose height and tone come from each blade's own y, and fireflies
+drawn as two passes over one seed so every core lands inside its own
+halo.
+
 ## Watercolor: setalpha/setblendmode + paintkit's pkwash/pkpaper (issue #47, 2026-08-28)
 
 Implements the architecture issue #46's spike recorded in

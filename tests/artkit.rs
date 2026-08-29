@@ -2669,7 +2669,7 @@ fn gradfill_clips_to_the_current_path_not_the_whole_page() {
 fn placements(src: &str) -> Vec<(f64, f64)> {
     let got = eval(src);
     assert!(
-        got.len() % 2 == 0,
+        got.len().is_multiple_of(2),
         "a `/Mark {{ pop pop }}` scatter must leave pairs, got {got:?}"
     );
     got.chunks(2)
@@ -2823,7 +2823,10 @@ fn scatter_reproduces_a_seeded_arrangement_and_restores_the_stream() {
          5 srand 0 0 100 100 screct << /Count 9 /Seed 3 /Mark { pop pop pop pop } >> scatter \
          rand",
     );
-    assert_eq!(got[0], got[1], "the ambient stream survived a seeded scatter");
+    assert_eq!(
+        got[0], got[1],
+        "the ambient stream survived a seeded scatter"
+    );
 
     // Without /Seed the scatter draws from the ambient stream, so it
     // is reproducible under the piece's own `N srand` and nothing else.
@@ -2986,7 +2989,10 @@ fn scatter_scale_and_rotate_stay_inside_their_ranges() {
     );
     let vals: Vec<f64> = got.iter().map(|s| s.parse().unwrap()).collect();
     assert!(vals[0] >= 0.5 && vals[1] <= 2.5, "scale escaped: {vals:?}");
-    assert!(vals[2] >= -30.0 && vals[3] <= 45.0, "angle escaped: {vals:?}");
+    assert!(
+        vals[2] >= -30.0 && vals[3] <= 45.0,
+        "angle escaped: {vals:?}"
+    );
     assert!(vals[1] - vals[0] > 1.0, "scale barely varied: {vals:?}");
     assert!(vals[3] - vals[2] > 30.0, "angle barely varied: {vals:?}");
 
@@ -3162,5 +3168,84 @@ fn scpath_bounds_a_pathological_edge_count() {
 
     // Just under the ceiling still captures cleanly.
     let got = eval("newpath 0 0 moveto 1 1 500 { pop 1 0.5 rlineto } for scpath /Edges get length");
-    assert_eq!(got[0], "2004", "501 edges: 500 segments plus the implicit close");
+    assert_eq!(
+        got[0], "2004",
+        "501 edges: 500 segments plus the implicit close"
+    );
+}
+
+#[test]
+fn the_scatter_specimen_sheet_renders_all_six_panels() {
+    // The payoff check: the file a human actually runs. Each panel is
+    // a 190x190 box, and every one of them has to come out with ink in
+    // it -- a scatter that silently placed nothing (an over-eager
+    // rejection, a weight clamped to zero, a region that captured
+    // empty) would still render a page of frames and captions and
+    // otherwise look fine.
+    let source = std::fs::read("examples/scatter.ps").expect("read the specimen");
+    let mut it = Interp::with_page(660, 560).expect("page");
+    it.run_source(&source)
+        .unwrap_or_else(|e| panic!("examples/scatter.ps failed: {}", it.error_report(&e)));
+    assert!(it.gfx().page_shown, "showpage must have run");
+
+    // Panel origins in user space, and the device y for each row
+    // (device y counts down from the top of a 560-tall page).
+    for (label, x0, y0) in [
+        ("fixed count", 20, 300),
+        ("density", 235, 300),
+        ("weight field", 450, 300),
+        ("min spacing", 20, 70),
+        ("path region", 235, 70),
+        ("same seed", 450, 70),
+    ] {
+        let mut marked = 0;
+        for dx in 0..190_u32 {
+            for dy in 0..190_u32 {
+                let px = x0 + dx;
+                let py = 560 - (y0 + dy) - 1;
+                if pixel(&it, px, py) != (255, 255, 255) {
+                    marked += 1;
+                }
+            }
+        }
+        // The frame alone is ~760 pixels of hairline; a panel whose
+        // scatter placed nothing would land near that floor.
+        assert!(
+            marked > 1500,
+            "the {label} panel has only {marked} marked pixels -- its scatter placed nothing"
+        );
+    }
+}
+
+#[test]
+fn ghostscript_accepts_the_scatter_specimen_sheet() {
+    // The synthetic driver in ghostscript_accepts_artkit exercises the
+    // primitives; this is the acceptance criterion itself -- the
+    // specimen page runs unchanged in both interpreters. `-dNOSAFER`
+    // is needed because the file does `(lib/artkit.ps) run` from disk,
+    // which gs's default sandbox blocks (same reasoning as the
+    // paintkit demo checks).
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let status = std::process::Command::new("gs")
+        .args([
+            "-dNOSAFER",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g660x560",
+            "-r72",
+            "-o/dev/null",
+            "examples/scatter.ps",
+        ])
+        .status()
+        .expect("run gs");
+    assert!(status.success(), "gs rejected examples/scatter.ps");
 }

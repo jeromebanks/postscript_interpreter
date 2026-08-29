@@ -57,6 +57,21 @@ prefer it over guessing a name from prose below.
   wants instead of plain `alongpath`.
 - **Shapes/text/layout**: `ngon`, `star`, `rrect`; `(s) cx y
   showctr`, `(s) w fitfont`; `x y w h cols rows {x y w h ...} grid`.
+- **Scatter** (the area-shaped counterpart to `alongpath`): build a
+  region with `x y w h screct` or `scpath` (the current path,
+  flattened and closed as `fill` sees it — `clippath scpath` for the
+  clip region), then `region << /Mark {x y scale angle ...} ... >>
+  scatter`. `/Count` or `/Density` (marks per square unit of the
+  region's own area), `/Weight {x y -> 0..1}` for a non-uniform
+  distribution (`noise2` composes straight into it), `/Scale [lo hi]`
+  and `/Rotate [lo hi]` for per-mark variation, `/MinSpacing` for
+  blue-noise separation, `/Seed` for an arrangement that reproduces
+  regardless of what drew before it (and doesn't disturb what draws
+  after). Candidates outside the region are rejected, not clipped, so
+  density means what it says. `scplaced` holds the count afterwards;
+  `x y region scin` and `region scarea` are there on their own.
+  Foliage, stars, debris, stipple, print specks — reach for this
+  before writing another random placement loop.
 - **Tiling**: `x0 y0 v1 v2 n1 n2 {x y ...} lattice` (the general point
   walk — any basis, oblique included); `hex`/`tri` shapes; `hexgrid`/
   `trigrid` (the other two regular tessellations, built on `lattice`);
