@@ -57,11 +57,11 @@
 //! content-dict keys to model as [`Param`]s, so a procedure's calling
 //! convention is carried in `example` (the stack-effect comment
 //! already written at its definition site) instead, and `parameters`
-//! stays empty. Templates, and the two options-dict procedures
-//! `hs-write`/`hs-linecount`/`hg-write`/`hg-linecount` (whose calling
-//! convention genuinely *is* one dict with named, defaulted keys —
-//! same shape as a template's content dict), use `parameters` for
-//! real.
+//! stays empty. Templates, the handwriting pairs
+//! `hs-write`/`hs-linecount`/`hg-write`/`hg-linecount`, and artkit's
+//! `scatter` (whose calling convention genuinely *is* one dict with
+//! named, defaulted keys — same shape as a template's content dict)
+//! use `parameters` for real.
 //!
 //! `example` alone isn't enough to actually run something, though — a
 //! page template errors `undefined: Palettes` unless `lib/artkit.ps`
@@ -243,6 +243,26 @@ pub const ARTKIT_INTERNAL: &[&str] = &[
     "FractalGens",
     "nfade",
     "nlerp",
+    // The scatter section (issue #48): three helper families under
+    // three deliberately distinct prefixes -- sc- (scatter's own
+    // loop and option handling), sq- (region capture), si- (scin's
+    // containment test) -- plus `scplaced`, which is data a caller
+    // reads after a call, not a procedure.
+    "scisnum",
+    "scgetdef",
+    "scodds",
+    "scokrange",
+    "scfree",
+    "scwins",
+    "scdeposit",
+    "scplaced",
+    "sqbounds",
+    "sqemit",
+    "sqline",
+    "sqclose",
+    "sqmove",
+    "siedge",
+    "siscan",
     "Palettes",
     "TurtleState",
 ];
@@ -1102,6 +1122,103 @@ static ENTRIES: &[Entry] = &[
         &[],
         ARTKIT,
         "x y w h cols rows {x y w h ...} grid -",
+        LIB
+    ),
+    // --- Procedures: scatter -----------------------------------------------
+    entry!(
+        "screct",
+        CapabilityKind::Procedure,
+        "A rectangular region, for scatter to place marks in.",
+        &[],
+        ARTKIT,
+        "x y w h screct -> region",
+        LIB
+    ),
+    entry!(
+        "scpath",
+        CapabilityKind::Procedure,
+        "The current path as a region — flattened and implicitly closed, the way fill sees it. `clippath scpath` captures the clip region instead.",
+        &[],
+        ARTKIT,
+        "newpath ... scpath -> region",
+        LIB
+    ),
+    entry!(
+        "scin",
+        CapabilityKind::Procedure,
+        "Whether a point is inside a region, under the nonzero winding rule (or even-odd, if the region's /Rule says so).",
+        &[],
+        ARTKIT,
+        "x y region scin -> bool",
+        LIB
+    ),
+    entry!(
+        "scarea",
+        CapabilityKind::Procedure,
+        "A region's area: w*h for a rectangle, the enclosed area for a captured path.",
+        &[],
+        ARTKIT,
+        "region scarea -> num",
+        LIB
+    ),
+    entry!(
+        "scatter",
+        CapabilityKind::Procedure,
+        "Places a caller-supplied mark repeatedly across a region — the area-shaped counterpart to alongpath. Fixed-count or density-based, optionally weighted by a caller procedure, with seeded scale and rotation variation and exact minimum spacing. Leaves the number actually placed in `scplaced`.",
+        &[
+            Param {
+                name: "Mark",
+                description: "The mark: called as `x y scale angle` per placed mark, and must consume all four",
+                default: None
+            },
+            Param {
+                name: "Count",
+                description: "How many marks to place; mutually exclusive with /Density",
+                default: Some("120")
+            },
+            Param {
+                name: "Density",
+                description: "Marks per square unit, resolved against the region's own area",
+                default: None
+            },
+            Param {
+                name: "MinSpacing",
+                description: "Minimum center-to-center distance between placed marks, enforced by rejection",
+                default: Some("0")
+            },
+            Param {
+                name: "Weight",
+                description: "Acceptance weight procedure, `x y -> w` in 0..1 — a density field, a falloff, anything computable",
+                default: None
+            },
+            Param {
+                name: "Scale",
+                description: "[lo hi] scale multiplier range handed to the mark",
+                default: Some("[1 1]")
+            },
+            Param {
+                name: "Rotate",
+                description: "[lo hi] rotation range in degrees handed to the mark",
+                default: Some("[0 0]")
+            },
+            Param {
+                name: "Seed",
+                description: "Seeds placement with `srand` and restores the caller's random stream afterwards",
+                default: None
+            },
+            Param {
+                name: "Tries",
+                description: "Candidate attempts per requested mark, 1..100",
+                default: Some("20")
+            },
+            Param {
+                name: "Budget",
+                description: "Hard deposit budget, 0..200000; a resolved count above it is rejected before anything is drawn",
+                default: Some("20000")
+            },
+        ],
+        ARTKIT,
+        "0 0 200 200 screct << /Count 150 /Seed 3 /MinSpacing 8 /Mark { pop pop newpath 2 0 360 arc fill } >> scatter",
         LIB
     ),
     // --- Procedures: tiling ------------------------------------------------

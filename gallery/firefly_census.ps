@@ -1,0 +1,196 @@
+%!PS-Adobe-3.0
+%%Title: Firefly Census
+%%BoundingBox: 0 0 640 800
+%%Creator: Claude & a nostalgic LaserWriter fan
+%%EndComments
+
+% A summer field after dark, drawn entirely as distributions. Every
+% mark on this page is placed by artkit's scatter (issue #48) -- not a
+% single hand-positioned star, blade, or firefly anywhere -- so the
+% piece is really a demonstration that the *shape* of a distribution
+% carries as much of a picture as the marks in it do.
+%
+% Four scatters, each using a different one of scatter's controls:
+%
+%   the sky      a /Weight procedure: a Milky Way band (a soft
+%                falloff off a diagonal axis) multiplied by coherent
+%                noise2, so the star density thickens along the band
+%                and clumps within it instead of drifting evenly
+%   the hill     scpath: the silhouette's own outline becomes the
+%                region, so its stipple texture stops exactly at the
+%                ridgeline with no clipping and no wasted candidates
+%   the meadow   /MinSpacing: blade anchors are pushed apart so the
+%                grass reads as a stand of individual plants rather
+%                than a random pile, and each blade's height comes
+%                from its own y (nearer grass is taller)
+%   the flies    /Seed plus a clustering weight: fireflies gather in a
+%                few drifting knots, and the halo pass and the core
+%                pass are two scatters sharing one seed, so every
+%                core lands exactly in the middle of its own halo
+%
+% Run from the repo root:
+%
+%   pscat --page 640x800 gallery/firefly_census.ps
+
+(lib/artkit.ps) run
+1618 srand
+noiseinit
+
+% --- the sky ---------------------------------------------------------
+% Deep nocturne overhead warming toward the horizon glow of a town
+% somewhere off the page.
+% gradfill clips to the *current* path, so the sky is a path built and
+% left standing, not a rectfill -- a filled rectangle consumes the very
+% path the shading would have been clipped to.
+newpath 0 0 moveto 640 0 lineto 640 800 lineto 0 800 lineto closepath
+0 800 0 150 [ [0.01 0.02 0.06] [0.03 0.05 0.13] [0.07 0.09 0.22]
+              [0.15 0.14 0.26] [0.30 0.22 0.26] [0.46 0.32 0.26] ]
+    axialsh gradfill
+
+% The band: distance from the diagonal axis running up to the right,
+% shaped into a soft ridge, then roughened by noise so the star field
+% clumps the way a real one does. scodds clamps whatever this returns
+% into a probability, so the arithmetic doesn't have to stay in 0..1.
+/band {                                          % x y -> w
+    4 dict begin
+        /by exch def /bx exch def
+        % Perpendicular distance from the line y = 0.55x + 300.
+        /bd by 0.55 bx mul 300 add sub abs def
+        /bw 1 bd 150 div dup mul sub def
+        bw 0 lt { /bw 0 def } if
+        bx 0.012 mul by 0.012 mul noise2 0.9 mul 0.55 add
+        bw 0.85 mul 0.1 add mul
+    end
+} def
+
+/star2 {                                         % x y s a -  (one star)
+    5 dict begin
+        pop /s exch def /y exch def /x exch def
+        % Warmer and brighter for the larger draws: a star field that
+        % is all one grey reads as noise, not as depth.
+        /v 0.72 s 0.2 mul add def
+        v 0.98 gt { /v 0.98 def } if
+        v v 0.97 mul v 0.86 mul setrgbcolor
+        newpath x y s 1.15 mul 0 360 arc fill
+    end
+} def
+
+0 210 640 590 screct
+    << /Count 2600 /Seed 41 /Tries 2 /Scale [ 0.18 1.25 ]
+       /Weight /band load /Mark /star2 load >>
+    scatter
+
+% --- the hill --------------------------------------------------------
+% One silhouette, built as a run of curves, used twice: filled as the
+% dark mass, then captured with scpath as the region its own stipple
+% texture is scattered into.
+/ridge {
+    newpath
+    0 0 moveto 0 168 lineto
+    90 236 170 150 250 196 curveto
+    330 242 400 132 470 176 curveto
+    540 220 590 150 640 186 curveto
+    640 0 lineto closepath
+} def
+
+ridge
+0.055 0.065 0.105 setrgbcolor fill
+
+ridge
+scpath /hillside exch def
+
+% Stipple: dry-brush tone lifted off the ridge, densest just under the
+% skyline, so the mass doesn't read as a flat cutout. The weight is
+% the mark's own height above the bottom of the page.
+0.17 0.20 0.26 setrgbcolor
+hillside
+    << /Count 6000 /Seed 77 /Tries 2 /Scale [ 0.35 1.05 ]
+       /Weight { exch pop 150 div 0.12 sub }
+       /Mark { 4 dict begin pop /s exch def /y exch def /x exch def
+               newpath x y s 0.9 mul 0 360 arc fill end } >>
+    scatter
+
+% --- the meadow ------------------------------------------------------
+% Blade anchors are spaced by /MinSpacing so the stand reads as
+% individual plants; each blade's height and lean come from its own
+% position, which is what /Mark's x y are for.
+/blade {                                         % x y s a -
+    6 dict begin
+        /a exch def /s exch def /y exch def /x exch def
+        /h 52 y 0.24 mul sub s mul def
+        h 6 lt { /h 6 def } if
+        /lean a 0.7 mul def
+        % Nearer blades are taller, and lift out of the dark a little
+        % further: the same y that sets the height sets the tone.
+        /g 0.07 1 y 175 div sub 0.10 mul add def
+        g 0.70 mul g g 0.58 mul setrgbcolor
+        h 0.055 mul 0.35 add setlinewidth
+        newpath
+        x y moveto
+        x lean 0.3 mul add y h 0.55 mul add
+        x lean add y h 0.9 mul add
+        x lean 1.7 mul add y h add
+        curveto
+        stroke
+    end
+} def
+
+0 0 640 175 screct
+    << /Density 0.042 /Seed 5 /MinSpacing 4.2 /Tries 24
+       /Scale [ 0.5 1.4 ] /Rotate [ -24 24 ]
+       % Thinning upward, so the stand fades into the hill's foot
+       % instead of ending on a ruled line.
+       /Weight { exch pop 1 exch 175 div sub 0.25 add }
+       /Mark /blade load >>
+    scatter
+
+% --- the fireflies ---------------------------------------------------
+% Two passes over the same region with the same seed and the same
+% options: halos first, then cores. Identical seeds mean identical
+% placements, so every core sits exactly inside its own halo -- the
+% reproducibility contract doing real compositional work rather than
+% just being a testable property.
+/knots {                                         % x y -> w
+    3 dict begin
+        /ky exch def /kx exch def
+        kx 0.009 mul ky 0.014 mul noise2 1.7 mul 0.15 sub
+        % Fireflies keep to the low air over the grass.
+        1 ky 50 sub 165 div dup mul sub 0 max mul
+    end
+} def
+
+/glow {                                          % x y s a -
+    5 dict begin
+        pop /s exch def /y exch def /x exch def
+        0.16 0.20 0.10 setrgbcolor
+        newpath x y s 5.2 mul 0 360 arc fill
+        0.28 0.32 0.13 setrgbcolor
+        newpath x y s 3.1 mul 0 360 arc fill
+    end
+} def
+
+/spark {                                         % x y s a -
+    5 dict begin
+        pop /s exch def /y exch def /x exch def
+        0.86 0.92 0.42 setrgbcolor
+        newpath x y s 1.5 mul 0 360 arc fill
+        0.99 1.0 0.80 setrgbcolor
+        newpath x y s 0.7 mul 0 360 arc fill
+    end
+} def
+
+/flies <<
+    /Count 230 /Seed 909 /Tries 30 /MinSpacing 14
+    /Scale [ 0.55 1.5 ] /Weight /knots load
+>> def
+
+0 26 640 300 screct flies dup /Mark /glow load put scatter
+0 26 640 300 screct flies dup /Mark /spark load put scatter
+
+% --- the plate line --------------------------------------------------
+/Palatino-Italic findfont 12 scalefont setfont
+0.58 0.60 0.66 setrgbcolor
+(Firefly Census) 320 762 showctr
+
+showpage
+%%EOF
