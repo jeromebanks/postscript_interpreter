@@ -3150,3 +3150,121 @@ fn a_forced_fallback_preview_ignores_ambient_compositing() {
         "ambient compositing leaked in"
     );
 }
+
+/// `pkpaper`'s fallback backdrop isn't a guess the way `pkwash`'s
+/// white-paper assumption is — a grain mark sits directly on a ground
+/// this same procedure just painted — so both blend modes have an exact
+/// closed form and `/Blend` has to be honored rather than collapsed
+/// into the source-over one (Codex review, PR #109, round 5).
+#[test]
+fn pkpaper_honors_blend_in_the_fallback_too() {
+    // Rendered under a 4x CTM so each speck covers whole device pixels:
+    // the darkest pixel is then exactly the mark color, which is what
+    // the two blend modes disagree about. At 1x the marks are subpixel
+    // and every pixel is a partial blend, which measures antialiasing
+    // rather than the formula.
+    let mark_color = |forced_fallback: bool, blend: &str| {
+        let mut it = fresh(200, 200);
+        if forced_fallback {
+            it.run_str("/pkalphaok false def").expect("force fallback");
+        }
+        it.run_str(&format!(
+            "gsave 4 4 scale 0 0 50 50 \
+             << /Tone [0.8 0.7 0.6] /Grain 1 /Alpha 0.9 /Depth 0.8 /Fiber 0 \
+                /Blend /{blend} /Seed 5 >> pkpaper grestore"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        it.gfx()
+            .pixmap
+            .pixels()
+            .iter()
+            .map(|p| p.red())
+            .min()
+            .expect("pixels")
+    };
+
+    // The closed forms, on the red channel: tone 0.8, alpha 0.9,
+    // depth 0.8.
+    //   Normal:   0.8*(1 - 0.8*0.9)                = 0.224 -> 57
+    //   Multiply: 0.8*(1 - 0.9 + 0.9*0.8*(1-0.8))  = 0.195 -> 50
+    let fb_normal = mark_color(true, "Normal");
+    let fb_multiply = mark_color(true, "Multiply");
+    assert!(
+        fb_multiply < fb_normal,
+        "fallback /Multiply should darken more than /Normal: {fb_multiply} vs {fb_normal}"
+    );
+    assert!(fb_normal.abs_diff(57) <= 2, "fallback Normal: {fb_normal}");
+    assert!(
+        fb_multiply.abs_diff(50) <= 2,
+        "fallback Multiply: {fb_multiply}"
+    );
+
+    // And because the backdrop is exactly known — a mark sits on a
+    // ground this same procedure just painted — the fallback lands
+    // where real alpha compositing lands, for both modes.
+    for blend in ["Normal", "Multiply"] {
+        let real = mark_color(false, blend);
+        let fallback = mark_color(true, blend);
+        assert!(
+            real.abs_diff(fallback) <= 2,
+            "{blend}: fallback {fallback} vs real {real}"
+        );
+    }
+}
+
+/// Grain centers are sampled right up to the rectangle's edges, and a
+/// speck reaches ~0.8 points past its center while a fiber reaches
+/// several — so an inset or adjacent `pkpaper` used to scatter texture
+/// onto its neighbour (Codex review, PR #109, round 5).
+#[test]
+fn pkpaper_keeps_its_texture_inside_its_rectangle() {
+    let mut it = fresh(200, 200);
+    it.run_str(
+        "0 0 1 setrgbcolor newpath 0 0 moveto 200 0 lineto 200 200 lineto 0 200 lineto \
+           closepath fill \
+         60 60 80 80 << /Tone [0.9 0.9 0.9] /Grain 1 /Fiber 0.5 /Seed 7 >> pkpaper",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+
+    let pm = &it.gfx().pixmap;
+    // A band just outside the ground on every side must still be the
+    // pure blue it was painted, untouched by any stray mark.
+    let mut strays = 0;
+    for d in 0..200u32 {
+        for (x, y) in [(d, 55), (d, 145), (55, d), (145, d)] {
+            if let Some(p) = pm.pixel(x, y)
+                && (p.red(), p.green(), p.blue()) != (0, 0, 255)
+            {
+                strays += 1;
+            }
+        }
+    }
+    assert_eq!(strays, 0, "{strays} pixels of texture escaped the ground");
+
+    // ...and the ground itself is genuinely textured, so the check
+    // above isn't passing because nothing was drawn.
+    let inside = pm.pixel(100, 100).expect("pixel");
+    assert!(inside.red() > 150, "the ground was painted");
+}
+
+/// An invalid explicit `/Pitch` must be rejected before the O(length)
+/// measurement traversal, not after it (Codex review, PR #109, round 5).
+#[test]
+fn an_invalid_explicit_pitch_is_rejected_before_walking() {
+    let mut it = fresh(400, 400);
+    // A path expensive enough to walk that doing so before rejecting is
+    // measurable: 60,000 tiny segments.
+    let started = std::time::Instant::now();
+    let err = it.run_str(
+        "0 0 0 setrgbcolor newpath 0 0 moveto 1 1 60000 { pop 0.002 0.002 rlineto } for \
+           closepath \
+         << /Alpha 0.3 /Pitch 0 >> pkwash",
+    );
+    let elapsed = started.elapsed();
+    assert!(err.is_err(), "/Pitch 0 should be rejected");
+    assert_eq!(ink_count(&it), 0);
+    assert!(
+        elapsed < std::time::Duration::from_millis(900),
+        "rejection walked the path first: took {elapsed:?}"
+    );
+}

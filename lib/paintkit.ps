@@ -2087,6 +2087,19 @@ systemdict /setalpha known /pwhasalpha exch def
 
     pwwarn
 
+    % An explicitly supplied /Pitch is validated *here*, before any
+    % traversal: the measurement pass below is O(length/8), and making
+    % malformed input pay for it before being rejected is backwards
+    % (Codex review, PR #109, round 5). Only the *derived* default
+    % needs the measured length, and that one can't be invalid -- it's
+    % clamped into 0.6..4 by construction.
+    /pwpitchgiven pwopts /Pitch known def
+    pwpitchgiven {
+        /pwpitch pwopts /Pitch get def
+        /pwpitch load xcheck { pkwash-pitch-must-not-be-a-procedure } if
+        pwpitch 0 le { pkwash-pitch-must-be-positive } if
+    } if
+
     % Pass 0: arc length and subpath count. `sp` sums to each subpath's
     % true length whatever pitch it was walked at, so a coarse walk
     % measures the path as exactly as a fine one would, for a fraction
@@ -2113,18 +2126,13 @@ systemdict /setalpha known /pwhasalpha exch def
     % region, not a stroke, so its scale is whatever the caller drew --
     % a fixed pitch either polygonalizes a small blob or samples a
     % page-sized one thousands of times.
-    /pwpitch
-        pwopts /Pitch known
-            { pwopts /Pitch get }
-            {
-                pwlen 180 div
-                dup 0.6 lt { pop 0.6 } if
-                dup 4 gt { pop 4 } if
-            }
-        ifelse
-    def
-    /pwpitch load xcheck { pkwash-pitch-must-not-be-a-procedure } if
-    pwpitch 0 le { pkwash-pitch-must-be-positive } if
+    pwpitchgiven not {
+        /pwpitch
+            pwlen 180 div
+            dup 0.6 lt { pop 0.6 } if
+            dup 4 gt { pop 4 } if
+        def
+    } if
 
     % The budget is enforced *arithmetically*, from the length already
     % measured, before any walk at `pwpitch` happens. Counting first and
@@ -2273,6 +2281,39 @@ systemdict /setalpha known /pwhasalpha exch def
     } if
 } def
 
+% -   (pkpaper's own rectangle as the current path; needed twice now,
+% once to fill the ground and once to clip the texture to it)
+% @internal
+/pvrect {
+    newpath
+    pvx pvy moveto pvw 0 rlineto 0 pvh rlineto pvw neg 0 rlineto
+    closepath
+} def
+
+% tone-component -> the opaque color one grain mark flattens to
+% Only reached when there's no real alpha to composite with. The
+% backdrop here is not a guess the way `pkwash`'s white-paper
+% assumption is -- a grain mark sits directly on a ground this same
+% procedure just painted -- so both blend modes have an exact
+% closed form, and /Blend has to be honored rather than collapsed
+% into the source-over one (Codex review, PR #109, round 5):
+%   Normal:   t*(1 - depth*a)
+%   Multiply: t*(1 - a + a*t*(1-depth))   -- the darkened source is
+%             multiplied by the tone it sits on before compositing
+% @internal
+/pvflat {
+    /pvfcomp exch def
+    pvblend /Multiply eq
+        {
+            pvfcomp
+            1 pvalpha sub
+            pvalpha pvfcomp mul 1 pvdepth sub mul add
+            mul
+        }
+        { pvfcomp 1 pvdepth pvalpha mul sub mul }
+    ifelse
+} def
+
 % cx cy len wid ang -   (adds one rotated fleck to the current path)
 % Built from explicit corner arithmetic rather than translate/rotate,
 % so it costs no CTM churn inside a loop that runs thousands of times
@@ -2387,9 +2428,7 @@ systemdict /setalpha known /pwhasalpha exch def
         % see that dial's own header (Codex review, PR #109, rounds 3
         % and 4).
         pwhasalpha { 1 setalpha /Normal setblendmode } if
-        newpath
-        pvx pvy moveto pvw 0 rlineto 0 pvh rlineto pvw neg 0 rlineto
-        closepath
+        pvrect
         pvtr pvtg pvtb setrgbcolor
         fill
 
@@ -2410,11 +2449,16 @@ systemdict /setalpha known /pwhasalpha exch def
                     pvtb 1 pvdepth sub mul
                     setrgbcolor
                 } {
-                    pvtr 1 pvdepth pvalpha mul sub mul
-                    pvtg 1 pvdepth pvalpha mul sub mul
-                    pvtb 1 pvdepth pvalpha mul sub mul
-                    setrgbcolor
+                    pvtr pvflat pvtg pvflat pvtb pvflat setrgbcolor
                 } ifelse
+                % Clipped to the same rectangle the ground filled:
+                % centers are sampled right up to the edges, and a
+                % speck reaches 0.8 points past its center while a
+                % fiber reaches several, so an inset or adjacent
+                % `pkpaper` would otherwise scatter texture onto its
+                % neighbour (Codex review, PR #109, round 5).
+                gsave
+                pvrect clip
                 newpath
                 1 1 pvn {
                     pop
@@ -2434,6 +2478,7 @@ systemdict /setalpha known /pwhasalpha exch def
                     } ifelse
                 } for
                 fill
+                grestore
             } if
         } if
         grestore
