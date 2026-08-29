@@ -1063,13 +1063,17 @@ end
             % subpath's own extent: an extent-relative epsilon would
             % call a genuinely triangular 100-by-1e-11 sliver
             % collinear, empty its bbox, and pile every mark on the
-            % origin (Codex review, round 8). This form only forgives
-            % the rounding error in computing the cross product
-            % itself, so a real deviation of any magnitude survives.
+            % origin (Codex review, round 8). And "a few ulps" means
+            % a few: a double carries about 2.2e-16 of relative error,
+            % so 1e-15 is roughly four of them -- enough to absorb the
+            % rounding in two products and their difference, and no
+            % more. A looser 1e-14 was still a thousand times larger
+            % than the error it forgives, and dropped a real triangle
+            % whose vertices sit around 1e8 (round 10).
             /sqcp1 sqcdx sqpdy mul def
             /sqcp2 sqcdy sqpdx mul def
             sqcp1 sqcp2 sub abs
-            sqcp1 abs sqcp2 abs add 1e-14 mul
+            sqcp1 abs sqcp2 abs add 1e-15 mul
             gt { /sqpcol false def } if
         } ifelse
     } if
@@ -1319,11 +1323,16 @@ end
     % instead would swallow a whole component whose height is smaller
     % than that: a 1x1e8 sliver beside a 1e10x0.01 one is a real region
     % of about 2e8 whose short half is a hundredth of a unit tall
-    % (Codex review, round 6).
+    % (Codex review, round 6). "A few ulps" is literal here too --
+    % 1e-15 against a double's 2.2e-16 -- because a coordinate-relative
+    % epsilon with any real slack in it merges genuinely distinct
+    % boundaries once the geometry sits far from the origin: at
+    % y = 1e10 a 5e-13 factor spans a hundredth of a unit, enough to
+    % collapse a 10-by-0.001 rectangle to nothing (round 10).
     sqaj 0 gt {
         /sqaprev sqays sqaj 1 sub get def
         sqav sqaprev sub abs
-        sqav abs sqaprev abs add 5e-13 mul le
+        sqav abs sqaprev abs add 1e-15 mul le
     } { false } ifelse
     not {
         sqanys sqaj gt {

@@ -250,6 +250,23 @@ exactly what it should — the segments that can affect the fill — so
 `scin`, the edge ceiling, and `scarea` all agree about what the region
 is.
 
+**Round ten: two tolerance constants tightened, and a boundary
+found.** Both findings named tolerances looser than the rounding error
+they exist to forgive — the collinearity test at 1e-14 and the
+boundary merge at 5e-13, against a double's own 2.2e-16 — so both were
+tightened to 1e-15, about four ulps. Neither reported failure actually
+reproduces in this interpreter, though, and the reason is worth
+recording: `flattenpath` quantizes coordinates, and at the magnitudes
+those cases use it quantizes the very deviation being tested away
+before any PostScript library can see the path. A triangle
+`(0,0) (1e8,1e8) (2e8, 2e8+1e-6)` arrives with its apex at exactly
+`(2e8, 2e8)` — measured, printed straight out of `pathforall` — so it
+*is* collinear by the time `scpath` runs, and `fill` paints nothing
+for it either. That is the floor on what any of these region
+predicates can distinguish, and it sits well above the arithmetic;
+the tightened constants are correct on their own merits rather than
+because they fix an observable bug.
+
 **One finding dispositioned rather than fixed.** The same round noted
 that `clippath scpath` doesn't capture the true clip when several
 clips are nested — correctly, but the cause is this interpreter's
