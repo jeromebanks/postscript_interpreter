@@ -184,6 +184,24 @@ errors worth reading — the same shape of leak `gsave` has when an
 error skips its `grestore`. The header names the caller's own
 two-line workaround.
 
+**Round six sharpened two of round five's fixes and found a third
+hole.** A subpath of one line segment is retraced by its own implicit
+close, so `fill` paints nothing for it — but it *has* edges, and
+edge-derived bounds included it, which is round five's bug with a
+harder input. A subpath now reaches the region's bbox only if it can
+enclose something: fewer than three edges cannot (two edges is always
+an out-and-back retrace), and neither can a subpath box with no width
+or no height — both provable exclusions rather than heuristics.
+Merging coincident slab boundaries with an epsilon scaled to the
+*region's* bbox can also exceed a whole component's height when the
+components' scales differ wildly (a 1x1e8 sliver beside a 1e10x0.01
+one), so the merge test is relative to the boundaries' own magnitude
+instead. And `xcheck` alone turned out to be too weak a guard for the
+callbacks: `3 cvx` is executable, and invoking it merely pushes 3, so
+an accepted `/Mark 3 cvx` would have reported placements while leaking
+five operands per mark — a callback must now be a procedure or an
+executable name for one.
+
 **One finding dispositioned rather than fixed.** The same round noted
 that `clippath scpath` doesn't capture the true clip when several
 clips are nested — correctly, but the cause is this interpreter's

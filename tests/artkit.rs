@@ -3721,3 +3721,75 @@ fn scarea_merges_boundaries_that_coincide() {
     );
     assert_eq!(got[0], "200.0", "two 10x10 squares at the same heights");
 }
+
+#[test]
+fn scpath_bounds_only_subpaths_that_can_enclose_something() {
+    // Round six, the sharper form of round five: a subpath of one line
+    // segment is retraced by its own implicit close, so `fill` paints
+    // nothing for it -- but it *has* edges, and edge-derived bounds
+    // included it. A remote `1e6 1e6 moveto 1e6+100 1e6 lineto`
+    // appended to a 100x100 square stretched the region across a
+    // million units and left a 100-mark scatter placing none of them.
+    let stray = "newpath 0 0 moveto 100 0 lineto 100 100 lineto 0 100 lineto closepath \
+                 1000000 1000000 moveto 1000100 1000000 lineto scpath";
+    let got = eval(&format!("{stray} dup /BBox get exch scarea"));
+    assert_eq!(got[0], "[0.0 0.0 100.0 100.0]");
+    assert_eq!(got[1], "10000.0");
+    let got = eval(&format!(
+        "{stray} << /Count 100 /Seed 1 /Mark {{ pop pop pop pop }} >> scatter scplaced"
+    ));
+    assert_eq!(got[0], "100");
+
+    // A flat (zero-height) subpath is excluded for the same reason
+    // even when it has three edges: no width or no height means no
+    // enclosed area under either rule.
+    let got = eval(
+        "newpath 0 0 moveto 10 0 lineto 10 10 lineto 0 10 lineto closepath \
+         500 500 moveto 600 500 lineto 700 500 lineto closepath scpath /BBox get",
+    );
+    assert_eq!(got[0], "[0.0 0.0 10.0 10.0]");
+}
+
+#[test]
+fn scatter_rejects_a_callback_that_is_executable_but_not_callable() {
+    // `xcheck` alone is too weak: `3 cvx` is executable, and invoking
+    // it just pushes 3 -- so an accepted `/Mark 3 cvx` would report
+    // placements while leaking five operands per mark (Codex review,
+    // round 6).
+    assert_eq!(
+        scatter_err("0 0 100 100 screct << /Mark 3 cvx >> scatter"),
+        "scatter-mark-must-be-a-procedure"
+    );
+    assert_eq!(
+        scatter_err("0 0 100 100 screct << /Mark { pop pop pop pop } /Weight 1 cvx >> scatter"),
+        "scatter-weight-must-be-a-procedure"
+    );
+
+    // An executable *name* for a procedure is genuinely callable, so
+    // it stays accepted -- and leaves nothing behind.
+    let got = eval(
+        "/M { pop pop pop pop } def \
+         0 0 100 100 screct << /Count 4 /Seed 1 /Mark /M cvx >> scatter scplaced",
+    );
+    assert_eq!(got, vec!["4"], "and nothing else on the stack");
+}
+
+#[test]
+fn scarea_merging_never_swallows_a_whole_component() {
+    // Round six: merging coincident boundaries with an epsilon scaled
+    // to the region's *bbox* can exceed a real component's entire
+    // height when the components' scales differ wildly -- a 1x1e8
+    // sliver beside a 1e10x0.01 one is about 2e8 of area whose short
+    // half is a hundredth of a unit tall, and it was being dropped.
+    // The merge test is relative to the boundaries' own magnitude now.
+    let got = eval(
+        "newpath 0 0 moveto 1 0 lineto 1 100000000 lineto 0 100000000 lineto closepath \
+         0 -50 moveto 10000000000 -50 lineto 10000000000 -49.99 lineto \
+         0 -49.99 lineto closepath scpath scarea",
+    );
+    let measured: f64 = got[0].parse().unwrap();
+    assert!(
+        (measured - 2e8).abs() < 2e8 * 0.01,
+        "measured {measured}, expected about 2e8 (1e8 from each component)"
+    );
+}

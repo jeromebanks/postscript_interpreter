@@ -847,7 +847,8 @@ end
 % `scpath` and skip `clippath` altogether.
 %
 % scatter's options, all optional except /Mark:
-%   /Mark {x y scale angle -> -}  the mark. Called once per placed
+%   /Mark {x y scale angle -> -}  the mark. A procedure (or an
+%           executable name for one). Called once per placed
 %           mark with its position, a scale multiplier drawn from
 %           /Scale, and a rotation in degrees drawn from /Rotate. It
 %           MUST consume all four operands (a proc that ignores them
@@ -983,6 +984,17 @@ end
     ifelse
 } def
 
+/sccallable {                                    % v -> bool
+% Executable *and* of a type that runs its target when invoked. A bare
+% `xcheck` isn't enough: `3 cvx` is executable, and calling it merely
+% pushes 3 -- so an accepted `/Mark 3 cvx` would report placements
+% while leaking five operands per mark instead of drawing one (Codex
+% review, round 6). A procedure or an executable name, nothing else.
+    dup xcheck exch type
+    dup /arraytype eq exch /nametype eq or
+    and
+} def
+
 /scokrange {                                     % v -> bool  ([lo hi]?)
     dup type /arraytype ne
         { pop false }
@@ -1005,18 +1017,49 @@ end
        /Area sqrw sqrh mul >>
 } def
 
-/sqbounds {                                      % x y -   (grow the bbox)
+/sqbounds {                                      % x y -
+% Grow the *current subpath's* box. It reaches the region's own bbox
+% only if that subpath turns out to be able to enclose something --
+% see sqpmerge.
     /sqby exch def /sqbx exch def
-    sqfirst {
-        /sqbx0 sqbx def /sqbx1 sqbx def
-        /sqby0 sqby def /sqby1 sqby def
-        /sqfirst false def
+    sqpfirst {
+        /sqpx0 sqbx def /sqpx1 sqbx def
+        /sqpy0 sqby def /sqpy1 sqby def
+        /sqpfirst false def
     } {
-        sqbx sqbx0 lt { /sqbx0 sqbx def } if
-        sqbx sqbx1 gt { /sqbx1 sqbx def } if
-        sqby sqby0 lt { /sqby0 sqby def } if
-        sqby sqby1 gt { /sqby1 sqby def } if
+        sqbx sqpx0 lt { /sqpx0 sqbx def } if
+        sqbx sqpx1 gt { /sqpx1 sqbx def } if
+        sqby sqpy0 lt { /sqpy0 sqby def } if
+        sqby sqpy1 gt { /sqpy1 sqby def } if
     } ifelse
+} def
+
+/sqpmerge {                                      % -
+% Fold the finished subpath's box into the region's, but only if that
+% subpath could contribute to a fill at all. Two exclusions, both
+% provable rather than heuristic: fewer than three edges cannot
+% enclose anything (two edges is always an out-and-back retrace, since
+% the second is the implicit close returning along the first), and a
+% box with no width or no height encloses zero area whatever the rule
+% says. Without them a remote `1e6 1e6 moveto 1e6+100 1e6 lineto`
+% appended to a 100x100 square -- which `fill` paints nothing for --
+% would stretch the region across a million units and leave a seeded
+% 100-mark scatter placing none of them (Codex review, rounds 5-6).
+    sqpfirst not
+    sqpn 3 ge and
+    sqpx1 sqpx0 gt and
+    sqpy1 sqpy0 gt and {
+        sqfirst {
+            /sqbx0 sqpx0 def /sqbx1 sqpx1 def
+            /sqby0 sqpy0 def /sqby1 sqpy1 def
+            /sqfirst false def
+        } {
+            sqpx0 sqbx0 lt { /sqbx0 sqpx0 def } if
+            sqpx1 sqbx1 gt { /sqbx1 sqpx1 def } if
+            sqpy0 sqby0 lt { /sqby0 sqpy0 def } if
+            sqpy1 sqby1 gt { /sqby1 sqpy1 def } if
+        } ifelse
+    } if
 } def
 
 /sqemit {                                        % x0 y0 x1 y1 -
@@ -1057,6 +1100,7 @@ end
     % vertex exactly once an edge leaves it.
     sqcx sqcy sqbounds
     sqlx sqly sqbounds
+    /sqpn sqpn 1 add def
     /sqcx sqlx def /sqcy sqly def
 } def
 
@@ -1075,6 +1119,7 @@ end
         % subpath `fill` ignores entirely -- a bare `moveto` with
         % nothing after it being exactly that case.
         sqcx sqsx ne sqcy sqsy ne or { sqsx sqsy sqline } if
+        sqpmerge
         /sqhave false def
     } if
 } def
@@ -1082,6 +1127,8 @@ end
 /sqmove {                                        % x y -   (subpath start)
     /sqmy exch def /sqmx exch def
     sqclose                                      % close the previous one
+    /sqpn 0 def
+    /sqpfirst true def
     /sqcx sqmx def /sqcy sqmy def
     /sqsx sqmx def /sqsy sqmy def
     /sqhave true def
@@ -1099,6 +1146,9 @@ end
     /sqn 0 def
     /sqhave false def
     /sqfirst true def
+    /sqpfirst true def
+    /sqpn 0 def
+    /sqpx0 0 def /sqpy0 0 def /sqpx1 0 def /sqpy1 0 def
     /sqcx 0 def /sqcy 0 def /sqsx 0 def /sqsy 0 def
     /sqbx0 0 def /sqby0 0 def /sqbx1 0 def /sqby1 0 def
     flattenpath
@@ -1184,10 +1234,17 @@ end
         /sqaj sqaj 1 sub def
         /sqawork sqawork 1 add def
     } loop
-    sqaj 0 gt
-        { sqav sqays sqaj 1 sub get sub abs sqadedup le }
-        { false }
-    ifelse
+    % Merge only boundaries that coincide to within a few ulps of
+    % *their own* magnitude. An epsilon scaled to the region's bbox
+    % instead would swallow a whole component whose height is smaller
+    % than that: a 1x1e8 sliver beside a 1e10x0.01 one is a real region
+    % of about 2e8 whose short half is a hundredth of a unit tall
+    % (Codex review, round 6).
+    sqaj 0 gt {
+        /sqaprev sqays sqaj 1 sub get def
+        sqav sqaprev sub abs
+        sqav abs sqaprev abs add 5e-13 mul le
+    } { false } ifelse
     not {
         sqanys sqaj gt {
             sqanys -1 sqaj 1 add {
@@ -1317,8 +1374,6 @@ end
     /sqan sqaedges length 4 idiv def
     sqan 0 eq { 0 } {
         /sqawork 0 def
-        /sqabb sqareg /BBox get def
-        /sqadedup sqabb 3 get sqabb 1 get sub abs 1e-9 mul def
         % Room for both endpoint heights of every edge, plus crossing
         % heights up to the point where integrating that many slabs
         % would exhaust the work budget anyway (each slab costs one
@@ -1460,12 +1515,13 @@ end
 
     scopts /Mark known not { scatter-mark-is-required } if
     /scmark scopts /Mark get def
-    /scmark load xcheck not { scatter-mark-must-be-a-procedure } if
+    /scmark load sccallable not { scatter-mark-must-be-a-procedure } if
 
     /schasw scopts /Weight known def
     schasw {
         /scwt scopts /Weight get def
-        /scwt load xcheck not { scatter-weight-must-be-a-procedure } if
+        /scwt load sccallable not
+            { scatter-weight-must-be-a-procedure } if
     } if
 
     /scmin scopts /MinSpacing 0 scgetdef def
