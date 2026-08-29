@@ -258,6 +258,8 @@ pub const ARTKIT_INTERNAL: &[&str] = &[
     "scplaced",
     "sqbounds",
     "sqemit",
+    "sqmeasure",
+    "sqscanline",
     "sqline",
     "sqclose",
     "sqmove",
@@ -1155,7 +1157,7 @@ static ENTRIES: &[Entry] = &[
     entry!(
         "scarea",
         CapabilityKind::Procedure,
-        "A region's area: w*h for a rectangle, the enclosed area for a captured path.",
+        "A region's area: exactly w*h for a rectangle, and for a captured path the area its own /Rule accepts, measured by scanline integration (a stored /Area wins, if one is put there).",
         &[],
         ARTKIT,
         "region scarea -> num",

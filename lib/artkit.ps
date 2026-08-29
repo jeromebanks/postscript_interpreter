@@ -806,9 +806,11 @@ end
 %   region scarea        -> num      the region's area
 %   region opts scatter  -           place marks
 %
-% A region is an ordinary dict — /Kind, /BBox, /Area, and for a path
-% region /Edges and /Rule — built once and reused across as many
-% scatter calls as you like. `scpath` records *user-space* coordinates
+% A region is an ordinary dict — /Kind and /BBox, plus /Area for a
+% rectangle and /Edges and /Rule for a captured path — built once and
+% reused across as many scatter calls as you like. A rectangle's area
+% is exact; a path region's is measured on demand by `scarea` (see its
+% own header), so flipping /Rule changes the answer the way it should. `scpath` records *user-space* coordinates
 % at capture time, so a region captured under one CTM is wrong under
 % another: capture and scatter under the same transform (or capture
 % inside the gsave that sets it).
@@ -996,15 +998,26 @@ end
 
 /sqline {                                        % x y -   (segment end)
     /sqly exch def /sqlx exch def
+    % A lineto after a closepath legitimately starts a fresh subpath
+    % from the closepath's own point (PLRM), so reopen rather than
+    % leaving it unclosable at the end.
+    sqhave not {
+        /sqsx sqcx def /sqsy sqcy def /sqhave true def
+    } if
     sqcx sqcy sqlx sqly sqemit
-    % Shoelace term for the signed area; halved once at the end.
-    /sqarea sqarea sqcx sqly mul add sqlx sqcy mul sub def
     /sqcx sqlx def /sqcy sqly def
     sqlx sqly sqbounds
 } def
 
 /sqclose {                                       % -   (closepath)
-    sqhave { sqsx sqsy sqline } if
+% Emitting the closing edge also *ends* the subpath, so `sqhave` goes
+% false: `pathforall` already calls this for an explicit `closepath`,
+% and scpath calls it once more at the end for a subpath left open.
+% Without the flag the second call would append a zero-length
+% duplicate edge for every explicitly closed subpath -- geometrically
+% inert (it can't cross a scanline) but it inflates /Edges and would
+% trip the edge ceiling one edge early (Codex review, PR #119).
+    sqhave { sqsx sqsy sqline /sqhave false def } if
 } def
 
 /sqmove {                                        % x y -   (subpath start)
@@ -1028,7 +1041,6 @@ end
     /sqn 0 def
     /sqhave false def
     /sqfirst true def
-    /sqarea 0 def
     /sqcx 0 def /sqcy 0 def /sqsx 0 def /sqsy 0 def
     /sqbx0 0 def /sqby0 0 def /sqbx1 0 def /sqby1 0 def
     flattenpath
@@ -1040,12 +1052,106 @@ end
     sqclose                                      % and the last subpath
     << /Kind /path
        /BBox [ sqbx0 sqby0 sqbx1 sqby1 ]
-       /Area sqarea abs 2 div
        /Edges sqbuf 0 sqn getinterval
        /Rule /nonzero >>
 } def
 
-/scarea { /Area get } def                        % region -> num
+% region -> num
+% A rectangle's area is exact and cached in its /Area; a path region's
+% is *measured*, by integrating the covered width across horizontal
+% scanlines under the region's own /Rule.
+%
+% Measuring rather than deriving is the point. The obvious cheap
+% formula -- the absolute value of the summed signed shoelace terms --
+% does not measure the region `scin` accepts, and a cross-model review
+% of this PR (#119) caught three ways it disagrees: two disjoint
+% same-size contours wound oppositely cancel to zero, nested
+% same-winding contours double-count the interior instead of reporting
+% the outer one, and nothing about it responds to /Rule at all, even
+% though the even-odd reading of a donut is a genuinely different
+% area. Scanline integration gets all of them right by construction:
+% it asks the same containment question `scin` does, just answered a
+% whole row at a time.
+%
+% The cost is exactness. Covered width is piecewise linear in y, so
+% midpoint sampling is exact within any slab that holds no vertex and
+% off by a slab-scale sliver in the few that do -- a fraction of a
+% percent on real shapes, which is well inside what a /Density-derived
+% mark count (truncated to an integer) can notice. A region whose area
+% must be exact can carry its own: `region /Area <num> put` short-
+% circuits the measurement, since a stored /Area always wins.
+/scarea {
+    dup /Area known { /Area get } { sqmeasure } ifelse
+} def
+
+/sqscanline {                                    % -> covered width
+% Every edge crossing the horizontal line y = sqasy, insertion-sorted
+% by x with its winding direction alongside (crossing counts stay
+% small -- a few per scanline on real shapes -- so an insertion sort
+% beats anything cleverer here). Then one walk left to right,
+% accumulating the width of each span the rule calls inside.
+    /sqam 0 def
+    0 4 sqaedges length 4 sub {
+        /sqai exch def
+        /sqey0 sqaedges sqai 1 add get def
+        /sqey1 sqaedges sqai 3 add get def
+        sqey0 sqasy le sqey1 sqasy le ne {
+            /sqex0 sqaedges sqai get def
+            /sqex1 sqaedges sqai 2 add get def
+            /sqat sqasy sqey0 sub sqey1 sqey0 sub div def
+            /sqax sqex0 sqex1 sqex0 sub sqat mul add def
+            /sqad sqey1 sqey0 gt { 1 } { -1 } ifelse def
+            /sqaj sqam def
+            {
+                sqaj 0 le { exit } if
+                sqaxs sqaj 1 sub get sqax le { exit } if
+                sqaxs sqaj sqaxs sqaj 1 sub get put
+                sqads sqaj sqads sqaj 1 sub get put
+                /sqaj sqaj 1 sub def
+            } loop
+            sqaxs sqaj sqax put
+            sqads sqaj sqad put
+            /sqam sqam 1 add def
+        } if
+    } for
+    /sqacov 0 def
+    /sqaw 0 def
+    /sqac 0 def
+    0 1 sqam 2 sub {
+        /sqai exch def
+        /sqaw sqaw sqads sqai get add def
+        /sqac sqac 1 add def
+        sqaeo { sqac 2 mod 0 ne } { sqaw 0 ne } ifelse
+            { /sqacov sqacov
+                  sqaxs sqai 1 add get sqaxs sqai get sub add def } if
+    } for
+    sqacov
+} def
+
+/sqmeasure {                                     % region -> num
+    /sqareg exch def
+    /sqaedges sqareg /Edges get def
+    /sqaeo sqareg /Rule get /evenodd eq def
+    /sqabb sqareg /BBox get def
+    /sqah sqabb 3 get sqabb 1 get sub def
+    sqah 0 le sqaedges length 0 eq or { 0 } {
+        % Slabs are budgeted against the edge count so a very complex
+        % region stays cheap to measure: the work is slabs x edges.
+        /sqan 1200000 sqaedges length 4 idiv div truncate cvi def
+        sqan 48 lt { /sqan 48 def } if
+        sqan 400 gt { /sqan 400 def } if
+        /sqaxs sqaedges length 4 idiv 1 add array def
+        /sqads sqaedges length 4 idiv 1 add array def
+        /sqastep sqah sqan div def
+        /sqatotal 0 def
+        0 1 sqan 1 sub {
+            /sqak exch def
+            /sqasy sqabb 1 get sqak 0.5 add sqastep mul add def
+            /sqatotal sqatotal sqscanline sqastep mul add def
+        } for
+        sqatotal
+    } ifelse
+} def
 
 /siedge {                                        % index -   (one edge)
 % Half-open crossing test against the ray running +x from (six,siy):
@@ -1144,8 +1250,8 @@ end
     % option should fail on the empty page, not halfway through one.
     scopts type /dicttype ne { scatter-opts-must-be-a-dict } if
     screg type /dicttype ne { scatter-needs-a-region } if
-    screg /BBox known screg /Kind known and
-        screg /Area known and not { scatter-needs-a-region } if
+    screg /BBox known screg /Kind known and not
+        { scatter-needs-a-region } if
 
     scopts /Mark known not { scatter-mark-is-required } if
     /scmark scopts /Mark get def
@@ -1189,9 +1295,10 @@ end
         /scdens scopts /Density get def
         scdens scisnum not { scatter-density-must-be-a-number } if
         scdens 0 lt { scatter-density-must-be-non-negative } if
-        screg scarea 0 le
+        /scregarea screg scarea def
+        scregarea 0 le
             { scatter-density-needs-a-region-with-positive-area } if
-        /scwant scdens screg scarea mul def
+        /scwant scdens scregarea mul def
     } {
         /scwant scopts /Count 120 scgetdef def
         scwant scisnum not { scatter-count-must-be-a-number } if

@@ -2721,10 +2721,9 @@ fn scpath_captures_the_current_path_as_a_region() {
     assert_eq!(got[0], "20000.0", "shoelace area of the triangle");
     assert_eq!(got[1], "[100.0 100.0 300.0 300.0]");
     assert_eq!(got[2], "/nonzero", "fill's own rule is the default");
-    let edge_numbers: usize = got[3].parse().unwrap();
-    assert!(
-        edge_numbers >= 12,
-        "three sides is at least three edges (12 numbers), got {edge_numbers}"
+    assert_eq!(
+        got[3], "12",
+        "a closed triangle is exactly three edges (12 numbers)"
     );
     assert_eq!(got[4], "true", "inside the triangle");
     assert_eq!(got[5], "false", "past the hypotenuse, inside the bbox");
@@ -3026,7 +3025,7 @@ fn scatter_on_an_empty_region_is_a_silent_no_op() {
          E scarea  E /Edges get length  0 0 E scin \
          E << /Count 20 /Mark { pop pop pop pop } >> scatter scplaced",
     );
-    assert_eq!(got[0], "0.0", "no path, no area");
+    assert_eq!(got[0], "0", "no path, no area");
     assert_eq!(got[1], "0");
     assert_eq!(got[2], "false", "nothing is inside an empty region");
     assert_eq!(got[3], "0", "and nothing gets placed");
@@ -3303,4 +3302,128 @@ fn scpath_chord_resolution_follows_the_ctm_for_curves_only() {
     assert_eq!(got[0], got[2], "polygon edge count is scale-independent");
     assert_eq!(got[1], got[3], "polygon area is scale-independent");
     assert_eq!(got[1], "10000.0", "and exact");
+}
+
+#[test]
+fn scarea_measures_the_region_that_scin_actually_accepts() {
+    // A cross-model review of PR #119 caught that the cheap formula --
+    // the absolute value of the summed signed shoelace terms -- is not
+    // the area `scin` accepts, in three separable ways. Each case here
+    // is one of them, with the value the containment rule actually
+    // implies, and each is checked under both rules where they differ.
+    let area = |src: &str| -> f64 {
+        let got = eval(src);
+        got[0]
+            .parse()
+            .unwrap_or_else(|_| panic!("area: {:?}", got[0]))
+    };
+    let outer = "newpath 0 0 moveto 100 0 lineto 100 100 lineto 0 100 lineto closepath";
+    let close_enough = |got: f64, want: f64, what: &str| {
+        assert!(
+            (got - want).abs() < want * 0.01 + 1.0,
+            "{what}: measured {got}, expected about {want}"
+        );
+    };
+
+    // A single simple contour is exact, not merely close.
+    let got = eval("newpath 100 100 moveto 300 100 lineto 100 300 lineto closepath scpath scarea");
+    assert_eq!(got[0], "20000.0", "a triangle's area is exact");
+
+    // 1. Two disjoint contours wound *oppositely* both count. The
+    // shoelace sum cancels them to zero, which would then trip
+    // /Density's positive-area guard on a perfectly good region.
+    let disjoint =
+        format!("{outer} 200 0 moveto 200 100 lineto 300 100 lineto 300 0 lineto closepath scpath");
+    close_enough(
+        area(&format!("{disjoint} scarea")),
+        20000.0,
+        "disjoint opposite-wound squares, nonzero",
+    );
+    close_enough(
+        area(&format!("{disjoint} dup /Rule /evenodd put scarea")),
+        20000.0,
+        "disjoint opposite-wound squares, even-odd",
+    );
+
+    // 2. Nested contours wound the *same* way are solid under nonzero
+    // (the outer square's area, not outer plus inner) and a ring under
+    // even-odd. The shoelace sum reports outer+inner for both.
+    let nested =
+        format!("{outer} 25 25 moveto 75 25 lineto 75 75 lineto 25 75 lineto closepath scpath");
+    close_enough(
+        area(&format!("{nested} scarea")),
+        10000.0,
+        "nested same-wound squares, nonzero",
+    );
+    close_enough(
+        area(&format!("{nested} dup /Rule /evenodd put scarea")),
+        7500.0,
+        "nested same-wound squares, even-odd",
+    );
+
+    // 3. The donut both rules agree on: opposite winding, so the hole
+    // is a hole either way.
+    let donut =
+        format!("{outer} 25 25 moveto 25 75 lineto 75 75 lineto 75 25 lineto closepath scpath");
+    close_enough(
+        area(&format!("{donut} scarea")),
+        7500.0,
+        "opposite-wound donut, nonzero",
+    );
+    close_enough(
+        area(&format!("{donut} dup /Rule /evenodd put scarea")),
+        7500.0,
+        "opposite-wound donut, even-odd",
+    );
+
+    // A curve measures to its flattened polygon, which is inscribed --
+    // so slightly under the true circle, by about a tenth of a percent
+    // at this interpreter's flattening tolerance.
+    let circle = area("newpath 100 100 50 0 360 arc closepath scpath scarea");
+    assert!(
+        (7700.0..=7853.99).contains(&circle),
+        "a radius-50 disc measured {circle}, expected just under pi*r^2 = 7853.98"
+    );
+
+    // A stored /Area always wins, which is the escape hatch for a
+    // region whose area has to be exact.
+    let got = eval(&format!("{donut} dup /Area 1234 put scarea"));
+    assert_eq!(got[0], "1234", "a stored /Area short-circuits measurement");
+}
+
+#[test]
+fn scpath_does_not_close_an_explicitly_closed_subpath_twice() {
+    // `pathforall` reports an explicit `closepath`, and scpath closes
+    // whatever is left open at the end -- so without a flag the last
+    // subpath got closed twice, appending a zero-length duplicate edge
+    // (Codex review, PR #119). Geometrically inert, but it inflated
+    // /Edges and would have tripped the 20000-edge ceiling one edge
+    // early.
+    let got = eval(
+        "newpath 0 0 moveto 100 0 lineto 100 100 lineto 0 100 lineto closepath          scpath /Edges get length 4 idiv",
+    );
+    assert_eq!(got[0], "4", "a closed square is four edges, not five");
+
+    // Two closed subpaths, likewise -- the first is closed by
+    // pathforall, and the following moveto must not close it again.
+    let got = eval(
+        "newpath 0 0 moveto 10 0 lineto 10 10 lineto closepath          50 50 moveto 60 50 lineto 60 60 lineto closepath          scpath /Edges get length 4 idiv",
+    );
+    assert_eq!(got[0], "6", "two closed triangles are six edges");
+
+    // A subpath left open still gets its implicit closing edge.
+    let got = eval("newpath 0 0 moveto 10 0 lineto 10 10 lineto scpath /Edges get length 4 idiv");
+    assert_eq!(got[0], "3", "an open triangle closes implicitly");
+
+    // And a lineto *after* a closepath legitimately starts a new
+    // subpath at the closepath's own point (PLRM), which must still be
+    // closed and measured rather than dropped.
+    let got = eval(
+        "newpath 0 0 moveto 100 0 lineto 100 100 lineto closepath          50 200 lineto 150 200 lineto scpath dup /Edges get length 4 idiv exch scarea",
+    );
+    assert_eq!(got[0], "6", "three edges each for the two subpaths");
+    assert_eq!(
+        got[1], "15000.0",
+        "the reopened subpath's 10000 counts alongside the triangle's 5000"
+    );
 }

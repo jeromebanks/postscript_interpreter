@@ -72,6 +72,31 @@ total work is bounded by `Count × Tries` with both capped, and
 in the edge count, so an unbounded path would make every candidate
 arbitrarily expensive.
 
+**Two defects a cross-model (Codex) review of PR #119 caught, both
+real.** First, `scarea` originally used the cheap formula — the
+absolute value of the summed signed shoelace terms — which is *not*
+the area `scin` accepts, in three separable ways: two disjoint
+contours wound oppositely cancel to zero (and then trip `/Density`'s
+own positive-area guard on a perfectly good region), nested
+same-winding contours report outer+inner rather than the solid outer
+one, and nothing about the formula responds to `/Rule` at all even
+though the even-odd reading of a donut is a genuinely different area.
+Replaced with scanline integration under the region's own rule —
+asking the same containment question `scin` does, a row at a time —
+which gets every case right by construction at the cost of exactness
+on shapes whose vertices don't line up with slab boundaries (a
+fraction of a percent; a rectangle region stays exact, and a stored
+`/Area` short-circuits the measurement for a caller who needs one).
+Second, an explicitly closed subpath was closed *twice* — `pathforall`
+reports the `closepath`, and `scpath` also closes whatever is left
+open at the end — appending a zero-length duplicate edge per closed
+subpath: geometrically inert (it can't cross a scanline) but it
+inflated `/Edges` and would have tripped the 20000-edge ceiling one
+edge early. Fixing it surfaced a third case worth handling: a `lineto`
+*after* a `closepath` legitimately starts a new subpath at the
+closepath's own point, so the capture reopens rather than silently
+dropping it.
+
 **Deliberately not built:** true Poisson-disk (Bridson) sampling —
 dart-throwing with a spacing grid is the placement primitive this
 issue asked for, not a sampler with a guaranteed fill quality; density
