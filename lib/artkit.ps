@@ -887,11 +887,28 @@ end
 %           drawn, so a pathological /Density can't run away. Total
 %           work is bounded regardless: at most Count*Tries candidates.
 %
-% After the call, `scplaced` holds how many marks actually landed
-% (read it, don't set it) — deliberately a global rather than a
-% returned value, since a count left on the operand stack is a leak
-% waiting for a caller who forgets to pop it. During /Mark, scplaced
-% is the 1-based index of the mark being drawn.
+% The deposit budget bounds *marks*, which is not the same as bounding
+% *work*: testing a candidate against a path region costs one pass
+% over its edges, so a legal `/Count 200000 /Tries 100` over a
+% 20000-edge region would be twenty million candidates at twenty
+% thousand edge tests each, and no amount of deposit budget stops it
+% (Codex review, round 3). Containment work is therefore metered as it
+% is spent, against `scworkmax`, and a call that would grind raises
+% `scatter-containment-work-exceeds-safety-limit` partway rather than
+% running for an hour. Rectangle regions cost a bounds check rather
+% than an edge scan, so they are effectively never charged.
+%
+% After the call, `scplaced` reports how many marks actually landed
+% — deliberately read back rather than returned, since a count left on
+% the operand stack is a leak waiting for a caller who forgets to pop
+% it. During /Mark, `scplaced` is the 1-based index of the mark being
+% drawn. It reads the count out of `ScatterState` rather than being a
+% plain variable, because a plain `def` writes into whatever dict is
+% current: a caller who wraps the call in the ordinary `N dict begin
+% ... end` — which is exactly what a `grid` or `truchet` stamp does —
+% would get the count written into their scratch dict and thrown away
+% with it (Codex review, round 3). `ScatterState` follows
+% `TurtleState`'s precedent above.
 %
 % Reproducibility: same seed, same options, same picture — the random
 % draws happen in a pinned order, x then y per candidate, then the
@@ -1100,8 +1117,11 @@ end
 % count is checked against the `sqabudget` ceiling and a region too
 % complex to measure raises `scarea-region-too-complex-to-measure`
 % instead of running for minutes. The ceiling admits paths of roughly
-% 1400 flattened edges -- for scale, a seven-letter word set at 72pt
-% and captured with `charpath` is about 330. Real regions are nowhere near it (a few hundred
+% 800 flattened edges -- for scale, a seven-letter word set at 72pt
+% and captured with `charpath` is about 330, and this repo's own
+% gallery piece captures a 75-edge ridge. A path that crosses itself
+% many times costs more than its edge count suggests, since every
+% crossing height buys a subdivision. Real regions are nowhere near it (a few hundred
 % flattened edges measures in milliseconds); a region that trips it can
 % carry its own area instead -- `region /Area <num> put` short-circuits
 % the measurement entirely, since a stored /Area always wins -- and
@@ -1183,7 +1203,69 @@ end
 % Measurement work units (edge scans and sort shifts), tuned so the
 % ceiling costs about a second in this interpreter rather than the
 % minutes an unbounded measurement of a pathological path would.
+% Measurement work units (edge scans and sort shifts), tuned so the
+% ceiling costs a second or two in this interpreter rather than the
+% minutes an unbounded measurement of a pathological path would.
 /sqabudget 2000000 def
+
+/sqaslab {                                       % lo hi -> area
+% One vertex-bounded slab, integrated adaptively. Covered width is
+% linear in y between consecutive vertex heights *unless* two edges
+% cross inside the slab, where the span structure changes and the
+% midpoint alone can be arbitrarily wrong -- a bow tie
+% (0,0)(100,100)(0,100)(100,0) is the smallest example: its only
+% vertex heights are 0 and 100, and the one midpoint at y=50 lands
+% exactly on the crossing, where the covered width is zero. Measuring
+% it that way reported area 0 for a region of 5000 (Codex review,
+% round 3).
+%
+% So each slab is checked for linearity instead of assumed linear:
+% sample the midpoint and both quarter points, and if the midpoint
+% isn't the average of the quarters, something bends in here -- halve
+% the slab and try again. Linear slabs pass the test immediately and
+% cost three scanlines instead of one; a bend costs one subdivision
+% per crossing height and then converges. Depth-first through an
+% explicit stack rather than by recursion, the same way `gasket` and
+% `carpet` walk their subdivisions.
+    /sqashi exch def /sqaslo exch def
+    sqastk 0 sqaslo put
+    sqastk 1 sqashi put
+    /sqasp 1 def
+    /sqasum 0 def
+    {
+        sqasp 0 le { exit } if
+        /sqasp sqasp 1 sub def
+        /sqalo0 sqastk sqasp 2 mul get def
+        /sqahi0 sqastk sqasp 2 mul 1 add get def
+        /sqahh sqahi0 sqalo0 sub def
+        /sqasy sqalo0 sqahh 2 div add def
+        /sqalm sqscanline def
+        sqahh sqaminh le {
+            /sqasum sqasum sqalm sqahh mul add def
+        } {
+            /sqasy sqalo0 sqahh 4 div add def
+            /sqal1 sqscanline def
+            /sqasy sqahi0 sqahh 4 div sub def
+            /sqal3 sqscanline def
+            /sqaavg sqal1 sqal3 add 2 div def
+            sqalm sqaavg sub abs sqatol le
+            sqasp 2 add 30 ge or {
+                % Linear here (or as deep as the stack goes): the
+                % two-point estimate is exact for a linear width and no
+                % worse than the midpoint otherwise.
+                /sqasum sqasum sqaavg sqahh mul add def
+            } {
+                sqastk sqasp 2 mul sqalo0 put
+                sqastk sqasp 2 mul 1 add sqalo0 sqahh 2 div add put
+                /sqasp sqasp 1 add def
+                sqastk sqasp 2 mul sqalo0 sqahh 2 div add put
+                sqastk sqasp 2 mul 1 add sqahi0 put
+                /sqasp sqasp 1 add def
+            } ifelse
+        } ifelse
+    } loop
+    sqasum
+} def
 
 /sqmeasure {                                     % region -> num
     /sqareg exch def
@@ -1199,17 +1281,20 @@ end
             sqaedges sqai 1 add get sqainsert
             sqaedges sqai 3 add get sqainsert
         } for
+        /sqabb sqareg /BBox get def
+        /sqatol sqabb 2 get sqabb 0 get sub abs 1e-7 mul def
+        /sqaminh sqabb 3 get sqabb 1 get sub abs 1e-7 mul def
         /sqaxs sqan 1 add array def
         /sqads sqan 1 add array def
+        /sqastk 64 array def
         /sqatotal 0 def
         0 1 sqanys 2 sub {
             /sqak exch def
-            /sqalo sqays sqak get def
-            /sqahi sqays sqak 1 add get def
-            sqahi sqalo gt {
-                /sqasy sqalo sqahi add 2 div def
+            sqays sqak 1 add get sqays sqak get gt {
                 /sqatotal
-                    sqatotal sqscanline sqahi sqalo sub mul add def
+                    sqatotal
+                    sqays sqak get sqays sqak 1 add get sqaslab
+                    add def
             } if
         } for
         sqatotal
@@ -1300,7 +1385,7 @@ end
         { scslo } { scslo frnd scshi scslo sub mul add } ifelse def
     /scang scrlo scrhi eq
         { scrlo } { scrlo frnd scrhi scrlo sub mul add } ifelse def
-    /scplaced scplaced 1 add def
+    ScatterState /placed ScatterState /placed get 1 add put
     scpx scpy scsc scang scmark
 } def
 
@@ -1395,13 +1480,22 @@ end
         scseed cvi srand
     } if
 
-    /scplaced 0 def
+    % A candidate against a path region costs a pass over its edges;
+    % against a rectangle it costs a bounds check. Charge accordingly.
+    /sccost screg /Kind get /path eq
+        { screg /Edges get length 4 idiv 1 max } { 1 } ifelse def
+    /scwork 0 def
+
+    ScatterState /placed 0 put
     1 1 scwant {
         pop
         1 1 sctries {
             pop
             /scpx scbx frnd scbw mul add def
             /scpy scby frnd scbh mul add def
+            /scwork scwork sccost add def
+            scwork scworkmax gt
+                { scatter-containment-work-exceeds-safety-limit } if
             scpx scpy screg scin {
                 scfree {
                     scwins { scdeposit exit } if
@@ -1417,7 +1511,16 @@ end
     scseeded { scsaved srand } if
 } def
 
-/scplaced 0 def                                  % marks placed, read-only
+% Containment work units (candidate tests, charged by the region's
+% edge count) a single scatter call may spend before it is stopped --
+% about four seconds' worth in this interpreter, and roughly six times
+% what the heaviest scatter in this repo's own gallery spends. A call
+% that genuinely needs more can raise it: `/scworkmax <n> def`.
+/scworkmax 4000000 def
+
+/ScatterState 4 dict def
+ScatterState /placed 0 put
+/scplaced { ScatterState /placed get } def       % marks placed, read-only
 
 % --- tiling (regular and randomized tessellations) --------------------
 % `grid` above already covers the square case. This section adds one

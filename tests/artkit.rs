@@ -3475,11 +3475,15 @@ fn scarea_refuses_a_region_too_expensive_to_measure() {
     // real mechanism.
     let mut it = Interp::new();
     load(&mut it);
+    // An ordinary shape measures fine under the shipped ceiling. A
+    // zigzag is the shape that doesn't: every one of its edges spans
+    // the bounding box, so each scanline sorts them all, and each of
+    // its many self-crossings buys a subdivision on top of that.
     let zigzag = "newpath 0 0 moveto \
-                  1 1 200 { /i exch def i 0.5 mul i 2 mod 0 eq { 100 } { 0 } ifelse lineto } \
+                  1 1 60 { /i exch def i 0.5 mul i 2 mod 0 eq { 100 } { 0 } ifelse lineto } \
                   for closepath scpath";
-    it.run_str(&format!("{zigzag} scarea"))
-        .expect("the default budget measures a 200-segment zigzag fine");
+    it.run_str("newpath 150 150 80 32 6 star closepath scpath scarea")
+        .expect("the shipped ceiling measures an ordinary star fine");
     it.run_str("clear").expect("clear");
 
     let err = it
@@ -3501,4 +3505,93 @@ fn scarea_refuses_a_region_too_expensive_to_measure() {
          scatter scplaced"
     ));
     assert_eq!(got[0], "5", "/Count scatter needs no area at all");
+}
+
+#[test]
+fn scarea_subdivides_a_slab_where_edges_cross_inside_it() {
+    // Round three of the review: "exact between vertex heights" holds
+    // only while nothing *crosses* between them. A bow tie is the
+    // smallest counterexample -- its only vertex heights are 0 and
+    // 100, and the single slab's midpoint lands exactly on the
+    // crossing at y=50, where the covered width is zero. Measuring it
+    // that way reported 0 for a region of 5000, which /Density would
+    // then have rejected outright as empty.
+    let bowtie = "newpath 0 0 moveto 100 100 lineto 0 100 lineto 100 0 lineto closepath scpath";
+    let got = eval(&format!("{bowtie} scarea"));
+    assert_eq!(got[0], "5000.0", "bow tie, nonzero: two triangles of 2500");
+    let got = eval(&format!("{bowtie} dup /Rule /evenodd put scarea"));
+    assert_eq!(
+        got[0], "5000.0",
+        "bow tie, even-odd: the same two triangles"
+    );
+
+    // And the subdivision must not disturb the shapes that were
+    // already exact -- a linear slab passes the check on the first
+    // try and is integrated whole.
+    let got = eval("newpath 100 100 moveto 300 100 lineto 100 300 lineto closepath scpath scarea");
+    assert_eq!(got[0], "20000.0", "a triangle is still exact");
+}
+
+#[test]
+fn scplaced_survives_the_callers_own_dictionary() {
+    // `/scplaced 0 def` wrote into whatever dict was current, so a
+    // caller who wrapped the call in the ordinary `N dict begin ...
+    // end` -- exactly what a `grid` or `truchet` stamp does -- had the
+    // count written into their scratch dict and thrown away with it
+    // (Codex review, round 3). It now reads out of ScatterState.
+    let got = eval(
+        "5 dict begin \
+           0 0 100 100 screct << /Count 3 /Seed 1 /Mark { pop pop pop pop } >> scatter \
+         end \
+         scplaced",
+    );
+    assert_eq!(got[0], "3", "the count outlived the caller's dict");
+
+    // It is also readable *inside* such a dict, during the mark.
+    // (Stashed in an array rather than a name, since a `def` from
+    // inside the mark would land in that same scratch dict -- the very
+    // shadowing this test is about.)
+    let got = eval(
+        "/seen [ 0 ] def 4 dict begin \
+           0 0 100 100 screct \
+           << /Count 4 /Seed 1 /Mark { pop pop pop pop seen 0 scplaced put } >> scatter \
+         end seen 0 get",
+    );
+    assert_eq!(got[0], "4", "the last mark saw its own 1-based index");
+}
+
+#[test]
+fn scatter_meters_containment_work_not_just_deposits() {
+    // The deposit budget bounds marks, which is not the same as
+    // bounding work: testing one candidate against a path region costs
+    // a pass over its edges, so a legal `/Count 200000 /Tries 100`
+    // over a 20000-edge region is twenty million candidates at twenty
+    // thousand edge tests each and no deposit budget stops it (Codex
+    // review, round 3). Driven here by lowering the ceiling rather
+    // than by building the pathological call itself.
+    let region = "newpath 0 0 moveto 100 0 lineto 100 100 lineto 0 100 lineto closepath scpath";
+    let never = "/Tries 100 /Weight { pop pop 0 } /Mark { pop pop pop pop }";
+    let mut it = Interp::new();
+    load(&mut it);
+    let err = it
+        .run_str(&format!(
+            "/scworkmax 500 def {region} << /Count 2000 /Budget 200000 {never} >> scatter"
+        ))
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n)
+            if n == "scatter-containment-work-exceeds-safety-limit"),
+        "got {err}"
+    );
+
+    // A rectangle region costs a bounds check rather than an edge
+    // scan, so the same call over one is charged a fraction as much
+    // and runs to completion under the same lowered ceiling.
+    let got = eval(&format!(
+        "/scworkmax 500 def 0 0 100 100 screct << /Count 4 /Seed 1 {never} >> scatter scplaced"
+    ));
+    assert_eq!(
+        got[0], "0",
+        "the weight rejected everything, but nothing errored"
+    );
 }

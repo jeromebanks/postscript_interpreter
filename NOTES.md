@@ -118,6 +118,31 @@ seven-letter word set at 72pt and captured with `charpath` is about
 still carry its own `/Area` or be scattered by `/Count`, which needs
 no area at all.
 
+**Round three found three more, all real.** (1) "Exact between vertex
+heights" holds only while nothing *crosses* between them: a bow tie —
+`(0,0) (100,100) (0,100) (100,0)` — has vertex heights of only 0 and
+100, and the single slab's midpoint lands exactly on the crossing at
+y=50 where the covered width is zero, so a region of 5000 measured as
+0 and `/Density` would have rejected it as empty. Slabs are now
+integrated *adaptively*: sample the midpoint and both quarter points,
+and if the midpoint isn't the average of the quarters, something bends
+in this slab — halve it and try again, depth-first through an explicit
+stack (`gasket`/`carpet`'s precedent). Linear slabs pass immediately
+and cost three scanlines instead of one; a bend costs one subdivision
+per crossing height and then converges, so the bow tie comes out at
+exactly 5000 under both rules. (2) The deposit budget bounds *marks*,
+which is not the same as bounding *work* — one candidate against a
+path region costs a pass over its edges, so a perfectly legal `/Count
+200000 /Tries 100` over a 20000-edge region is twenty million
+candidates at twenty thousand edge tests apiece, and no deposit budget
+touches it. Containment work is now metered as it is spent, against
+`scworkmax`. (3) `scplaced` was a plain `def`, so a caller who wrapped
+the call in the ordinary `N dict begin ... end` — exactly what a
+`grid` or `truchet` stamp does — got the count written into their own
+scratch dict and thrown away with it. It now reads out of a
+`ScatterState` dict (`TurtleState`'s precedent), so it survives any
+dict scoping while the spelling at the call site is unchanged.
+
 **One finding dispositioned rather than fixed.** The same round noted
 that `clippath scpath` doesn't capture the true clip when several
 clips are nested — correctly, but the cause is this interpreter's
