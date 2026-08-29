@@ -447,8 +447,11 @@ A's nested-`clip` technique as the portable fallback. It isn't one: a
 fallback has to degrade *automatically*, and A needs up to 2ᴺ hand-
 ordered region fills with a blend color guessed per pair — the same
 combinatorial limit named as its ceiling above. What shipped instead is
-a flatten-against-white fallback: `pkalphaok` probes
-`systemdict /setalpha known` at load, and without it each mark is
+a flatten-against-white fallback: `pwhasalpha` probes
+`systemdict /setalpha known` at load and the documented `pkalphaok`
+dial is set from it (two names because forcing the dial false to
+preview the fallback in pscat has to neutralize ambient compositing
+too, which only the probe can answer), and without alpha each mark is
 painted in the opaque color it would have had over white paper
 (`1-(1-c)*a`), accumulated across layers so the build-up survives, with
 a one-line diagnostic the first time it engages. A `gs file.ps` run

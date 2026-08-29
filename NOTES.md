@@ -70,11 +70,17 @@ caller's stream on every wash), and (b) every intermediate product stays
 inside 32-bit integer range, so the texture is identical under
 Ghostscript's 32-bit ints.
 
-**The Ghostscript fallback**, and what it is not. `pkalphaok` probes
-`systemdict /setalpha known` at load. Without it, each mark is painted
-in its flattened-over-white equivalent (`1-(1-c)*a`), accumulated across
-layers so the build-up survives, and a one-line diagnostic prints the
-first time it engages. A `gs file.ps` run therefore renders a legible,
+**The Ghostscript fallback**, and what it is not. Two names, not one:
+`pwhasalpha` (internal, immutable) is the load-time probe of
+`systemdict /setalpha known`, and `pkalphaok` is the documented dial
+set from it. They only diverge when someone sets the dial false by hand
+to preview the fallback in pscat — and that divergence is load-bearing,
+because everything that neutralizes ambient compositing keys off the
+*probe*: gs has no `setalpha` for an ambient value to leak out of, so a
+preview that inherited one wouldn't be a preview of gs. Without alpha,
+each mark is painted in its flattened-over-white equivalent
+(`1-(1-c)*a`), accumulated across layers so the build-up survives, and a
+one-line diagnostic prints the first time it engages. A `gs file.ps` run therefore renders a legible,
 opaque version of any watercolor program instead of erroring. What it
 provably cannot do is let anything underneath show through — a wash over
 `pkpaper`'s ground, or two overlapping washes, goes flat. That is
