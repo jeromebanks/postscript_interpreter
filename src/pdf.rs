@@ -33,7 +33,7 @@ use std::rc::Rc;
 
 use tiny_skia::FillRule;
 
-use crate::gfx::ClipNode;
+use crate::gfx::{ClipNode, Composite};
 use crate::svg::Chain;
 
 pub struct PdfRecorder {
@@ -49,6 +49,16 @@ pub struct PdfRecorder {
     /// Which images each finished page references.
     page_images: Vec<Vec<usize>>,
     current_images: Vec<usize>,
+    /// `ExtGState` dict bodies (issue #47's alpha/blend export), e.g.
+    /// `/ca 0.32 /CA 0.32 /BM /Multiply`, deduped by content and
+    /// document-global; pages reference them by index, exactly like
+    /// `images` above. Stays empty for any program that never touches
+    /// `setalpha`/`setblendmode`, which is what keeps those documents
+    /// byte-identical to what this exporter produced before.
+    gstates: Vec<String>,
+    /// Which gstates each finished page references.
+    page_gstates: Vec<Vec<usize>>,
+    current_gstates: Vec<usize>,
     /// Document `/Info` fields (issue #8) — from `%%Title:`/`%%For:`
     /// DSC header comments via `scan_document_info`, when present.
     title: Option<String>,
@@ -65,6 +75,9 @@ impl PdfRecorder {
             images: Vec::new(),
             page_images: Vec::new(),
             current_images: Vec::new(),
+            gstates: Vec::new(),
+            page_gstates: Vec::new(),
+            current_gstates: Vec::new(),
             title: None,
             author: None,
         }
@@ -75,6 +88,37 @@ impl PdfRecorder {
     pub fn set_info(&mut self, title: Option<String>, author: Option<String>) {
         self.title = title;
         self.author = author;
+    }
+
+    /// Register this element's alpha/blend as an `ExtGState` and
+    /// return the `/GSn gs` operator that selects it — empty for
+    /// opaque source-over, so nothing is emitted (and no `/ExtGState`
+    /// resource dict appears) unless a program actually asked for it.
+    ///
+    /// PDF splits what `setalpha` merges: `ca` is the fill (non-stroking)
+    /// constant alpha and `CA` the stroking one. pscat's contract is a
+    /// single alpha covering both, so both keys get the same value.
+    fn gs_ref(&mut self, comp: Composite) -> String {
+        if comp.is_default() {
+            return String::new();
+        }
+        let body = format!(
+            "/ca {} /CA {} /BM /{}",
+            f(comp.alpha),
+            f(comp.alpha),
+            comp.blend.as_ps_name(),
+        );
+        let idx = match self.gstates.iter().position(|g| *g == body) {
+            Some(i) => i,
+            None => {
+                self.gstates.push(body);
+                self.gstates.len() - 1
+            }
+        };
+        if !self.current_gstates.contains(&idx) {
+            self.current_gstates.push(idx);
+        }
+        format!("/GS{idx} gs ")
     }
 
     fn clip_prelude(&mut self, chain: &Chain) -> String {
@@ -100,12 +144,14 @@ impl PdfRecorder {
         path: &crate::gfx::PsPath,
         rule: FillRule,
         rgb: (f32, f32, f32),
+        comp: Composite,
         chain: &Chain,
     ) {
         let clip = self.clip_prelude(chain);
+        let gs = self.gs_ref(comp);
         let _ = writeln!(
             self.content,
-            "q {clip}{} {} {} rg {} {}
+            "q {clip}{gs}{} {} {} rg {} {}
 Q",
             f(rgb.0),
             f(rgb.1),
@@ -128,9 +174,11 @@ Q",
         join: tiny_skia::LineJoin,
         miter_limit: f32,
         dash: Option<(&[f32], f32)>,
+        comp: Composite,
         chain: &Chain,
     ) {
         let clip = self.clip_prelude(chain);
+        let gs = self.gs_ref(comp);
         let cap = match cap {
             tiny_skia::LineCap::Round => 1,
             tiny_skia::LineCap::Square => 2,
@@ -150,7 +198,7 @@ Q",
         };
         let _ = writeln!(
             self.content,
-            "q {clip}{} {} {} RG {} w {cap} J {join} j {} M {dash}{} S
+            "q {clip}{gs}{} {} {} RG {} w {cap} J {join} j {} M {dash}{} S
 Q",
             f(rgb.0),
             f(rgb.1),
@@ -230,20 +278,24 @@ Q",
     pub(crate) fn erase(&mut self) {
         self.content.clear();
         self.current_images.clear();
+        self.current_gstates.clear();
     }
 
     pub(crate) fn end_page(&mut self) {
         self.pages.push(self.content.clone());
         self.page_images.push(self.current_images.clone());
+        self.page_gstates.push(self.current_gstates.clone());
     }
 
     /// Serialize the whole document.
     pub fn finish(&self, trailing_art: bool) -> Vec<u8> {
         let mut pages = self.pages.clone();
         let mut page_images = self.page_images.clone();
+        let mut page_gstates = self.page_gstates.clone();
         if pages.is_empty() || trailing_art {
             pages.push(self.content.clone());
             page_images.push(self.current_images.clone());
+            page_gstates.push(self.current_gstates.clone());
         }
         let npages = pages.len();
 
@@ -260,15 +312,36 @@ Q",
             .into_bytes(),
         );
         let image_base = 3 + npages * 2;
-        for (i, (content, imgs)) in pages.iter().zip(&page_images).enumerate() {
+        for (i, ((content, imgs), gss)) in pages
+            .iter()
+            .zip(&page_images)
+            .zip(&page_gstates)
+            .enumerate()
+        {
             let xobjects: Vec<String> = imgs
                 .iter()
                 .map(|&idx| format!("/Im{idx} {} 0 R", image_base + idx))
                 .collect();
-            let resources = if xobjects.is_empty() {
+            // ExtGStates are written inline in the page's own
+            // /Resources rather than as indirect objects: they're a
+            // handful of numbers each, and keeping them out of the
+            // numbered-object list means the kids/image_base
+            // positional math above needs no adjustment at all.
+            let extgstates: Vec<String> = gss
+                .iter()
+                .map(|&idx| format!("/GS{idx} << {} >>", self.gstates[idx]))
+                .collect();
+            let mut parts = String::new();
+            if !xobjects.is_empty() {
+                let _ = write!(parts, " /XObject << {} >>", xobjects.join(" "));
+            }
+            if !extgstates.is_empty() {
+                let _ = write!(parts, " /ExtGState << {} >>", extgstates.join(" "));
+            }
+            let resources = if parts.is_empty() {
                 String::new()
             } else {
-                format!(" /Resources << /XObject << {} >> >>", xobjects.join(" "))
+                format!(" /Resources <<{parts} >>")
             };
             objects.push(
                 format!(

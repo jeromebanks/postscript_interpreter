@@ -1756,3 +1756,731 @@
         grestore
     } if
 } def
+
+% --- watercolor wash and paper ground (issue #47) ---------------------
+% opts pkwash -
+% x y w h opts pkpaper -
+%
+% The watercolor medium, implementing the architecture issue #46's
+% spike selected and recorded in `docs/WATERCOLOR.md`: real alpha
+% compositing in the renderer (`setalpha`/`setblendmode`, this repo's
+% only non-PLRM painting operators) for the translucency and pooling,
+% noise-perturbed *vector* geometry for the wet, irregular boundary --
+% not a fluid solver, not a raster post-pass, both of which that spike
+% weighed and rejected.
+%
+% `pkwash` takes the current path as the wet region and lays one wash
+% into it: /Layers translucent passes, each with its own wobbled
+% boundary (so the layers' edges don't coincide and the mark reads as
+% pigment settling rather than one flat shape), an optional darker rim
+% where the pigment pools as the edge dries, and optional granulation
+% inside the wash. `pkpaper` lays the ground the wash sits on: a tone
+% fill plus seeded grain and fibers.
+%
+% Color, as with every other preset in this file, comes from whatever
+% the caller already set -- there is no color key.
+%
+% Wash order. Under the default /Blend /Normal, washes composite
+% source-over: a later wash reads as fresher paint over a drier one,
+% and the result depends on the order they were laid down. That is
+% honest watercolor behavior, and `docs/WATERCOLOR.md` flagged it as
+% something this issue had to either document or give control over.
+% Both: /Blend /Multiply is the order-independent alternative --
+% multiplication commutes, so a stack of washes reads the same however
+% it was ordered, at the cost of never lightening anything.
+%
+% Determinism. Every random choice here comes from this section's own
+% generator (`pwrand`), not from `rand`/`frnd`. Two reasons, both
+% deliberate departures from the sibling presets above:
+%   * /Seed makes one wash reproducible on its own without disturbing
+%     the caller's `rand` stream, so re-rolling a single wash's texture
+%     doesn't change every mark placed after it. The obvious
+%     alternative -- `rrand` to save the stream, `srand` to seed
+%     locally, `srand` again to restore -- looks equivalent but is not:
+%     under `--sweep-seed` (issue #21) *every* `srand` is intercepted
+%     and forced to the sweep's value, so the "restore" would silently
+%     reset the caller's stream to the sweep seed on every wash, and
+%     the sweep's own never-called-srand diagnostic would misfire.
+%   * `pwrand` is a Schrage-decomposed minimal-standard LCG, whose
+%     intermediate products are provably within 32-bit integer range,
+%     so it produces the *same* texture under real Ghostscript (where
+%     `rand` is a different generator entirely and integer overflow
+%     silently promotes to real) as it does here.
+% Without /Seed the generator is seeded from a single `rand` draw, so
+% a wash still follows the caller's own `srand` the way the rest of
+% this file does.
+%
+% Ghostscript. This is the first preset in this file that does not
+% render the same way under plain `gs file.ps`: gs 10.x has no
+% PostScript-callable alpha operator at all (tested directly in #46's
+% spike -- `.setfillconstantalpha`, `.setopacityalpha`,
+% `.setstrokeconstantalpha` and `setalpha` are all `where`-undefined;
+% gs's real transparency lives inside its PDF interpreter). Rather
+% than error there, `pkwash`/`pkpaper` probe once at load time
+% (`pkalphaok`) and fall back to painting each mark in the *flattened*
+% color that mark would have had over white paper -- 1-(1-c)*a per
+% channel, accumulated across layers so the build-up survives. What
+% that fallback cannot reproduce is anything underneath showing
+% through: a wash over `pkpaper`'s ground, or two washes overlapping,
+% goes flat instead of mixing. It is a legible approximation, not a
+% substitute, and it prints a one-line diagnostic the first time it
+% engages so a `gs` run says so out loud. Verified output for
+% alpha-bearing content goes through `--pdf` (PDF's `ExtGState`
+% `ca`/`CA`/`BM`, which gs *does* implement -- see `tests/pdf.rs`),
+% not through `gs file.ps`.
+%
+% Resource limits, in the same spirit as `pkdry`'s and `pkspray`'s
+% deposit budgets: /Layers is hard-capped at 1..8, the boundary sample
+% count and the grain/fleck counts are each checked against a fixed
+% budget before any drawing starts, and raster dimensions and output
+% size are already bounded by pscat's own `--page` ceiling, so nothing
+% here can turn an unattended render unbounded.
+%
+% Scratch prefix pw- (pkwash) and pv- (pkpaper) -- deliberately
+% distinct from pk-/pn-/pb-/pz-/po-, see the file header.
+
+% Whether the operators *exist*, as opposed to whether this library
+% should *use* them -- two questions that look like one until someone
+% sets the `pkalphaok` dial below to false by hand. Then they diverge,
+% and everything that neutralizes ambient compositing has to key off
+% this one: forcing the fallback in pscat is a request to preview what
+% Ghostscript does, and gs cannot have an ambient `setalpha` leaking
+% into the preview because gs has no `setalpha` at all (Codex review,
+% PR #109). Immutable; nothing here ever assigns it again.
+%
+% Written probe-first with `exch def` rather than the more obvious
+% `/name systemdict /setalpha known def`: build.rs's tag scanner models
+% the depth-0 stack with a two-slot window, so a `def` whose key sits
+% four objects back reads `/setalpha` as the name being defined (a real
+% limitation of that parser, of the same family as issue #104's, not a
+% quirk of this line). It stays on one line so the tag block is still
+% directly above the `def`, which the scanner also requires.
+% @internal
+systemdict /setalpha known /pwhasalpha exch def
+
+% @kind: Dial
+% @summary: Whether pkwash/pkpaper composite for real. Set at load from whether pscat's setalpha operator exists; false under plain Ghostscript, where they fall back to flattening each mark against white. Set it false by hand to preview that fallback here.
+% @example: pkalphaok { (real alpha) } { (flattened fallback) } ifelse print
+/pkalphaok pwhasalpha def
+
+% Set once the fallback has announced itself, so a piece with fifty
+% washes prints the diagnostic once rather than fifty times.
+% @internal
+/pwwarned false def
+
+% @internal
+/pwwarn {
+    pkalphaok not pwwarned not and {
+        /pwwarned true def
+        (paintkit: no setalpha here -- watercolor washes fall back to )
+        print
+        (flattening each mark against white; overlaps will not mix.\n)
+        print
+    } if
+} def
+
+% seed -   (seeds this section's own generator; see the header)
+% Reduced mod 2147483646 *before* `abs` so the most negative
+% representable integer can't overflow on its way through, and offset
+% to 1..2147483646 because 0 is the Lehmer generator's one fixed point.
+% @internal
+/pwsrand {
+    cvi 2147483646 mod abs 1 add
+    /pwstate exch def
+} def
+
+% -> 0.0..1.0
+% Schrage's decomposition of the minimal standard LCG (16807, 2^31-1):
+% every intermediate product stays inside 32-bit signed range
+% (16807*127772 and 2836*16806 are both under 2^31-1), which is what
+% makes the sequence identical under Ghostscript's 32-bit integers
+% rather than silently promoting to real and drifting.
+% @internal
+/pwrand {
+    /pwq pwstate 127773 idiv def
+    /pwstate pwstate 127773 mod 16807 mul pwq 2836 mul sub def
+    pwstate 0 lt { /pwstate pwstate 2147483647 add def } if
+    pwstate 2147483647 div
+} def
+
+% The wobble's harmonic ladder. *Integer* multiples of the subpath's
+% normalized progress, so the displacement at t=1 equals the one at t=0
+% and a closed wash boundary joins seamlessly instead of stepping at the
+% seam. Spread roughly geometrically rather than 1,2,3,4,...: a wet edge
+% has both slow lobes and fine crenulation, and evenly-spaced harmonics
+% spend most of their amplitude in the middle of that range where
+% neither reads.
+% @internal
+/pwfreqs [1 2 3 5 8 13] def
+
+% -   (fresh wobble coefficients for one wash layer)
+% Amplitude falls off as f^-0.8 (pink-ish, so the low harmonics carry
+% the shape and the high ones only roughen it), each scaled by its own
+% random factor, and the whole set normalized to sum to 1 -- which makes
+% /Wet an honest bound on the displacement whatever the draws came out
+% as, rather than a number whose meaning drifts with the coefficients.
+% @internal
+/pwwobinit {
+    /pwamp pwfreqs length array def
+    /pwpha pwfreqs length array def
+    /pwsum 0 def
+    0 1 pwfreqs length 1 sub {
+        /pwk exch def
+        /pwav
+            1 pwfreqs pwk get 0.8 exp div
+            0.55 pwrand 0.9 mul add mul
+        def
+        pwamp pwk pwav put
+        pwpha pwk pwrand 360 mul put
+        /pwsum pwsum pwav add def
+    } for
+    /pwanorm 1 pwsum div def
+    % A small whole-layer offset on top of the per-point wobble. Two
+    % layers whose boundaries differ only in *shape* still land on top
+    % of each other almost everywhere; nudging each one bodily leaves
+    % the thin crescents of single-layer coverage that read as the
+    % internal contour lines a glazed wash actually has. Deliberately a
+    % translation rather than an inward bias: "inward" would depend on
+    % the caller's winding direction, which nothing here can know.
+    /pwdx pwrand 0.6 mul 0.3 sub def
+    /pwdy pwrand 0.6 mul 0.3 sub def
+} def
+
+% t subphase -> displacement in about -1..1
+% @internal
+/pwwob {
+    /pwwsp exch def
+    /pwwt exch def
+    /pwacc 0 def
+    0 1 pwfreqs length 1 sub {
+        /pwk exch def
+        /pwacc
+            pwacc
+            pwamp pwk get
+            pwwt pwfreqs pwk get 360 mul mul
+            pwpha pwk get add pwwsp add sin
+            mul
+            add
+        def
+    } for
+    pwacc pwanorm mul
+} def
+
+% atotal -   (fallback only: the opaque color this mark would have had
+% over white paper at total coverage `atotal`)
+% @internal
+/pwsetflat {
+    /pwft exch def
+    1 1 pwr sub pwft mul sub
+    1 1 pwg sub pwft mul sub
+    1 1 pwb sub pwft mul sub
+    setrgbcolor
+} def
+
+% amark -   (paint for one mark of alpha `amark` laid over whatever
+% this wash has already put down, tracked in pwcum)
+% @internal
+/pwmark {
+    /pwmk exch def
+    pkalphaok
+        { pwmk setalpha }
+        { 1 1 pwcum sub 1 pwmk sub mul sub pwsetflat }
+    ifelse
+} def
+
+% -   (builds the current layer's wobbled boundary into the current
+% path, one closed subpath per subpath of the sampled source)
+% @internal
+/pwbuild {
+    /pwsub 0 def
+    /pwstarted false def
+    0 1 pwcount 1 sub {
+        /pwi exch def
+        pwraw pwi get
+        dup 0 get /pwx exch def
+        dup 1 get /pwy exch def
+        dup 2 get /pwang exch def
+        dup 3 get /pwt exch def
+        5 get /pwae exch def
+        /pwfirst pwae 1 and 1 eq def
+        pwfirst {
+            pwstarted { closepath } if
+            /pwstarted true def
+            /pwsub pwsub 1 add def
+        } if
+        % Displace along the local normal. Each subpath gets its own
+        % phase offset, or every subpath of a multi-blob wash would
+        % wobble in lockstep.
+        /pwd pwt pwsub 137 mul pwwob pwwet mul def
+        /pwnx pwang 90 add cos pwd mul pwx add pwdx pwwet mul add def
+        /pwny pwang 90 add sin pwd mul pwy add pwdy pwwet mul add def
+        pwfirst { pwnx pwny moveto } { pwnx pwny lineto } ifelse
+    } for
+    pwstarted { closepath } if
+} def
+
+% @kind: Procedure
+% @summary: Fills the current path as a translucent watercolor wash: layered passes each with their own wobbled wet boundary, an optional darker rim where pigment pools at the drying edge, and optional granulation. Color comes from whatever the caller already set. Needs pscat's setalpha; falls back to flattening against white elsewhere.
+% @example: newpath 200 200 90 0 360 arc closepath << /Alpha 0.3 /Wet 6 /Bloom 0.6 >> pkwash
+% @param: /Alpha Per-layer wash strength, 0..1 (default 0.32)
+% @param: /Layers Translucent passes to build up, hard-capped 1..8 (default 2)
+% @param: /Wet Peak boundary spread in points -- how far the wet edge wanders off the path (default 2.5)
+% @param: /Bloom Edge-pooling strength, 0..1, the darker rim a drying wash leaves (default 0.45)
+% @param: /BloomWidth Rim width in points (default Wet*1.5, at least 2)
+% @param: /Grain Granulation inside the wash, 0..1 -- seeded pigment speckle (default 0)
+% @param: /Blend /Normal (source-over, order-dependent) or /Multiply (commutative, never lightens) (default /Normal)
+% @param: /Pitch Boundary sampling pitch; must be > 0 (default the path's own perimeter/180, clamped to 0.6..4)
+% @param: /Seed Integer seed for this wash alone, leaving the caller's rand stream untouched (default: one rand draw from the caller's stream)
+/pkwash {
+    /pwopts exch def
+
+    % Validation runs unconditionally, before the path is looked at --
+    % same doctrine as pkribbon/pkspray above, and for the same reason
+    % (an empty path must still reject a malformed dict). `/key load
+    % xcheck` rejects procedure-valued options: no key here takes one,
+    % and a name bound to a procedure auto-executes on bare reference.
+    /pwalpha pwopts /Alpha 0.32 pkgetdef def
+    /pwalpha load xcheck { pkwash-alpha-must-not-be-a-procedure } if
+    pwalpha 0 lt pwalpha 1 gt or { pkwash-alpha-must-be-0-to-1 } if
+
+    /pwlayers pwopts /Layers 2 pkgetdef def
+    /pwlayers load xcheck { pkwash-layers-must-not-be-a-procedure } if
+    /pwlayers pwlayers truncate cvi def
+    pwlayers 1 lt pwlayers 8 gt or { pkwash-layers-must-be-1-to-8 } if
+
+    /pwwet pwopts /Wet 2.5 pkgetdef def
+    /pwwet load xcheck { pkwash-wet-must-not-be-a-procedure } if
+    pwwet 0 lt { pkwash-wet-must-be-non-negative } if
+
+    /pwbloom pwopts /Bloom 0.45 pkgetdef def
+    /pwbloom load xcheck { pkwash-bloom-must-not-be-a-procedure } if
+    pwbloom 0 lt pwbloom 1 gt or { pkwash-bloom-must-be-0-to-1 } if
+
+    /pwbloomw
+        pwopts /BloomWidth
+        pwwet 1.5 mul dup 2 lt { pop 2 } if
+        pkgetdef
+    def
+    /pwbloomw load xcheck { pkwash-bloomwidth-must-not-be-a-procedure } if
+    pwbloomw 0 le { pkwash-bloomwidth-must-be-positive } if
+
+    /pwgrain pwopts /Grain 0 pkgetdef def
+    /pwgrain load xcheck { pkwash-grain-must-not-be-a-procedure } if
+    pwgrain 0 lt pwgrain 1 gt or { pkwash-grain-must-be-0-to-1 } if
+
+    /pwblend pwopts /Blend /Normal pkgetdef def
+    % The executable-value guard has to come *before* the first bare
+    % `pwblend` reference, not after: a name bound to a procedure
+    % auto-executes on bare reference (pkgetdef's own header documents
+    % the trap), so checking the value first would already have run it.
+    /pwblend load xcheck { pkwash-blend-must-not-be-a-procedure } if
+    pwblend /Normal ne pwblend /Multiply ne and
+        { pkwash-blend-must-be-Normal-or-Multiply } if
+
+    % Seed this wash's own generator before anything draws, so /Seed
+    % and the caller's-stream default reach every later pwrand call
+    % identically.
+    pwopts /Seed known
+        { pwopts /Seed get pwsrand }
+        { rand pwsrand }
+    ifelse
+
+    pwwarn
+
+    % An explicitly supplied /Pitch is validated *here*, before any
+    % traversal: the measurement pass below is O(length/8), and making
+    % malformed input pay for it before being rejected is backwards
+    % (Codex review, PR #109, round 5). Only the *derived* default
+    % needs the measured length, and that one can't be invalid -- it's
+    % clamped into 0.6..4 by construction.
+    /pwpitchgiven pwopts /Pitch known def
+    pwpitchgiven {
+        /pwpitch pwopts /Pitch get def
+        /pwpitch load xcheck { pkwash-pitch-must-not-be-a-procedure } if
+        pwpitch 0 le { pkwash-pitch-must-be-positive } if
+    } if
+
+    % Pass 0: arc length and subpath count. `sp` sums to each subpath's
+    % true length whatever pitch it was walked at, so a coarse walk
+    % measures the path as exactly as a fine one would, for a fraction
+    % of the calls.
+    %
+    % Even this pass is O(length/8), so it carries its own abort: a
+    % path long enough to blow that bound would take an unbounded time
+    % just to *measure*, before any of the budgets below could ever
+    % have their say. Raising from inside the callback unwinds the walk
+    % immediately -- walkpath has no early-exit of its own (Codex
+    % review, PR #109).
+    /pwlen 0 def
+    /pwsubs 0 def
+    /pwmeas 0 def
+    8 {
+        /pwae exch def /pwsp exch def pop pop pop pop
+        /pwlen pwlen pwsp add def
+        pwae 1 and 1 eq { /pwsubs pwsubs 1 add def } if
+        /pwmeas pwmeas 1 add def
+        pwmeas 40000 gt { pkwash-path-too-long-for-safety-limit } if
+    } walkpath
+
+    % A default pitch derived from the path's own size: a wash is a
+    % region, not a stroke, so its scale is whatever the caller drew --
+    % a fixed pitch either polygonalizes a small blob or samples a
+    % page-sized one thousands of times.
+    pwpitchgiven not {
+        /pwpitch
+            pwlen 180 div
+            dup 0.6 lt { pop 0.6 } if
+            dup 4 gt { pop 4 } if
+        def
+    } if
+
+    % The budget is enforced *arithmetically*, from the length already
+    % measured, before any walk at `pwpitch` happens. Counting first and
+    % checking after -- the obvious shape, and what this did originally
+    % -- doesn't bound anything: at `/Pitch 0.0001` the counting walk
+    % itself is the unbounded work, and the check it eventually reaches
+    % never runs (Codex review, PR #109).
+    %
+    % walkpath emits floor(L/pitch)+1 regular stops per subpath plus at
+    % most one guaranteed endpoint, so length/pitch + 2 per subpath is a
+    % true upper bound (a sum of floors never exceeds the floor of the
+    % sum); the slack covers float rounding. Sizing the collection array
+    % from that bound rather than from an exact count is what lets this
+    % walk the path *twice* rather than three times -- parity with
+    % pkribbon and pkspray, which matters because walkpath's own
+    % per-segment traversal cost is paid once per pass.
+    /pwcap pwlen pwpitch div pwsubs 2 mul add 8 add truncate cvi def
+    pwcap 20000 gt
+        { pkwash-boundary-sample-count-exceeds-safety-limit } if
+
+    % Collect into that preallocated array -- fill-as-you-walk is the
+    % only shape that survives walkpath's cross-subpath stack discipline
+    % (same as pkribbon's pkraw and pkspray's pzraw). If the bound above
+    % were ever wrong, `put` raises rangecheck rather than corrupting
+    % anything.
+    /pwraw pwcap array def
+    /pwci 0 def
+    pwpitch {
+        6 array astore pwraw pwci 3 -1 roll put
+        /pwci pwci 1 add def
+    } walkpath
+    /pwcount pwci def
+
+    pwcount 0 gt {
+        % The granulation region and its budget are both settled here,
+        % before the first fill. Deriving them from the *source* path's
+        % bbox inflated by the largest displacement a boundary can take
+        % (the wobble is normalized to at most /Wet, the per-layer
+        % offset to at most 0.3 of it) rather than from a built
+        % boundary is what makes that possible -- and it means a
+        % rejected grain count leaves the canvas untouched, instead of
+        % aborting on top of layers and bloom already painted (Codex
+        % review, PR #109). The scatter is clipped to the wash either
+        % way, so a slightly generous region costs nothing but a few
+        % rejected candidate points.
+        pathbbox
+        /pwy1 exch def /pwx1 exch def /pwy0 exch def /pwx0 exch def
+        /pwinf pwwet 1.3 mul 1 add def
+        /pwx0 pwx0 pwinf sub def
+        /pwy0 pwy0 pwinf sub def
+        /pwx1 pwx1 pwinf add def
+        /pwy1 pwy1 pwinf add def
+        % One mark per ~14 square points at /Grain 1 -- dense enough to
+        % read as tooth in the paper rather than as scattered dots.
+        /pwn
+            pwgrain pwx1 pwx0 sub mul pwy1 pwy0 sub mul 14 div
+            truncate cvi
+        def
+        pwn 0 lt { /pwn 0 def } if
+        pwn 120000 gt { pkwash-grain-count-exceeds-safety-limit } if
+
+        currentrgbcolor /pwb exch def /pwg exch def /pwr exch def
+        gsave
+        % Neutralize first, then opt in. Neutralizing keys off
+        % `pwhasalpha` (do the operators exist?) rather than
+        % `pkalphaok` (should this wash use them?), so a forced-fallback
+        % preview is a faithful one: gs has no ambient alpha or blend to
+        % inherit, so neither may this. Then, when the wash really is
+        % compositing, its own /Blend is set unconditionally rather than
+        % only when it's /Multiply -- a caller who left
+        % `/Multiply setblendmode` in force would otherwise get a
+        % Multiply wash out of `/Blend /Normal`, making a documented
+        % option depend on incoming graphics state (Codex review,
+        % PR #109, rounds 2 and 4). All inside the gsave, so the
+        % caller's own state comes back either way.
+        pwhasalpha {
+            1 setalpha /Normal setblendmode
+            pkalphaok { pwblend setblendmode } if
+        } if
+
+        % The layers. pwcum tracks the coverage already laid down, which
+        % the alpha path ignores (the renderer is doing the real
+        % compositing) and the flattened fallback needs in order to
+        % reproduce the build-up.
+        /pwcum 0 def
+        1 1 pwlayers {
+            pop
+            pwwobinit
+            pwalpha pwmark
+            newpath pwbuild fill
+            /pwcum 1 1 pwcum sub 1 pwalpha sub mul sub def
+        } for
+
+        % Edge pooling. The rim is a stroke of the boundary clipped to
+        % the wash itself, so only its inward half survives -- a band
+        % that follows the wet edge exactly and cannot leak outside it.
+        % Two passes, wide-and-faint under narrow-and-stronger, so the
+        % rim grades inward instead of reading as an outline. The
+        % boundary is whatever the last layer built: the rim belongs to
+        % the edge that is actually visible.
+        pwbloom 0 gt {
+            newpath pwbuild
+            gsave
+                clip
+                % Cap, join, width *and* dash: an inherited dash pattern
+                % would turn the pooled edge into a dashed rim, and the
+                % rim is the one mark here whose whole job is to be
+                % continuous (Codex review, PR #109).
+                1 setlinejoin 1 setlinecap [] 0 setdash
+                newpath pwbuild
+                pwbloomw 2 mul setlinewidth
+                pwalpha pwbloom mul 0.55 mul pwmark
+                stroke
+                newpath pwbuild
+                pwbloomw 0.8 mul setlinewidth
+                pwalpha pwbloom mul pwmark
+                stroke
+            grestore
+        } if
+
+        % Granulation: pigment settling into the paper's tooth, as
+        % seeded dots clipped to the wash. One accumulated path and one
+        % fill, not a fill per dot.
+        pwgrain 0 gt {
+            newpath pwbuild
+            pwn 0 gt {
+                gsave
+                    clip
+                    pwalpha pwgrain mul 0.8 mul pwmark
+                    newpath
+                    1 1 pwn {
+                        pop
+                        /pwgx pwx0 pwrand pwx1 pwx0 sub mul add def
+                        /pwgy pwy0 pwrand pwy1 pwy0 sub mul add def
+                        /pwgr 0.35 pwrand 0.95 mul add def
+                        pwgx pwgr add pwgy moveto
+                        pwgx pwgy pwgr 0 360 arc
+                        closepath
+                    } for
+                    fill
+                grestore
+            } if
+        } if
+
+        grestore
+    } if
+} def
+
+% -   (pkpaper's own rectangle as the current path; needed twice now,
+% once to fill the ground and once to clip the texture to it)
+% @internal
+/pvrect {
+    newpath
+    pvx pvy moveto pvw 0 rlineto 0 pvh rlineto pvw neg 0 rlineto
+    closepath
+} def
+
+% tone-component -> the opaque color one grain mark flattens to
+% Only reached when there's no real alpha to composite with. The
+% backdrop here is not a guess the way `pkwash`'s white-paper
+% assumption is -- a grain mark sits directly on a ground this same
+% procedure just painted -- so both blend modes have an exact
+% closed form, and /Blend has to be honored rather than collapsed
+% into the source-over one (Codex review, PR #109, round 5):
+%   Normal:   t*(1 - depth*a)
+%   Multiply: t*(1 - a + a*t*(1-depth))   -- the darkened source is
+%             multiplied by the tone it sits on before compositing
+% @internal
+/pvflat {
+    /pvfcomp exch def
+    pvblend /Multiply eq
+        {
+            pvfcomp
+            1 pvalpha sub
+            pvalpha pvfcomp mul 1 pvdepth sub mul add
+            mul
+        }
+        { pvfcomp 1 pvdepth pvalpha mul sub mul }
+    ifelse
+} def
+
+% cx cy len wid ang -   (adds one rotated fleck to the current path)
+% Built from explicit corner arithmetic rather than translate/rotate,
+% so it costs no CTM churn inside a loop that runs thousands of times
+% and leaves the caller's coordinate system exactly as it found it.
+% @internal
+/pvfleck {
+    /pvfa exch def
+    /pvfw exch 2 div def
+    /pvfl exch 2 div def
+    /pvfy exch def
+    /pvfx exch def
+    /pvfc pvfa cos def
+    /pvfs pvfa sin def
+    pvfx pvfl pvfc mul sub pvfw pvfs mul add
+    pvfy pvfl pvfs mul sub pvfw pvfc mul sub moveto
+    pvfx pvfl pvfc mul add pvfw pvfs mul add
+    pvfy pvfl pvfs mul add pvfw pvfc mul sub lineto
+    pvfx pvfl pvfc mul add pvfw pvfs mul sub
+    pvfy pvfl pvfs mul add pvfw pvfc mul add lineto
+    pvfx pvfl pvfc mul sub pvfw pvfs mul sub
+    pvfy pvfl pvfs mul sub pvfw pvfc mul add lineto
+    closepath
+} def
+
+% @kind: Procedure
+% @summary: Lays a paper ground for watercolor: a tone fill over the given rectangle plus seeded grain speckle and fiber flecks. Paint it first; washes go over it. Uses setalpha where available and falls back to flattened tones elsewhere.
+% @example: 0 0 612 792 << /Tone [0.97 0.955 0.92] /Grain 0.6 >> pkpaper
+% @param: /Tone Paper color as a 3-element [r g b] array (default [0.965 0.95 0.915])
+% @param: /Grain Grain density, 0..1 (default 0.5)
+% @param: /Alpha Strength of each grain mark, 0..1 (default 0.18)
+% @param: /Depth How much darker than the tone a grain mark is, 0..1 (default 0.28)
+% @param: /Fiber Fraction of grain marks drawn as elongated paper fibers rather than specks, 0..1 (default 0.18)
+% @param: /Blend /Normal or /Multiply, for the grain marks (default /Normal)
+% @param: /Seed Integer seed for this ground alone, leaving the caller's rand stream untouched (default: one rand draw from the caller's stream)
+/pkpaper {
+    /pvopts exch def
+    /pvh exch def
+    /pvw exch def
+    /pvy exch def
+    /pvx exch def
+
+    /pvtone pvopts /Tone [0.965 0.95 0.915] pkgetdef def
+    % Before any bare `pvtone`, and before the type check specifically:
+    % a procedure *is* arraytype, so the type check alone would accept
+    % one -- after having already executed it on the bare reference.
+    /pvtone load xcheck { pkpaper-tone-must-not-be-a-procedure } if
+    pvtone type /arraytype ne { pkpaper-tone-must-be-an-array } if
+    pvtone length 3 ne { pkpaper-tone-must-have-three-components } if
+    % The guards above cover the array; its *elements* need their own.
+    % `/Tone [{ erasepage 0.9 } 0.8 0.7]` passes every check above, and
+    % the procedure then runs the moment the name it gets bound to is
+    % referenced -- a malformed color option performing arbitrary side
+    % effects instead of raising a type error (Codex review, PR #109).
+    % `get` retrieves without executing, so the check itself is safe.
+    0 1 2 {
+        pvtone exch get
+        dup xcheck { pkpaper-tone-components-must-not-be-procedures } if
+        dup type dup /integertype ne exch /realtype ne and
+            { pkpaper-tone-components-must-be-numbers } if
+        pop
+    } for
+
+    /pvgrain pvopts /Grain 0.5 pkgetdef def
+    /pvgrain load xcheck { pkpaper-grain-must-not-be-a-procedure } if
+    pvgrain 0 lt pvgrain 1 gt or { pkpaper-grain-must-be-0-to-1 } if
+
+    /pvalpha pvopts /Alpha 0.18 pkgetdef def
+    /pvalpha load xcheck { pkpaper-alpha-must-not-be-a-procedure } if
+    pvalpha 0 lt pvalpha 1 gt or { pkpaper-alpha-must-be-0-to-1 } if
+
+    /pvdepth pvopts /Depth 0.28 pkgetdef def
+    /pvdepth load xcheck { pkpaper-depth-must-not-be-a-procedure } if
+    pvdepth 0 lt pvdepth 1 gt or { pkpaper-depth-must-be-0-to-1 } if
+
+    /pvfiber pvopts /Fiber 0.18 pkgetdef def
+    /pvfiber load xcheck { pkpaper-fiber-must-not-be-a-procedure } if
+    pvfiber 0 lt pvfiber 1 gt or { pkpaper-fiber-must-be-0-to-1 } if
+
+    /pvblend pvopts /Blend /Normal pkgetdef def
+    /pvblend load xcheck { pkpaper-blend-must-not-be-a-procedure } if
+    pvblend /Normal ne pvblend /Multiply ne and
+        { pkpaper-blend-must-be-Normal-or-Multiply } if
+
+    pvopts /Seed known
+        { pvopts /Seed get pwsrand }
+        { rand pwsrand }
+    ifelse
+
+    pwwarn
+
+    pvw 0 le pvh 0 le or not {
+        /pvtr pvtone 0 get def
+        /pvtg pvtone 1 get def
+        /pvtb pvtone 2 get def
+
+        % Settled before the tone fill, not after it: a budget checked
+        % once the ground is already down leaves a half-painted canvas
+        % behind on rejection, which is exactly what the pre-draw
+        % validation contract this file states is supposed to prevent
+        % (Codex review, PR #109).
+        /pvn pvgrain pvw pvh mul mul 55 div truncate cvi def
+        pvn 0 lt { /pvn 0 def } if
+        pvn 60000 gt { pkpaper-grain-count-exceeds-safety-limit } if
+
+        gsave
+        % The ground is a ground: opaque and source-over, whatever the
+        % caller had set. /Alpha and /Blend are documented as *grain*
+        % options, so inheriting an ambient `setalpha`/`setblendmode`
+        % here would make the paper itself translucent with nothing in
+        % the contract saying so. Keyed off `pwhasalpha`, not
+        % `pkalphaok`, so it also holds in a forced-fallback preview --
+        % see that dial's own header (Codex review, PR #109, rounds 3
+        % and 4).
+        pwhasalpha { 1 setalpha /Normal setblendmode } if
+        pvrect
+        pvtr pvtg pvtb setrgbcolor
+        fill
+
+        pvgrain 0 gt pvalpha 0 gt and {
+            pvn 0 gt {
+                % A grain mark is the tone darkened by /Depth. With real
+                % alpha that's painted at /Alpha over the ground; in the
+                % fallback the two collapse to one opaque color, which
+                % for a mark directly on the ground is exact rather than
+                % approximate -- the fallback only loses fidelity where
+                % something *underneath* would have shown through.
+                pkalphaok {
+                    % Explicit, for the same reason as pkwash's above.
+                    pvblend setblendmode
+                    pvalpha setalpha
+                    pvtr 1 pvdepth sub mul
+                    pvtg 1 pvdepth sub mul
+                    pvtb 1 pvdepth sub mul
+                    setrgbcolor
+                } {
+                    pvtr pvflat pvtg pvflat pvtb pvflat setrgbcolor
+                } ifelse
+                % Clipped to the same rectangle the ground filled:
+                % centers are sampled right up to the edges, and a
+                % speck reaches 0.8 points past its center while a
+                % fiber reaches several, so an inset or adjacent
+                % `pkpaper` would otherwise scatter texture onto its
+                % neighbour (Codex review, PR #109, round 5).
+                gsave
+                pvrect clip
+                newpath
+                1 1 pvn {
+                    pop
+                    /pvgx pvx pwrand pvw mul add def
+                    /pvgy pvy pwrand pvh mul add def
+                    pwrand pvfiber lt {
+                        pvgx pvgy
+                        1.5 pwrand 4 mul add
+                        0.3 pwrand 0.35 mul add
+                        pwrand 180 mul
+                        pvfleck
+                    } {
+                        /pvgr 0.3 pwrand 0.5 mul add def
+                        pvgx pvgr add pvgy moveto
+                        pvgx pvgy pvgr 0 360 arc
+                        closepath
+                    } ifelse
+                } for
+                fill
+                grestore
+            } if
+        } if
+        grestore
+    } if
+} def

@@ -130,6 +130,35 @@ stamping along paths, type on a curve — load `lib/artkit.ps` and see
 the `psart` skill (`.claude/skills/psart/SKILL.md`): it teaches the
 whole render-look-refine workflow.
 
+## Translucency: setalpha / setblendmode (pscat extensions)
+
+```postscript
+0.3 setalpha              % fill/stroke opacity, 0..1
+/Multiply setblendmode    % or /Normal (the default); nothing else
+currentalpha currentblendmode
+```
+
+Graphics state, so `gsave`/`grestore` snapshot them and `initgraphics`
+resets them. They reach fills, strokes, shown text and `shfill` — **not**
+`image`/`imagemask`, which paint opaque regardless. Exported by `--svg`
+and `--pdf` as well as `--png`.
+
+**These are not PLRM operators.** Ghostscript has no
+PostScript-callable alpha operator at all, so a program that uses them
+will not render the same under plain `gs file.ps`. Two consequences
+worth planning around:
+
+- To hand someone a verified translucent render, use `--pdf` (gs's own
+  PDF interpreter does understand transparency) or `--png`, not a `.ps`
+  file they will run through gs.
+- Library code that wants to survive both should probe:
+  `systemdict /setalpha known` — `lib/paintkit.ps` does exactly this
+  (`pkalphaok`) and falls back to flattening each mark against white.
+
+`lib/paintkit.ps`'s `pkwash`/`pkpaper` are the watercolor medium built
+on top of these; `pscat --capabilities` has their full option list, and
+`docs/WATERCOLOR.md` explains why the mechanism is shaped this way.
+
 ## Watch it draw (needs a display)
 
 ```sh

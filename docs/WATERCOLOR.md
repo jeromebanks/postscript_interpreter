@@ -408,3 +408,70 @@ This decision, and the contract sketch above, has been posted to
 as a comment, per #46's acceptance criterion to update it since this
 spike adds a hard new requirement to its scope (SVG/PDF export
 alongside the alpha operator, not after).
+
+---
+
+## Postscript: what #47 actually shipped
+
+This section was added after the fact by issue #47's implementation, so
+the decision record above stays readable as the decision it was, and the
+places where implementation diverged from it are visible rather than
+implied.
+
+**Followed as recommended.** Approach B is the mechanism: `alpha` is a
+`GraphicsState` field snapshotted by `gsave`/`grestore`, exposed as
+`setalpha`/`currentalpha`, with `/Multiply` scoped in alongside it as
+`setblendmode`/`currentblendmode`. SVG (`fill-opacity`/`stroke-opacity`,
+`mix-blend-mode`) and PDF (`ExtGState` `ca`/`CA`/`BM`) landed in the same
+change as the operators, not after — both emitting nothing at the
+defaults, so existing exports are byte-identical rather than merely
+equivalent. Approach C was not built. `lib/paintkit.ps`'s `pkwash`/
+`pkpaper` are the medium; the boundary is noise-perturbed vector
+geometry, exactly as the "is spatial diffusion needed?" answer above
+predicted, and there is no PDE solver anywhere in it.
+
+**The open question, answered.** This document asked whether PDF-path
+verification could substitute for the `ghostscript_accepts_*` pattern
+for alpha-bearing content. It can, and it is stronger:
+`tests/pdf.rs`'s `alpha_survives_the_round_trip_through_gs` and
+`multiply_blending_survives_the_round_trip_through_gs` rasterize pscat's
+PDF *with gs* and block-compare against pscat's own canvas, so they
+assert gs's transparency implementation lands on the same pixels
+tiny-skia did — not merely that gs doesn't error. Both pass inside the
+tolerance the existing PDF tests already use. The `ghostscript_accepts_*`
+check is kept too, but for what it can honestly say: that the library
+file still loads and the *fallback* draws under gs.
+
+**Where #47 diverged, deliberately.** This document nominated Approach
+A's nested-`clip` technique as the portable fallback. It isn't one: a
+fallback has to degrade *automatically*, and A needs up to 2ᴺ hand-
+ordered region fills with a blend color guessed per pair — the same
+combinatorial limit named as its ceiling above. What shipped instead is
+a flatten-against-white fallback: `pwhasalpha` probes
+`systemdict /setalpha known` at load and the documented `pkalphaok`
+dial is set from it (two names because forcing the dial false to
+preview the fallback in pscat has to neutralize ambient compositing
+too, which only the probe can answer), and without alpha each mark is
+painted in the opaque color it would have had over white paper
+(`1-(1-c)*a`), accumulated across layers so the build-up survives, with
+a one-line diagnostic the first time it engages. A `gs file.ps` run
+therefore renders a legible, opaque version of a watercolor program.
+What it cannot do is let anything underneath show through — a wash over
+`pkpaper`'s ground, or two overlapping washes, goes flat. That is
+asserted as its own test rather than left as prose. Approach A remains
+available and documented for a small hand-composed scene; it is simply
+not what the library falls back to.
+
+**Order dependence, resolved rather than only documented.** The
+asymmetry this document flagged in Approach B's sample is real and is
+kept as the default: source-over means a later wash reads as fresher
+paint, and the result depends on the order. `/Blend /Multiply` is the
+commutative alternative — the specimen sheet shows the same two washes
+in both orders under both modes, so the difference is visible rather
+than asserted.
+
+**Known gap this issue did not close.** Alpha and blend do not reach
+`image`/`imagemask`, which blit samples straight into the pixmap instead
+of going through `Gfx::paint()`. A translucent `image` paints opaque.
+Documented at the field, the operator, README, and HANDOFF; closing it
+means teaching the image blitter about the graphics state.

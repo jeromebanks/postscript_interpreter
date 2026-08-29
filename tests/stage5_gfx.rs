@@ -242,3 +242,98 @@ fn rectclip_clips_and_clears_the_path() {
     let it = render(&format!("[] rectclip {FULL_PAGE} fill"));
     assert_eq!(pixel(&it, 50, 50), WHITE);
 }
+
+// --- issue #47: setalpha/setblendmode, pscat's own extensions -------
+//
+// These are deliberately *not* PLRM operators (real Ghostscript has no
+// PostScript-callable alpha operator at all — issue #46's spike tested
+// that directly), so there's no gs behavior to pin them against the way
+// the rest of this file pins its operators. What's asserted here is the
+// contract `docs/WATERCOLOR.md` recorded for them: clamping, graphics-
+// state semantics, and a hard error on an unknown mode name.
+
+#[test]
+fn setalpha_clamps_and_round_trips() {
+    assert_eq!(eval("0.25 setalpha currentalpha"), ["0.25"]);
+    assert_eq!(eval("2 setalpha currentalpha"), ["1.0"]);
+    assert_eq!(eval("-3 setalpha currentalpha"), ["0.0"]);
+    // Nothing set it: the default is opaque.
+    assert_eq!(eval("currentalpha"), ["1.0"]);
+}
+
+#[test]
+fn setblendmode_accepts_only_the_two_modes() {
+    assert_eq!(
+        eval("/Multiply setblendmode currentblendmode"),
+        ["/Multiply"]
+    );
+    assert_eq!(eval("/Normal setblendmode currentblendmode"), ["/Normal"]);
+    assert_eq!(eval("currentblendmode"), ["/Normal"]);
+
+    let mut it = Interp::with_page(100, 100).expect("test page");
+    // An unknown mode is a rangecheck, not a silent fall-through to
+    // Normal — a typo has to be loud or it diverges from what the
+    // program asked for with no signal at all.
+    assert!(matches!(
+        it.run_str("/Screen setblendmode"),
+        Err(PsError::Rangecheck)
+    ));
+    let mut it = Interp::with_page(100, 100).expect("test page");
+    assert!(matches!(
+        it.run_str("(Multiply) setblendmode"),
+        Err(PsError::Typecheck)
+    ));
+}
+
+#[test]
+fn alpha_and_blend_are_graphics_state() {
+    // gsave/grestore snapshot them like any other paint attribute...
+    assert_eq!(
+        eval(
+            "0.5 setalpha /Multiply setblendmode gsave 0.1 setalpha /Normal setblendmode grestore currentalpha currentblendmode"
+        ),
+        ["0.5", "/Multiply"]
+    );
+    // ...and initgraphics resets them.
+    assert_eq!(
+        eval("0.5 setalpha /Multiply setblendmode initgraphics currentalpha currentblendmode"),
+        ["1.0", "/Normal"]
+    );
+}
+
+#[test]
+fn alpha_paints_translucently_and_stacks() {
+    // One 50% black wash over white paper is mid grey; a second one
+    // over the first is darker still — the build-up `pkwash`'s /Layers
+    // key is made of.
+    let it = render(&format!("0.5 setalpha 0 setgray newpath {FULL_PAGE} fill"));
+    let (r, _, _) = pixel(&it, 50, 50);
+    assert!(r.abs_diff(128) <= 2, "one wash: {r}");
+
+    let it = render(&format!(
+        "0.5 setalpha 0 setgray newpath {FULL_PAGE} fill newpath {FULL_PAGE} fill"
+    ));
+    let (r2, _, _) = pixel(&it, 50, 50);
+    assert!(r2.abs_diff(64) <= 3, "two washes: {r2}");
+}
+
+#[test]
+fn zero_alpha_paints_nothing() {
+    let it = render(&format!("0 setalpha 0 setgray newpath {FULL_PAGE} fill"));
+    assert_eq!(pixel(&it, 50, 50), WHITE);
+}
+
+#[test]
+fn multiply_darkens_where_normal_replaces() {
+    // Yellow then blue. Under Normal the blue simply wins; under
+    // Multiply the overlap goes to the component-wise product, which
+    // for these two is near-black — the pigment-overlap look.
+    let program = |mode: &str| {
+        format!(
+            "/{mode} setblendmode 1 1 0 setrgbcolor newpath {FULL_PAGE} fill
+             0 0 1 setrgbcolor newpath {FULL_PAGE} fill"
+        )
+    };
+    assert_eq!(pixel(&render(&program("Normal")), 50, 50), (0, 0, 255));
+    assert_eq!(pixel(&render(&program("Multiply")), 50, 50), BLACK);
+}

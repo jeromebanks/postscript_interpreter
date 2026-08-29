@@ -3,6 +3,120 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Watercolor: setalpha/setblendmode + paintkit's pkwash/pkpaper (issue #47, 2026-08-28)
+
+Implements the architecture issue #46's spike recorded in
+`docs/WATERCOLOR.md` — Approach B, a small renderer-level alpha
+extension — and the artist-facing medium on top of it.
+
+**Renderer.** `GraphicsState` gains `alpha: f32` (promoted from the
+spike's `pub(crate)` prototype) and `blend: BlendMode`, a two-variant
+pscat enum (`Normal`/`Multiply`). Four new operators: `setalpha`/
+`currentalpha` and `setblendmode`/`currentblendmode`. They are
+**pscat extensions, not PLRM operators** — the spike established
+directly that gs 10.x has no PostScript-callable alpha operator at all.
+Both ride `gsave`/`grestore` for free and reset with `initgraphics`;
+alpha clamps like the color operators, an unknown blend name is a
+`rangecheck` rather than a silent fall-back.
+
+Reach: `fill`, `stroke`, shown text (`fill_path_direct`), and `shfill`
+(whose gradient needs `Shader::apply_opacity` — `paint()`'s color alpha
+can't reach a shader). **Not** `image`/`imagemask`, which blit samples
+straight into the pixmap; that gap is documented at the field, at the
+operator, in README, and in the tests rather than quietly left.
+
+Export, both required before merge per the spike's own scope cut:
+`--svg` emits `fill-opacity`/`stroke-opacity` on the painted element and
+`style="mix-blend-mode:multiply"` on the *outermost clip wrapper* — a
+non-`none` `clip-path` establishes a stacking context, so a blend
+declared inside the group composites against transparent black and
+renders plain source-over. Confirmed in Chrome rather than reasoned
+about: the same clipped-Multiply scene gives pscat's own rgb(51,92,46)
+with the group placement and the unblended rgb(51,102,230) with the
+element placement. `pkwash` paints its bloom and grain inside a `clip`,
+so this is the default path, not an edge case. `--pdf` carries an `ExtGState`
+registry deduped by content with a per-page reference list (the same
+shape the image XObject machinery already had), inline in each page's
+`/Resources`. Both emit *nothing* at the defaults, so a program that
+never touches the operators exports byte-identical SVG and PDF —
+asserted directly, not assumed.
+
+**The gs-verification question the spike left open for this issue** is
+answered by `tests/pdf.rs`: PDF-path verification substitutes for the
+`ghostscript_accepts_*` pattern for alpha-bearing content, and is
+strictly stronger — it rasterizes our PDF *with gs* and block-compares
+against our own canvas, so it asserts gs's own transparency lands on the
+same pixels tiny-skia did, not merely that gs doesn't error. Both plain
+alpha and `/Multiply` pass inside the existing tolerance.
+
+**Library.** `lib/paintkit.ps` gains `pkwash` (the wash: /Alpha,
+/Layers, /Wet, /Bloom + /BloomWidth, /Grain, /Blend, /Pitch, /Seed) and
+`pkpaper` (the ground: /Tone, /Grain, /Alpha, /Depth, /Fiber, /Blend,
+/Seed). The wet boundary is a pink-spectrum harmonic ladder at *integer*
+multiples of each subpath's normalized progress — seamless on a closed
+path — displaced along the local normal, plus a small per-layer
+translation that leaves the crescents of single-layer coverage a glazed
+wash actually shows. Edge pooling is a stroke of that boundary clipped
+to the wash, so only its inward half survives. All of it vector; no
+diffusion solver, no raster pass.
+
+Two deliberate departures from the sibling presets, both recorded at the
+section header: randomness comes from the section's own Schrage-
+decomposed LCG rather than `rand`, so (a) `/Seed` reproduces one wash
+without moving the caller's stream *and* without the `--sweep-seed`
+breakage an `rrand`/`srand` save-restore would cause (issue #21's
+override intercepts every `srand`, so the "restore" would reset the
+caller's stream on every wash), and (b) every intermediate product stays
+inside 32-bit integer range, so the texture is identical under
+Ghostscript's 32-bit ints.
+
+**The Ghostscript fallback**, and what it is not. Two names, not one:
+`pwhasalpha` (internal, immutable) is the load-time probe of
+`systemdict /setalpha known`, and `pkalphaok` is the documented dial
+set from it. They only diverge when someone sets the dial false by hand
+to preview the fallback in pscat — and that divergence is load-bearing,
+because everything that neutralizes ambient compositing keys off the
+*probe*: gs has no `setalpha` for an ambient value to leak out of, so a
+preview that inherited one wouldn't be a preview of gs. Without alpha,
+each mark is painted in its flattened-over-white equivalent
+(`1-(1-c)*a`), accumulated across layers so the build-up survives, and a
+one-line diagnostic prints the first time it engages. A `gs file.ps` run therefore renders a legible,
+opaque version of any watercolor program instead of erroring. What it
+provably cannot do is let anything underneath show through — a wash over
+`pkpaper`'s ground, or two overlapping washes, goes flat. That is
+asserted as a test in its own right so the limitation stays documented
+rather than discovered. This substitutes for the spike's nominated
+portable fallback (Approach A's nested `clip` technique), which cannot
+degrade automatically: it needs 2ᴺ hand-ordered region fills and a blend
+color guessed per pair.
+
+`/Blend /Multiply` answers the wash-order question the spike explicitly
+handed to this issue: source-over is order-dependent (honest watercolor,
+and documented as such), and Multiply is the commutative alternative.
+Both are shown side by side, in both orders, in the specimen.
+
+Surfaces: `examples/paintkit_wash_demo.ps` (a six-row specimen ramping
+each control) and `gallery/first_rain.ps`, a river valley in layered
+washes — wired into all three of `gallery/show.sh`'s parallel arrays,
+`gallery/README.md`, and `site/gallery.html`, with its committed
+2× supersampled still. `pkwash`/`pkpaper`/`pkalphaok` register with the
+#39/#94 capability catalog automatically from their `% @...` tags.
+
+Deliberately out of scope: separate fill/stroke alpha (PDF's `ca`/`CA`
+split — one `setalpha` drives both), soft masks, blend modes beyond
+Normal/Multiply, any raster post-pass (the spike's rejected Approach C),
+a diffusion solver, and alpha on `image`/`imagemask`. `pkpaper` is a
+watercolor ground, not a general surface library — issue #51's
+`surfacekit` is the right home for paper/canvas/print surfaces in
+general and should supersede it rather than duplicate it.
+
+One incidental finding, filed here rather than fixed: `build.rs`'s
+tag scanner models the depth-0 stack with a two-slot window, so
+`/pkalphaok systemdict /setalpha known def` reads `/setalpha` as the
+name being defined. Same family as issue #104's open parser gaps; the
+definition is written probe-first (`... /pkalphaok exch def`) to stay
+inside what the scanner understands, with a comment saying why.
+
 ## Mochi in Denim Blue — pkoil gallery portrait (issue #100, 2026-08-27)
 
 Closes the gallery deliverable deferred from issue #45 with a

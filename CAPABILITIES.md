@@ -217,6 +217,18 @@ needed at all.
   reasoning doesn't extend to graph/dataviz/etching, which aren't font
   or handwriting families. A reasonable follow-up, not silently
   dropped.
+- **Renderer operators aren't cataloged.** Issue #47 added
+  `setalpha`/`currentalpha` and `setblendmode`/`currentblendmode` —
+  pscat's own painting extensions, implemented in Rust rather than in a
+  `lib/*.ps` file. Every discovery mechanism this catalog has is
+  PostScript-source-driven (`% @...` tags parsed out of `lib/*.ps` at
+  build time, or the hand-written `ENTRIES` rows), with no `kind` that
+  means "interpreter operator", so adding one would mean a new
+  discovery path, not a new row. An agent finds those two the way it
+  finds any other interpreter operator: `.claude/skills/pscat/SKILL.md`
+  and README. The *library* built on them (`pkwash`, `pkpaper`,
+  `pkalphaok`) is cataloged normally, and its summaries name the
+  operators, so a catalog-only reader isn't left unaware they exist.
 - **No `--capabilities <kind>` filter.** The CLI always prints the
   full payload; an agent that wants just palettes filters the JSON
   itself. Simpler for a first version — revisit if the payload size

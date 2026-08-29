@@ -50,6 +50,12 @@ pub fn install(dict: &mut Dict) {
     op(dict, "currentrgbcolor", currentrgbcolor);
     op(dict, "currentgray", currentgray);
     op(dict, "currentlinewidth", currentlinewidth);
+    // pscat extensions (issue #47) -- not PLRM operators; see their
+    // definitions below and docs/WATERCOLOR.md.
+    op(dict, "setalpha", setalpha);
+    op(dict, "currentalpha", currentalpha);
+    op(dict, "setblendmode", setblendmode);
+    op(dict, "currentblendmode", currentblendmode);
     // Rectangle conveniences (Level 2)
     op(dict, "rectfill", rectfill);
     op(dict, "rectstroke", rectstroke);
@@ -314,6 +320,58 @@ fn currentflat(it: &mut Interp) -> Result<(), PsError> {
 fn setlinewidth(it: &mut Interp) -> Result<(), PsError> {
     let w = it.pop_f64()?;
     it.gfx.set_line_width(w);
+    Ok(())
+}
+
+/// `num setalpha -` -- fill/stroke opacity, 0 (invisible) to 1
+/// (opaque). **A pscat extension, not a PLRM operator**: real
+/// Ghostscript exposes no PostScript-callable alpha operator at all
+/// (tested in issue #46's spike, `docs/WATERCOLOR.md`), so a program
+/// that calls this will not render the same way under plain `gs
+/// file.ps`. `lib/paintkit.ps`'s watercolor section probes for it with
+/// `systemdict /setalpha known` and falls back to flattening each wash
+/// against white when it's absent.
+///
+/// Clamped rather than range-checked, matching how the color operators
+/// here already treat out-of-range components. Snapshotted by
+/// `gsave`/`grestore` and reset by `initgraphics`, like every other
+/// paint attribute. Reaches `fill`, `stroke`, shown text, and `shfill`;
+/// **not** `image`/`imagemask`, which blit their own samples straight
+/// into the pixmap (documented gap -- see `GraphicsState::alpha`).
+fn setalpha(it: &mut Interp) -> Result<(), PsError> {
+    let a = it.pop_f64()?;
+    it.gfx.state_mut().alpha = a.clamp(0.0, 1.0) as f32;
+    Ok(())
+}
+
+fn currentalpha(it: &mut Interp) -> Result<(), PsError> {
+    let a = it.gfx.state().alpha;
+    it.push(Object::real(a as f64));
+    Ok(())
+}
+
+/// `name setblendmode -` -- `/Normal` (source-over, the default) or
+/// `/Multiply`. Another pscat extension (issue #47), with the same
+/// Ghostscript caveat as `setalpha`.
+///
+/// An unrecognized name is a `rangecheck`, deliberately: silently
+/// falling back to /Normal would let a typo diverge from what the
+/// program asked for with no signal at all, the same reasoning
+/// `lib/paintkit.ps`'s `pkribbon` uses to reject an unknown cap style
+/// rather than defaulting it.
+fn setblendmode(it: &mut Interp) -> Result<(), PsError> {
+    let obj = it.pop()?;
+    let Value::Name(n) = &obj.value else {
+        return Err(PsError::Typecheck);
+    };
+    let mode = crate::gfx::BlendMode::from_ps_name(n).ok_or(PsError::Rangecheck)?;
+    it.gfx.state_mut().blend = mode;
+    Ok(())
+}
+
+fn currentblendmode(it: &mut Interp) -> Result<(), PsError> {
+    let name = it.gfx.state().blend.as_ps_name();
+    it.push(Object::name(name));
     Ok(())
 }
 
