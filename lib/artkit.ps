@@ -985,14 +985,31 @@ end
 } def
 
 /sccallable {                                    % v -> bool
-% Executable *and* of a type that runs its target when invoked. A bare
+% Executable *and* actually runs a procedure when invoked. A bare
 % `xcheck` isn't enough: `3 cvx` is executable, and calling it merely
 % pushes 3 -- so an accepted `/Mark 3 cvx` would report placements
-% while leaking five operands per mark instead of drawing one (Codex
-% review, round 6). A procedure or an executable name, nothing else.
-    dup xcheck exch type
-    dup /arraytype eq exch /nametype eq or
-    and
+% while leaking five operands per mark instead of drawing one. Nor is
+% "executable name" enough on its own: `/M 3 def` then `/Mark /M cvx`
+% leaks the same way, and an *undefined* executable name would fail
+% only mid-placement, after the seed and the random stream had already
+% moved (Codex review, rounds 6-7). So a name is resolved and its
+% target checked. The candidate travels in a one-element array
+% throughout, since binding a procedure to a name would execute it on
+% the next bare reference -- pkgetdef's trap, same trick.
+    1 array astore /sccbox exch def
+    sccbox 0 get xcheck {
+        sccbox 0 get type /arraytype eq {
+            true
+        } {
+            sccbox 0 get type /nametype eq {
+                sccbox 0 get where {
+                    sccbox 0 get get 1 array astore /sccinner exch def
+                    sccinner 0 get xcheck
+                    sccinner 0 get type /arraytype eq and
+                } { false } ifelse
+            } { false } ifelse
+        } ifelse
+    } { false } ifelse
 } def
 
 /scokrange {                                     % v -> bool  ([lo hi]?)
@@ -1017,6 +1034,28 @@ end
        /Area sqrw sqrh mul >>
 } def
 
+/sqpcollinear {                                  % x y -
+% Track whether every point of the current subpath lies on one line:
+% the line through its first point in the direction of the first point
+% that differs from it. A single point off that line settles it for
+% the whole subpath.
+    /sqcy2 exch def /sqcx2 exch def
+    sqpcol {
+        /sqcdx sqcx2 sqsx sub def
+        /sqcdy sqcy2 sqsy sub def
+        sqpdx 0 eq sqpdy 0 eq and {
+            /sqpdx sqcdx def
+            /sqpdy sqcdy def
+        } {
+            /sqccross sqcdx sqpdy mul sqcdy sqpdx mul sub abs def
+            sqccross
+            sqcdx abs sqcdy abs add sqpdx abs sqpdy abs add mul
+            1e-12 mul
+            gt { /sqpcol false def } if
+        } ifelse
+    } if
+} def
+
 /sqbounds {                                      % x y -
 % Grow the *current subpath's* box. It reaches the region's own bbox
 % only if that subpath turns out to be able to enclose something --
@@ -1039,16 +1078,19 @@ end
 % subpath could contribute to a fill at all. Two exclusions, both
 % provable rather than heuristic: fewer than three edges cannot
 % enclose anything (two edges is always an out-and-back retrace, since
-% the second is the implicit close returning along the first), and a
-% box with no width or no height encloses zero area whatever the rule
-% says. Without them a remote `1e6 1e6 moveto 1e6+100 1e6 lineto`
-% appended to a 100x100 square -- which `fill` paints nothing for --
-% would stretch the region across a million units and leave a seeded
-% 100-mark scatter placing none of them (Codex review, rounds 5-6).
+% the second is the implicit close returning along the first), and
+% neither can a subpath whose points are all on one straight line,
+% however many edges it has. Without them a remote subpath that
+% `fill` paints nothing for -- `1e6 1e6 moveto 1e6+100 1e6 lineto`, or
+% a collinear diagonal of three points -- would stretch the region
+% across a million units and leave a seeded 100-mark scatter placing
+% none of them (Codex review, rounds 5-7). Collinearity is the right
+% test rather than a degenerate bounding box: it catches the diagonal
+% case a zero-width/height check misses, and it keeps a bow tie, whose
+% signed area cancels to nothing but which `fill` paints in full.
     sqpfirst not
     sqpn 3 ge and
-    sqpx1 sqpx0 gt and
-    sqpy1 sqpy0 gt and {
+    sqpcol not and {
         sqfirst {
             /sqbx0 sqpx0 def /sqbx1 sqpx1 def
             /sqby0 sqpy0 def /sqby1 sqpy1 def
@@ -1100,6 +1142,7 @@ end
     % vertex exactly once an edge leaves it.
     sqcx sqcy sqbounds
     sqlx sqly sqbounds
+    sqlx sqly sqpcollinear
     /sqpn sqpn 1 add def
     /sqcx sqlx def /sqcy sqly def
 } def
@@ -1129,6 +1172,8 @@ end
     sqclose                                      % close the previous one
     /sqpn 0 def
     /sqpfirst true def
+    /sqpcol true def
+    /sqpdx 0 def /sqpdy 0 def
     /sqcx sqmx def /sqcy sqmy def
     /sqsx sqmx def /sqsy sqmy def
     /sqhave true def
@@ -1148,6 +1193,8 @@ end
     /sqfirst true def
     /sqpfirst true def
     /sqpn 0 def
+    /sqpcol true def
+    /sqpdx 0 def /sqpdy 0 def
     /sqpx0 0 def /sqpy0 0 def /sqpx1 0 def /sqpy1 0 def
     /sqcx 0 def /sqcy 0 def /sqsx 0 def /sqsy 0 def
     /sqbx0 0 def /sqby0 0 def /sqbx1 0 def /sqby1 0 def
@@ -1565,8 +1612,15 @@ end
         scwant scisnum not { scatter-count-must-be-a-number } if
         scwant 0 lt { scatter-count-must-be-non-negative } if
     } ifelse
+    % Truncate first: the budget is a bound on *marks placed*, and the
+    % count placed is the truncation, so comparing the raw value would
+    % reject a density of 1.5 against a budget of 1 even though it
+    % resolves to one mark (Codex review, round 7). `truncate` before
+    % `cvi` keeps a pathological value a real for the comparison rather
+    % than overflowing an integer conversion.
+    /scwant scwant truncate def
     scwant scbudget gt { scatter-count-exceeds-safety-limit } if
-    /scwant scwant truncate cvi def
+    /scwant scwant cvi def
 
     /scbb screg /BBox get def
     /scbx scbb 0 get def

@@ -3793,3 +3793,85 @@ fn scarea_merging_never_swallows_a_whole_component() {
         "measured {measured}, expected about 2e8 (1e8 from each component)"
     );
 }
+
+#[test]
+fn scpath_excludes_collinear_subpaths_but_keeps_bow_ties() {
+    // Round seven, the last shape in this family: a remote *diagonal*
+    // run of three collinear points has three edges and a
+    // non-degenerate bounding box, so neither earlier exclusion caught
+    // it -- yet it encloses nothing and `fill` paints nothing for it.
+    // Collinearity is the test now, and it has to keep a bow tie,
+    // whose signed area cancels to zero but which fills in full.
+    let got = eval(
+        "newpath 0 0 moveto 100 0 lineto 100 100 lineto 0 100 lineto closepath \
+         1000000 1000000 moveto 1000100 1000100 lineto 1000200 1000200 lineto \
+         scpath /BBox get",
+    );
+    assert_eq!(
+        got[0], "[0.0 0.0 100.0 100.0]",
+        "the collinear run is not in bounds"
+    );
+
+    let got = eval(
+        "newpath 0 0 moveto 100 0 lineto 100 100 lineto 0 100 lineto closepath \
+         1000000 1000000 moveto 1000100 1000100 lineto 1000200 1000200 lineto scpath \
+         << /Count 100 /Seed 1 /Mark { pop pop pop pop } >> scatter scplaced",
+    );
+    assert_eq!(got[0], "100");
+
+    let got = eval(
+        "newpath 0 0 moveto 100 100 lineto 0 100 lineto 100 0 lineto closepath \
+         scpath dup /BBox get exch scarea",
+    );
+    assert_eq!(
+        got[0], "[0.0 0.0 100.0 100.0]",
+        "a bow tie is a real region"
+    );
+    assert_eq!(got[1], "5000.0");
+}
+
+#[test]
+fn scatter_resolves_an_executable_callback_name_before_accepting_it() {
+    // Round seven: `nametype` alone said nothing about what the name
+    // is bound to. `/M3 3 def` then `/Mark /M3 cvx` passed validation
+    // and leaked five operands per placement, and an *undefined* name
+    // failed only mid-placement, after the seed and the random stream
+    // had already moved.
+    assert_eq!(
+        scatter_err("/M3 3 def 0 0 100 100 screct << /Mark /M3 cvx >> scatter"),
+        "scatter-mark-must-be-a-procedure"
+    );
+    assert_eq!(
+        scatter_err("0 0 100 100 screct << /Mark /NoSuchProcAnywhere cvx >> scatter"),
+        "scatter-mark-must-be-a-procedure"
+    );
+    assert_eq!(
+        scatter_err(
+            "/W3 3 def 0 0 100 100 screct \
+             << /Mark { pop pop pop pop } /Weight /W3 cvx >> scatter"
+        ),
+        "scatter-weight-must-be-a-procedure"
+    );
+}
+
+#[test]
+fn scatter_applies_the_budget_to_the_count_it_will_actually_place() {
+    // Round seven: the raw resolved value was compared against
+    // /Budget, but the count placed is its truncation -- so a density
+    // of 1.5 over a unit rectangle was rejected against a budget of 1
+    // even though it places exactly one mark.
+    let got = eval(
+        "0 0 1 1 screct << /Density 1.5 /Budget 1 /Mark { pop pop pop pop } >> scatter \
+         scplaced",
+    );
+    assert_eq!(got[0], "1");
+
+    // The bound still bites where it should: a count whose truncation
+    // is genuinely over is still refused.
+    assert_eq!(
+        scatter_err(
+            "0 0 1 1 screct << /Density 2.5 /Budget 1 /Mark { pop pop pop pop } >> scatter"
+        ),
+        "scatter-count-exceeds-safety-limit"
+    );
+}

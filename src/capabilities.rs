@@ -261,6 +261,7 @@ pub const ARTKIT_INTERNAL: &[&str] = &[
     "sqbounds",
     "sqemit",
     "sqpmerge",
+    "sqpcollinear",
     "sqabudget",
     "sqainsert",
     "sqmeasure",

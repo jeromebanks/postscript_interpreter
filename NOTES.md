@@ -202,6 +202,20 @@ an accepted `/Mark 3 cvx` would have reported placements while leaking
 five operands per mark — a callback must now be a procedure or an
 executable name for one.
 
+**Round seven closed the same bbox hole's last shape, plus two
+smaller ones.** A remote *diagonal* run of three collinear points has
+three edges and a non-degenerate box, so neither earlier exclusion
+caught it, yet it encloses nothing; the test is now collinearity,
+which catches it and still keeps a bow tie (signed area zero, filled
+area real). `nametype` alone also said nothing about what an
+executable callback name is *bound* to — `/M3 3 def` then `/Mark /M3
+cvx` passed validation and leaked five operands per placement, and an
+undefined name failed only mid-placement after the seed and the random
+stream had moved — so a name is resolved and its target checked. And
+`/Budget` was compared against the raw resolved value rather than the
+truncation actually placed, rejecting a density of 1.5 against a
+budget of 1 for a call that places exactly one mark.
+
 **One finding dispositioned rather than fixed.** The same round noted
 that `clippath scpath` doesn't capture the true clip when several
 clips are nested — correctly, but the cause is this interpreter's
