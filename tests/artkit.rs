@@ -3427,3 +3427,78 @@ fn scpath_does_not_close_an_explicitly_closed_subpath_twice() {
         "the reopened subpath's 10000 counts alongside the triangle's 5000"
     );
 }
+
+#[test]
+fn scarea_slabs_follow_the_vertices_so_no_component_is_missed() {
+    // Round two of the same cross-model review: an evenly spaced set
+    // of scanlines can step straight over a component thinner than one
+    // step. A 1x1000 sliver beside a disjoint 1000x1 one is that case
+    // -- two halves at wildly different vertical scales -- and the
+    // fixed-sample version reported half the region, which /Density
+    // would then have underplaced by half. Slabs bounded by the edges'
+    // own vertex heights can't miss a component, because the component
+    // brings its own boundaries.
+    let got = eval(
+        "newpath 0 0 moveto 1 0 lineto 1 1000 lineto 0 1000 lineto closepath \
+         0 -50 moveto 1000 -50 lineto 1000 -49 lineto 0 -49 lineto closepath \
+         scpath scarea",
+    );
+    let measured: f64 = got[0].parse().unwrap();
+    assert!(
+        (measured - 2000.0).abs() < 1.0,
+        "the two slivers measured {measured}, expected 1000 + 1000"
+    );
+
+    // Vertex-bounded slabs are also *exact* for a shape whose edges
+    // don't cross, rather than merely close: covered width is linear
+    // in y between consecutive vertex heights, so a slab's midpoint
+    // times its height integrates it exactly.
+    let got = eval(
+        "newpath 0 0 moveto 300 0 lineto 300 20 lineto 100 20 lineto \
+         100 400 lineto 0 400 lineto closepath scpath scarea",
+    );
+    assert_eq!(
+        got[0], "44000.0",
+        "an L-shape measures exactly 300*20 + 100*380"
+    );
+}
+
+#[test]
+fn scarea_refuses_a_region_too_expensive_to_measure() {
+    // Measurement work is roughly slabs x edges, and both grow with
+    // the path -- a zigzag whose every edge spans the bounding box is
+    // the shape that makes it quadratic (same review round). Rather
+    // than let `scarea` run for minutes, the work is counted against
+    // `sqabudget` and a region past it says so. Driven here by
+    // lowering the budget rather than by building a genuinely huge
+    // path, so the test costs milliseconds and still exercises the
+    // real mechanism.
+    let mut it = Interp::new();
+    load(&mut it);
+    let zigzag = "newpath 0 0 moveto \
+                  1 1 200 { /i exch def i 0.5 mul i 2 mod 0 eq { 100 } { 0 } ifelse lineto } \
+                  for closepath scpath";
+    it.run_str(&format!("{zigzag} scarea"))
+        .expect("the default budget measures a 200-segment zigzag fine");
+    it.run_str("clear").expect("clear");
+
+    let err = it
+        .run_str(&format!("/sqabudget 500 def {zigzag} scarea"))
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "scarea-region-too-complex-to-measure"),
+        "got {err}"
+    );
+
+    // The documented escape hatch: a region that can't be measured can
+    // still carry its own area, and /Count scatter never needs one.
+    let got = eval(&format!(
+        "/sqabudget 500 def {zigzag} dup /Area 4321 put scarea"
+    ));
+    assert_eq!(got[0], "4321");
+    let got = eval(&format!(
+        "/sqabudget 500 def {zigzag} << /Count 5 /Seed 1 /Mark {{ pop pop pop pop }} >> \
+         scatter scplaced"
+    ));
+    assert_eq!(got[0], "5", "/Count scatter needs no area at all");
+}

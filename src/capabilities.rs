@@ -258,6 +258,8 @@ pub const ARTKIT_INTERNAL: &[&str] = &[
     "scplaced",
     "sqbounds",
     "sqemit",
+    "sqabudget",
+    "sqainsert",
     "sqmeasure",
     "sqscanline",
     "sqline",

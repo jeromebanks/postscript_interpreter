@@ -97,6 +97,38 @@ edge early. Fixing it surfaced a third case worth handling: a `lineto`
 closepath's own point, so the capture reopens rather than silently
 dropping it.
 
+**A second review round found the first fix's own two holes.** The
+replacement measurement sampled a fixed 400 evenly spaced scanlines,
+which can step straight over a component thinner than one step — a
+1x1000 sliver beside a disjoint 1000x1 one reported half the region,
+and `/Density` would have underplaced it by half. And its per-scanline
+insertion sort is quadratic in the crossings, so a zigzag whose every
+edge spans the bounding box could run for minutes at the 20000-edge
+ceiling. Both are fixed by the same change of footing: slabs are now
+bounded by the *edges' own vertex heights* rather than by a fixed
+count, which no component can fall between and which is additionally
+*exact* (covered width is linear in y between consecutive vertex
+heights, so midpoint times height integrates it exactly — a
+self-intersecting path is off only by a sliver at each crossing
+height); and the measurement counts its own work against a budget
+(`sqabudget`), raising `scarea-region-too-complex-to-measure` rather
+than grinding. The ceiling admits roughly 1400 flattened edges — a
+seven-letter word set at 72pt and captured with `charpath` is about
+330, and the gallery piece's ridge is 304 — and a region past it can
+still carry its own `/Area` or be scattered by `/Count`, which needs
+no area at all.
+
+**One finding dispositioned rather than fixed.** The same round noted
+that `clippath scpath` doesn't capture the true clip when several
+clips are nested — correctly, but the cause is this interpreter's
+`clippath`, which returns the most recently established clip path
+instead of the intersection of all of them (Ghostscript returns the
+intersection; both measured). That's a pre-existing pscat divergence
+from the PLRM, not something this issue introduced, and fixing it
+means path intersection in the renderer — filed separately (#120).
+The scatter docs now scope the idiom honestly instead of implying more
+than `clippath` delivers.
+
 **Deliberately not built:** true Poisson-disk (Bridson) sampling —
 dart-throwing with a spacing grid is the placement primitive this
 issue asked for, not a sampler with a guaranteed fill quality; density

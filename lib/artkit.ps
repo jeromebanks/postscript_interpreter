@@ -834,7 +834,17 @@ end
 % matching `fill`; `region /Rule /evenodd put` switches it to the
 % even-odd rule (matching `eofill`) for that region from then on.
 % `clippath scpath` is the idiom for scattering inside the current
-% *clip* region rather than inside a drawn shape.
+% *clip* region rather than inside a drawn shape -- with one caveat
+% that belongs to `clippath` rather than to this section: this
+% interpreter's `clippath` returns the most recently established clip
+% path, not the intersection of every clip in effect (Ghostscript
+% returns the true intersection; confirmed by measuring both). So the
+% idiom captures the whole clip when one clip is in force, which is
+% the ordinary case, and only the newest of several when they have
+% been nested -- candidates would then be accepted inside the newest
+% but outside an older one, and painted invisibly. Clip once for the
+% region you mean to scatter into, or capture the shape itself with
+% `scpath` and skip `clippath` altogether.
 %
 % scatter's options, all optional except /Mark:
 %   /Mark {x y scale angle -> -}  the mark. Called once per placed
@@ -1073,23 +1083,62 @@ end
 % it asks the same containment question `scin` does, just answered a
 % whole row at a time.
 %
-% The cost is exactness. Covered width is piecewise linear in y, so
-% midpoint sampling is exact within any slab that holds no vertex and
-% off by a slab-scale sliver in the few that do -- a fraction of a
-% percent on real shapes, which is well inside what a /Density-derived
-% mark count (truncated to an integer) can notice. A region whose area
-% must be exact can carry its own: `region /Area <num> put` short-
-% circuits the measurement, since a stored /Area always wins.
+% The slabs are bounded by the *edges' own endpoint y values*, not by
+% a fixed count of evenly spaced samples. That matters twice over.
+% Covered width is linear in y between consecutive vertex heights, so
+% a slab's midpoint times its height is exact there -- the measurement
+% is exact for any path whose edges don't cross each other (a
+% self-intersecting one is off by a sliver at each crossing height,
+% where the span structure changes mid-slab). And no component can
+% fall between samples: a 1x1000 sliver alongside a 1000x1 one is a
+% region whose two halves live at wildly different vertical scales,
+% and evenly spaced sampling reports half of it (the second review
+% round's example) while vertex-bounded slabs report both exactly.
+%
+% Cost is bounded rather than assumed: measurement work is roughly
+% slabs times edges, both of which grow with the path, so a running
+% count is checked against the `sqabudget` ceiling and a region too
+% complex to measure raises `scarea-region-too-complex-to-measure`
+% instead of running for minutes. The ceiling admits paths of roughly
+% 1400 flattened edges -- for scale, a seven-letter word set at 72pt
+% and captured with `charpath` is about 330. Real regions are nowhere near it (a few hundred
+% flattened edges measures in milliseconds); a region that trips it can
+% carry its own area instead -- `region /Area <num> put` short-circuits
+% the measurement entirely, since a stored /Area always wins -- and
+% `/Count` scatter over such a region needs no area at all.
 /scarea {
     dup /Area known { /Area get } { sqmeasure } ifelse
+} def
+
+/sqainsert {                                     % y -
+% One slab boundary into the sorted boundary list. Duplicates are left
+% in (two subpaths can share a vertex height) -- they make zero-height
+% slabs, which the integration skips, and dropping them would cost
+% more than skipping them does.
+    /sqav exch def
+    /sqaj sqanys def
+    {
+        sqaj 0 le { exit } if
+        sqays sqaj 1 sub get sqav le { exit } if
+        sqays sqaj sqays sqaj 1 sub get put
+        /sqaj sqaj 1 sub def
+        /sqawork sqawork 1 add def
+    } loop
+    sqays sqaj sqav put
+    /sqanys sqanys 1 add def
+    sqawork sqabudget gt { scarea-region-too-complex-to-measure } if
 } def
 
 /sqscanline {                                    % -> covered width
 % Every edge crossing the horizontal line y = sqasy, insertion-sorted
 % by x with its winding direction alongside (crossing counts stay
 % small -- a few per scanline on real shapes -- so an insertion sort
-% beats anything cleverer here). Then one walk left to right,
-% accumulating the width of each span the rule calls inside.
+% beats anything cleverer here; the pathological case is charged to
+% the work budget rather than paid for with a more elaborate sort).
+% Then one walk left to right, accumulating the width of each span the
+% rule calls inside.
+    /sqawork sqawork sqan add def
+    sqawork sqabudget gt { scarea-region-too-complex-to-measure } if
     /sqam 0 def
     0 4 sqaedges length 4 sub {
         /sqai exch def
@@ -1108,10 +1157,13 @@ end
                 sqaxs sqaj sqaxs sqaj 1 sub get put
                 sqads sqaj sqads sqaj 1 sub get put
                 /sqaj sqaj 1 sub def
+                /sqawork sqawork 1 add def
             } loop
             sqaxs sqaj sqax put
             sqads sqaj sqad put
             /sqam sqam 1 add def
+            sqawork sqabudget gt
+                { scarea-region-too-complex-to-measure } if
         } if
     } for
     /sqacov 0 def
@@ -1128,26 +1180,37 @@ end
     sqacov
 } def
 
+% Measurement work units (edge scans and sort shifts), tuned so the
+% ceiling costs about a second in this interpreter rather than the
+% minutes an unbounded measurement of a pathological path would.
+/sqabudget 2000000 def
+
 /sqmeasure {                                     % region -> num
     /sqareg exch def
     /sqaedges sqareg /Edges get def
     /sqaeo sqareg /Rule get /evenodd eq def
-    /sqabb sqareg /BBox get def
-    /sqah sqabb 3 get sqabb 1 get sub def
-    sqah 0 le sqaedges length 0 eq or { 0 } {
-        % Slabs are budgeted against the edge count so a very complex
-        % region stays cheap to measure: the work is slabs x edges.
-        /sqan 1200000 sqaedges length 4 idiv div truncate cvi def
-        sqan 48 lt { /sqan 48 def } if
-        sqan 400 gt { /sqan 400 def } if
-        /sqaxs sqaedges length 4 idiv 1 add array def
-        /sqads sqaedges length 4 idiv 1 add array def
-        /sqastep sqah sqan div def
+    /sqan sqaedges length 4 idiv def
+    sqan 0 eq { 0 } {
+        /sqawork 0 def
+        /sqays sqan 2 mul array def
+        /sqanys 0 def
+        0 4 sqaedges length 4 sub {
+            /sqai exch def
+            sqaedges sqai 1 add get sqainsert
+            sqaedges sqai 3 add get sqainsert
+        } for
+        /sqaxs sqan 1 add array def
+        /sqads sqan 1 add array def
         /sqatotal 0 def
-        0 1 sqan 1 sub {
+        0 1 sqanys 2 sub {
             /sqak exch def
-            /sqasy sqabb 1 get sqak 0.5 add sqastep mul add def
-            /sqatotal sqatotal sqscanline sqastep mul add def
+            /sqalo sqays sqak get def
+            /sqahi sqays sqak 1 add get def
+            sqahi sqalo gt {
+                /sqasy sqalo sqahi add 2 div def
+                /sqatotal
+                    sqatotal sqscanline sqahi sqalo sub mul add def
+            } if
         } for
         sqatotal
     } ifelse
