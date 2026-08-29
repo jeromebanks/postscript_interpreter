@@ -674,6 +674,11 @@ fn ghostscript_accepts_artkit() {
                        /x exch def newpath x y 2 s mul 0 360 arc fill end } >> \
             scatter \
         (GSSCATTER ) print scplaced == \
+        true setpacking \
+        20 20 100 100 screct \
+            << /Count 5 /Seed 2 /Mark { pop pop pop pop } >> scatter \
+        false setpacking \
+        (GSPACKED ) print scplaced == \
         newpath 200 200 60 24 5 star closepath scpath \
             << /Density 0.004 /Seed 4 /Tries 20 /Weight { pop 200 div } \
                /Mark { pop pop pop pop } >> scatter \
@@ -716,6 +721,23 @@ fn ghostscript_accepts_artkit() {
     assert!(
         (1..=40).contains(&placed),
         "gs placed {placed} marks for a /Count 40 /MinSpacing 9 scatter --          over the requested count means the budget/tries contract broke,          zero means the region or the grid rejected everything"
+    );
+
+    // Ghostscript packs literal procedures under `true setpacking`
+    // (this interpreter leaves them plain), so a callback guard that
+    // insists on a bare `arraytype` rejects an ordinary `{ ... }`
+    // /Mark *there and nowhere else* -- the exact cross-interpreter
+    // break this check exists to catch (Codex review, round 8).
+    let packed: i64 = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("GSPACKED "))
+        .unwrap_or_else(|| panic!("gs didn't print a packed-scatter count: {stdout:?}"))
+        .trim()
+        .parse()
+        .expect("packed scatter count parses as an integer");
+    assert_eq!(
+        packed, 5,
+        "gs placed {packed} of 5 marks for a packed /Mark procedure"
     );
 
     let tiles: i64 = stdout
@@ -3874,4 +3896,63 @@ fn scatter_applies_the_budget_to_the_count_it_will_actually_place() {
         ),
         "scatter-count-exceeds-safety-limit"
     );
+}
+
+#[test]
+fn scatter_accepts_every_shape_of_callable_callback() {
+    // Round eight: a literal procedure is `packedarraytype` under
+    // Ghostscript's `true setpacking` and `arraytype` here, so
+    // insisting on the latter would reject an ordinary `{ ... }`
+    // callback in gs -- the break the gs driver now also checks
+    // directly. Operators and chains of executable names are callable
+    // too; a name bound to itself is refused rather than looped on.
+    let got = eval(
+        "true setpacking \
+         /n 0 def 0 0 100 100 screct \
+         << /Count 3 /Seed 1 /Mark { pop pop pop pop /n n 1 add def } >> scatter \
+         false setpacking n",
+    );
+    assert_eq!(got[0], "3", "a packed procedure is callable");
+
+    let got = eval(
+        "/A { pop pop pop pop } def /B /A cvx def \
+         0 0 100 100 screct << /Count 5 /Seed 1 /Mark /B cvx >> scatter scplaced",
+    );
+    assert_eq!(got[0], "5", "a name bound to a name bound to a procedure");
+
+    assert_eq!(
+        scatter_err("/Loop /Loop cvx def 0 0 100 100 screct << /Mark /Loop cvx >> scatter"),
+        "scatter-mark-must-be-a-procedure",
+        "a self-referential name is refused, not chased"
+    );
+}
+
+#[test]
+fn scpath_keeps_a_thin_region_that_is_genuinely_not_collinear() {
+    // Round eight: the collinearity tolerance was a fraction of the
+    // subpath's own extent, which calls a real 100-by-1e-11 triangle
+    // collinear -- emptying its bbox and piling every mark on the
+    // origin. It is now a few ulps of the cross product's own terms,
+    // so only actual rounding error is forgiven. Rendered under an
+    // anisotropic CTM, which is where such a sliver is a real shape
+    // rather than something flattenpath quantizes away.
+    let got = eval(
+        "gsave 1 10000000000000 scale \
+         newpath 0 0 moveto 100 0 lineto 50 0.00000000001 lineto closepath \
+         scpath dup /BBox get exch scarea grestore",
+    );
+    assert_eq!(got[0], "[0.0 0.0 100.0 9.999993888509806e-12]");
+    let area: f64 = got[1].parse().unwrap();
+    assert!(
+        (area - 5e-10).abs() < 5e-12,
+        "a 100 x 1e-11 triangle is about 5e-10, measured {area}"
+    );
+
+    // A genuinely collinear run is still excluded.
+    let got = eval(
+        "newpath 0 0 moveto 100 0 lineto 100 100 lineto 0 100 lineto closepath \
+         1000000 1000000 moveto 1000100 1000100 lineto 1000200 1000200 lineto \
+         scpath /BBox get",
+    );
+    assert_eq!(got[0], "[0.0 0.0 100.0 100.0]");
 }

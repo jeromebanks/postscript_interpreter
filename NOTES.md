@@ -216,6 +216,27 @@ stream had moved — so a name is resolved and its target checked. And
 truncation actually placed, rejecting a density of 1.5 against a
 budget of 1 for a call that places exactly one mark.
 
+**Round eight caught a real cross-interpreter break.** Ghostscript
+packs literal procedures under `true setpacking` — `{ ... }` is
+`packedarraytype` there where this interpreter leaves it
+`arraytype` — so round seven's callback guard, which insisted on
+`arraytype`, would have rejected an ordinary `/Mark { ... }` in gs and
+nowhere else. `sccallable` now accepts a procedure, a packed
+procedure, or an operator, and resolves a chain of executable names
+with a depth cap so a name bound to itself is refused rather than
+chased (paintkit had already hit the packing difference; its own
+`packedarraytype` checks are the precedent). The gs driver in
+`tests/artkit.rs` now runs a packed-procedure scatter directly, since
+that break can only appear in the interpreter that packs. The round
+also found the collinearity tolerance too coarse: scaled to the
+subpath's own extent, it called a genuinely triangular 100-by-1e-11
+sliver collinear, emptied its bbox and piled every mark on the origin.
+It is now a few ulps of the cross product's own terms, forgiving only
+the rounding error in computing it — and the test for that runs under
+an anisotropic CTM, since at identity `flattenpath`'s own coordinate
+quantization makes such a sliver genuinely flat before scpath ever
+sees it.
+
 **One finding dispositioned rather than fixed.** The same round noted
 that `clippath scpath` doesn't capture the true clip when several
 clips are nested — correctly, but the cause is this interpreter's

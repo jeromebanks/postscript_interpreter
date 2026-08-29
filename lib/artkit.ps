@@ -985,31 +985,42 @@ end
 } def
 
 /sccallable {                                    % v -> bool
-% Executable *and* actually runs a procedure when invoked. A bare
+% Executable *and* actually runs something when invoked. A bare
 % `xcheck` isn't enough: `3 cvx` is executable, and calling it merely
 % pushes 3 -- so an accepted `/Mark 3 cvx` would report placements
 % while leaking five operands per mark instead of drawing one. Nor is
 % "executable name" enough on its own: `/M 3 def` then `/Mark /M cvx`
 % leaks the same way, and an *undefined* executable name would fail
 % only mid-placement, after the seed and the random stream had already
-% moved (Codex review, rounds 6-7). So a name is resolved and its
-% target checked. The candidate travels in a one-element array
-% throughout, since binding a procedure to a name would execute it on
-% the next bare reference -- pkgetdef's trap, same trick.
+% moved. So a name is resolved -- through a chain of names if that is
+% how it was bound -- and its target checked, with a depth cap so a
+% name bound to itself is refused rather than looping.
+%
+% Three callable types, not one: a procedure, a *packed* procedure
+% (Ghostscript packs literal procedures under `true setpacking`, where
+% this interpreter leaves them plain -- so requiring `arraytype` alone
+% would reject an ordinary `{ ... }` callback there; paintkit hit the
+% same thing, see its own `packedarraytype` checks), and an operator.
+% The candidate travels in a one-element array throughout, since
+% binding a procedure to a name would execute it on the next bare
+% reference -- pkgetdef's trap, same trick.
+% (Codex review, rounds 6-8.)
     1 array astore /sccbox exch def
-    sccbox 0 get xcheck {
-        sccbox 0 get type /arraytype eq {
-            true
-        } {
-            sccbox 0 get type /nametype eq {
-                sccbox 0 get where {
-                    sccbox 0 get get 1 array astore /sccinner exch def
-                    sccinner 0 get xcheck
-                    sccinner 0 get type /arraytype eq and
-                } { false } ifelse
-            } { false } ifelse
-        } ifelse
-    } { false } ifelse
+    /sccn 0 def
+    {
+        sccbox 0 get xcheck not { false exit } if
+        sccbox 0 get type /arraytype eq
+        sccbox 0 get type /packedarraytype eq or
+        sccbox 0 get type /operatortype eq or
+            { true exit } if
+        sccbox 0 get type /nametype ne { false exit } if
+        /sccn sccn 1 add def
+        sccn 32 gt { false exit } if
+        sccbox 0 get where
+            { sccbox 0 get get 1 array astore /sccbox exch def }
+            { false exit }
+        ifelse
+    } loop
 } def
 
 /scokrange {                                     % v -> bool  ([lo hi]?)
@@ -1047,10 +1058,18 @@ end
             /sqpdx sqcdx def
             /sqpdy sqcdy def
         } {
-            /sqccross sqcdx sqpdy mul sqcdy sqpdx mul sub abs def
-            sqccross
-            sqcdx abs sqcdy abs add sqpdx abs sqpdy abs add mul
-            1e-12 mul
+            % The tolerance is a few ulps of the two products the
+            % cross product subtracts, not a fraction of the
+            % subpath's own extent: an extent-relative epsilon would
+            % call a genuinely triangular 100-by-1e-11 sliver
+            % collinear, empty its bbox, and pile every mark on the
+            % origin (Codex review, round 8). This form only forgives
+            % the rounding error in computing the cross product
+            % itself, so a real deviation of any magnitude survives.
+            /sqcp1 sqcdx sqpdy mul def
+            /sqcp2 sqcdy sqpdx mul def
+            sqcp1 sqcp2 sub abs
+            sqcp1 abs sqcp2 abs add 1e-14 mul
             gt { /sqpcol false def } if
         } ifelse
     } if
