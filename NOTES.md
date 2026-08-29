@@ -143,6 +143,27 @@ scratch dict and thrown away with it. It now reads out of a
 `ScatterState` dict (`TurtleState`'s precedent), so it survives any
 dict scoping while the spelling at the call site is unchanged.
 
+**Round four replaced the round-three fix's own criterion.** The
+adaptive subdivision test — subdivide when a slab's midpoint width
+misses the average of its quarter widths — is a *sample* of
+linearity, and a region can be built whose three samples line up
+across a genuine crossing: a six-vertex even-odd polygon read that way
+measured 4000 against an exact 43025/14 ≈ 3073.21, so `/Density` would
+have overplaced it by a third. Sampling was replaced with finding: the
+slab boundaries now include every height at which two edges actually
+cross, computed by testing each edge pair, alongside the vertex
+heights. Inside a slab where no edge begins, ends, or crosses another,
+the span structure is fixed and every span's width is linear, so a
+plain midpoint is exact — for *any* polygon, self-intersecting ones
+included, with no adaptive machinery at all. It is also cheaper on the
+ordinary crossing-free paths that make up nearly every real region:
+one scanline per slab instead of three, against a one-time pass over
+the edge pairs. The same round also caught that a scatter nested
+inside a `/Mark` reset the shared published count (an outer `/Count 3`
+finished reporting 2 and numbered its marks 1, 3, 3); the running
+total is now a local republished on each placement, so a nested call
+gets its own counter and can't renumber its caller's marks.
+
 **One finding dispositioned rather than fixed.** The same round noted
 that `clippath scpath` doesn't capture the true clip when several
 clips are nested — correctly, but the cause is this interpreter's

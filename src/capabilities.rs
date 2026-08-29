@@ -263,7 +263,7 @@ pub const ARTKIT_INTERNAL: &[&str] = &[
     "sqainsert",
     "sqmeasure",
     "sqscanline",
-    "sqaslab",
+    "sqacrossings",
     "sqline",
     "sqclose",
     "sqmove",

@@ -3508,7 +3508,7 @@ fn scarea_refuses_a_region_too_expensive_to_measure() {
 }
 
 #[test]
-fn scarea_subdivides_a_slab_where_edges_cross_inside_it() {
+fn scarea_measures_a_self_intersecting_region_exactly() {
     // Round three of the review: "exact between vertex heights" holds
     // only while nothing *crosses* between them. A bow tie is the
     // smallest counterexample -- its only vertex heights are 0 and
@@ -3594,4 +3594,69 @@ fn scatter_meters_containment_work_not_just_deposits() {
         got[0], "0",
         "the weight rejected everything, but nothing errored"
     );
+}
+
+#[test]
+fn scarea_finds_crossings_rather_than_sniffing_for_them() {
+    // Round four: the first fix for the bow tie subdivided a slab when
+    // its midpoint width missed the average of its quarter widths --
+    // and a region can be built whose three samples line up across a
+    // real crossing, so the measurement stopped early and overstated
+    // the area by a third. This polygon is that region: six vertices,
+    // read under the even-odd rule, exact area 43025/14 (the review
+    // quoted 3073.21 for it, and the scin cross-check below is the
+    // independent evidence). Slab boundaries now come from the
+    // crossings themselves, so no sample pattern can hide one.
+    let poly = "newpath 10 0 moveto 100 100 lineto 50 0 lineto 70 100 lineto \
+                80 0 lineto 10 100 lineto closepath scpath dup /Rule /evenodd put";
+    let got = eval(&format!("{poly} scarea"));
+    let measured: f64 = got[0].parse().unwrap();
+    let exact = 43025.0 / 14.0;
+    assert!(
+        (measured - exact).abs() < 1e-6,
+        "measured {measured}, expected {exact}"
+    );
+
+    // Cross-checked against the containment test itself, which is the
+    // property the whole measurement exists to agree with: a coarse
+    // grid of scin samples over the bounding box lands within a
+    // percent of the measured area.
+    let got = eval(&format!(
+        "{poly} /P exch def /hits 0 def \
+         0 1 179 {{ /gi exch def 0 1 179 {{ /gj exch def \
+           10 gi 0.5 mul add 0.25 add  gj 0.5555 mul 0.27 add  P scin \
+             {{ /hits hits 1 add def }} if \
+         }} for }} for hits"
+    ));
+    let hits: f64 = got[0].parse().unwrap();
+    let sampled = hits * (90.0 / 180.0) * (100.0 / 180.0);
+    assert!(
+        (sampled - measured).abs() < measured * 0.01,
+        "scin sampled {sampled}, scarea measured {measured}"
+    );
+}
+
+#[test]
+fn a_nested_scatter_does_not_corrupt_the_enclosing_count() {
+    // Round four: /Mark running another scatter -- the documented
+    // nesting case, wrapped in the caller's own dict -- reset the
+    // shared published count, so an outer /Count 3 finished reporting
+    // 2 and numbered its marks 1, 3, 3. The running total is now a
+    // local republished on each placement, so the nested call gets its
+    // own counter.
+    let got = eval(
+        "/idx [ 0 0 0 ] def \
+         /inner 0 0 50 50 screct def \
+         0 0 100 100 screct \
+         << /Count 3 /Seed 1 /Mark { \
+              pop pop pop pop \
+              idx scplaced 1 sub scplaced put \
+              8 dict begin \
+                inner << /Count 2 /Seed 2 /Mark { pop pop pop pop } >> scatter \
+              end \
+            } >> scatter \
+         idx scplaced",
+    );
+    assert_eq!(got[0], "[1 2 3]", "the outer marks keep their own indices");
+    assert_eq!(got[1], "3", "and the outer total survives the nested calls");
 }

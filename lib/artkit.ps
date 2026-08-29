@@ -908,7 +908,14 @@ end
 % ... end` — which is exactly what a `grid` or `truchet` stamp does —
 % would get the count written into their scratch dict and thrown away
 % with it (Codex review, round 3). `ScatterState` follows
-% `TurtleState`'s precedent above.
+% `TurtleState`'s precedent above. The count a scatter publishes there
+% is its own even when scatters nest: the running total is a local,
+% republished on each placement, so a nested call can't reset the
+% enclosing one's count or renumber its marks (Codex review, round 4).
+% The one gap, and it is the caller's own timing: reading `scplaced`
+% inside a /Mark *after* that mark has itself run a nested scatter
+% reports the nested call's total, until the enclosing call places its
+% next mark.
 %
 % Reproducibility: same seed, same options, same picture — the random
 % draws happen in a pinned order, x then y per candidate, then the
@@ -1100,17 +1107,22 @@ end
 % it asks the same containment question `scin` does, just answered a
 % whole row at a time.
 %
-% The slabs are bounded by the *edges' own endpoint y values*, not by
-% a fixed count of evenly spaced samples. That matters twice over.
-% Covered width is linear in y between consecutive vertex heights, so
-% a slab's midpoint times its height is exact there -- the measurement
-% is exact for any path whose edges don't cross each other (a
-% self-intersecting one is off by a sliver at each crossing height,
-% where the span structure changes mid-slab). And no component can
-% fall between samples: a 1x1000 sliver alongside a 1000x1 one is a
-% region whose two halves live at wildly different vertical scales,
-% and evenly spaced sampling reports half of it (the second review
-% round's example) while vertex-bounded slabs report both exactly.
+% The slabs are bounded by the geometry itself -- every edge endpoint
+% height, plus every height at which two edges cross -- rather than by
+% a fixed count of evenly spaced samples. That matters three times
+% over. Inside a slab where no edge begins, ends, or crosses another,
+% the span structure is fixed and each span's width is linear in y, so
+% the slab's midpoint times its height is exact: the measurement is
+% exact for any polygon, self-intersecting ones included (a bow tie
+% measures its two triangles, not the zero width at the pinch). No
+% component can fall between samples either: a 1x1000 sliver alongside
+% a 1000x1 one is a region whose two halves live at wildly different
+% vertical scales, and evenly spaced sampling reports half of it while
+% geometry-bounded slabs report both exactly. And nothing here is
+% inferred from samples -- an earlier version subdivided a slab when
+% its midpoint width missed the average of its quarter widths, which a
+% path can be built to defeat by lining those three samples up across
+% a real crossing.
 %
 % Cost is bounded rather than assumed: measurement work is roughly
 % slabs times edges, both of which grow with the path, so a running
@@ -1146,7 +1158,8 @@ end
     } loop
     sqays sqaj sqav put
     /sqanys sqanys 1 add def
-    sqawork sqabudget gt { scarea-region-too-complex-to-measure } if
+    sqawork sqabudget gt sqanys sqays length ge or
+        { scarea-region-too-complex-to-measure } if
 } def
 
 /sqscanline {                                    % -> covered width
@@ -1208,63 +1221,52 @@ end
 % minutes an unbounded measurement of a pathological path would.
 /sqabudget 2000000 def
 
-/sqaslab {                                       % lo hi -> area
-% One vertex-bounded slab, integrated adaptively. Covered width is
-% linear in y between consecutive vertex heights *unless* two edges
-% cross inside the slab, where the span structure changes and the
-% midpoint alone can be arbitrarily wrong -- a bow tie
-% (0,0)(100,100)(0,100)(100,0) is the smallest example: its only
-% vertex heights are 0 and 100, and the one midpoint at y=50 lands
-% exactly on the crossing, where the covered width is zero. Measuring
-% it that way reported area 0 for a region of 5000 (Codex review,
-% round 3).
+/sqacrossings {                                  % -
+% Every height at which two edges properly cross, added to the slab
+% boundaries alongside the vertex heights. That combination is what
+% makes a plain midpoint exact for *any* polygon: inside a slab where
+% no edge begins, ends, or crosses another, the sorted span structure
+% is fixed and each span's width is linear in y, so midpoint times
+% height integrates it exactly.
 %
-% So each slab is checked for linearity instead of assumed linear:
-% sample the midpoint and both quarter points, and if the midpoint
-% isn't the average of the quarters, something bends in here -- halve
-% the slab and try again. Linear slabs pass the test immediately and
-% cost three scanlines instead of one; a bend costs one subdivision
-% per crossing height and then converges. Depth-first through an
-% explicit stack rather than by recursion, the same way `gasket` and
-% `carpet` walk their subdivisions.
-    /sqashi exch def /sqaslo exch def
-    sqastk 0 sqaslo put
-    sqastk 1 sqashi put
-    /sqasp 1 def
-    /sqasum 0 def
-    {
-        sqasp 0 le { exit } if
-        /sqasp sqasp 1 sub def
-        /sqalo0 sqastk sqasp 2 mul get def
-        /sqahi0 sqastk sqasp 2 mul 1 add get def
-        /sqahh sqahi0 sqalo0 sub def
-        /sqasy sqalo0 sqahh 2 div add def
-        /sqalm sqscanline def
-        sqahh sqaminh le {
-            /sqasum sqasum sqalm sqahh mul add def
-        } {
-            /sqasy sqalo0 sqahh 4 div add def
-            /sqal1 sqscanline def
-            /sqasy sqahi0 sqahh 4 div sub def
-            /sqal3 sqscanline def
-            /sqaavg sqal1 sqal3 add 2 div def
-            sqalm sqaavg sub abs sqatol le
-            sqasp 2 add 30 ge or {
-                % Linear here (or as deep as the stack goes): the
-                % two-point estimate is exact for a linear width and no
-                % worse than the midpoint otherwise.
-                /sqasum sqasum sqaavg sqahh mul add def
-            } {
-                sqastk sqasp 2 mul sqalo0 put
-                sqastk sqasp 2 mul 1 add sqalo0 sqahh 2 div add put
-                /sqasp sqasp 1 add def
-                sqastk sqasp 2 mul sqalo0 sqahh 2 div add put
-                sqastk sqasp 2 mul 1 add sqahi0 put
-                /sqasp sqasp 1 add def
-            } ifelse
-        } ifelse
-    } loop
-    sqasum
+% The previous version instead sniffed for crossings, subdividing a
+% slab when its midpoint width missed the average of its quarter
+% widths. A fourth review round showed why sampling can't be trusted
+% for this: an even-odd region can be built whose three samples line
+% up despite genuine crossings between them, and the measurement then
+% stops early and overstates the area by a third. Finding the
+% crossings is more work up front (every edge pair, charged to the
+% same budget) but it can't be fooled, and it costs *less* than three
+% samples per slab on the ordinary paths that have no crossings at all.
+%
+% Endpoint touches are excluded (strict 0 < t < 1): a shared vertex is
+% already a boundary, and admitting it would add a duplicate.
+    0 4 sqaedges length 8 sub {
+        /sqaci exch def
+        /sqapx sqaedges sqaci get def
+        /sqapy sqaedges sqaci 1 add get def
+        /sqarx sqaedges sqaci 2 add get sqapx sub def
+        /sqary sqaedges sqaci 3 add get sqapy sub def
+        sqaci 4 add 4 sqaedges length 4 sub {
+            /sqacj exch def
+            /sqawork sqawork 1 add def
+            /sqaqx sqaedges sqacj get def
+            /sqaqy sqaedges sqacj 1 add get def
+            /sqaux sqaedges sqacj 2 add get sqaqx sub def
+            /sqauy sqaedges sqacj 3 add get sqaqy sub def
+            /sqaden sqarx sqauy mul sqary sqaux mul sub def
+            sqaden 0 ne {
+                /sqadx sqaqx sqapx sub def
+                /sqady sqaqy sqapy sub def
+                /sqatt sqadx sqauy mul sqady sqaux mul sub sqaden div def
+                /sqauu sqadx sqary mul sqady sqarx mul sub sqaden div def
+                sqatt 0 gt sqatt 1 lt and
+                sqauu 0 gt sqauu 1 lt and and
+                    { sqapy sqary sqatt mul add sqainsert } if
+            } if
+        } for
+        sqawork sqabudget gt { scarea-region-too-complex-to-measure } if
+    } for
 } def
 
 /sqmeasure {                                     % region -> num
@@ -1274,27 +1276,28 @@ end
     /sqan sqaedges length 4 idiv def
     sqan 0 eq { 0 } {
         /sqawork 0 def
-        /sqays sqan 2 mul array def
+        % Room for both endpoint heights of every edge plus up to as
+        % many crossing heights again; a path that needs more than that
+        % is charged to the budget rather than quietly truncated.
+        /sqays sqan 4 mul 4 add array def
         /sqanys 0 def
         0 4 sqaedges length 4 sub {
             /sqai exch def
             sqaedges sqai 1 add get sqainsert
             sqaedges sqai 3 add get sqainsert
         } for
-        /sqabb sqareg /BBox get def
-        /sqatol sqabb 2 get sqabb 0 get sub abs 1e-7 mul def
-        /sqaminh sqabb 3 get sqabb 1 get sub abs 1e-7 mul def
+        sqacrossings
         /sqaxs sqan 1 add array def
         /sqads sqan 1 add array def
-        /sqastk 64 array def
         /sqatotal 0 def
         0 1 sqanys 2 sub {
             /sqak exch def
-            sqays sqak 1 add get sqays sqak get gt {
+            /sqalo sqays sqak get def
+            /sqahi sqays sqak 1 add get def
+            sqahi sqalo gt {
+                /sqasy sqalo sqahi add 2 div def
                 /sqatotal
-                    sqatotal
-                    sqays sqak get sqays sqak 1 add get sqaslab
-                    add def
+                    sqatotal sqscanline sqahi sqalo sub mul add def
             } if
         } for
         sqatotal
@@ -1385,7 +1388,13 @@ end
         { scslo } { scslo frnd scshi scslo sub mul add } ifelse def
     /scang scrlo scrhi eq
         { scrlo } { scrlo frnd scrhi scrlo sub mul add } ifelse def
-    ScatterState /placed ScatterState /placed get 1 add put
+    % The running count is a local, published to ScatterState on every
+    % placement: a nested scatter (from inside a /Mark or /Weight,
+    % wrapped in the caller's own dict as this section's nesting note
+    % requires) then gets its own counter rather than resetting this
+    % one, and this call's next placement republishes its own count.
+    /scrun scrun 1 add def
+    ScatterState /placed scrun put
     scpx scpy scsc scang scmark
 } def
 
@@ -1486,6 +1495,7 @@ end
         { screg /Edges get length 4 idiv 1 max } { 1 } ifelse def
     /scwork 0 def
 
+    /scrun 0 def
     ScatterState /placed 0 put
     1 1 scwant {
         pop
@@ -1503,6 +1513,10 @@ end
             } if
         } for
     } for
+
+    % Republish at the end: a scatter nested inside this call's last
+    % mark would otherwise leave its own count standing as the result.
+    ScatterState /placed scrun put
 
     % rrand/srand round-trips exactly in both pscat and Ghostscript
     % (pinned by hand in both before this was written). Under
