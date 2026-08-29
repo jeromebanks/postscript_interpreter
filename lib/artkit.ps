@@ -876,7 +876,16 @@ end
 %           scatter reproduces regardless of what drew before it and
 %           doesn't perturb what draws after it. Omit it to draw from
 %           the ambient stream — still deterministic under the piece's
-%           own `N srand`, just not independent of it.
+%           own `N srand`, just not independent of it. The restore is
+%           skipped if the call *errors* out — a /Mark that raises,
+%           say, caught by the caller's own `stopped`. PostScript has
+%           no finally, and buying the restore back would mean
+%           swallowing the error and re-raising it as a bare `stop`,
+%           losing the self-documenting name that makes these errors
+%           worth reading (the same shape of leak `gsave` has when an
+%           error skips its `grestore`). A caller recovering from a
+%           caught error who needs the stream back can bracket their
+%           own `stopped` the same way: `rrand` before, `srand` after.
 %   /Tries n  candidate attempts per requested mark, 1..100 (default
 %           20). A mark whose attempts are all rejected is skipped and
 %           the next one is attempted — scatter places *at most*
@@ -1039,8 +1048,16 @@ end
         /sqsx sqcx def /sqsy sqcy def /sqhave true def
     } if
     sqcx sqcy sqlx sqly sqemit
-    /sqcx sqlx def /sqcy sqly def
+    % Bounds come from *edges*, never from a bare moveto: `fill`
+    % ignores a subpath that never draws, so a stray `1e6 1e6 moveto`
+    % must not stretch the region's bbox around a candidate area a
+    % million times too big and leave scatter placing nothing (Codex
+    % review, round 5). Both endpoints are offered here rather than
+    % only the new one, since the first point of a subpath is a real
+    % vertex exactly once an edge leaves it.
+    sqcx sqcy sqbounds
     sqlx sqly sqbounds
+    /sqcx sqlx def /sqcy sqly def
 } def
 
 /sqclose {                                       % -   (closepath)
@@ -1051,7 +1068,15 @@ end
 % duplicate edge for every explicitly closed subpath -- geometrically
 % inert (it can't cross a scanline) but it inflates /Edges and would
 % trip the edge ceiling one edge early (Codex review, PR #119).
-    sqhave { sqsx sqsy sqline /sqhave false def } if
+    sqhave {
+        % A closing edge of zero length is no edge at all: it can't
+        % cross a scanline, and emitting one would both inflate /Edges
+        % and (since bounds come from edges) stretch the bbox around a
+        % subpath `fill` ignores entirely -- a bare `moveto` with
+        % nothing after it being exactly that case.
+        sqcx sqsx ne sqcy sqsy ne or { sqsx sqsy sqline } if
+        /sqhave false def
+    } if
 } def
 
 /sqmove {                                        % x y -   (subpath start)
@@ -1060,7 +1085,6 @@ end
     /sqcx sqmx def /sqcy sqmy def
     /sqsx sqmx def /sqsy sqmy def
     /sqhave true def
-    sqmx sqmy sqbounds
 } def
 
 /scpath {                                        % -> region
@@ -1143,21 +1167,38 @@ end
 } def
 
 /sqainsert {                                     % y -
-% One slab boundary into the sorted boundary list. Duplicates are left
-% in (two subpaths can share a vertex height) -- they make zero-height
-% slabs, which the integration skips, and dropping them would cost
-% more than skipping them does.
+% One slab boundary into the sorted boundary list, coincident ones
+% merged. Merging matters for more than tidiness: many edge pairs can
+% cross at the *same* height -- nine stacked copies of one bow tie
+% have 36 edges and hundreds of pairwise crossings, all at two
+% heights -- and without merging each one claims another array slot
+% until a geometrically trivial region is rejected as too complex
+% (Codex review, round 5). Two boundaries closer together than a
+% billionth of the region's height bound a slab of no consequence
+% anyway.
     /sqav exch def
     /sqaj sqanys def
     {
         sqaj 0 le { exit } if
         sqays sqaj 1 sub get sqav le { exit } if
-        sqays sqaj sqays sqaj 1 sub get put
         /sqaj sqaj 1 sub def
         /sqawork sqawork 1 add def
     } loop
-    sqays sqaj sqav put
-    /sqanys sqanys 1 add def
+    sqaj 0 gt
+        { sqav sqays sqaj 1 sub get sub abs sqadedup le }
+        { false }
+    ifelse
+    not {
+        sqanys sqaj gt {
+            sqanys -1 sqaj 1 add {
+                /sqaii exch def
+                sqays sqaii sqays sqaii 1 sub get put
+                /sqawork sqawork 1 add def
+            } for
+        } if
+        sqays sqaj sqav put
+        /sqanys sqanys 1 add def
+    } if
     sqawork sqabudget gt sqanys sqays length ge or
         { scarea-region-too-complex-to-measure } if
 } def
@@ -1276,10 +1317,17 @@ end
     /sqan sqaedges length 4 idiv def
     sqan 0 eq { 0 } {
         /sqawork 0 def
-        % Room for both endpoint heights of every edge plus up to as
-        % many crossing heights again; a path that needs more than that
-        % is charged to the budget rather than quietly truncated.
-        /sqays sqan 4 mul 4 add array def
+        /sqabb sqareg /BBox get def
+        /sqadedup sqabb 3 get sqabb 1 get sub abs 1e-9 mul def
+        % Room for both endpoint heights of every edge, plus crossing
+        % heights up to the point where integrating that many slabs
+        % would exhaust the work budget anyway (each slab costs one
+        % pass over the edges), capped so a simple path doesn't
+        % allocate an enormous array it will never fill.
+        /sqays
+            sqan 2 mul
+            sqabudget sqan idiv dup 4096 gt { pop 4096 } if add
+            8 add array def
         /sqanys 0 def
         0 4 sqaedges length 4 sub {
             /sqai exch def

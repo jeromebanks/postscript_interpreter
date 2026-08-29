@@ -164,6 +164,26 @@ finished reporting 2 and numbered its marks 1, 3, 3); the running
 total is now a local republished on each placement, so a nested call
 gets its own counter and can't renumber its caller's marks.
 
+**Round five, two more real ones and a language-level limit.** A bare
+`moveto` draws nothing — `fill` skips such a subpath entirely — but
+the capture was stretching the region's bbox around it, so one stray
+`1e6 1e6 moveto` appended to a 100x100 square made scatter sample a
+million-unit box and place none of the marks asked for; bounds now
+come from edges, and a zero-length closing edge isn't emitted at all
+(which also subsumes round two's double-close more directly). And many
+edge pairs can cross at the *same* height, each claiming another slot
+in the boundary array: nine stacked copies of one bow tie are 36 edges
+with hundreds of pairwise crossings at two heights, and the
+measurement rejected that trivial region as too complex — coincident
+boundaries are now merged. The third finding, that `/Seed`'s restore
+is skipped when the call errors out under a caller's `stopped`, is
+real and documented rather than fixed: PostScript has no finally, and
+buying the restore back means swallowing the error and re-raising it
+as a bare `stop`, losing the self-documenting name that makes these
+errors worth reading — the same shape of leak `gsave` has when an
+error skips its `grestore`. The header names the caller's own
+two-line workaround.
+
 **One finding dispositioned rather than fixed.** The same round noted
 that `clippath scpath` doesn't capture the true clip when several
 clips are nested — correctly, but the cause is this interpreter's

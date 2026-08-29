@@ -3660,3 +3660,64 @@ fn a_nested_scatter_does_not_corrupt_the_enclosing_count() {
     assert_eq!(got[0], "[1 2 3]", "the outer marks keep their own indices");
     assert_eq!(got[1], "3", "and the outer total survives the nested calls");
 }
+
+#[test]
+fn scpath_ignores_subpaths_that_fill_would_ignore() {
+    // Round five: a bare `moveto` draws nothing -- `fill` skips such a
+    // subpath entirely -- but the capture was stretching the region's
+    // bbox around it, so one stray `1e6 1e6 moveto` appended to a
+    // 100x100 square made scatter sample a million-unit box and place
+    // none of the marks asked for. Bounds now come from edges, and a
+    // zero-length closing edge isn't emitted at all.
+    let stray = "newpath 0 0 moveto 100 0 lineto 100 100 lineto 0 100 lineto closepath \
+                 1000000 1000000 moveto scpath";
+    let got = eval(&format!("{stray} dup /BBox get exch scarea"));
+    assert_eq!(
+        got[0], "[0.0 0.0 100.0 100.0]",
+        "the stray moveto is not in bounds"
+    );
+    assert_eq!(got[1], "10000.0", "nor in the area");
+
+    let got = eval(&format!(
+        "{stray} << /Count 100 /Seed 1 /Mark {{ pop pop pop pop }} >> scatter scplaced"
+    ));
+    assert_eq!(got[0], "100", "every requested mark still lands");
+
+    // The same rule means a subpath closing exactly where it started
+    // contributes no zero-length edge.
+    let got = eval(
+        "newpath 0 0 moveto 10 0 lineto 10 10 lineto 0 0 lineto closepath \
+         scpath /Edges get length 4 idiv",
+    );
+    assert_eq!(
+        got[0], "3",
+        "the explicit return to the start is the third edge"
+    );
+}
+
+#[test]
+fn scarea_merges_boundaries_that_coincide() {
+    // Round five: many edge pairs can cross at the *same* height, and
+    // every one of them claimed another slot in the boundary array --
+    // nine stacked copies of one bow tie are 36 edges with hundreds of
+    // pairwise crossings at two heights, and the measurement rejected
+    // that geometrically trivial region as too complex.
+    let got = eval(
+        "newpath 1 1 9 { pop \
+           0 0 moveto 100 100 lineto 0 100 lineto 100 0 lineto closepath } for \
+         scpath scarea",
+    );
+    assert_eq!(
+        got[0], "5000.0",
+        "nine identical bow ties are still one bow tie"
+    );
+
+    // Coincident *vertex* heights merge the same way -- two subpaths
+    // that happen to share a height are one boundary, not two.
+    let got = eval(
+        "newpath 0 0 moveto 10 0 lineto 10 10 lineto 0 10 lineto closepath \
+         20 0 moveto 30 0 lineto 30 10 lineto 20 10 lineto closepath \
+         scpath scarea",
+    );
+    assert_eq!(got[0], "200.0", "two 10x10 squares at the same heights");
+}
