@@ -813,6 +813,19 @@ end
 % another: capture and scatter under the same transform (or capture
 % inside the gsave that sets it).
 %
+% A curved region carries one more CTM dependence, inherited from
+% `flattenpath`: its tolerance is a fixed fraction of a *device*
+% pixel, so the same curve captured under a larger scale becomes more
+% chords. That shifts /Area slightly and moves the region's boundary
+% by sub-chord amounts — and inside a scatter, a boundary that moves
+% changes which candidates are rejected, which shifts the whole
+% random-draw sequence after it. So the same seeded scatter over a
+% *curved* region is reproducible at a given scale, not across scales
+% (measured on one ridge: 304 chords and an area of 119192.04 at 1x,
+% 372 chords at 2x). A region with only straight edges has no such
+% dependence — its capture is exact and identical at every scale, in
+% this interpreter and in Ghostscript both.
+%
 % `scpath` flattens the current path the way alongpath does — the path
 % survives, flattened — and closes every subpath implicitly, exactly
 % as `fill` would. `scin` then answers with the nonzero winding rule,
@@ -878,7 +891,13 @@ end
 % (equally valid, equally reproducible) arrangement there. gs
 % compatibility here means the file runs, not that it matches
 % pixel for pixel — the same standard the rest of this file's
-% rand-driven procedures hold to.
+% rand-driven procedures hold to. Counts, areas, and rejections do
+% agree exactly — with one exception, and it isn't `rand`'s doing:
+% gs flattens curves to its own chord count (232 where this
+% interpreter produces 304, for the same ridge at the same scale),
+% so a *curved* region's /Area, and therefore any count /Density
+% resolves from it, differ a little between the two. A straight-edged
+% region agrees exactly.
 %
 % /MinSpacing is enforced through a sparse hash grid (one dict entry
 % per placed mark, cell size MinSpacing/1.5 so a cell's diagonal stays

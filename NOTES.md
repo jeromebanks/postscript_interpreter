@@ -79,12 +79,28 @@ issue asked for, not a sampler with a guaranteed fill quality; density
 composes into one (issue #19 was explicitly not a blocker); and any
 particle simulation. `alongpath` is untouched.
 
-**gs.** The section runs unchanged in Ghostscript — counts, areas, and
-rejections agree exactly — but *placements* do not: gs's `rand` is a
-different generator, so a seeded scatter is reproducible within each
-interpreter, not across the two. Documented in the section header
-rather than papered over, and the gs driver in `tests/artkit.rs`
-checks the count contract rather than pixel parity.
+**gs, and a second divergence that isn't `rand`'s doing.** The section
+runs unchanged in Ghostscript, but *placements* don't match: gs's
+`rand` is a different generator, so a seeded scatter is reproducible
+within each interpreter, not across the two. The gs driver in
+`tests/artkit.rs` therefore checks the count contract rather than
+pixel parity. Counts and areas *do* agree exactly — except for curved
+regions, and that one is `flattenpath`, not `rand`: its tolerance is a
+fixed fraction of a **device** pixel (HANDOFF's documented deviation
+from `setflat`), so the chord count follows the CTM. The same ridge
+measured 304 chords at 1x and 372 at 2x in this interpreter, and 232
+in gs — so a curved region's `/Area`, and any count `/Density`
+resolves from it, differ both across scales and across interpreters.
+The consequence worth stating plainly, because it isn't obvious: a
+boundary that moves by sub-chord amounts changes *which candidates get
+rejected*, which shifts the whole random-draw sequence after it. A
+seeded scatter over a curved region is reproducible at a given scale,
+not across scales. A straight-edged region has no such dependence —
+exact and identical at every scale in both interpreters — and
+`scpath_chord_resolution_follows_the_ctm_for_curves_only` pins the
+relationship both ways. Found by cross-model plan review at the
+implementation-review stage, before the PR, rather than empirically
+after.
 
 **Demos.** `examples/scatter.ps` is a six-panel specimen (fixed count,
 one density over two region sizes, a `noise2` weight field, minimum

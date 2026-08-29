@@ -28,6 +28,18 @@
 %                pass are two scatters sharing one seed, so every
 %                core lands exactly in the middle of its own halo
 %
+% One caveat worth knowing if you re-render the committed still: the
+% hill's region comes from a *curved* silhouette, and flattenpath's
+% tolerance is a fixed fraction of a device pixel, so capturing it
+% under the gallery's 2x supersample yields a slightly different chord
+% set than a 1x run does. Its stipple therefore lands in a slightly
+% different (equally seeded, equally reproducible) arrangement at the
+% two scales -- invisible among 6000 texture dots, but it means this
+% one piece's still is not a strict pixel-doubling of its 1x render
+% the way a straight-edged piece's is. Everything else on the page --
+% the sky, the meadow, the fireflies -- scatters over rectangles and
+% is scale-invariant.
+%
 % Run from the repo root:
 %
 %   pscat --page 640x800 gallery/firefly_census.ps

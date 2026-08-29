@@ -3249,3 +3249,58 @@ fn ghostscript_accepts_the_scatter_specimen_sheet() {
         .expect("run gs");
     assert!(status.success(), "gs rejected examples/scatter.ps");
 }
+
+#[test]
+fn artkit_loads_without_drawing_anything() {
+    // An explicit acceptance criterion for every library file here,
+    // and the one property no other test states directly: `run`ning
+    // artkit must define names and paint nothing.
+    let mut it = Interp::new();
+    load(&mut it);
+    assert_eq!(ink_count(&it), 0, "loading artkit put ink on the page");
+    assert!(!it.gfx().page_shown, "loading artkit must not showpage");
+    assert!(
+        it.operand_stack().is_empty(),
+        "loading artkit left {:?} on the operand stack",
+        it.operand_stack()
+            .iter()
+            .map(|o| o.repr())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn scpath_chord_resolution_follows_the_ctm_for_curves_only() {
+    // flattenpath's tolerance is a fixed fraction of a *device* pixel
+    // (HANDOFF's documented deviation from setflat), so a curved
+    // region captured under a larger scale is made of more chords.
+    // That is not a bug to fix here -- it is a property callers have
+    // to know about, because a boundary that moves by sub-chord
+    // amounts changes which scatter candidates get rejected, and that
+    // shifts every random draw after it. Pinned as a *relationship*
+    // (more scale, more chords; straight edges, no dependence at all)
+    // rather than as exact counts, which are the flattener's business.
+    let curve = "newpath 0 0 moveto 90 236 170 150 250 196 curveto \
+                 330 242 400 132 470 176 curveto closepath scpath /Edges get length";
+    let got = eval(&format!(
+        "{curve} gsave 2 2 scale {curve} grestore gsave 0.5 0.5 scale {curve} grestore"
+    ));
+    let at_1x: i64 = got[0].parse().unwrap();
+    let at_2x: i64 = got[1].parse().unwrap();
+    let at_half: i64 = got[2].parse().unwrap();
+    assert!(
+        at_half < at_1x && at_1x < at_2x,
+        "chord counts should track the device-space scale: {at_half} / {at_1x} / {at_2x}"
+    );
+
+    // A straight-edged region has no such dependence: same edges,
+    // same area, at any scale -- which is what makes a rectangle (or
+    // any polygon) region safe to capture and scatter under different
+    // transforms.
+    let poly = "newpath 0 0 moveto 100 0 lineto 100 100 lineto 0 100 lineto closepath \
+                scpath dup /Edges get length exch scarea";
+    let got = eval(&format!("{poly} gsave 2 2 scale {poly} grestore"));
+    assert_eq!(got[0], got[2], "polygon edge count is scale-independent");
+    assert_eq!(got[1], got[3], "polygon area is scale-independent");
+    assert_eq!(got[1], "10000.0", "and exact");
+}
