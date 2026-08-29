@@ -667,6 +667,16 @@ fn ghostscript_accepts_artkit() {
         100 100 noise2 pop \
         100 100 0.5 { pop pop 42 } curl2 pop pop \
         newpath 50 50 5 2 { pop pop 1 0 } advect stroke \
+        20 20 160 160 screct \
+            << /Count 40 /Seed 9 /MinSpacing 9 /Tries 20 /Scale [ 0.5 1.5 ] \
+               /Rotate [ 0 360 ] \
+               /Mark { 4 dict begin /a exch def /s exch def /y exch def \
+                       /x exch def newpath x y 2 s mul 0 360 arc fill end } >> \
+            scatter \
+        (GSSCATTER ) print scplaced == \
+        newpath 200 200 60 24 5 star closepath scpath \
+            << /Density 0.004 /Seed 4 /Tries 20 /Weight { pop 200 div } \
+               /Mark { pop pop pop pop } >> scatter \
         showpage\n";
     let dir = std::env::temp_dir().join(format!("pscat-artkit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
@@ -691,6 +701,23 @@ fn ghostscript_accepts_artkit() {
         String::from_utf8_lossy(&output.stdout)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
+    // The scatter section runs under gs too, and its *counts* agree
+    // exactly even though its *positions* cannot: gs's `rand` is a
+    // different generator, so a seeded scatter is reproducible within
+    // each interpreter, not across the two -- the same standard the
+    // rest of this file's rand-driven procedures hold gs to.
+    let placed: i64 = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("GSSCATTER "))
+        .unwrap_or_else(|| panic!("gs didn't print a scatter count: {stdout:?}"))
+        .trim()
+        .parse()
+        .expect("scatter count parses as an integer");
+    assert!(
+        (1..=40).contains(&placed),
+        "gs placed {placed} marks for a /Count 40 /MinSpacing 9 scatter --          over the requested count means the budget/tries contract broke,          zero means the region or the grid rejected everything"
+    );
+
     let tiles: i64 = stdout
         .lines()
         .find_map(|l| l.strip_prefix("GSTILES "))
@@ -2626,4 +2653,514 @@ fn gradfill_clips_to_the_current_path_not_the_whole_page() {
         (255, 255, 255),
         "gradfill must not paint outside the clipped path"
     );
+}
+
+// --- scatter (issue #48) ---------------------------------------------
+//
+// The placement primitives are checked the way the rest of this file
+// checks rand-driven art: arithmetic where the answer is exact (areas,
+// containment, spacing, ranges, counts), and the reproducibility
+// contract pinned by running the same seeded call twice. A `/Mark`
+// of `{ pop pop }` drops the scale and angle and leaves each placed
+// x y pair on the operand stack, so `eval` hands the whole placement
+// back as a coordinate list.
+
+/// Every placed x y pair from a `/Mark { pop pop }` scatter.
+fn placements(src: &str) -> Vec<(f64, f64)> {
+    let got = eval(src);
+    assert!(
+        got.len() % 2 == 0,
+        "a `/Mark {{ pop pop }}` scatter must leave pairs, got {got:?}"
+    );
+    got.chunks(2)
+        .map(|c| {
+            (
+                c[0].parse().unwrap_or_else(|_| panic!("x: {:?}", c[0])),
+                c[1].parse().unwrap_or_else(|_| panic!("y: {:?}", c[1])),
+            )
+        })
+        .collect()
+}
+
+fn scatter_err(src: &str) -> String {
+    let mut it = Interp::new();
+    load(&mut it);
+    match it.run_str(src).unwrap_err() {
+        PsError::Undefined(name) => name,
+        other => panic!("expected a self-documenting undefined name, got {other}"),
+    }
+}
+
+#[test]
+fn screct_describes_its_rectangle() {
+    let got = eval(
+        "100 50 200 150 screct /R exch def \
+         R scarea  R /Kind get  R /BBox get \
+         150 100 R scin  99 100 R scin  150 201 R scin",
+    );
+    assert_eq!(got[0], "30000", "area is w*h");
+    assert_eq!(got[1], "/rect");
+    assert_eq!(got[2], "[100 50 300 200]");
+    assert_eq!(got[3], "true", "a point in the middle is inside");
+    assert_eq!(got[4], "false", "a point left of x0 is outside");
+    assert_eq!(got[5], "false", "a point above y1 is outside");
+}
+
+#[test]
+fn scpath_captures_the_current_path_as_a_region() {
+    // A right triangle with legs 200 and 200: area 20000, and the
+    // point (280, 280) sits outside the hypotenuse (x + y = 400) but
+    // inside the bounding box -- the case a bbox-only region gets
+    // wrong.
+    let got = eval(
+        "newpath 100 100 moveto 300 100 lineto 100 300 lineto closepath \
+         scpath /T exch def \
+         T scarea  T /BBox get  T /Rule get  T /Edges get length \
+         150 150 T scin  280 280 T scin  50 150 T scin",
+    );
+    assert_eq!(got[0], "20000.0", "shoelace area of the triangle");
+    assert_eq!(got[1], "[100.0 100.0 300.0 300.0]");
+    assert_eq!(got[2], "/nonzero", "fill's own rule is the default");
+    let edge_numbers: usize = got[3].parse().unwrap();
+    assert!(
+        edge_numbers >= 12,
+        "three sides is at least three edges (12 numbers), got {edge_numbers}"
+    );
+    assert_eq!(got[4], "true", "inside the triangle");
+    assert_eq!(got[5], "false", "past the hypotenuse, inside the bbox");
+    assert_eq!(got[6], "false", "outside the bbox entirely");
+}
+
+#[test]
+fn scpath_leaves_the_flattened_path_behind_like_alongpath() {
+    // alongpath's contract: the current path survives, flattened. A
+    // region capture that consumed the path would break the
+    // `<shape> scpath ... stroke` idiom examples/scatter.ps uses to
+    // draw the region's own outline.
+    let mut it = Interp::new();
+    load(&mut it);
+    it.run_str(
+        "newpath 100 100 moveto 300 100 lineto 200 260 lineto closepath \
+         scpath pop 2 setlinewidth stroke",
+    )
+    .expect("stroke after scpath");
+    assert!(ink_count(&it) > 0, "the path was still there to stroke");
+}
+
+#[test]
+fn scin_honors_the_even_odd_rule_when_asked() {
+    // Two concentric squares wound the same way: nonzero says the
+    // middle is solid, even-odd punches the hole. Both readings are
+    // legitimate -- they're what `fill` and `eofill` would each paint
+    // -- so the region carries the choice rather than the library
+    // picking one.
+    let src = |rule: &str| {
+        format!(
+            "newpath 0 0 moveto 100 0 lineto 100 100 lineto 0 100 lineto closepath \
+             25 25 moveto 75 25 lineto 75 75 lineto 25 75 lineto closepath \
+             scpath /D exch def D /Rule {rule} put \
+             50 50 D scin  10 50 D scin  120 50 D scin"
+        )
+    };
+    let got = eval(&src("/nonzero"));
+    assert_eq!(got[0], "true", "nonzero: the inner square is still inside");
+    assert_eq!(got[1], "true", "the ring is inside either way");
+    assert_eq!(got[2], "false");
+    let got = eval(&src("/evenodd"));
+    assert_eq!(got[0], "false", "even-odd: the inner square is a hole");
+    assert_eq!(got[1], "true", "the ring is inside either way");
+    assert_eq!(got[2], "false");
+}
+
+#[test]
+fn clippath_scpath_scatters_inside_the_clip_region() {
+    // The issue's "clipping to an arbitrary current path" reading:
+    // `clippath` makes the clip region the current path, so the same
+    // capture covers it with no separate mechanism.
+    let got = eval(
+        "gsave newpath 10 10 200 100 rectclip clippath scpath /C exch def grestore \
+         C scarea  100 50 C scin  300 50 C scin",
+    );
+    assert_eq!(got[0], "20000.0");
+    assert_eq!(got[1], "true");
+    assert_eq!(got[2], "false");
+}
+
+#[test]
+fn scatter_places_the_requested_count_and_reports_it() {
+    let got = eval(
+        "0 0 200 200 screct << /Count 40 /Seed 3 /Mark { pop pop pop pop } >> scatter \
+         scplaced",
+    );
+    assert_eq!(got, vec!["40"], "an unconstrained scatter places them all");
+
+    let pts = placements("0 0 200 200 screct << /Count 25 /Seed 3 /Mark { pop pop } >> scatter");
+    assert_eq!(pts.len(), 25);
+    for (x, y) in &pts {
+        assert!(
+            (0.0..=200.0).contains(x) && (0.0..=200.0).contains(y),
+            "({x}, {y}) landed outside the region"
+        );
+    }
+}
+
+#[test]
+fn scatter_reproduces_a_seeded_arrangement_and_restores_the_stream() {
+    let call = "0 0 200 200 screct << /Count 30 /Seed 91 /MinSpacing 12 /Tries 20 \
+                /Scale [ 0.5 2 ] /Rotate [ 0 360 ] /Mark { pop pop } >> scatter";
+    let first = placements(call);
+    let second = placements(call);
+    assert_eq!(first, second, "same seed and options, same arrangement");
+    assert!(!first.is_empty());
+
+    // /Seed also has to leave the caller's own stream where it found
+    // it: rrand/srand round-trips exactly in this interpreter and in
+    // Ghostscript (both pinned by hand before /Seed was written), so a
+    // seeded scatter is an island, not a perturbation of everything
+    // drawn after it.
+    let got = eval(
+        "5 srand rand \
+         5 srand 0 0 100 100 screct << /Count 9 /Seed 3 /Mark { pop pop pop pop } >> scatter \
+         rand",
+    );
+    assert_eq!(got[0], got[1], "the ambient stream survived a seeded scatter");
+
+    // Without /Seed the scatter draws from the ambient stream, so it
+    // is reproducible under the piece's own `N srand` and nothing else.
+    let unseeded = "0 0 200 200 screct << /Count 12 /Mark { pop pop } >> scatter";
+    let a = placements(&format!("17 srand {unseeded}"));
+    let b = placements(&format!("17 srand {unseeded}"));
+    let c = placements(&format!("18 srand {unseeded}"));
+    assert_eq!(a, b, "same ambient seed, same arrangement");
+    assert_ne!(a, c, "a different ambient seed moves the marks");
+}
+
+#[test]
+fn scatter_min_spacing_is_exact_not_approximate() {
+    // The sparse hash grid (cells of MinSpacing/1.5, a 5x5
+    // neighborhood) has to be an exact accelerator, not a heuristic:
+    // every accepted pair must clear the distance, and the grid must
+    // not reject so eagerly that nothing lands.
+    let spacing = 14.0_f64;
+    let pts = placements(
+        "0 0 200 200 screct \
+         << /Count 120 /Seed 8 /MinSpacing 14 /Tries 30 /Mark { pop pop } >> scatter",
+    );
+    assert!(
+        pts.len() > 40,
+        "the grid rejected far too much: only {} marks",
+        pts.len()
+    );
+    assert!(
+        pts.len() < 120,
+        "a 200x200 box cannot hold 120 marks 14 apart -- \
+         if it did, spacing wasn't being enforced"
+    );
+    for (i, a) in pts.iter().enumerate() {
+        for b in &pts[i + 1..] {
+            let d = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+            assert!(
+                d >= spacing - 1e-9,
+                "{a:?} and {b:?} are {d} apart, under the {spacing} minimum"
+            );
+        }
+    }
+}
+
+#[test]
+fn scatter_density_resolves_against_the_region_area() {
+    // Count = truncate(Density * Area), and the same density over a
+    // region twice the size wants twice the marks -- the property
+    // that makes /Density worth having over /Count.
+    let got = eval(
+        "0 0 100 200 screct << /Density 0.01 /Seed 2 /Mark { pop pop pop pop } >> scatter \
+         scplaced \
+         0 0 200 200 screct << /Density 0.01 /Seed 2 /Mark { pop pop pop pop } >> scatter \
+         scplaced",
+    );
+    assert_eq!(got[0], "200", "0.01 * 20000");
+    assert_eq!(got[1], "400", "0.01 * 40000");
+
+    // A path region resolves against its real area, not its bbox: the
+    // triangle is half the box, so it wants half the marks.
+    let got = eval(
+        "newpath 0 0 moveto 200 0 lineto 0 200 lineto closepath scpath \
+         << /Density 0.01 /Seed 2 /Tries 40 /Mark { pop pop pop pop } >> scatter scplaced",
+    );
+    assert_eq!(got[0], "200", "0.01 * 20000, the triangle's own area");
+}
+
+#[test]
+fn scatter_weight_biases_where_marks_land() {
+    // A weight of 1 on the left half and 0 on the right is the
+    // sharpest test of the acceptance roll: not one mark may land in
+    // the zero-weight half, and the left half must still fill.
+    let pts = placements(
+        "0 0 200 200 screct \
+         << /Count 60 /Seed 4 /Tries 40 /Weight { pop 100 lt { 1 } { 0 } ifelse } \
+            /Mark { pop pop } >> scatter",
+    );
+    assert!(pts.len() > 40, "only {} marks survived", pts.len());
+    for (x, _) in &pts {
+        assert!(*x < 100.0, "a zero-weight candidate at x={x} was placed");
+    }
+
+    // A uniform weight below 1 thins the scatter without moving it
+    // into a corner: with a single try per mark, roughly a quarter of
+    // 400 candidates should survive a weight of 0.25.
+    let got = eval(
+        "0 0 200 200 screct \
+         << /Count 400 /Seed 6 /Tries 1 /Weight { pop pop 0.25 } \
+            /Mark { pop pop pop pop } >> scatter scplaced",
+    );
+    let kept: i64 = got[0].parse().unwrap();
+    assert!(
+        (60..=140).contains(&kept),
+        "a 0.25 weight over 400 single-try candidates kept {kept}, expected ~100"
+    );
+}
+
+#[test]
+fn scatter_weight_may_itself_call_scin() {
+    // The composition that motivated three separate scratch prefixes:
+    // a /Weight proc calling `scin` runs in the middle of scatter's
+    // own placement loop, so scin's scratch names (si-) must not
+    // collide with the loop state (sc-). If they did, the loop would
+    // lose its bounds or its options partway through rather than
+    // failing loudly.
+    let pts = placements(
+        "0 0 200 200 screct /R exch def \
+         newpath 20 20 moveto 180 20 lineto 100 180 lineto closepath scpath /T exch def \
+         R << /Count 50 /Seed 12 /Tries 30 \
+              /Weight { T scin { 1 } { 0 } ifelse } /Mark { pop pop } >> scatter",
+    );
+    assert!(pts.len() > 20, "only {} marks survived", pts.len());
+    for (x, y) in &pts {
+        // Inside the triangle (20,20)-(180,20)-(100,180).
+        let inside = *y >= 20.0
+            && *y <= 180.0
+            && *x >= 20.0 + (100.0 - 20.0) * (*y - 20.0) / 160.0
+            && *x <= 180.0 - (180.0 - 100.0) * (*y - 20.0) / 160.0;
+        assert!(inside, "({x}, {y}) is outside the weight proc's triangle");
+    }
+}
+
+#[test]
+fn scatter_only_places_marks_inside_a_path_region() {
+    // Candidates are drawn from the bounding box and rejected by
+    // `scin`, so a concave region has to actually reject: every mark
+    // inside the star, none in the notches between its points.
+    let pts = placements(
+        "newpath 150 150 80 32 6 star closepath scpath \
+         << /Count 120 /Seed 5 /Tries 20 /Mark { pop pop } >> scatter",
+    );
+    assert!(pts.len() > 60, "only {} marks survived", pts.len());
+    let mut it = Interp::new();
+    load(&mut it);
+    for (x, y) in &pts {
+        let got = it
+            .run_str(&format!(
+                "newpath 150 150 80 32 6 star closepath scpath {x} {y} 3 -1 roll scin"
+            ))
+            .map(|()| it.operand_stack().last().map(|o| o.repr()))
+            .expect("scin");
+        assert_eq!(
+            got.as_deref(),
+            Some("true"),
+            "({x}, {y}) was placed outside the star"
+        );
+        it.run_str("clear").expect("clear");
+    }
+}
+
+#[test]
+fn scatter_scale_and_rotate_stay_inside_their_ranges() {
+    let got = eval(
+        "/slo 9e9 def /shi -9e9 def /alo 9e9 def /ahi -9e9 def \
+         0 0 200 200 screct \
+         << /Count 80 /Seed 13 /Scale [ 0.5 2.5 ] /Rotate [ -30 45 ] \
+            /Mark { /a exch def /s exch def pop pop \
+                    s slo lt { /slo s def } if  s shi gt { /shi s def } if \
+                    a alo lt { /alo a def } if  a ahi gt { /ahi a def } if } >> scatter \
+         slo shi alo ahi",
+    );
+    let vals: Vec<f64> = got.iter().map(|s| s.parse().unwrap()).collect();
+    assert!(vals[0] >= 0.5 && vals[1] <= 2.5, "scale escaped: {vals:?}");
+    assert!(vals[2] >= -30.0 && vals[3] <= 45.0, "angle escaped: {vals:?}");
+    assert!(vals[1] - vals[0] > 1.0, "scale barely varied: {vals:?}");
+    assert!(vals[3] - vals[2] > 30.0, "angle barely varied: {vals:?}");
+
+    // The degenerate default ranges hand the mark exactly 1 and 0 --
+    // no draw is consumed for a range that cannot vary.
+    let got = eval(
+        "/n 0 def 0 0 200 200 screct \
+         << /Count 12 /Seed 13 \
+            /Mark { 0 eq exch 1 eq and { /n n 1 add def } if pop pop } >> scatter n",
+    );
+    assert_eq!(got[0], "12", "every mark got scale 1 and angle 0");
+}
+
+#[test]
+fn scatter_marks_the_placement_index_in_scplaced() {
+    // scplaced is documented as readable *during* /Mark as the
+    // 1-based index of the mark being drawn, which is what lets a
+    // mark vary with its own ordinal.
+    let got = eval(
+        "/seq [ ] def 0 0 100 100 screct \
+         << /Count 4 /Seed 1 /Mark { pop pop pop pop /seq [ seq aload pop scplaced ] def } >> \
+         scatter seq",
+    );
+    assert_eq!(got[0], "[1 2 3 4]");
+}
+
+#[test]
+fn scatter_on_an_empty_region_is_a_silent_no_op() {
+    let got = eval(
+        "newpath scpath /E exch def \
+         E scarea  E /Edges get length  0 0 E scin \
+         E << /Count 20 /Mark { pop pop pop pop } >> scatter scplaced",
+    );
+    assert_eq!(got[0], "0.0", "no path, no area");
+    assert_eq!(got[1], "0");
+    assert_eq!(got[2], "false", "nothing is inside an empty region");
+    assert_eq!(got[3], "0", "and nothing gets placed");
+}
+
+#[test]
+fn scatter_bounds_pathological_counts_densities_and_spacings() {
+    // The whole rejection matrix, each raising the file's
+    // self-documenting undefined-name idiom rather than drawing
+    // something enormous or looping. The mutual-exclusion check in
+    // particular has to test key *presence*: a `known`-less check
+    // would see the /Count default and reject every /Density call.
+    let mark = "/Mark { pop pop pop pop }";
+    for (src, expected) in [
+        (
+            format!("0 0 100 100 screct << {mark} /Count 5 /Density 1 >> scatter"),
+            "scatter-count-and-density-are-mutually-exclusive",
+        ),
+        (
+            format!("0 0 100 100 screct << {mark} /Count 999999 >> scatter"),
+            "scatter-count-exceeds-safety-limit",
+        ),
+        (
+            format!("0 0 100 100 screct << {mark} /Density 1000 >> scatter"),
+            "scatter-count-exceeds-safety-limit",
+        ),
+        (
+            format!("0 0 100 100 screct << {mark} /Count -3 >> scatter"),
+            "scatter-count-must-be-non-negative",
+        ),
+        (
+            format!("0 0 100 100 screct << {mark} /Density -0.5 >> scatter"),
+            "scatter-density-must-be-non-negative",
+        ),
+        (
+            format!("newpath scpath << {mark} /Density 1 >> scatter"),
+            "scatter-density-needs-a-region-with-positive-area",
+        ),
+        (
+            format!("0 0 100 100 screct << {mark} /MinSpacing -1 >> scatter"),
+            "scatter-minspacing-must-be-non-negative",
+        ),
+        (
+            format!("0 0 100 100 screct << {mark} /MinSpacing 0.000001 >> scatter"),
+            "scatter-minspacing-too-small-for-the-region",
+        ),
+        (
+            format!("0 0 100 100 screct << {mark} /Tries 0 >> scatter"),
+            "scatter-tries-must-be-1-to-100",
+        ),
+        (
+            format!("0 0 100 100 screct << {mark} /Tries 500 >> scatter"),
+            "scatter-tries-must-be-1-to-100",
+        ),
+        (
+            format!("0 0 100 100 screct << {mark} /Budget 500000 >> scatter"),
+            "scatter-budget-must-be-0-to-200000",
+        ),
+        (
+            format!("0 0 100 100 screct << {mark} /Scale [ 2 1 ] >> scatter"),
+            "scatter-scale-range-must-be-low-then-high",
+        ),
+        (
+            format!("0 0 100 100 screct << {mark} /Scale 3 >> scatter"),
+            "scatter-scale-must-be-two-numbers",
+        ),
+        (
+            format!("0 0 100 100 screct << {mark} /Rotate [ 90 0 ] >> scatter"),
+            "scatter-rotate-range-must-be-low-then-high",
+        ),
+        (
+            format!("0 0 100 100 screct << {mark} /Seed (nope) >> scatter"),
+            "scatter-seed-must-be-a-number",
+        ),
+        (
+            format!("0 0 100 100 screct << {mark} /Count (many) >> scatter"),
+            "scatter-count-must-be-a-number",
+        ),
+        (
+            "0 0 100 100 screct << >> scatter".to_string(),
+            "scatter-mark-is-required",
+        ),
+        (
+            "0 0 100 100 screct << /Mark 3 >> scatter".to_string(),
+            "scatter-mark-must-be-a-procedure",
+        ),
+        (
+            format!("0 0 100 100 screct << {mark} /Weight 4 >> scatter"),
+            "scatter-weight-must-be-a-procedure",
+        ),
+        (
+            format!("<< /Kind /rect >> << {mark} >> scatter"),
+            "scatter-needs-a-region",
+        ),
+        (
+            "0 0 100 100 screct 5 scatter".to_string(),
+            "scatter-opts-must-be-a-dict",
+        ),
+        (
+            "0 0 100 0 screct".to_string(),
+            "screct-width-and-height-must-be-positive",
+        ),
+        (
+            "0 0 (wide) 50 screct".to_string(),
+            "screct-needs-four-numbers",
+        ),
+    ] {
+        assert_eq!(scatter_err(&src), expected, "for {src}");
+    }
+}
+
+#[test]
+fn scatter_budget_is_checked_before_anything_is_drawn() {
+    // paintkit's own precedent: an over-budget call must fail on a
+    // blank page, not halfway through one.
+    let mut it = Interp::new();
+    load(&mut it);
+    let err = it
+        .run_str(
+            "0 0 100 100 screct << /Count 50000 /Budget 100 \
+             /Mark { pop pop pop 0 360 arc fill } >> scatter",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "scatter-count-exceeds-safety-limit"),
+        "got {err}"
+    );
+    assert_eq!(ink_count(&it), 0, "nothing may be drawn before the check");
+}
+
+#[test]
+fn scpath_bounds_a_pathological_edge_count() {
+    // A region capture is linear in the path's flattened edges and
+    // scin's per-point cost is too, so an unbounded path would make
+    // every candidate arbitrarily expensive. 20000 edges is the
+    // ceiling; a path past it is rejected rather than captured.
+    let err = scatter_err("newpath 0 0 moveto 1 1 25000 { pop 1 0.5 rlineto } for scpath");
+    assert_eq!(err, "scpath-too-many-edges");
+
+    // Just under the ceiling still captures cleanly.
+    let got = eval("newpath 0 0 moveto 1 1 500 { pop 1 0.5 rlineto } for scpath /Edges get length");
+    assert_eq!(got[0], "2004", "501 edges: 500 segments plus the implicit close");
 }

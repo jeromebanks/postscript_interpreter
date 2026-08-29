@@ -1,0 +1,166 @@
+%!PS-Adobe-3.0
+%%Title: Scatter — a specimen sheet for artkit's distribution primitives
+%%BoundingBox: 0 0 660 560
+%%EndComments
+
+% Specimen sheet for artkit's scatter section (lib/artkit.ps): six
+% panels, one placement mode each, reading left to right and top to
+% bottom in roughly the order a piece would reach for them. Top row is
+% the three ways a scatter decides *how many* marks and *where*: a
+% fixed count over a rectangle, a density resolved against two
+% differently sized regions, and a weight procedure turning a coherent
+% noise field into a density field. Bottom row is the three things
+% that make a scatter look deliberate rather than random: minimum
+% spacing, an arbitrary path as the region, and a fixed seed
+% reproducing the same arrangement twice. Run from the repo root:
+%
+%   pscat --page 660x560 examples/scatter.ps
+
+(lib/artkit.ps) run
+noiseinit
+
+1 1 1 setrgbcolor clippath fill
+
+/Palatino-Bold findfont 20 scalefont setfont
+0.1 0.1 0.12 setrgbcolor
+(Scatter) 330 528 showctr
+/Palatino-Italic findfont 11 scalefont setfont
+(screct, scpath, scin, scarea, scatter) 330 512 showctr
+
+/numstr { 20 string cvs } def
+
+% Every panel sits in the same 190x190 box with a hairline frame and a
+% caption beneath it.
+/frame {                                         % x y -
+    /fy exch def /fx exch def
+    gsave
+        0.78 0.76 0.72 setrgbcolor 0.6 setlinewidth
+        newpath fx fy 190 190 rectstroke
+    grestore
+} def
+/caption {                                       % (s) x y -
+    gsave
+        /Palatino-Italic findfont 9.5 scalefont setfont
+        0.35 0.33 0.30 setrgbcolor
+        showctr
+    grestore
+} def
+
+% The marks. Each one wraps its whole body in its own dict, the
+% nesting convention artkit's own stamp procs follow, so a mark can be
+% composed with anything else without its locals leaking.
+/dot {                                           % x y s a -
+    4 dict begin
+        pop /s exch def /y exch def /x exch def
+        newpath x y 2.1 s mul 0 360 arc fill
+    end
+} def
+/blade {                                         % x y s a -  (a leaf)
+    5 dict begin
+        /a exch def /s exch def /y exch def /x exch def
+        gsave
+            x y translate a rotate s dup scale
+            newpath 0 0 moveto 3.5 3 5 -3 11 0 curveto
+            5 3 3.5 -3 0 0 curveto fill
+        grestore
+    end
+} def
+/chip {                                          % x y s a -  (a square)
+    5 dict begin
+        /a exch def /s exch def /y exch def /x exch def
+        gsave
+            x y translate a rotate s dup scale
+            newpath -3 -3 6 6 rectfill
+        grestore
+    end
+} def
+
+% --- 1. fixed count over a rectangle ---------------------------------
+20 300 frame
+0.16 0.20 0.34 setrgbcolor
+35 315 160 160 screct << /Count 170 /Seed 3 /Mark /dot load >> scatter
+(fixed /Count over a rectangle) 115 288 caption
+
+% --- 2. density: the same /Density over two different regions --------
+235 300 frame
+0.20 0.32 0.30 setrgbcolor
+250 315 110 160 screct << /Density 0.006 /Seed 5 /Mark /dot load >> scatter
+/kept1 scplaced def
+0.62 0.38 0.20 setrgbcolor
+372 315 48 160 screct << /Density 0.006 /Seed 5 /Mark /dot load >> scatter
+gsave
+    /Palatino findfont 9 scalefont setfont
+    0.35 0.33 0.30 setrgbcolor
+    262 302 moveto kept1 numstr show ( marks) show
+    378 302 moveto scplaced numstr show ( marks) show
+grestore
+(one /Density, two areas) 330 288 caption
+
+% --- 3. a weight procedure as a density field ------------------------
+450 300 frame
+% noise2's own range runs to roughly +/-0.7; the shift and scale here
+% land it inside the 0..1 scatter clamps a weight to, without ever
+% flattening to all-or-nothing.
+/cloud { 0.022 mul exch 0.022 mul exch noise2 0.8 mul 0.5 add } def
+0.30 0.16 0.34 setrgbcolor
+465 315 160 160 screct
+    << /Count 700 /Seed 11 /Tries 3 /Mark /dot load /Weight /cloud load >>
+    scatter
+(a /Weight field, from noise2) 545 288 caption
+
+% --- 4. minimum spacing ----------------------------------------------
+20 70 frame
+0.72 0.36 0.16 setrgbcolor
+35 85 160 160 screct
+    << /Count 240 /Seed 7 /MinSpacing 11 /Tries 40 /Mark /dot load >>
+    scatter
+gsave
+    /Palatino findfont 9 scalefont setfont
+    0.35 0.33 0.30 setrgbcolor
+    35 72 moveto scplaced numstr show ( of 240 fit at /MinSpacing 11) show
+grestore
+(/MinSpacing, by rejection) 115 58 caption
+
+% --- 5. an arbitrary path as the region ------------------------------
+235 70 frame
+% The region is the star itself, not its bounding box: scpath records
+% the flattened outline and every candidate outside it is rejected, so
+% the leaves reach into the points instead of filling a rectangle. It
+% is the *anchor* that lands inside the region -- a mark with real
+% extent, like these leaves, can still overhang the outline, which is
+% the caller's business and not something scatter clips.
+newpath 330 165 82 34 7 star closepath
+scpath /starry exch def
+gsave
+    0.80 0.78 0.72 setrgbcolor 0.7 setlinewidth stroke
+grestore
+0.22 0.40 0.20 setrgbcolor
+starry
+    << /Count 150 /Seed 2 /MinSpacing 9 /Tries 30
+       /Scale [ 0.55 1.1 ] /Rotate [ 0 360 ] /Mark /blade load >>
+    scatter
+(scpath: a shape as the region) 330 58 caption
+
+% --- 6. the same seed, twice -----------------------------------------
+450 70 frame
+% Two independent scatter calls, same /Seed, same options, one
+% translated: identical arrangements, which is the whole point of
+% seeding. /Seed also restores the ambient random stream afterwards,
+% so the second call is unaffected by the first having run.
+/twin {                                          % x y -
+    gsave
+        translate
+        0 0 74 160 screct
+            << /Count 34 /Seed 44 /MinSpacing 13 /Tries 30
+               /Scale [ 0.5 1.2 ] /Rotate [ 0 90 ] /Mark /chip load >>
+            scatter
+    grestore
+} def
+0.16 0.26 0.42 setrgbcolor
+466 85 twin
+0.62 0.20 0.24 setrgbcolor
+556 85 twin
+(one /Seed, two calls) 545 58 caption
+
+showpage
+%%EOF
