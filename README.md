@@ -554,6 +554,35 @@ newpath 300 500 120 0 360 arc closepath
 << /Alpha 0.3 /Layers 3 /Wet 8 /Bloom 0.6 >> pkwash   % then the wash
 ```
 
+A sixth sibling, `lib/hatchkit.ps` (issue #49), is a reusable hatching
+and cross-hatching library: `hatch` fills whatever region is currently
+clipped with a family of parallel line strokes, so the caller supplies
+the region and any tone-driving callback rather than this library
+doing image analysis or tone extraction (`lib/etching.ps` already
+covers that end-to-end). It never reimplements point-in-polygon or
+edge-crossing tests -- lines are drawn well past the region's
+boundary and left for the graphics state's own `clip` to cut down, so
+`hatch` clips to concave and self-intersecting paths exactly as well
+as convex ones. Single or multi-angle (`/Angles`, layered per call --
+two calls at 90 degrees apart is the classic cross-hatch), seeded
+width/wobble/dropout/length variation, and an optional per-sample
+`/Density` callback that drives width buckets and a no-ink cutoff --
+clamped into `[0,1]` regardless of what the callback returns, so a
+misbehaving callback can only change tone, never spawn unbounded
+geometry. `/MaxLines` and `/MaxSamples` reject a pathological
+`/Spacing` before anything is drawn, the same up-front-reject shape
+`scatter`'s `/Budget` uses. `examples/hatching.ps` is a three-panel
+specimen sheet: flat shading, a `/Density`-driven tonal band that
+reads as a curved, lit sphere despite every stroke being straight, and
+layered cross-hatching built from two and three `hatch` calls over the
+same region.
+
+```postscript
+(lib/hatchkit.ps) run
+newpath 40 40 moveto 260 40 lineto 260 260 lineto 40 260 lineto closepath clip
+<< /Angle 30 /Spacing 4 /Seed 1 >> hatch
+```
+
 ## The website
 
 **[jeromebanks.github.io/postscript_interpreter](https://jeromebanks.github.io/postscript_interpreter/)**

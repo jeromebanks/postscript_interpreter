@@ -3,6 +3,126 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Reusable hatching and cross-hatching primitives (issue #49, 2026-08-30)
+
+A sixth sibling library, `lib/hatchkit.ps` — no dependency on
+`artkit.ps` or any other sibling, matching `graph.ps`/`dataviz.ps`/
+`etching.ps`'s precedent. One operator, `hatch`: fills whatever region
+is currently *clipped* with a family of parallel line strokes. The
+caller supplies the region (an ordinary `<path> clip`) and, optionally,
+a tone-driving `/Density` callback; image analysis and tone extraction
+stay `lib/etching.ps`'s job, per the issue's own scope cut.
+
+**Lean on the real `clip`, don't reimplement polygon math.**
+`et-hatch` already proved the technique: sweep parallel lines across a
+bbox-sized area and let the graphics state's own clip cut them to
+shape. `hatch` generalizes that geometry — lines are drawn well past
+the region's actual boundary, so it clips to concave and
+self-intersecting paths exactly as well as convex ones, with no
+point-in-polygon or edge-crossing code anywhere in the file. This also
+sidesteps `clippath`'s known multi-clip bug (issue #120) entirely —
+`hatch` never calls `clippath`; `/BBox` defaults to `pathbbox` of the
+*current path* instead (which survives `clip`, since `clip` doesn't
+consume the path).
+
+**Bounding candidate work, not just marks — twice.** `scatter`'s own
+NOTES entry (issue #48) records the lesson this reuses: a deposit
+budget on *marks placed* doesn't bound *work done* when each candidate
+costs more than O(1) to test. Here that shows up as two independent,
+fully-deterministic-from-`/BBox`/`/Spacing`/`/Angles` pre-flight
+checks, both computed and enforced *before* any drawing or RNG draw:
+`/MaxLines` (total candidate lines across every angle) and
+`/MaxSamples` (total `/Density` callback invocations, gated only when
+`/Density` is given, bounded per-line by an exact projection formula —
+`|dx|*w + |dy|*h`, not the ~2x-larger bbox diagonal a cruder estimate
+would use). A first draft only had `/MaxLines`; an advisor review
+before implementation caught that a small `/Spacing` over a modest
+bbox already drives the sample count into the tens of millions —
+exactly the "bounds marks, not work" gap scatter's own history warns
+about — which is what actually makes "density callbacks cannot create
+unbounded output" (the issue's own acceptance criterion) hold.
+
+**A line's own clipped-in-region span, not the raw sweep, is what
+`/Trim` shortens.** An early draft trimmed a fraction of the full
+bbox-diagonal sweep length, which the same advisor review flagged as
+badly conditioned — a fixed fraction of an ~850-unit diagonal is
+invisible against a small centered shape and total against one in a
+bbox corner. Each candidate line is instead clipped analytically
+against the bbox first (a small unrolled Liang-Barsky, four boundary
+tests — by construction every offset this file sweeps already
+intersects the box, proven by convexity of the projection onto the
+sweep normal, so the general-purpose "parallel and outside" rejection
+branch is a defensive backstop, never a load-bearing path), and
+`/Trim`'s fraction applies to *that* real span.
+
+**Two real implementation bugs, caught by actually rendering, not by
+reasoning about the PostScript.** (1) `hkclipseg` was first called
+with an initial `t` range of `[0, 1]` — mimicking a unit-length probe
+— instead of a range wide enough to contain the whole bbox
+intersection; Liang-Barsky can only *shrink* a given range, never grow
+it, so every stroke silently clipped down to length ≤ 1 (rendered as a
+diagonal chain of dots, not lines) until the initial range became
+`[-diagonal, diagonal]`. (2) `/Density`'s value was stored under a
+bare name (`/hdensity`) rather than wrapped in the 1-element-array
+trick every other option-default helper in this codebase already uses
+for exactly this reason (`scgetdef`/`pkgetdef`/`pggetdef`, and this
+file's own `hkgetdef`) — a name bound directly to a *procedure*
+auto-executes on every bare reference, so each `hdensity null ne` /
+`hdensity xcheck` / `hsx hsy hdensity exec` was silently re-running the
+caller's own density callback mid-setup instead of testing or invoking
+it deliberately, corrupting the operand stack (`stackunderflow` at
+`pop`, sourced from inside the *caller's* proc, not `hatch`'s own
+code — a genuinely confusing symptom to trace back). Wrapping it as
+`hdensityopt`, retrieved via `hdensityopt 0 get`, fixed it; the same
+footgun this file's own `hkgetdef` exists to avoid, applied
+inconsistently to a second name in the same file.
+
+**API surface:** `/BBox`, `/Angle` or `/Angles` (each a full layered
+pass, in order — the mechanism behind cross-hatching and multi-angle
+engraving fills), `/Spacing`, `/Width` (number or `[lo hi]` range),
+`/Wobble` (seeded perpendicular offset — position only, not a
+mid-stroke jitter; a genuinely shaky hand-drawn stroke stays
+`paintkit.ps`'s territory), `/Dropout`, `/Trim`, `/Density` +
+`/DensityThreshold` (quantized into 6 fixed width buckets, one stroke
+per constant-bucket run along a line — `et-hatch`'s own technique,
+reused for the same reason: stroke count, not sample count, dominates
+render time), `/Seed` (srand + rrand-restore, `scatter`'s convention),
+`/MaxLines`, `/MaxSamples`. A documented caveat worth remembering: a
+*second* layered `hatch` call over the same clip cannot rely on the
+default `/BBox` (`pathbbox` of the current path) — `hatch`'s own
+strokes end with `stroke`'s ordinary implicit `newpath`, so by the
+second call the clip rectangle is no longer the current path,
+regardless of how it was built. `examples/hatching.ps`'s "layered
+cross-hatch" panel passes `/BBox` explicitly for exactly this reason.
+
+**Tag-migrated from the start, not added to `build.rs`'s
+`LEGACY_FILES`.** `lib/paintkit.ps` is still the only *pre-existing*
+file migrated to the `% @kind:`/`@summary:`/`@example:`/`@param:`
+doc-comment catalog (issue #94) — migrating the rest is itchy-when-
+you-get-to-it follow-up work per `HANDOFF.md`. A brand-new file has no
+migration debt to defer, though: `build.rs`'s own docs frame
+`LEGACY_FILES` as distinguishing "deliberately uncataloged" from
+"forgotten" for files that predate the mechanism, not as a default for
+new ones, so `hatchkit.ps` tags every top-level definition (`@internal`
+for scratch helpers, a full block for `hatch` itself) and gets
+capability-catalog registration (issue #39) for free from
+`cargo build` — no hand-written `capabilities.rs` entry needed.
+
+`tests/hatchkit.rs`: reproducibility (identical pixels, same seed and
+options), a two-angle `/Angles` pass inking more than one angle alone,
+dropout measurably reducing ink, a concave (chevron) clip leaving its
+own bbox corners blank, `/Density` carving a hard region boundary and
+clamping an out-of-range return value instead of erroring, `/BBox`
+defaulting to `pathbbox` matching an explicit box pixel-for-pixel, and
+both safety limits rejecting *before* any ink lands — plus the
+`ghostscript_accepts_*` acceptance test every sibling library carries.
+Deliberately cut, and recorded rather than silently skipped: no
+gallery piece or site/playground entry — the issue's own acceptance
+criteria ask for a "specimen page," not a gallery piece, and
+`examples/hatching.ps` (three panels: flat shading, a `/Density`-driven
+tonal band that reads as a curved, lit sphere from perfectly straight
+strokes, and layered cross-hatching) covers that.
+
 ## Deterministic scatter and distribution primitives for artkit (issue #48, 2026-08-29)
 
 The area-shaped counterpart to `alongpath`/`walkpath`: place a
