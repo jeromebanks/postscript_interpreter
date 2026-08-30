@@ -556,6 +556,84 @@ fn clobbering_trim_bounds_from_density_does_not_bypass_max_samples() {
     );
 }
 
+// The next three tests are round-3 regressions from a third Codex
+// review of PR #121, after rounds 1-2's fixes landed. Two are
+// non-adversarial bugs (an ordinary caller can hit either with no
+// /Density callback at all); the third — bbox bounds living outside
+// the reserved `hk-` prefix, the same shape as round 2's finding — is
+// deliberately *not* fixed. Renaming cannot close that class: a
+// callback that redefines the *already-hk-prefixed* `hkstep` directly
+// still bypasses the cap (`clobbering_hstep_from_density_...` above,
+// tested against the pre-fix unprefixed name, makes the same point).
+// PostScript has no private namespace, so this stays a documented
+// contract -- `lib/artkit.ps`'s `scatter` ships with the identical
+// exposure for `/Mark`/`/Weight` against its own sc-/sq-/si- prefixes
+// (see NOTES.md's issue #49 entry for the full disposition).
+
+#[test]
+fn preflight_line_count_matches_the_real_drawing_loop_exactly() {
+    // A config where PostScript's own floating-point `for` (summing
+    // /Spacing repeatedly) used to take one more trip than
+    // cvi(span/spacing)+1 predicted -- an *ordinary* caller hits this,
+    // no adversarial /Density needed. The fix makes the drawing loop
+    // integer-indexed, deriving each line from `hkmin + i*hkspacing`
+    // rather than accumulating, so the real trip count now equals the
+    // pre-flight formula by construction. Asserted directly: exactly
+    // /MaxSamples calls, not one more.
+    let mut it = with_lib(60, 60);
+    it.run_str(
+        "/n 0 def \
+         << /BBox [0 0 3.3 0.1] /Angle 0 /Spacing 0.55 /MaxSamples 12 \
+            /Density { /n n 1 add def pop pop 1 } >> hatch \
+         n",
+    )
+    .unwrap_or_else(|e| panic!("hatch failed: {}", it.error_report(&e)));
+    let stack = it.operand_stack();
+    let n: i64 = stack
+        .last()
+        .expect("n left on the stack")
+        .repr()
+        .parse()
+        .expect("n should be an integer");
+    assert_eq!(
+        n, 12,
+        "the real /Density call count should exactly match the pre-flight estimate"
+    );
+}
+
+#[test]
+fn dropout_of_exactly_1_drops_every_line() {
+    // hkfrnd can return exactly 1.0, which a bare `hkfrnd hdropout lt`
+    // turns into "never dropped" even at the documented-certain
+    // /Dropout of 1 -- the exact trap lib/artkit.ps's scodds already
+    // documents and guards against; hatchkit's own dropout roll now
+    // mirrors that pattern. A seed exists (found by the review) where
+    // the sole candidate line in a one-line-tall region survives a
+    // /Dropout of 1 without this fix.
+    let mut it = with_lib(20, 20);
+    run(
+        &mut it,
+        "0 0 0 setrgbcolor 1 setlinecap \
+         << /BBox [0 0 10 10] /Seed 230538014 /Dropout 1 >> hatch",
+    );
+    assert_eq!(
+        ink_count(&it),
+        0,
+        "/Dropout 1 should drop every candidate line, drawing nothing"
+    );
+}
+
+#[test]
+fn bbox_must_have_exactly_four_elements() {
+    // `aload pop` silently accepts an oversized array, reading its
+    // *last* four elements as coordinates and leaving the rest on the
+    // operand stack -- violating hatch's own `opts hatch -` contract.
+    assert_eq!(
+        hatch_err("<< /BBox [99 0 0 10 10] >> hatch"),
+        "hatch-bbox-must-have-four-elements"
+    );
+}
+
 #[test]
 fn ghostscript_accepts_the_hatching_specimen_sheet() {
     // The acceptance criterion itself -- the specimen page runs

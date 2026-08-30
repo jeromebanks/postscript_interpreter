@@ -204,6 +204,59 @@ got the same validate-up-front treatment `/Spacing`/`/Trim` already
 had. Both rounds' fixes are covered by dedicated regression tests
 (`tests/hatchkit.rs`) that reproduce the exact clobber/malformed-input
 shape a docs-only reading wouldn't have caught.
+
+**A third Codex review found two more real bugs — neither adversarial,
+both hit by an ordinary caller — plus a third finding that's the same
+naming class round 2 already closed, restated against different
+names, and deliberately not fixed this time.**
+
+The one that mattered most: PostScript's own `for` loop, used for both
+the line sweep and the per-line density sampling, accumulates its step
+by repeated floating-point addition — `kmin spacing kmax { ... } for`
+— which does not always take the same number of trips as
+`cvi((kmax-kmin)/spacing)+1`, the formula the pre-flight budget uses to
+approve that same work. A 12-sample estimate saw a real 13th
+`/Density` call; no callback involved, just an ordinary `/BBox`/
+`/Spacing` combination landing on a case where the two computations
+disagreed. Fixed by making both loops integer-indexed —
+`0 1 n-1 { /i exch def kmin i spacing mul add ... } for` — so the real
+trip count *equals* the pre-flight formula by construction rather than
+merely agreeing with it in the common case; confirmed directly
+(printing both loops' own computed line count for the same non-trivial
+`/BBox`/`/Angle`/`/Spacing`, matching exactly) rather than trusted from
+the reasoning alone, and the specimen sheet was re-rendered to check
+the sub-ulp coordinate change (deriving each line from `kmin + i*spacing`
+instead of accumulated addition) didn't visibly shift anything.
+
+The second: `hkfrnd` can return exactly `1.0`, which a bare
+`hkfrnd hdropout lt` turns into "never dropped" even at a
+documented-certain `/Dropout` of 1 — `lib/artkit.ps`'s `scodds` already
+names and guards against this exact trap for the same reason; the
+dropout roll now mirrors its pattern (`>= 1` and `<= 0` both skip the
+roll entirely, matching `/Wobble`/`/Trim`'s existing convention of not
+consuming a random draw for a degenerate range). A third, unrelated bug
+in the same round: `/BBox` accepted any array `aload pop` could unpack,
+silently reading an oversized array's *last* four elements as
+coordinates and leaving the rest sitting on the operand stack —
+violating `hatch`'s own `opts hatch -` contract. Now validated to be
+exactly four elements.
+
+The finding *not* acted on: `hbx0`/`hbx1`/etc. (the bbox bounds) and
+`hangles` (the angles array binding) aren't `hk`-prefixed either, the
+same shape as round 2's `hspacing`/`hstep` finding. This class doesn't
+converge by renaming — `clobbering_hstep_from_density_...`
+(`tests/hatchkit.rs`) already proves a callback redefining the
+*already-`hk`-prefixed* `hkstep` directly still bypasses the cap, since
+PostScript has no mechanism that would stop it regardless of which
+name is targeted. `lib/artkit.ps`'s `scatter` (issue #48, cross-model
+reviewed in its own right) ships with the identical exposure and
+documents it as a plain contract: `/Mark`/`/Weight` "must not touch
+sc-, sq-, or si- names." `hatchkit.ps`'s own "Scratch prefix" section
+already states the equivalent contract over every `h`-prefixed name,
+with the `hk`-prefixed subset called out as the part that also gates a
+safety limit — this finding doesn't change that, it's the same
+documented risk restated against names the round-2 rename didn't
+happen to cover. Not a new exposure this PR introduced.
 Deliberately cut, and recorded rather than silently skipped: no
 gallery piece or site/playground entry — the issue's own acceptance
 criteria ask for a "specimen page," not a gallery piece, and

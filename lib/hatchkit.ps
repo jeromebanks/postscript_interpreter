@@ -305,7 +305,16 @@
   /hopts exch def
 
   hopts /BBox known
-    { hopts /BBox get aload pop }
+    {
+      hopts /BBox get
+      % aload pushes every element (not just four) then the array
+      % itself; an oversized array would silently leave its leading
+      % elements sitting under the four this code actually consumes,
+      % violating `hatch`'s own `opts hatch -` contract (Codex review,
+      % PR #121, round 3).
+      dup length 4 ne { hatch-bbox-must-have-four-elements } if
+      aload pop
+    }
     { pathbbox }
   ifelse
   /hby1 exch def
@@ -451,10 +460,31 @@
     hbx1 hnx mul hby1 hny mul add hcproj sub hkmmfeed
     /hkmin hkmn def
     /hkmax hkmx def
-
-    hkmin hkspacing hkmax {
-      /hk exch def
-      hdropout 0 gt { hkfrnd hdropout lt } { false } ifelse
+    % Integer-indexed, not a floating-point `for` accumulating
+    % hkspacing repeatedly: PostScript's own `for` can take one extra
+    % (or one fewer) trip than cvi(span/step)+1 predicts, since it
+    % accumulates the step by repeated addition rather than computing
+    % that same division -- confirmed empirically (Codex review, PR
+    % #121, round 3): a 12-line pre-flight estimate saw a real 13th
+    % candidate. Deriving each line's own hk from the integer index
+    % instead makes the real trip count *equal* cvi(span/step)+1 by
+    % construction, matching the pre-flight formula exactly rather
+    % than merely hoping the two computations agree.
+    hkmax hkmin sub hkspacing div cvi 1 add /hknlines exch def
+    0 1 hknlines 1 sub {
+      /hki exch def
+      hkmin hki hkspacing mul add /hk exch def
+      % Mirrors artkit.ps's scodds exactly, for the same reason its own
+      % comment names: hkfrnd can land on exactly 1.0, which a bare
+      % `hkfrnd hdropout lt` turns into "never dropped" even for a
+      % documented-certain /Dropout of 1 (Codex review, PR #121, round
+      % 3 -- a seed exists where the sole candidate line in a one-line
+      % region survives a /Dropout of 1). >= 1 and <= 0 both skip the
+      % roll entirely, not just short-circuit after rolling.
+      hdropout 1 ge
+        { true }
+        { hdropout 0 le { false } { hkfrnd hdropout lt } ifelse }
+      ifelse
         {}
         {
           hwobble 0 gt { hkfrnd 2 mul 1 sub hwobble mul } { 0 } ifelse
@@ -499,8 +529,17 @@
                 {
                   /hrunb 0 def
                   /hrunt0 htlo2 def
-                  htlo2 hkstep hthi2 {
-                    /ht exch def
+                  % Integer-indexed for the same reason as the k-loop
+                  % above: the real trip count must equal
+                  % cvi(span/step)+1 by construction, not merely agree
+                  % with it. hthi2 htlo2 sub is this line's own
+                  % (already-clipped-and-trimmed) span, always <=
+                  % hmaxseg, so this count is always <= the pre-flight
+                  % per-line estimate that bounded /MaxSamples.
+                  hthi2 htlo2 sub hkstep div cvi 1 add /hknsamp exch def
+                  0 1 hknsamp 1 sub {
+                    /hti exch def
+                    htlo2 hti hkstep mul add /ht exch def
                     hcx hnx hkk mul add hdx ht mul add /hsx exch def
                     hcy hny hkk mul add hdy ht mul add /hsy exch def
                     hsx hsy hdensityopt 0 get exec hkclamp01 /hdval exch def
