@@ -634,6 +634,63 @@ fn bbox_must_have_exactly_four_elements() {
     );
 }
 
+// The next two tests are round-4 regressions from a fourth Codex
+// review of PR #121, after rounds 1-3's fixes landed. Both are
+// non-adversarial: an ordinary caller hits either with no /Density
+// callback and no deliberately malformed input, just a particular
+// /BBox/Angle/Spacing combination landing on a floating-point edge.
+
+#[test]
+fn preflight_uses_the_same_centered_projections_as_drawing() {
+    // The pre-flight budget computed its corner projections raw
+    // (uncentered), while the drawing loop centered them (subtracting
+    // the bbox-center's own projection) -- the same mathematical
+    // difference, but raw and centered subtraction round differently
+    // in floating point for a large-magnitude /BBox, so the two loops'
+    // own line counts could actually disagree. This exact
+    // /BBox/Angle/Spacing/Wobble/Seed combination used to pass
+    // /MaxLines 1 and /MaxSamples 1 at pre-flight but have the drawing
+    // loop compute two candidate lines and call /Density twice.
+    let mut it = with_lib(60, 60);
+    let err = it
+        .run_str(
+            "/n 0 def \
+             << /BBox [-102.45945071801543 154.9295410513878 33.34343981174436 175.85219124668143] \
+                /Angle -99.51648412272334 /Spacing 137.39315161176085 /Wobble 1 /Seed 1 \
+                /MaxLines 1 /MaxSamples 1 /Density { /n n 1 add def pop pop 1 } >> hatch",
+        )
+        .unwrap_err();
+    match err {
+        PsError::Undefined(name) => assert_eq!(
+            name, "hatch-line-count-exceeds-safety-limit",
+            "pre-flight should now see the same 2-line count the drawing loop would produce"
+        ),
+        other => panic!("expected a self-documenting undefined name, got {other}"),
+    }
+}
+
+#[test]
+fn thin_near_axis_aligned_region_still_draws() {
+    // A region thinner than /Spacing places its sole candidate line at
+    // its swept range's own boundary (hkmin), tangent to the bbox --
+    // at a near-axis-aligned angle, floating-point roundoff could then
+    // make hkclipseg reject that tangent intersection, silently
+    // drawing nothing even though a plain 0-degree hatch over the same
+    // region draws fine. Centering the candidate (or candidates) a
+    // little inside the swept range instead of flush against its start
+    // fixes it.
+    let mut it = with_lib(120, 21);
+    run(
+        &mut it,
+        "0 0 0 setrgbcolor 1 setlinecap \
+         << /BBox [10 10 110 11] /Angle 0.0004 /Spacing 6 >> hatch",
+    );
+    assert!(
+        ink_count(&it) > 0,
+        "a thin, near-axis-aligned region should still draw at least one stroke"
+    );
+}
+
 #[test]
 fn ghostscript_accepts_the_hatching_specimen_sheet() {
     // The acceptance criterion itself -- the specimen page runs

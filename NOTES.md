@@ -257,6 +257,57 @@ with the `hk`-prefixed subset called out as the part that also gates a
 safety limit — this finding doesn't change that, it's the same
 documented risk restated against names the round-2 rename didn't
 happen to cover. Not a new exposure this PR introduced.
+
+**A fourth Codex review found two more floating-point robustness
+bugs, both non-adversarial — an ordinary `/BBox`/`/Angle`/`/Spacing`
+combination, no callback involved — and both fixed.** (1) The
+pre-flight budget computed its corner projections *raw* (uncentered),
+while the drawing loop centered them (subtracting the bbox center's
+own projection) before round 4 — mathematically the same difference,
+but raw and centered subtraction round differently in floating point
+for a large-magnitude `/BBox` far from the origin, so the two loops'
+own line counts could actually disagree: one repro passed `/MaxLines
+1`/`/MaxSamples 1` at pre-flight while the drawing loop computed two
+candidates and called `/Density` twice — the exact "two computations
+expected to agree" trap round 3's integer-loop fix closed for
+`for`-loop trip counts, recurring one level up in the corner-
+projection math that feeds those loops. Fixed by using the identical
+centered-projection formula in both loops, closing the gap by
+construction rather than by argument (this is also what round 3's own
+sanity check — "run one config through both and check they agree" —
+was checking for, and the config it happened to use didn't surface
+this one; round 4's repro used far-from-origin coordinates
+specifically). (2) A region thinner than `/Spacing` places its sole
+candidate line at its own swept range's boundary (`hkmin`), tangent to
+the bbox; at a near-axis-aligned angle, floating-point roundoff could
+make `hkclipseg` reject that exact tangent intersection, silently
+drawing nothing for a region that geometrically should get one line —
+a plain 0-degree hatch over the same region drew fine, only a
+near-0.0004-degree tilt triggered it. Fixed by centering the whole
+candidate distribution within `[hkmin, hkmax]` (splitting the leftover
+slack — the span rarely divides evenly by `/Spacing` — across both
+ends instead of anchoring flush at `hkmin`), which also fixes the
+general case, not just the single-candidate one: every candidate now
+sits a little inside the box rather than the first one always
+grazing its edge. Both fixes are covered by regression tests
+(`tests/hatchkit.rs`) using the review's own repro parameters; the
+specimen sheet was re-rendered and re-eyeballed after each (the
+"layered cross-hatch" panel's grid shifts by up to half a spacing unit
+at its seams from the centering change — cosmetic, not a defect).
+
+Four review rounds, nine fixed findings, one explicit disposition.
+Round 5 was not run: rounds 3 and 4 both surfaced genuine,
+non-adversarial floating-point edge cases worth fixing, but the
+returns are visibly narrowing (round 4's two findings needed
+far-from-origin coordinates and a ten-thousandth-of-a-degree tilt to
+surface), and the remaining exposure class (documented-contract
+scratch-name collisions) doesn't converge by further review — see the
+round-3 disposition above. `hatchkit.ps`'s own geometry now computes
+every safety-critical count and coordinate exactly once per shape
+(centered projections, integer-indexed loops, centered candidate
+placement) rather than through two paths expected to agree, which is
+the actual property that closes this whole class of finding, not
+another round of chasing individual repros.
 Deliberately cut, and recorded rather than silently skipped: no
 gallery piece or site/playground entry — the issue's own acceptance
 criteria ask for a "specimen page," not a gallery piece, and

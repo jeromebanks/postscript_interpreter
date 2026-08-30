@@ -416,11 +416,20 @@
     hdy neg /hnx exch def
     hdx /hny exch def
     hdx abs hbw mul hdy abs hbh mul add /hmaxseg exch def
+    % Centered the same way the drawing loop below centers its own
+    % projections (subtracting hcproj) -- raw, uncentered corner dot
+    % products round differently in floating point than the centered
+    % ones the drawing loop actually uses (confirmed: a large-magnitude
+    % /BBox far from the origin can make the two disagree by one whole
+    % candidate line), so using anything else here risks a pre-flight
+    % count that doesn't match what the drawing loop can actually
+    % produce (Codex review, PR #121, round 4).
+    /hcproj hcx hnx mul hcy hny mul add def
     hkmmreset
-    hbx0 hnx mul hby0 hny mul add hkmmfeed
-    hbx1 hnx mul hby0 hny mul add hkmmfeed
-    hbx0 hnx mul hby1 hny mul add hkmmfeed
-    hbx1 hnx mul hby1 hny mul add hkmmfeed
+    hbx0 hnx mul hby0 hny mul add hcproj sub hkmmfeed
+    hbx1 hnx mul hby0 hny mul add hcproj sub hkmmfeed
+    hbx0 hnx mul hby1 hny mul add hcproj sub hkmmfeed
+    hbx1 hnx mul hby1 hny mul add hcproj sub hkmmfeed
     hkmx hkmn sub hkspacing div cvi 1 add /hnlines exch def
     /htotallines htotallines hnlines add def
     hmaxseg hkstep div cvi 1 add /hsamplesperline exch def
@@ -471,9 +480,23 @@
     % construction, matching the pre-flight formula exactly rather
     % than merely hoping the two computations agree.
     hkmax hkmin sub hkspacing div cvi 1 add /hknlines exch def
+    % The candidate set rarely divides the span evenly, so
+    % (hknlines-1)*hkspacing is usually a little short of hkmax --
+    % anchoring the whole run flush against hkmin puts the *first*
+    % candidate exactly tangent to the box's own boundary, and at a
+    % near-axis-aligned angle floating-point roundoff can then make
+    % hkclipseg reject that tangent intersection, silently drawing
+    % nothing for a thin region that geometrically should get one line
+    % (Codex review, PR #121, round 4). Splitting the leftover slack
+    % evenly across both ends centers every candidate a little inside
+    % the box instead, including -- especially -- the single-candidate
+    % case (hknlines 1), which used to sit exactly at hkmin with no
+    % margin at all.
+    hkmax hkmin sub hknlines 1 sub hkspacing mul sub 2 div /hkslack exch def
+    hkmin hkslack add /hkbase exch def
     0 1 hknlines 1 sub {
       /hki exch def
-      hkmin hki hkspacing mul add /hk exch def
+      hkbase hki hkspacing mul add /hk exch def
       % Mirrors artkit.ps's scodds exactly, for the same reason its own
       % comment names: hkfrnd can land on exactly 1.0, which a bare
       % `hkfrnd hdropout lt` turns into "never dropped" even for a
