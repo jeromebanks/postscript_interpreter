@@ -200,7 +200,28 @@ a real `Interp` and checks the name set both ways -- every cataloged
 name still exists, and every name a source file actually defines is
 either cataloged or on an explicit internal-helper allowlist. See
 CAPABILITIES.md for the payload shape and how to register a new
-capability (NOTES.md's entry has the full story).
+capability (NOTES.md's entry has the full story). Also done: issue
+#48, deterministic scatter and distribution primitives for artkit --
+the area-shaped counterpart to `alongpath`: `screct`/`scpath` build a
+region (a rectangle, or the current path flattened and closed the way
+`fill` sees it -- `clippath scpath` for the clip region),
+`scin`/`scarea` interrogate one, and `scatter` places a
+caller-supplied mark across it by fixed count or by density, with a
+`/Weight` procedure for non-uniform distributions, seeded
+scale/rotation variation, exact `/MinSpacing` (a sparse hash grid in
+an ordinary PostScript dict, cells of MinSpacing/1.5 so at most one
+mark per cell, 5x5 neighborhood -- not an O(n^2) scan), and a hard
+deposit budget. Containment is a real crossing test over the captured
+edges, so candidates outside a shape are *rejected* rather than drawn
+and clipped. Three scratch prefixes (`sc-`/`sq-`/`si-`) rather than
+one, because the natural way to write a non-uniform scatter is a
+`/Weight` proc that calls `scin` from inside scatter's own loop.
+`examples/scatter.ps` and the gallery piece `Firefly Census`
+(`gallery/firefly_census.ps`, a night meadow where every mark on the
+page is scattered and none placed by hand) demonstrate it (NOTES.md's
+entry has the full story, including why `/Seed` saves and restores the
+caller's random stream with `rrand` instead of just calling `srand`,
+and why gs agrees on scatter's counts but not its placements).
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;

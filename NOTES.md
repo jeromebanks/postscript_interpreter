@@ -3,6 +3,322 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Deterministic scatter and distribution primitives for artkit (issue #48, 2026-08-29)
+
+The area-shaped counterpart to `alongpath`/`walkpath`: place a
+caller-supplied mark many times *across a region* instead of stringing
+it along a curve. Five public names in a new `lib/artkit.ps` section —
+`screct`/`scpath` build a region, `scin`/`scarea` interrogate one, and
+`scatter` places marks in it.
+
+**Regions are objects, not arguments.** `screct` takes a rectangle;
+`scpath` captures the current path — flattened and implicitly closed
+exactly as `fill` sees it, with the path left behind flattened
+(`alongpath`'s own contract), so `<shape> scpath ... stroke` can draw
+the region's outline afterwards. `clippath scpath` covers the issue's
+"clipping to an arbitrary current path" reading with no separate
+mechanism. Containment is a real crossing test over the captured
+edges, not a bounding-box approximation and not rasterizer clipping:
+candidates outside the shape are *rejected* rather than drawn and
+clipped, so `/Density` resolves against the shape's own area and the
+deposit budget isn't spent on invisible marks. `scin` answers under
+the nonzero winding rule by default (matching `fill`); a region's
+`/Rule` can be set to `/evenodd` (matching `eofill`), which is a
+genuine choice about what "inside" means for a donut rather than a
+detail to hard-code.
+
+**Placement.** `/Count` or `/Density` (mutually exclusive — checked by
+key *presence*, since a `known`-less check would see the `/Count`
+default and reject every `/Density` call), a `/Weight` procedure for
+non-uniform distributions, `/Scale` and `/Rotate` ranges handed to the
+mark, `/MinSpacing`, `/Seed`, `/Tries`, `/Budget`. The mark is called
+`x y scale angle`, and the count actually placed lands in the global
+`scplaced` rather than on the operand stack — a returned count is a
+`--lint` operand-leak trap waiting for the first caller who forgets to
+`pop` it.
+
+**Minimum spacing is exact, and cheap.** Dart-throwing against every
+placed mark is O(n²); instead each accepted mark goes into a sparse
+hash grid held in an ordinary PostScript dict, with cells of
+`MinSpacing/1.5` so a cell's diagonal (0.943·MinSpacing) can hold at
+most one mark and no per-cell capacity case arises. A candidate checks
+the 5×5 cell neighborhood, which provably covers the whole
+MinSpacing disc. Memory tracks the number of marks placed, not the
+region's size.
+
+**`/Seed` restores the stream it borrowed.** `rrand`/`srand`
+round-trips exactly in this interpreter *and* in Ghostscript (pinned
+by hand in both before the option was written), so a seeded scatter is
+reproducible regardless of what drew before it and doesn't perturb
+what draws after it — a bare `srand` would have made `/Seed` a hidden
+global side effect. Under `--sweep-seed` the sweep overrides the
+restore too, which is what a sweep is for.
+
+**Three scratch prefixes, deliberately.** `sc-` (scatter's loop), `sq-`
+(region capture), `si-` (containment). The natural way to write a
+non-uniform scatter is a `/Weight` proc that calls `scin` — which runs
+*inside* scatter's own placement loop, so a shared prefix would have
+corrupted the loop's bounds or options partway through. Caught in plan
+review before any code existed; `scatter_weight_may_itself_call_scin`
+pins it. A `/Mark` or `/Weight` that calls `scatter` again is the
+`gasket`/`carpet` nesting case: the library stays unwrapped, the
+caller wraps.
+
+**Bounds.** Every option is range- and type-checked before a single
+mark is drawn (paintkit's precedent: fail on the blank page, not
+halfway through one), a resolved count over `/Budget` is rejected,
+total work is bounded by `Count × Tries` with both capped, and
+`scpath` refuses a path past 20000 flattened edges — `scin` is linear
+in the edge count, so an unbounded path would make every candidate
+arbitrarily expensive.
+
+**Two defects a cross-model (Codex) review of PR #119 caught, both
+real.** First, `scarea` originally used the cheap formula — the
+absolute value of the summed signed shoelace terms — which is *not*
+the area `scin` accepts, in three separable ways: two disjoint
+contours wound oppositely cancel to zero (and then trip `/Density`'s
+own positive-area guard on a perfectly good region), nested
+same-winding contours report outer+inner rather than the solid outer
+one, and nothing about the formula responds to `/Rule` at all even
+though the even-odd reading of a donut is a genuinely different area.
+Replaced with scanline integration under the region's own rule —
+asking the same containment question `scin` does, a row at a time —
+which gets every case right by construction at the cost of exactness
+on shapes whose vertices don't line up with slab boundaries (a
+fraction of a percent; a rectangle region stays exact, and a stored
+`/Area` short-circuits the measurement for a caller who needs one).
+Second, an explicitly closed subpath was closed *twice* — `pathforall`
+reports the `closepath`, and `scpath` also closes whatever is left
+open at the end — appending a zero-length duplicate edge per closed
+subpath: geometrically inert (it can't cross a scanline) but it
+inflated `/Edges` and would have tripped the 20000-edge ceiling one
+edge early. Fixing it surfaced a third case worth handling: a `lineto`
+*after* a `closepath` legitimately starts a new subpath at the
+closepath's own point, so the capture reopens rather than silently
+dropping it.
+
+**A second review round found the first fix's own two holes.** The
+replacement measurement sampled a fixed 400 evenly spaced scanlines,
+which can step straight over a component thinner than one step — a
+1x1000 sliver beside a disjoint 1000x1 one reported half the region,
+and `/Density` would have underplaced it by half. And its per-scanline
+insertion sort is quadratic in the crossings, so a zigzag whose every
+edge spans the bounding box could run for minutes at the 20000-edge
+ceiling. Both are fixed by the same change of footing: slabs are now
+bounded by the *edges' own vertex heights* rather than by a fixed
+count, which no component can fall between and which is additionally
+*exact* (covered width is linear in y between consecutive vertex
+heights, so midpoint times height integrates it exactly — a
+self-intersecting path is off only by a sliver at each crossing
+height); and the measurement counts its own work against a budget
+(`sqabudget`), raising `scarea-region-too-complex-to-measure` rather
+than grinding. The ceiling admits roughly 1400 flattened edges — a
+seven-letter word set at 72pt and captured with `charpath` is about
+330, and the gallery piece's ridge is 304 — and a region past it can
+still carry its own `/Area` or be scattered by `/Count`, which needs
+no area at all.
+
+**Round three found three more, all real.** (1) "Exact between vertex
+heights" holds only while nothing *crosses* between them: a bow tie —
+`(0,0) (100,100) (0,100) (100,0)` — has vertex heights of only 0 and
+100, and the single slab's midpoint lands exactly on the crossing at
+y=50 where the covered width is zero, so a region of 5000 measured as
+0 and `/Density` would have rejected it as empty. Slabs are now
+integrated *adaptively*: sample the midpoint and both quarter points,
+and if the midpoint isn't the average of the quarters, something bends
+in this slab — halve it and try again, depth-first through an explicit
+stack (`gasket`/`carpet`'s precedent). Linear slabs pass immediately
+and cost three scanlines instead of one; a bend costs one subdivision
+per crossing height and then converges, so the bow tie comes out at
+exactly 5000 under both rules. (2) The deposit budget bounds *marks*,
+which is not the same as bounding *work* — one candidate against a
+path region costs a pass over its edges, so a perfectly legal `/Count
+200000 /Tries 100` over a 20000-edge region is twenty million
+candidates at twenty thousand edge tests apiece, and no deposit budget
+touches it. Containment work is now metered as it is spent, against
+`scworkmax`. (3) `scplaced` was a plain `def`, so a caller who wrapped
+the call in the ordinary `N dict begin ... end` — exactly what a
+`grid` or `truchet` stamp does — got the count written into their own
+scratch dict and thrown away with it. It now reads out of a
+`ScatterState` dict (`TurtleState`'s precedent), so it survives any
+dict scoping while the spelling at the call site is unchanged.
+
+**Round four replaced the round-three fix's own criterion.** The
+adaptive subdivision test — subdivide when a slab's midpoint width
+misses the average of its quarter widths — is a *sample* of
+linearity, and a region can be built whose three samples line up
+across a genuine crossing: a six-vertex even-odd polygon read that way
+measured 4000 against an exact 43025/14 ≈ 3073.21, so `/Density` would
+have overplaced it by a third. Sampling was replaced with finding: the
+slab boundaries now include every height at which two edges actually
+cross, computed by testing each edge pair, alongside the vertex
+heights. Inside a slab where no edge begins, ends, or crosses another,
+the span structure is fixed and every span's width is linear, so a
+plain midpoint is exact — for *any* polygon, self-intersecting ones
+included, with no adaptive machinery at all. It is also cheaper on the
+ordinary crossing-free paths that make up nearly every real region:
+one scanline per slab instead of three, against a one-time pass over
+the edge pairs. The same round also caught that a scatter nested
+inside a `/Mark` reset the shared published count (an outer `/Count 3`
+finished reporting 2 and numbered its marks 1, 3, 3); the running
+total is now a local republished on each placement, so a nested call
+gets its own counter and can't renumber its caller's marks.
+
+**Round five, two more real ones and a language-level limit.** A bare
+`moveto` draws nothing — `fill` skips such a subpath entirely — but
+the capture was stretching the region's bbox around it, so one stray
+`1e6 1e6 moveto` appended to a 100x100 square made scatter sample a
+million-unit box and place none of the marks asked for; bounds now
+come from edges, and a zero-length closing edge isn't emitted at all
+(which also subsumes round two's double-close more directly). And many
+edge pairs can cross at the *same* height, each claiming another slot
+in the boundary array: nine stacked copies of one bow tie are 36 edges
+with hundreds of pairwise crossings at two heights, and the
+measurement rejected that trivial region as too complex — coincident
+boundaries are now merged. The third finding, that `/Seed`'s restore
+is skipped when the call errors out under a caller's `stopped`, is
+real and documented rather than fixed: PostScript has no finally, and
+buying the restore back means swallowing the error and re-raising it
+as a bare `stop`, losing the self-documenting name that makes these
+errors worth reading — the same shape of leak `gsave` has when an
+error skips its `grestore`. The header names the caller's own
+two-line workaround.
+
+**Round six sharpened two of round five's fixes and found a third
+hole.** A subpath of one line segment is retraced by its own implicit
+close, so `fill` paints nothing for it — but it *has* edges, and
+edge-derived bounds included it, which is round five's bug with a
+harder input. A subpath now reaches the region's bbox only if it can
+enclose something: fewer than three edges cannot (two edges is always
+an out-and-back retrace), and neither can a subpath box with no width
+or no height — both provable exclusions rather than heuristics.
+Merging coincident slab boundaries with an epsilon scaled to the
+*region's* bbox can also exceed a whole component's height when the
+components' scales differ wildly (a 1x1e8 sliver beside a 1e10x0.01
+one), so the merge test is relative to the boundaries' own magnitude
+instead. And `xcheck` alone turned out to be too weak a guard for the
+callbacks: `3 cvx` is executable, and invoking it merely pushes 3, so
+an accepted `/Mark 3 cvx` would have reported placements while leaking
+five operands per mark — a callback must now be a procedure or an
+executable name for one.
+
+**Round seven closed the same bbox hole's last shape, plus two
+smaller ones.** A remote *diagonal* run of three collinear points has
+three edges and a non-degenerate box, so neither earlier exclusion
+caught it, yet it encloses nothing; the test is now collinearity,
+which catches it and still keeps a bow tie (signed area zero, filled
+area real). `nametype` alone also said nothing about what an
+executable callback name is *bound* to — `/M3 3 def` then `/Mark /M3
+cvx` passed validation and leaked five operands per placement, and an
+undefined name failed only mid-placement after the seed and the random
+stream had moved — so a name is resolved and its target checked. And
+`/Budget` was compared against the raw resolved value rather than the
+truncation actually placed, rejecting a density of 1.5 against a
+budget of 1 for a call that places exactly one mark.
+
+**Round eight caught a real cross-interpreter break.** Ghostscript
+packs literal procedures under `true setpacking` — `{ ... }` is
+`packedarraytype` there where this interpreter leaves it
+`arraytype` — so round seven's callback guard, which insisted on
+`arraytype`, would have rejected an ordinary `/Mark { ... }` in gs and
+nowhere else. `sccallable` now accepts a procedure, a packed
+procedure, or an operator, and resolves a chain of executable names
+with a depth cap so a name bound to itself is refused rather than
+chased (paintkit had already hit the packing difference; its own
+`packedarraytype` checks are the precedent). The gs driver in
+`tests/artkit.rs` now runs a packed-procedure scatter directly, since
+that break can only appear in the interpreter that packs. The round
+also found the collinearity tolerance too coarse: scaled to the
+subpath's own extent, it called a genuinely triangular 100-by-1e-11
+sliver collinear, emptied its bbox and piled every mark on the origin.
+It is now a few ulps of the cross product's own terms, forgiving only
+the rounding error in computing it — and the test for that runs under
+an anisotropic CTM, since at identity `flattenpath`'s own coordinate
+quantization makes such a sliver genuinely flat before scpath ever
+sees it.
+
+**Round nine completed rounds seven and eight.** Those excluded an
+unfillable subpath from the *bounds* but left its segments in
+`/Edges`, so the measurement still integrated them. An out-and-back
+pair should cancel — both crossings land on the same x at every
+height — but only exactly, and at a coordinate like 1e9 the two
+computed crossings differ in their last bits, leaving a hair of width
+across an enormous span: a 10x10 square plus `0 0 moveto 1e9 1e9
+lineto` measured 159.6 instead of 100. A rejected subpath's edges are
+now rolled back out of the buffer too, which makes `/Edges` mean
+exactly what it should — the segments that can affect the fill — so
+`scin`, the edge ceiling, and `scarea` all agree about what the region
+is.
+
+**Round ten: two tolerance constants tightened, and a boundary
+found.** Both findings named tolerances looser than the rounding error
+they exist to forgive — the collinearity test at 1e-14 and the
+boundary merge at 5e-13, against a double's own 2.2e-16 — so both were
+tightened to 1e-15, about four ulps. Neither reported failure actually
+reproduces in this interpreter, though, and the reason is worth
+recording: `flattenpath` quantizes coordinates, and at the magnitudes
+those cases use it quantizes the very deviation being tested away
+before any PostScript library can see the path. A triangle
+`(0,0) (1e8,1e8) (2e8, 2e8+1e-6)` arrives with its apex at exactly
+`(2e8, 2e8)` — measured, printed straight out of `pathforall` — so it
+*is* collinear by the time `scpath` runs, and `fill` paints nothing
+for it either. That is the floor on what any of these region
+predicates can distinguish, and it sits well above the arithmetic;
+the tightened constants are correct on their own merits rather than
+because they fix an observable bug.
+
+**One finding dispositioned rather than fixed.** The same round noted
+that `clippath scpath` doesn't capture the true clip when several
+clips are nested — correctly, but the cause is this interpreter's
+`clippath`, which returns the most recently established clip path
+instead of the intersection of all of them (Ghostscript returns the
+intersection; both measured). That's a pre-existing pscat divergence
+from the PLRM, not something this issue introduced, and fixing it
+means path intersection in the renderer — filed separately (#120).
+The scatter docs now scope the idiom honestly instead of implying more
+than `clippath` delivers.
+
+**Deliberately not built:** true Poisson-disk (Bridson) sampling —
+dart-throwing with a spacing grid is the placement primitive this
+issue asked for, not a sampler with a guaranteed fill quality; density
+*fields* as first-class objects, since `/Weight` plus `noise2` already
+composes into one (issue #19 was explicitly not a blocker); and any
+particle simulation. `alongpath` is untouched.
+
+**gs, and a second divergence that isn't `rand`'s doing.** The section
+runs unchanged in Ghostscript, but *placements* don't match: gs's
+`rand` is a different generator, so a seeded scatter is reproducible
+within each interpreter, not across the two. The gs driver in
+`tests/artkit.rs` therefore checks the count contract rather than
+pixel parity. Counts and areas *do* agree exactly — except for curved
+regions, and that one is `flattenpath`, not `rand`: its tolerance is a
+fixed fraction of a **device** pixel (HANDOFF's documented deviation
+from `setflat`), so the chord count follows the CTM. The same ridge
+measured 304 chords at 1x and 372 at 2x in this interpreter, and 232
+in gs — so a curved region's `/Area`, and any count `/Density`
+resolves from it, differ both across scales and across interpreters.
+The consequence worth stating plainly, because it isn't obvious: a
+boundary that moves by sub-chord amounts changes *which candidates get
+rejected*, which shifts the whole random-draw sequence after it. A
+seeded scatter over a curved region is reproducible at a given scale,
+not across scales. A straight-edged region has no such dependence —
+exact and identical at every scale in both interpreters — and
+`scpath_chord_resolution_follows_the_ctm_for_curves_only` pins the
+relationship both ways. Found by cross-model plan review at the
+implementation-review stage, before the PR, rather than empirically
+after.
+
+**Demos.** `examples/scatter.ps` is a six-panel specimen (fixed count,
+one density over two region sizes, a `noise2` weight field, minimum
+spacing, a star as the region, one seed reproduced by two separate
+calls). `gallery/firefly_census.ps` is a night meadow in which every
+mark on the page is scattered and none placed by hand: a star field
+weighted by a Milky Way band times coherent noise, hill stipple
+scattered into the silhouette's own `scpath` outline, min-spaced grass
+whose height and tone come from each blade's own y, and fireflies
+drawn as two passes over one seed so every core lands inside its own
+halo.
+
 ## Watercolor: setalpha/setblendmode + paintkit's pkwash/pkpaper (issue #47, 2026-08-28)
 
 Implements the architecture issue #46's spike recorded in

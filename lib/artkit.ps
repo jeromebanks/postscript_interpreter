@@ -22,6 +22,8 @@
 %   shapes    cx cy r n ngon | cx cy r1 r2 n star | x y w h r rrect
 %   text      (s) cx y showctr | (s) w fitfont
 %   layout    x y w h cols rows {x y w h ...} grid
+%   scatter   x y w h screct | scpath -> region | x y region scin
+%             region scarea | region <</Mark {x y s a ...}>> scatter
 %   tiling    x0 y0 v1 v2 n1 n2 {x y ...} lattice | cx cy r hex
 %             cx cy s up tri | x y w h cols rows {...} hexgrid | trigrid
 %             | truchet
@@ -41,8 +43,8 @@
 % Convention: helper names are lowercase and short; internal scratch
 % names carry two-letter prefixes (ad-, ap-, c2-, cp-, ct-, ef-, ep-,
 % g2-, gd-, gh-, gk-, ha-, hg-, ho-, hp-, hr-, ht-, hy-, ld-, ls-, n2-,
-% nf-, ni-, nl-, pt-, tg-, tk-, wk-) — avoid redefining those inside
-% brush/draw procs.
+% nf-, ni-, nl-, pt-, sc-, si-, sq-, tg-, tk-, wk-) — avoid redefining
+% those inside brush/draw procs.
 
 % --- random ----------------------------------------------------------
 % Deterministic (rand), reproducible under srand. Drawn from rand's
@@ -787,6 +789,952 @@ end
         } for
     } for
 } def
+
+% --- scatter (deterministic mark distribution) ------------------------
+% The area-shaped counterpart to alongpath/walkpath's path-shaped walk:
+% place a caller-supplied mark many times across a *region* instead of
+% stringing it along a curve. Foliage, stars, debris, collage
+% fragments, stipple, print specks — anything that wants marks
+% distributed over an area. This is placement infrastructure, not a
+% particle simulator: scatter decides *where* (and at what scale and
+% angle) a mark goes, the caller's own procedure decides what the mark
+% looks like.
+%
+%   x y w h screct       -> region   a rectangle
+%   scpath               -> region   the current path, as `fill` sees it
+%   x y region scin      -> bool     is this point inside the region?
+%   region scarea        -> num      the region's area
+%   region opts scatter  -           place marks
+%
+% A region is an ordinary dict — /Kind and /BBox, plus /Area for a
+% rectangle and /Edges and /Rule for a captured path — built once and
+% reused across as many scatter calls as you like. A rectangle's area
+% is exact; a path region's is measured on demand by `scarea` (see its
+% own header), so flipping /Rule changes the answer the way it should. `scpath` records *user-space* coordinates
+% at capture time, so a region captured under one CTM is wrong under
+% another: capture and scatter under the same transform (or capture
+% inside the gsave that sets it).
+%
+% A curved region carries one more CTM dependence, inherited from
+% `flattenpath`: its tolerance is a fixed fraction of a *device*
+% pixel, so the same curve captured under a larger scale becomes more
+% chords. That shifts /Area slightly and moves the region's boundary
+% by sub-chord amounts — and inside a scatter, a boundary that moves
+% changes which candidates are rejected, which shifts the whole
+% random-draw sequence after it. So the same seeded scatter over a
+% *curved* region is reproducible at a given scale, not across scales
+% (measured on one ridge: 304 chords and an area of 119192.04 at 1x,
+% 372 chords at 2x). A region with only straight edges has no such
+% dependence — its capture is exact and identical at every scale, in
+% this interpreter and in Ghostscript both.
+%
+% `scpath` flattens the current path the way alongpath does — the path
+% survives, flattened — and closes every subpath implicitly, exactly
+% as `fill` would. `scin` then answers with the nonzero winding rule,
+% matching `fill`; `region /Rule /evenodd put` switches it to the
+% even-odd rule (matching `eofill`) for that region from then on.
+% `clippath scpath` is the idiom for scattering inside the current
+% *clip* region rather than inside a drawn shape -- with one caveat
+% that belongs to `clippath` rather than to this section: this
+% interpreter's `clippath` returns the most recently established clip
+% path, not the intersection of every clip in effect (Ghostscript
+% returns the true intersection; confirmed by measuring both). So the
+% idiom captures the whole clip when one clip is in force, which is
+% the ordinary case, and only the newest of several when they have
+% been nested -- candidates would then be accepted inside the newest
+% but outside an older one, and painted invisibly. Clip once for the
+% region you mean to scatter into, or capture the shape itself with
+% `scpath` and skip `clippath` altogether.
+%
+% scatter's options, all optional except /Mark:
+%   /Mark {x y scale angle -> -}  the mark. A procedure (or an
+%           executable name for one). Called once per placed
+%           mark with its position, a scale multiplier drawn from
+%           /Scale, and a rotation in degrees drawn from /Rotate. It
+%           MUST consume all four operands (a proc that ignores them
+%           leaks four numbers per mark onto the operand stack —
+%           `--lint` reports exactly that) and must not touch sc-,
+%           sq-, or si- names.
+%   /Count  how many marks to place (default 120). Mutually exclusive
+%           with /Density — passing both is an error rather than a
+%           silent winner.
+%   /Density marks per square unit, resolved against the region's own
+%           /Area (a 300x400 region at 0.001 wants 120 marks). The
+%           region must have positive area.
+%   /MinSpacing  minimum center-to-center distance between placed
+%           marks (default 0, off). Enforced exactly, by rejection.
+%   /Weight {x y -> w}  acceptance weight, 0..1 — the probability a
+%           candidate at (x,y) survives (clamped: >=1 always, <=0
+%           never). This is how a scatter gets non-uniform: pass
+%           `{ ... noise2 ... }` for a coherent density field, a
+%           distance falloff for a cluster, anything you can compute.
+%           Called only for candidates that already passed the region
+%           and spacing tests, and must consume its two operands.
+%   /Scale [lo hi]   scale multiplier range (default [1 1])
+%   /Rotate [lo hi]  rotation range in degrees (default [0 0])
+%   /Seed n  seeds the placement with `n srand` and restores the
+%           caller's random stream afterwards (via rrand), so a seeded
+%           scatter reproduces regardless of what drew before it and
+%           doesn't perturb what draws after it. Omit it to draw from
+%           the ambient stream — still deterministic under the piece's
+%           own `N srand`, just not independent of it. The restore is
+%           skipped if the call *errors* out — a /Mark that raises,
+%           say, caught by the caller's own `stopped`. PostScript has
+%           no finally, and buying the restore back would mean
+%           swallowing the error and re-raising it as a bare `stop`,
+%           losing the self-documenting name that makes these errors
+%           worth reading (the same shape of leak `gsave` has when an
+%           error skips its `grestore`). A caller recovering from a
+%           caught error who needs the stream back can bracket their
+%           own `stopped` the same way: `rrand` before, `srand` after.
+%   /Tries n  candidate attempts per requested mark, 1..100 (default
+%           20). A mark whose attempts are all rejected is skipped and
+%           the next one is attempted — scatter places *at most*
+%           /Count marks, never more.
+%   /Budget n  hard deposit budget, 0..200000 (default 20000). A
+%           resolved count above it is rejected
+%           (`scatter-count-exceeds-safety-limit`) before anything is
+%           drawn, so a pathological /Density can't run away. Total
+%           work is bounded regardless: at most Count*Tries candidates.
+%
+% The deposit budget bounds *marks*, which is not the same as bounding
+% *work*: testing a candidate against a path region costs one pass
+% over its edges, so a legal `/Count 200000 /Tries 100` over a
+% 20000-edge region would be twenty million candidates at twenty
+% thousand edge tests each, and no amount of deposit budget stops it
+% (Codex review, round 3). Containment work is therefore metered as it
+% is spent, against `scworkmax`, and a call that would grind raises
+% `scatter-containment-work-exceeds-safety-limit` partway rather than
+% running for an hour. Rectangle regions cost a bounds check rather
+% than an edge scan, so they are effectively never charged.
+%
+% After the call, `scplaced` reports how many marks actually landed
+% — deliberately read back rather than returned, since a count left on
+% the operand stack is a leak waiting for a caller who forgets to pop
+% it. During /Mark, `scplaced` is the 1-based index of the mark being
+% drawn. It reads the count out of `ScatterState` rather than being a
+% plain variable, because a plain `def` writes into whatever dict is
+% current: a caller who wraps the call in the ordinary `N dict begin
+% ... end` — which is exactly what a `grid` or `truchet` stamp does —
+% would get the count written into their scratch dict and thrown away
+% with it (Codex review, round 3). `ScatterState` follows
+% `TurtleState`'s precedent above. The count a scatter publishes there
+% is its own even when scatters nest: the running total is a local,
+% republished on each placement, so a nested call can't reset the
+% enclosing one's count or renumber its marks (Codex review, round 4).
+% The one gap, and it is the caller's own timing: reading `scplaced`
+% inside a /Mark *after* that mark has itself run a nested scatter
+% reports the nested call's total, until the enclosing call places its
+% next mark.
+%
+% Reproducibility: same seed, same options, same picture — the random
+% draws happen in a pinned order, x then y per candidate, then the
+% /Weight roll (only when /Weight is given, and only for candidates
+% that passed the geometry tests), then on acceptance the scale and
+% the angle (each drawn only when its range is non-degenerate). That
+% pinning is within *this* interpreter: Ghostscript's `rand` is a
+% different generator, so a scattered piece renders as a different
+% (equally valid, equally reproducible) arrangement there. gs
+% compatibility here means the file runs, not that it matches
+% pixel for pixel — the same standard the rest of this file's
+% rand-driven procedures hold to. Counts, areas, and rejections do
+% agree exactly — with one exception, and it isn't `rand`'s doing:
+% gs flattens curves to its own chord count (232 where this
+% interpreter produces 304, for the same ridge at the same scale),
+% so a *curved* region's /Area, and therefore any count /Density
+% resolves from it, differ a little between the two. A straight-edged
+% region agrees exactly.
+%
+% /MinSpacing is enforced through a sparse hash grid (one dict entry
+% per placed mark, cell size MinSpacing/1.5 so a cell's diagonal stays
+% under MinSpacing and can hold at most one mark), so each candidate
+% checks a fixed 5x5 cell neighborhood instead of every mark placed so
+% far. Memory tracks the number of marks, not the region's size.
+%
+% Scratch prefixes: sc- (scatter and its helpers), sq- (screct/scpath/
+% scarea capture), si- (scin's containment test) — three distinct
+% prefixes on purpose, since a /Weight proc calling `scin` runs in the
+% middle of scatter's own loop. A /Mark or /Weight proc that calls
+% `scatter` again is the gasket/carpet nesting case: the library stays
+% unwrapped, so wrap the nested call in your own dict if you need it.
+
+/scisnum { type dup /integertype eq exch /realtype eq or } def % v -> bool
+
+% opts key default scgetdef -> value
+% artkit's own copy of the wrap-the-default-in-an-array trick (see
+% pagekit's pggetdef / paintkit's pkgetdef for the same reasoning): a
+% name bound directly to a procedure auto-executes on bare reference,
+% so the default is read back out of a 1-element array instead.
+/scgetdef {                                      % dict key default -> value
+    /scgdd exch 1 array astore def
+    /scgdk exch def
+    /scgdt exch def
+    scgdt scgdk known { scgdt scgdk get } { scgdd 0 get } ifelse
+} def
+
+% rate scodds -> bool
+% Clamped probability roll: certain at rate >= 1, impossible at
+% rate <= 0. frnd can land on exactly 1.0, which a bare `frnd rate lt`
+% would turn into "never" even for a documented-certain rate of 1
+% (the seed-5659 finding paintkit's pkdry records).
+/scodds {
+    dup 1 ge
+        { pop true }
+        { dup 0 le { pop false } { frnd exch lt } ifelse }
+    ifelse
+} def
+
+/sccallable {                                    % v -> bool
+% Executable *and* actually runs something when invoked. A bare
+% `xcheck` isn't enough: `3 cvx` is executable, and calling it merely
+% pushes 3 -- so an accepted `/Mark 3 cvx` would report placements
+% while leaking five operands per mark instead of drawing one. Nor is
+% "executable name" enough on its own: `/M 3 def` then `/Mark /M cvx`
+% leaks the same way, and an *undefined* executable name would fail
+% only mid-placement, after the seed and the random stream had already
+% moved. So a name is resolved -- through a chain of names if that is
+% how it was bound -- and its target checked, with a depth cap so a
+% name bound to itself is refused rather than looping.
+%
+% Three callable types, not one: a procedure, a *packed* procedure
+% (Ghostscript packs literal procedures under `true setpacking`, where
+% this interpreter leaves them plain -- so requiring `arraytype` alone
+% would reject an ordinary `{ ... }` callback there; paintkit hit the
+% same thing, see its own `packedarraytype` checks), and an operator.
+% The candidate travels in a one-element array throughout, since
+% binding a procedure to a name would execute it on the next bare
+% reference -- pkgetdef's trap, same trick.
+% (Codex review, rounds 6-8.)
+    1 array astore /sccbox exch def
+    /sccn 0 def
+    {
+        sccbox 0 get xcheck not { false exit } if
+        sccbox 0 get type /arraytype eq
+        sccbox 0 get type /packedarraytype eq or
+        sccbox 0 get type /operatortype eq or
+            { true exit } if
+        sccbox 0 get type /nametype ne { false exit } if
+        /sccn sccn 1 add def
+        sccn 32 gt { false exit } if
+        sccbox 0 get where
+            { sccbox 0 get get 1 array astore /sccbox exch def }
+            { false exit }
+        ifelse
+    } loop
+} def
+
+/scokrange {                                     % v -> bool  ([lo hi]?)
+    dup type /arraytype ne
+        { pop false }
+        { dup length 2 ne
+            { pop false }
+            { dup 0 get scisnum exch 1 get scisnum and }
+          ifelse }
+    ifelse
+} def
+
+% --- regions ---------------------------------------------------------
+
+/screct {                                        % x y w h -> region
+    /sqrh exch def /sqrw exch def /sqry exch def /sqrx exch def
+    sqrx scisnum sqry scisnum and
+    sqrw scisnum and sqrh scisnum and not { screct-needs-four-numbers } if
+    sqrw 0 le sqrh 0 le or { screct-width-and-height-must-be-positive } if
+    << /Kind /rect
+       /BBox [ sqrx sqry sqrx sqrw add sqry sqrh add ]
+       /Area sqrw sqrh mul >>
+} def
+
+/sqpcollinear {                                  % x y -
+% Track whether every point of the current subpath lies on one line:
+% the line through its first point in the direction of the first point
+% that differs from it. A single point off that line settles it for
+% the whole subpath.
+    /sqcy2 exch def /sqcx2 exch def
+    sqpcol {
+        /sqcdx sqcx2 sqsx sub def
+        /sqcdy sqcy2 sqsy sub def
+        sqpdx 0 eq sqpdy 0 eq and {
+            /sqpdx sqcdx def
+            /sqpdy sqcdy def
+        } {
+            % The tolerance is a few ulps of the two products the
+            % cross product subtracts, not a fraction of the
+            % subpath's own extent: an extent-relative epsilon would
+            % call a genuinely triangular 100-by-1e-11 sliver
+            % collinear, empty its bbox, and pile every mark on the
+            % origin (Codex review, round 8). And "a few ulps" means
+            % a few: a double carries about 2.2e-16 of relative error,
+            % so 1e-15 is roughly four of them -- enough to absorb the
+            % rounding in two products and their difference, and no
+            % more. A looser 1e-14 was still a thousand times larger
+            % than the error it forgives, and dropped a real triangle
+            % whose vertices sit around 1e8 (round 10).
+            /sqcp1 sqcdx sqpdy mul def
+            /sqcp2 sqcdy sqpdx mul def
+            sqcp1 sqcp2 sub abs
+            sqcp1 abs sqcp2 abs add 1e-15 mul
+            gt { /sqpcol false def } if
+        } ifelse
+    } if
+} def
+
+/sqbounds {                                      % x y -
+% Grow the *current subpath's* box. It reaches the region's own bbox
+% only if that subpath turns out to be able to enclose something --
+% see sqpmerge.
+    /sqby exch def /sqbx exch def
+    sqpfirst {
+        /sqpx0 sqbx def /sqpx1 sqbx def
+        /sqpy0 sqby def /sqpy1 sqby def
+        /sqpfirst false def
+    } {
+        sqbx sqpx0 lt { /sqpx0 sqbx def } if
+        sqbx sqpx1 gt { /sqpx1 sqbx def } if
+        sqby sqpy0 lt { /sqpy0 sqby def } if
+        sqby sqpy1 gt { /sqpy1 sqby def } if
+    } ifelse
+} def
+
+/sqpmerge {                                      % -
+% Fold the finished subpath's box into the region's, but only if that
+% subpath could contribute to a fill at all. Two exclusions, both
+% provable rather than heuristic: fewer than three edges cannot
+% enclose anything (two edges is always an out-and-back retrace, since
+% the second is the implicit close returning along the first), and
+% neither can a subpath whose points are all on one straight line,
+% however many edges it has. Without them a remote subpath that
+% `fill` paints nothing for -- `1e6 1e6 moveto 1e6+100 1e6 lineto`, or
+% a collinear diagonal of three points -- would stretch the region
+% across a million units and leave a seeded 100-mark scatter placing
+% none of them (Codex review, rounds 5-7). Collinearity is the right
+% test rather than a degenerate bounding box: it catches the diagonal
+% case a zero-width/height check misses, and it keeps a bow tie, whose
+% signed area cancels to nothing but which `fill` paints in full.
+    sqpfirst not
+    sqpn 3 ge and
+    sqpcol not and {
+        sqfirst {
+            /sqbx0 sqpx0 def /sqbx1 sqpx1 def
+            /sqby0 sqpy0 def /sqby1 sqpy1 def
+            /sqfirst false def
+        } {
+            sqpx0 sqbx0 lt { /sqbx0 sqpx0 def } if
+            sqpx1 sqbx1 gt { /sqbx1 sqpx1 def } if
+            sqpy0 sqby0 lt { /sqby0 sqpy0 def } if
+            sqpy1 sqby1 gt { /sqby1 sqpy1 def } if
+        } ifelse
+    } {
+        % Rejected: take its edges back out of the buffer too, not just
+        % its corner out of the bbox. An out-and-back pair *should*
+        % cancel -- both crossings land on the same x at every height --
+        % but only exactly, and at a coordinate like 1e9 the two
+        % computed crossings differ in their last bits, leaving a hair
+        % of width across an enormous span: a 10x10 square plus
+        % `0 0 moveto 1e9 1e9 lineto` measured 159.6 instead of 100
+        % (Codex review, round 9). Dropping the edges makes /Edges mean
+        % exactly what it should -- the segments that can affect the
+        % fill -- so `scin` and the edge ceiling agree with `scarea`.
+        /sqn sqpstart def
+    } ifelse
+} def
+
+/sqemit {                                        % x0 y0 x1 y1 -
+% Append one edge to the growable flat edge buffer. PostScript arrays
+% are fixed-size, so growth is a doubling copy; the 20000-edge ceiling
+% (80000 numbers) bounds both the buffer and scin's per-point cost,
+% which is linear in the edge count.
+    /sqe3 exch def /sqe2 exch def /sqe1 exch def /sqe0 exch def
+    sqn 4 add 80000 gt { scpath-too-many-edges } if
+    sqn 4 add sqcap gt {
+        /sqcap sqcap 2 mul def
+        /sqnew sqcap array def
+        sqnew 0 sqbuf putinterval
+        /sqbuf sqnew def
+    } if
+    sqbuf sqn sqe0 put
+    sqbuf sqn 1 add sqe1 put
+    sqbuf sqn 2 add sqe2 put
+    sqbuf sqn 3 add sqe3 put
+    /sqn sqn 4 add def
+} def
+
+/sqline {                                        % x y -   (segment end)
+    /sqly exch def /sqlx exch def
+    % A lineto after a closepath legitimately starts a fresh subpath
+    % from the closepath's own point (PLRM), so reopen rather than
+    % leaving it unclosable at the end.
+    sqhave not {
+        /sqsx sqcx def /sqsy sqcy def /sqhave true def
+    } if
+    sqcx sqcy sqlx sqly sqemit
+    % Bounds come from *edges*, never from a bare moveto: `fill`
+    % ignores a subpath that never draws, so a stray `1e6 1e6 moveto`
+    % must not stretch the region's bbox around a candidate area a
+    % million times too big and leave scatter placing nothing (Codex
+    % review, round 5). Both endpoints are offered here rather than
+    % only the new one, since the first point of a subpath is a real
+    % vertex exactly once an edge leaves it.
+    sqcx sqcy sqbounds
+    sqlx sqly sqbounds
+    sqlx sqly sqpcollinear
+    /sqpn sqpn 1 add def
+    /sqcx sqlx def /sqcy sqly def
+} def
+
+/sqclose {                                       % -   (closepath)
+% Emitting the closing edge also *ends* the subpath, so `sqhave` goes
+% false: `pathforall` already calls this for an explicit `closepath`,
+% and scpath calls it once more at the end for a subpath left open.
+% Without the flag the second call would append a zero-length
+% duplicate edge for every explicitly closed subpath -- geometrically
+% inert (it can't cross a scanline) but it inflates /Edges and would
+% trip the edge ceiling one edge early (Codex review, PR #119).
+    sqhave {
+        % A closing edge of zero length is no edge at all: it can't
+        % cross a scanline, and emitting one would both inflate /Edges
+        % and (since bounds come from edges) stretch the bbox around a
+        % subpath `fill` ignores entirely -- a bare `moveto` with
+        % nothing after it being exactly that case.
+        sqcx sqsx ne sqcy sqsy ne or { sqsx sqsy sqline } if
+        sqpmerge
+        /sqhave false def
+    } if
+} def
+
+/sqmove {                                        % x y -   (subpath start)
+    /sqmy exch def /sqmx exch def
+    sqclose                                      % close the previous one
+    /sqpstart sqn def
+    /sqpn 0 def
+    /sqpfirst true def
+    /sqpcol true def
+    /sqpdx 0 def /sqpdy 0 def
+    /sqcx sqmx def /sqcy sqmy def
+    /sqsx sqmx def /sqsy sqmy def
+    /sqhave true def
+} def
+
+/scpath {                                        % -> region
+% The current path as a region. Flattens it (the path survives,
+% flattened — alongpath's contract) and closes every subpath
+% implicitly, exactly as `fill` would. A curveto proc is still handed
+% to pathforall even though flattenpath should have removed them all,
+% copying alintern's defensive shape. An empty path yields an empty
+% region: zero area, no edges, and scin false everywhere.
+    /sqcap 256 def
+    /sqbuf sqcap array def
+    /sqn 0 def
+    /sqhave false def
+    /sqfirst true def
+    /sqpfirst true def
+    /sqpstart 0 def
+    /sqpn 0 def
+    /sqpcol true def
+    /sqpdx 0 def /sqpdy 0 def
+    /sqpx0 0 def /sqpy0 0 def /sqpx1 0 def /sqpy1 0 def
+    /sqcx 0 def /sqcy 0 def /sqsx 0 def /sqsy 0 def
+    /sqbx0 0 def /sqby0 0 def /sqbx1 0 def /sqby1 0 def
+    flattenpath
+    { sqmove }
+    { sqline }
+    { pop pop pop pop pop pop }
+    { sqclose }
+    pathforall
+    sqclose                                      % and the last subpath
+    << /Kind /path
+       /BBox [ sqbx0 sqby0 sqbx1 sqby1 ]
+       /Edges sqbuf 0 sqn getinterval
+       /Rule /nonzero >>
+} def
+
+% region -> num
+% A rectangle's area is exact and cached in its /Area; a path region's
+% is *measured*, by integrating the covered width across horizontal
+% scanlines under the region's own /Rule.
+%
+% Measuring rather than deriving is the point. The obvious cheap
+% formula -- the absolute value of the summed signed shoelace terms --
+% does not measure the region `scin` accepts, and a cross-model review
+% of this PR (#119) caught three ways it disagrees: two disjoint
+% same-size contours wound oppositely cancel to zero, nested
+% same-winding contours double-count the interior instead of reporting
+% the outer one, and nothing about it responds to /Rule at all, even
+% though the even-odd reading of a donut is a genuinely different
+% area. Scanline integration gets all of them right by construction:
+% it asks the same containment question `scin` does, just answered a
+% whole row at a time.
+%
+% The slabs are bounded by the geometry itself -- every edge endpoint
+% height, plus every height at which two edges cross -- rather than by
+% a fixed count of evenly spaced samples. That matters three times
+% over. Inside a slab where no edge begins, ends, or crosses another,
+% the span structure is fixed and each span's width is linear in y, so
+% the slab's midpoint times its height is exact: the measurement is
+% exact for any polygon, self-intersecting ones included (a bow tie
+% measures its two triangles, not the zero width at the pinch). No
+% component can fall between samples either: a 1x1000 sliver alongside
+% a 1000x1 one is a region whose two halves live at wildly different
+% vertical scales, and evenly spaced sampling reports half of it while
+% geometry-bounded slabs report both exactly. And nothing here is
+% inferred from samples -- an earlier version subdivided a slab when
+% its midpoint width missed the average of its quarter widths, which a
+% path can be built to defeat by lining those three samples up across
+% a real crossing.
+%
+% Cost is bounded rather than assumed: measurement work is roughly
+% slabs times edges, both of which grow with the path, so a running
+% count is checked against the `sqabudget` ceiling and a region too
+% complex to measure raises `scarea-region-too-complex-to-measure`
+% instead of running for minutes. The ceiling admits paths of roughly
+% 800 flattened edges -- for scale, a seven-letter word set at 72pt
+% and captured with `charpath` is about 330, and this repo's own
+% gallery piece captures a 75-edge ridge. A path that crosses itself
+% many times costs more than its edge count suggests, since every
+% crossing height buys a subdivision. Real regions are nowhere near it (a few hundred
+% flattened edges measures in milliseconds); a region that trips it can
+% carry its own area instead -- `region /Area <num> put` short-circuits
+% the measurement entirely, since a stored /Area always wins -- and
+% `/Count` scatter over such a region needs no area at all.
+/scarea {
+    dup /Area known { /Area get } { sqmeasure } ifelse
+} def
+
+/sqainsert {                                     % y -
+% One slab boundary into the sorted boundary list, coincident ones
+% merged. Merging matters for more than tidiness: many edge pairs can
+% cross at the *same* height -- nine stacked copies of one bow tie
+% have 36 edges and hundreds of pairwise crossings, all at two
+% heights -- and without merging each one claims another array slot
+% until a geometrically trivial region is rejected as too complex
+% (Codex review, round 5). Two boundaries closer together than a
+% billionth of the region's height bound a slab of no consequence
+% anyway.
+    /sqav exch def
+    /sqaj sqanys def
+    {
+        sqaj 0 le { exit } if
+        sqays sqaj 1 sub get sqav le { exit } if
+        /sqaj sqaj 1 sub def
+        /sqawork sqawork 1 add def
+    } loop
+    % Merge only boundaries that coincide to within a few ulps of
+    % *their own* magnitude. An epsilon scaled to the region's bbox
+    % instead would swallow a whole component whose height is smaller
+    % than that: a 1x1e8 sliver beside a 1e10x0.01 one is a real region
+    % of about 2e8 whose short half is a hundredth of a unit tall
+    % (Codex review, round 6). "A few ulps" is literal here too --
+    % 1e-15 against a double's 2.2e-16 -- because a coordinate-relative
+    % epsilon with any real slack in it merges genuinely distinct
+    % boundaries once the geometry sits far from the origin: at
+    % y = 1e10 a 5e-13 factor spans a hundredth of a unit, enough to
+    % collapse a 10-by-0.001 rectangle to nothing (round 10).
+    sqaj 0 gt {
+        /sqaprev sqays sqaj 1 sub get def
+        sqav sqaprev sub abs
+        sqav abs sqaprev abs add 1e-15 mul le
+    } { false } ifelse
+    not {
+        sqanys sqaj gt {
+            sqanys -1 sqaj 1 add {
+                /sqaii exch def
+                sqays sqaii sqays sqaii 1 sub get put
+                /sqawork sqawork 1 add def
+            } for
+        } if
+        sqays sqaj sqav put
+        /sqanys sqanys 1 add def
+    } if
+    sqawork sqabudget gt sqanys sqays length ge or
+        { scarea-region-too-complex-to-measure } if
+} def
+
+/sqscanline {                                    % -> covered width
+% Every edge crossing the horizontal line y = sqasy, insertion-sorted
+% by x with its winding direction alongside (crossing counts stay
+% small -- a few per scanline on real shapes -- so an insertion sort
+% beats anything cleverer here; the pathological case is charged to
+% the work budget rather than paid for with a more elaborate sort).
+% Then one walk left to right, accumulating the width of each span the
+% rule calls inside.
+    /sqawork sqawork sqan add def
+    sqawork sqabudget gt { scarea-region-too-complex-to-measure } if
+    /sqam 0 def
+    0 4 sqaedges length 4 sub {
+        /sqai exch def
+        /sqey0 sqaedges sqai 1 add get def
+        /sqey1 sqaedges sqai 3 add get def
+        sqey0 sqasy le sqey1 sqasy le ne {
+            /sqex0 sqaedges sqai get def
+            /sqex1 sqaedges sqai 2 add get def
+            /sqat sqasy sqey0 sub sqey1 sqey0 sub div def
+            /sqax sqex0 sqex1 sqex0 sub sqat mul add def
+            /sqad sqey1 sqey0 gt { 1 } { -1 } ifelse def
+            /sqaj sqam def
+            {
+                sqaj 0 le { exit } if
+                sqaxs sqaj 1 sub get sqax le { exit } if
+                sqaxs sqaj sqaxs sqaj 1 sub get put
+                sqads sqaj sqads sqaj 1 sub get put
+                /sqaj sqaj 1 sub def
+                /sqawork sqawork 1 add def
+            } loop
+            sqaxs sqaj sqax put
+            sqads sqaj sqad put
+            /sqam sqam 1 add def
+            sqawork sqabudget gt
+                { scarea-region-too-complex-to-measure } if
+        } if
+    } for
+    /sqacov 0 def
+    /sqaw 0 def
+    /sqac 0 def
+    0 1 sqam 2 sub {
+        /sqai exch def
+        /sqaw sqaw sqads sqai get add def
+        /sqac sqac 1 add def
+        sqaeo { sqac 2 mod 0 ne } { sqaw 0 ne } ifelse
+            { /sqacov sqacov
+                  sqaxs sqai 1 add get sqaxs sqai get sub add def } if
+    } for
+    sqacov
+} def
+
+% Measurement work units (edge scans and sort shifts), tuned so the
+% ceiling costs about a second in this interpreter rather than the
+% minutes an unbounded measurement of a pathological path would.
+% Measurement work units (edge scans and sort shifts), tuned so the
+% ceiling costs a second or two in this interpreter rather than the
+% minutes an unbounded measurement of a pathological path would.
+/sqabudget 2000000 def
+
+/sqacrossings {                                  % -
+% Every height at which two edges properly cross, added to the slab
+% boundaries alongside the vertex heights. That combination is what
+% makes a plain midpoint exact for *any* polygon: inside a slab where
+% no edge begins, ends, or crosses another, the sorted span structure
+% is fixed and each span's width is linear in y, so midpoint times
+% height integrates it exactly.
+%
+% The previous version instead sniffed for crossings, subdividing a
+% slab when its midpoint width missed the average of its quarter
+% widths. A fourth review round showed why sampling can't be trusted
+% for this: an even-odd region can be built whose three samples line
+% up despite genuine crossings between them, and the measurement then
+% stops early and overstates the area by a third. Finding the
+% crossings is more work up front (every edge pair, charged to the
+% same budget) but it can't be fooled, and it costs *less* than three
+% samples per slab on the ordinary paths that have no crossings at all.
+%
+% Endpoint touches are excluded (strict 0 < t < 1): a shared vertex is
+% already a boundary, and admitting it would add a duplicate.
+    0 4 sqaedges length 8 sub {
+        /sqaci exch def
+        /sqapx sqaedges sqaci get def
+        /sqapy sqaedges sqaci 1 add get def
+        /sqarx sqaedges sqaci 2 add get sqapx sub def
+        /sqary sqaedges sqaci 3 add get sqapy sub def
+        sqaci 4 add 4 sqaedges length 4 sub {
+            /sqacj exch def
+            /sqawork sqawork 1 add def
+            /sqaqx sqaedges sqacj get def
+            /sqaqy sqaedges sqacj 1 add get def
+            /sqaux sqaedges sqacj 2 add get sqaqx sub def
+            /sqauy sqaedges sqacj 3 add get sqaqy sub def
+            /sqaden sqarx sqauy mul sqary sqaux mul sub def
+            sqaden 0 ne {
+                /sqadx sqaqx sqapx sub def
+                /sqady sqaqy sqapy sub def
+                /sqatt sqadx sqauy mul sqady sqaux mul sub sqaden div def
+                /sqauu sqadx sqary mul sqady sqarx mul sub sqaden div def
+                sqatt 0 gt sqatt 1 lt and
+                sqauu 0 gt sqauu 1 lt and and
+                    { sqapy sqary sqatt mul add sqainsert } if
+            } if
+        } for
+        sqawork sqabudget gt { scarea-region-too-complex-to-measure } if
+    } for
+} def
+
+/sqmeasure {                                     % region -> num
+    /sqareg exch def
+    /sqaedges sqareg /Edges get def
+    /sqaeo sqareg /Rule get /evenodd eq def
+    /sqan sqaedges length 4 idiv def
+    sqan 0 eq { 0 } {
+        /sqawork 0 def
+        % Room for both endpoint heights of every edge, plus crossing
+        % heights up to the point where integrating that many slabs
+        % would exhaust the work budget anyway (each slab costs one
+        % pass over the edges), capped so a simple path doesn't
+        % allocate an enormous array it will never fill.
+        /sqays
+            sqan 2 mul
+            sqabudget sqan idiv dup 4096 gt { pop 4096 } if add
+            8 add array def
+        /sqanys 0 def
+        0 4 sqaedges length 4 sub {
+            /sqai exch def
+            sqaedges sqai 1 add get sqainsert
+            sqaedges sqai 3 add get sqainsert
+        } for
+        sqacrossings
+        /sqaxs sqan 1 add array def
+        /sqads sqan 1 add array def
+        /sqatotal 0 def
+        0 1 sqanys 2 sub {
+            /sqak exch def
+            /sqalo sqays sqak get def
+            /sqahi sqays sqak 1 add get def
+            sqahi sqalo gt {
+                /sqasy sqalo sqahi add 2 div def
+                /sqatotal
+                    sqatotal sqscanline sqahi sqalo sub mul add def
+            } if
+        } for
+        sqatotal
+    } ifelse
+} def
+
+/siedge {                                        % index -   (one edge)
+% Half-open crossing test against the ray running +x from (six,siy):
+% an edge counts when exactly one of its endpoints is at or below the
+% ray, which also guarantees siy1 != siy0 in the branch that divides.
+    /sii exch def
+    /six0 siedges sii get def
+    /siy0 siedges sii 1 add get def
+    /six1 siedges sii 2 add get def
+    /siy1 siedges sii 3 add get def
+    siy0 siy le siy1 siy le ne {
+        /sit siy siy0 sub siy1 siy0 sub div def
+        six0 six1 six0 sub sit mul add six gt {
+            /sic sic 1 add def
+            siy1 siy0 gt { /siw siw 1 add def } { /siw siw 1 sub def } ifelse
+        } if
+    } if
+} def
+
+/siscan {                                        % -> bool  (path region)
+    /siedges sireg /Edges get def
+    /siw 0 def
+    /sic 0 def
+    0 4 siedges length 4 sub { siedge } for
+    sireg /Rule get /evenodd eq
+        { sic 2 mod 0 ne }
+        { siw 0 ne }
+    ifelse
+} def
+
+/scin {                                          % x y region -> bool
+    /sireg exch def /siy exch def /six exch def
+    /sibb sireg /BBox get def
+    six sibb 0 get lt six sibb 2 get gt or
+    siy sibb 1 get lt or siy sibb 3 get gt or
+        { false }
+        { sireg /Kind get /rect eq { true } { siscan } ifelse }
+    ifelse
+} def
+
+% --- scatter ---------------------------------------------------------
+
+/scfree {                                        % -> bool  (spacing ok?)
+% The 5x5 neighborhood around the candidate's own cell. With cells of
+% MinSpacing/1.5 a mark can only be within MinSpacing of a cell at
+% most 2 away, so this is exact, not an approximation.
+    scmin 0 le { true } {
+        /scgi scpx scbx sub sccell div truncate cvi def
+        /scgj scpy scby sub sccell div truncate cvi def
+        /scfok true def
+        -2 1 2 {
+            /scdi exch def
+            -2 1 2 {
+                /scdj exch def
+                /sckey scgi scdi add 2 add scstride mul
+                       scgj scdj add 2 add add def
+                scgrid sckey known {
+                    /scpt scgrid sckey get def
+                    scpx scpt 0 get sub dup mul
+                    scpy scpt 1 get sub dup mul add
+                    scmin dup mul lt { /scfok false def } if
+                } if
+            } for
+            scfok not { exit } if
+        } for
+        scfok
+    } ifelse
+} def
+
+/scwins {                                        % -> bool  (weight roll)
+    schasw { scpx scpy scwt scodds } { true } ifelse
+} def
+
+/scdeposit {                                     % -   (place one mark)
+    scmin 0 gt {
+        scgrid
+            scpx scbx sub sccell div truncate cvi 2 add scstride mul
+            scpy scby sub sccell div truncate cvi 2 add add
+            [ scpx scpy ]
+        put
+    } if
+    /scsc scslo scshi eq
+        { scslo } { scslo frnd scshi scslo sub mul add } ifelse def
+    /scang scrlo scrhi eq
+        { scrlo } { scrlo frnd scrhi scrlo sub mul add } ifelse def
+    % The running count is a local, published to ScatterState on every
+    % placement: a nested scatter (from inside a /Mark or /Weight,
+    % wrapped in the caller's own dict as this section's nesting note
+    % requires) then gets its own counter rather than resetting this
+    % one, and this call's next placement republishes its own count.
+    /scrun scrun 1 add def
+    ScatterState /placed scrun put
+    scpx scpy scsc scang scmark
+} def
+
+/scatter {                                       % region opts -
+    /scopts exch def
+    /screg exch def
+
+    % Everything is validated before a single mark is drawn, the way
+    % paintkit's presets validate their whole dict up front: a bad
+    % option should fail on the empty page, not halfway through one.
+    scopts type /dicttype ne { scatter-opts-must-be-a-dict } if
+    screg type /dicttype ne { scatter-needs-a-region } if
+    screg /BBox known screg /Kind known and not
+        { scatter-needs-a-region } if
+
+    scopts /Mark known not { scatter-mark-is-required } if
+    /scmark scopts /Mark get def
+    /scmark load sccallable not { scatter-mark-must-be-a-procedure } if
+
+    /schasw scopts /Weight known def
+    schasw {
+        /scwt scopts /Weight get def
+        /scwt load sccallable not
+            { scatter-weight-must-be-a-procedure } if
+    } if
+
+    /scmin scopts /MinSpacing 0 scgetdef def
+    scmin scisnum not { scatter-minspacing-must-be-a-number } if
+    scmin 0 lt { scatter-minspacing-must-be-non-negative } if
+
+    /sctries scopts /Tries 20 scgetdef def
+    sctries scisnum not { scatter-tries-must-be-a-number } if
+    sctries 1 lt sctries 100 gt or { scatter-tries-must-be-1-to-100 } if
+    /sctries sctries truncate cvi def
+
+    /scbudget scopts /Budget 20000 scgetdef def
+    scbudget scisnum not { scatter-budget-must-be-a-number } if
+    scbudget 0 lt scbudget 200000 gt or
+        { scatter-budget-must-be-0-to-200000 } if
+
+    /scsr scopts /Scale [ 1 1 ] scgetdef def
+    scsr scokrange not { scatter-scale-must-be-two-numbers } if
+    /scslo scsr 0 get def
+    /scshi scsr 1 get def
+    scslo scshi gt { scatter-scale-range-must-be-low-then-high } if
+
+    /scrr scopts /Rotate [ 0 0 ] scgetdef def
+    scrr scokrange not { scatter-rotate-must-be-two-numbers } if
+    /scrlo scrr 0 get def
+    /scrhi scrr 1 get def
+    scrlo scrhi gt { scatter-rotate-range-must-be-low-then-high } if
+
+    scopts /Count known scopts /Density known and
+        { scatter-count-and-density-are-mutually-exclusive } if
+    scopts /Density known {
+        /scdens scopts /Density get def
+        scdens scisnum not { scatter-density-must-be-a-number } if
+        scdens 0 lt { scatter-density-must-be-non-negative } if
+        /scregarea screg scarea def
+        scregarea 0 le
+            { scatter-density-needs-a-region-with-positive-area } if
+        /scwant scdens scregarea mul def
+    } {
+        /scwant scopts /Count 120 scgetdef def
+        scwant scisnum not { scatter-count-must-be-a-number } if
+        scwant 0 lt { scatter-count-must-be-non-negative } if
+    } ifelse
+    % Truncate first: the budget is a bound on *marks placed*, and the
+    % count placed is the truncation, so comparing the raw value would
+    % reject a density of 1.5 against a budget of 1 even though it
+    % resolves to one mark (Codex review, round 7). `truncate` before
+    % `cvi` keeps a pathological value a real for the comparison rather
+    % than overflowing an integer conversion.
+    /scwant scwant truncate def
+    scwant scbudget gt { scatter-count-exceeds-safety-limit } if
+    /scwant scwant cvi def
+
+    /scbb screg /BBox get def
+    /scbx scbb 0 get def
+    /scby scbb 1 get def
+    /scbw scbb 2 get scbx sub def
+    /scbh scbb 3 get scby sub def
+
+    scmin 0 gt {
+        /sccell scmin 1.5 div def
+        % A spacing this fine relative to the region isn't a
+        % constraint any more, it's just an enormous key space.
+        scbw sccell div scbh sccell div add 4000000 gt
+            { scatter-minspacing-too-small-for-the-region } if
+        /scstride scbh sccell div truncate cvi 5 add def
+        /scgrid scwant 2 mul 32 add dict def
+    } if
+
+    /scseeded scopts /Seed known def
+    scseeded {
+        /scseed scopts /Seed get def
+        scseed scisnum not { scatter-seed-must-be-a-number } if
+        scseed abs 2147483647 gt { scatter-seed-out-of-range } if
+        /scsaved rrand def
+        scseed cvi srand
+    } if
+
+    % A candidate against a path region costs a pass over its edges;
+    % against a rectangle it costs a bounds check. Charge accordingly.
+    /sccost screg /Kind get /path eq
+        { screg /Edges get length 4 idiv 1 max } { 1 } ifelse def
+    /scwork 0 def
+
+    /scrun 0 def
+    ScatterState /placed 0 put
+    1 1 scwant {
+        pop
+        1 1 sctries {
+            pop
+            /scpx scbx frnd scbw mul add def
+            /scpy scby frnd scbh mul add def
+            /scwork scwork sccost add def
+            scwork scworkmax gt
+                { scatter-containment-work-exceeds-safety-limit } if
+            scpx scpy screg scin {
+                scfree {
+                    scwins { scdeposit exit } if
+                } if
+            } if
+        } for
+    } for
+
+    % Republish at the end: a scatter nested inside this call's last
+    % mark would otherwise leave its own count standing as the result.
+    ScatterState /placed scrun put
+
+    % rrand/srand round-trips exactly in both pscat and Ghostscript
+    % (pinned by hand in both before this was written). Under
+    % `--sweep-seed` the sweep overrides this restore too, which is
+    % the whole point of a sweep.
+    scseeded { scsaved srand } if
+} def
+
+% Containment work units (candidate tests, charged by the region's
+% edge count) a single scatter call may spend before it is stopped --
+% about four seconds' worth in this interpreter, and roughly six times
+% what the heaviest scatter in this repo's own gallery spends. A call
+% that genuinely needs more can raise it: `/scworkmax <n> def`.
+/scworkmax 4000000 def
+
+/ScatterState 4 dict def
+ScatterState /placed 0 put
+/scplaced { ScatterState /placed get } def       % marks placed, read-only
 
 % --- tiling (regular and randomized tessellations) --------------------
 % `grid` above already covers the square case. This section adds one
