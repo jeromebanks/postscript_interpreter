@@ -388,6 +388,110 @@ fn max_samples_rejects_before_drawing_anything() {
     );
 }
 
+// The next three tests are regressions from a Codex review of PR #121
+// (this issue's own PR): all three were real bypasses of the
+// documented safety limits, none caught by the 17 tests above.
+
+#[test]
+fn out_of_range_trim_is_rejected() {
+    // /Trim [-100 0.1] can draw a *negative* trim fraction, which
+    // lengthens a line's span instead of shortening it -- sampling
+    // past what /MaxSamples's pre-flight estimate (bounded on the
+    // assumption /Trim only ever shrinks) accounted for. Validating
+    // the range up front closes that regardless of /MaxSamples.
+    assert_eq!(
+        hatch_err(
+            "<< /BBox [0 0 200 200] /Spacing 20 /Trim [-100 0.1] \
+              /Density { pop pop 1 } >> hatch"
+        ),
+        "hatch-trim-must-be-ordered-fractions-in-0-1"
+    );
+    assert_eq!(
+        hatch_err("<< /BBox [0 0 200 200] /Spacing 20 /Trim [0.6 0.4] >> hatch"),
+        "hatch-trim-must-be-ordered-fractions-in-0-1",
+        "inverted range (lo > hi)"
+    );
+}
+
+#[test]
+fn mutating_the_angles_array_mid_call_does_not_bypass_max_lines() {
+    // The exact shape a Codex review found: /Angles pointing at a
+    // caller-owned array, mutated by a /Density callback (called
+    // mid-drawing-pass) *after* the pre-flight budget was computed
+    // from the array's original contents but *before* the mutated
+    // angle would be swept -- with the static [0 45] equivalent
+    // rejected by /MaxLines but the live-array version silently
+    // sweeping the mutated 45 anyway, unbudgeted. `hatch` now takes a
+    // private copy of /Angles up front, so the fix's observable
+    // property is that the mutation has *no effect at all*: the call
+    // succeeds (the un-mutated [0 0] budget was always within
+    // /MaxLines) and draws pixel-identically to a plain, static
+    // `/Angles [0 0]` call -- not the [0 45] cross-hatch a successful
+    // mutation would have produced.
+    let mut mutated = with_lib(100, 100);
+    run(
+        &mut mutated,
+        "0 0 0 setrgbcolor 1 setlinecap \
+         /A [0 0] def \
+         newpath 0 0 moveto 1000 0 lineto 1000 100 lineto 0 100 lineto closepath clip \
+         << /BBox [0 0 1000 100] /Angles A /Spacing 60 /MaxLines 5 \
+            /Density { A 1 45 put pop pop 1 } >> hatch",
+    );
+    let mut baseline = with_lib(100, 100);
+    run(
+        &mut baseline,
+        "0 0 0 setrgbcolor 1 setlinecap \
+         newpath 0 0 moveto 1000 0 lineto 1000 100 lineto 0 100 lineto closepath clip \
+         << /BBox [0 0 1000 100] /Angles [0 0] /Spacing 60 /MaxLines 5 \
+            /Density { pop pop 1 } >> hatch",
+    );
+    assert_eq!(
+        mutated.gfx().pixmap.data(),
+        baseline.gfx().pixmap.data(),
+        "mutating the caller's own /Angles array mid-call should have no effect on what's drawn"
+    );
+
+    // And the static equivalent of the *intended* bypass ([0 45], the
+    // value the mutation tried to smuggle in) is still correctly
+    // rejected -- confirming this isn't passing merely because
+    // /MaxLines 5 is too loose to ever fire for this /BBox/Spacing.
+    let err = hatch_err(
+        "newpath 0 0 moveto 1000 0 lineto 1000 100 lineto 0 100 lineto closepath clip \
+         << /BBox [0 0 1000 100] /Angles [0 45] /Spacing 60 /MaxLines 5 >> hatch",
+    );
+    assert_eq!(err, "hatch-line-count-exceeds-safety-limit");
+}
+
+#[test]
+fn thin_axis_aligned_region_still_draws() {
+    // A region thinner than /Spacing, at a plain axis-aligned angle,
+    // used to compute its sweep normal via an independent
+    // cos/sin(angle+90) trig call rather than deriving it from the
+    // already-computed direction vector -- two separate floating-point
+    // trig evaluations are not guaranteed exactly orthogonal, and for
+    // a thin-enough box that sub-ulp slack placed the sole candidate
+    // offset just outside the box's true projection, so hkclipseg
+    // rejected it and the pass silently drew nothing.
+    // A 1-unit-tall region only gets one hairline-thin stroke, whose
+    // anti-aliased coverage per pixel can land right at (this build's
+    // observed value: exactly 128) the ink_count threshold other
+    // tests use -- so check for *any* deviation from pure white
+    // instead of a "dark enough" threshold; the property under test
+    // is whether hkclipseg accepted the candidate at all, not how
+    // dark the resulting stroke looks.
+    let mut it = with_lib(100, 100);
+    run(
+        &mut it,
+        "0 0 0 setrgbcolor 1 setlinecap \
+         << /BBox [0 0 100 1] /Angle 0 /Spacing 6 >> hatch",
+    );
+    let any_ink = it.gfx().pixmap.pixels().iter().any(|p| p.red() < 255);
+    assert!(
+        any_ink,
+        "a thin axis-aligned region should still get at least one stroke"
+    );
+}
+
 #[test]
 fn ghostscript_accepts_the_hatching_specimen_sheet() {
     // The acceptance criterion itself -- the specimen page runs

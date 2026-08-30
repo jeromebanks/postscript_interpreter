@@ -80,14 +80,18 @@
 %           first, before any other roll for that line, so a kept
 %           line's later rolls (/Wobble, /Trim, /Width) happen in the
 %           same relative order whether or not /Dropout is in play.
-%   /Trim [lo hi]  fraction, in [0,1], of a drawn line's own
-%           *in-region* length (the part `hatch` actually clips into
-%           the BBox — not the full sweep) to shorten it by, split at a
-%           second random point between the two ends. Only rolled when
-%           the range's high end is > 0, two rolls (the fraction, then
-%           the front/back split) — the "length variation" that keeps
-%           hatch strokes from all reaching the region's edge in
-%           lockstep. Default [0 0], off.
+%   /Trim [lo hi]  fraction, in [0,1] with lo <= hi (validated —
+%           `hatch-trim-must-be-ordered-fractions-in-0-1` otherwise,
+%           since an out-of-range or inverted pair could draw a
+%           *negative* fraction and lengthen a line instead of
+%           shortening it), of a drawn line's own *in-region* length
+%           (the part `hatch` actually clips into the BBox — not the
+%           full sweep) to shorten it by, split at a second random
+%           point between the two ends. Only rolled when the range's
+%           high end is > 0, two rolls (the fraction, then the front/
+%           back split) — the "length variation" that keeps hatch
+%           strokes from all reaching the region's edge in lockstep.
+%           Default [0 0], off.
 %   /Density {x y -> d}  optional per-sample tone callback, called with
 %           a point along each line (in the same user-space coordinates
 %           as /BBox). MUST consume both operands and leave exactly one
@@ -306,6 +310,15 @@
     { [ hopts /Angle 45 hkgetdef ] }
   ifelse
   /hangles exch def
+  % A private copy, not the caller's own array reference: /Angles is
+  % read twice (the pre-flight budget below, then the drawing pass),
+  % and a /Density callback runs in between, mid-drawing-pass, with
+  % nothing stopping it from mutating a caller-owned array in place.
+  % Without this copy, a later angle's value could change after the
+  % budget was computed from its original value but before that angle
+  % is actually swept -- silently drawing more (or different) geometry
+  % than /MaxLines ever saw and approved (Codex review, PR #121).
+  hangles hangles length array copy /hangles exch def
 
   hopts /Width 1 hkgetdef /hwidthopt exch def
   hwidthopt type /arraytype eq
@@ -326,6 +339,15 @@
   hopts /Trim [ 0 0 ] hkgetdef /htrimopt exch def
   /htrimlo htrimopt 0 get def
   /htrimhi htrimopt 1 get def
+  % Trim's fraction is only ever supposed to *shrink* a line's own
+  % in-box span, never grow it -- an out-of-[0,1] or inverted range
+  % (e.g. /Trim [-100 0.1]) can draw a negative fraction, which
+  % lengthens the span instead, sampling well past what /MaxSamples's
+  % pre-flight estimate (bounded on the assumption Trim only shrinks)
+  % ever accounted for (Codex review, PR #121).
+  htrimlo 0 lt htrimlo 1 gt or htrimhi 0 lt or htrimhi 1 gt or htrimlo htrimhi gt or
+    { hatch-trim-must-be-ordered-fractions-in-0-1 }
+  if
 
   % Wrapped in a 1-element array, the same trick hkgetdef uses for its
   % default: a name bound directly to a procedure auto-executes on
@@ -348,9 +370,21 @@
   /htotalsamples 0 def
   hangles {
     /hang exch def
-    hang 90 add cos /hnx exch def
-    hang 90 add sin /hny exch def
-    hang cos abs hbw mul hang sin abs hbh mul add /hmaxseg exch def
+    hang cos /hdx exch def
+    hang sin /hdy exch def
+    % Derived algebraically from hdx/hdy (a +90-degree rotation is
+    % exactly (-dy, dx)), not via an independent cos/sin(angle+90)
+    % call: two separate trig evaluations of a different input angle
+    % are not guaranteed exactly orthogonal in floating point, and for
+    % a region thinner than /Spacing that sub-ulp slack can be enough
+    % to place the sole candidate offset just outside the box's true
+    % projection, so hkclipseg rejects it and the pass silently draws
+    % nothing (Codex review, PR #121). Must match the drawing loop's
+    % own derivation below exactly, or the two loops' /MaxLines counts
+    % and actual candidate offsets could disagree.
+    hdy neg /hnx exch def
+    hdx /hny exch def
+    hdx abs hbw mul hdy abs hbh mul add /hmaxseg exch def
     hkmmreset
     hbx0 hnx mul hby0 hny mul add hkmmfeed
     hbx1 hnx mul hby0 hny mul add hkmmfeed
@@ -383,8 +417,10 @@
     /hang exch def
     hang cos /hdx exch def
     hang sin /hdy exch def
-    hang 90 add cos /hnx exch def
-    hang 90 add sin /hny exch def
+    % Same algebraic derivation as the pre-flight loop above, and for
+    % the same reason -- must agree with it exactly.
+    hdy neg /hnx exch def
+    hdx /hny exch def
     /hcproj hcx hnx mul hcy hny mul add def
     hkmmreset
     hbx0 hnx mul hby0 hny mul add hcproj sub hkmmfeed

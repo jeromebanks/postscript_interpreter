@@ -133,6 +133,44 @@ same review also caught `/Dropout`'s roll firing unconditionally even
 at `/Dropout 0` — unlike `/Wobble`/`/Trim`, which were already guarded
 — silently consuming a random draw from the caller's ambient stream on
 every plain `hatch` call with no `/Seed`; now guarded the same way.
+
+**A Codex review of the PR (this issue's own #121) found three more —
+real bypasses of the documented safety limits, none caught by the 20
+tests above at the time.** (1) `/Trim`'s two fractions were never
+validated: an out-of-range or inverted pair (`/Trim [-100 0.1]`) could
+sample a *negative* trim fraction, which lengthens a line's span
+instead of shortening it — sampling well past what `/MaxSamples`'s
+pre-flight estimate ever accounted for, since that estimate is only
+sound on the assumption Trim can shrink a span, never grow it. Now
+validated up front (`hatch-trim-must-be-ordered-fractions-in-0-1`),
+closing the gap regardless of `/MaxSamples`. (2) `/Angles` read the
+caller's own array by reference, not a copy, and was read *twice* —
+once by the pre-flight budget, once by the drawing pass — with a
+`/Density` callback (caller-supplied code, called in between, mid-
+drawing-pass) able to mutate a not-yet-swept angle after the budget
+was already computed from its original value: a static `/Angles
+[0 45]` call correctly rejects against a tight `/MaxLines`, but the
+equivalent live-array version — start at `[0 0]` (budgeted low),
+mutate the second entry to `45` from inside `/Density` before that
+pass draws — silently swept the un-budgeted 45 anyway. Fixed by taking
+a private array copy immediately after reading `/Angles`, before the
+budget is computed, so nothing the caller's own code does afterward
+can change what gets swept or how it was budgeted. (3) The sweep
+normal was computed independently via `cos`/`sin(angle+90)` rather
+than derived from the already-computed direction vector — two separate
+floating-point trig evaluations of *different* input angles are not
+guaranteed exactly orthogonal, and for a region thinner than
+`/Spacing` at a plain axis-aligned angle, that sub-ulp slack could
+place the sole candidate offset just outside the box's true
+projection, so `hkclipseg` rejected it and the pass silently drew
+nothing. Fixed by deriving the normal algebraically as `(-hdy, hdx)`
+in both the pre-flight and drawing loops, which is exact relative to
+the already-computed `(hdx, hdy)` regardless of floating-point trig
+rounding. All three now have regression tests in `tests/hatchkit.rs`;
+fixing (1)'s validation itself needed a second pass after a
+self-introduced bug (a boolean `or` chain missing one combinator for
+five terms, caught immediately by testing the expression standalone
+rather than trusting it against the fix).
 Deliberately cut, and recorded rather than silently skipped: no
 gallery piece or site/playground entry — the issue's own acceptance
 criteria ask for a "specimen page," not a gallery piece, and
