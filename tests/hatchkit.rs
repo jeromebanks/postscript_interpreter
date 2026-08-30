@@ -492,6 +492,70 @@ fn thin_axis_aligned_region_still_draws() {
     );
 }
 
+// The next two tests are round-2 regressions from a second Codex
+// review of PR #121, after the first round's three fixes landed:
+// `hstep`/`hspacing`/`htrimlo`/`htrimhi` were internal working state
+// that gates a loop bound, but weren't actually `hk`-prefixed despite
+// the library's own docs claiming that was the reserved contract --
+// so a /Density callback (documented as forbidden from touching any
+// `h`-prefixed name, but a caller relying on the *narrower*, actually
+// enforced-by-naming "hk-" claim would reasonably believe otherwise)
+// could clobber one and change a *later* line or angle's own budgeted
+// work, bypassing /MaxLines or /MaxSamples for the rest of the call.
+// Renamed to `hkspacing`/`hkstep`/`hktrimlo`/`hktrimhi` so the
+// existing "don't touch hk- names" contract actually covers them.
+
+#[test]
+fn clobbering_hstep_from_density_does_not_change_the_real_sampling_step() {
+    // `hkstep` (the real internal name after the fix) is still
+    // documented as off-limits and a caller redefining it is still
+    // undefined behavior -- but a caller touching the *unprefixed*
+    // `hstep` name specifically (a name the pre-fix docs' "hk-"
+    // contract never actually covered) must have no effect at all,
+    // since it no longer aliases anything hatch reads.
+    let mut it = with_lib(60, 60);
+    it.run_str(
+        "/n 0 def \
+         << /BBox [0 0 50 50] /Angle 0 /Spacing 25 /MaxSamples 15 \
+            /Density { /hstep 0.1 def /n n 1 add def pop pop 1 } >> hatch \
+         n",
+    )
+    .unwrap_or_else(|e| panic!("hatch failed: {}", it.error_report(&e)));
+    let stack = it.operand_stack();
+    let n: i64 = stack
+        .last()
+        .expect("n left on the stack")
+        .repr()
+        .parse()
+        .expect("n should be an integer");
+    assert_eq!(
+        n, 15,
+        "redefining the unprefixed /hstep should not change the real budgeted sample count"
+    );
+}
+
+#[test]
+fn clobbering_trim_bounds_from_density_does_not_bypass_max_samples() {
+    // Same shape as the /Trim input-validation test above, but via
+    // global corruption mid-call rather than malformed initial input
+    // -- /Trim's own validation only runs once, so if the bound
+    // variables it validated aren't the same ones later code reads,
+    // a /Density callback can reintroduce exactly the negative-trim
+    // span-growth bug the validation was meant to close.
+    // A plain successful `run()` (which also asserts an empty operand
+    // stack afterward) is the assertion here: clobbering the
+    // unprefixed names must have no effect, so this must behave
+    // exactly like the equivalent call with no /Density at all --
+    // not error, and not silently sample far more than /MaxSamples.
+    let mut it = with_lib(60, 60);
+    run(
+        &mut it,
+        "0 0 0 setrgbcolor 1 setlinecap \
+         << /BBox [0 0 50 50] /Angle 0 /Spacing 25 /MaxSamples 15 \
+            /Density { /htrimhi 999 def /htrimlo -999 def pop pop 1 } >> hatch",
+    );
+}
+
 #[test]
 fn ghostscript_accepts_the_hatching_specimen_sheet() {
     // The acceptance criterion itself -- the specimen page runs

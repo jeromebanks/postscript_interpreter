@@ -171,6 +171,39 @@ fixing (1)'s validation itself needed a second pass after a
 self-introduced bug (a boolean `or` chain missing one combinator for
 five terms, caught immediately by testing the expression standalone
 rather than trusting it against the fix).
+
+**A second Codex review of the updated diff found two more, both the
+same underlying shape.** `hspacing`/`hstep`/`htrimlo`/`htrimhi` were
+internal working state that gates a loop bound — the exact kind of
+name the file's own docs claimed was protected by the `hk-` scratch
+prefix — but were never actually `hk`-prefixed. A `/Density` callback
+redefining the *unprefixed* `/hstep` mid-call (`/hstep 0.1 def`, well
+outside the documented `[0.25, spacing/2]` range) reads back in a
+later line's own sampling loop, since each line constructs its `for`
+loop fresh rather than capturing the value once — one 50×50 `/BBox`,
+`/MaxSamples 15` reproduction ran the callback 1005 times, not 15.
+`/Trim`'s validated bounds had the identical exposure for the same
+reason: the validation only runs once, so corrupting the same-named
+variables it validated reintroduces the negative-span-growth bug
+issue #49's *first* Codex round already closed for malformed *input*.
+Fixed by renaming all four to `hkspacing`/`hkstep`/`hktrimlo`/
+`hktrimhi`, which brings them under the contract the docs already
+state (and were, in every other name's case, already accurate about)
+— not a new mechanism, just closing a gap between what the docs
+claimed and what the code actually named. Every *other* `h`-prefixed
+working-state name (geometry, width, tone) only affects rendering
+correctness if corrupted, not how much work gets done, so left as-is;
+`hatchkit.ps`'s "Scratch prefix" section now says this explicitly
+rather than the earlier, inaccurate blanket "hk- throughout" claim.
+The same review's second finding — `/Wobble`, `/Dropout`, and
+`/DensityThreshold` silently accepting out-of-contract values (a
+negative `/DensityThreshold` making even a density-0 sample count as
+ink, the exact `le`-at-threshold behavior the design notes above
+specifically call out getting right for the *documented* range) —
+got the same validate-up-front treatment `/Spacing`/`/Trim` already
+had. Both rounds' fixes are covered by dedicated regression tests
+(`tests/hatchkit.rs`) that reproduce the exact clobber/malformed-input
+shape a docs-only reading wouldn't have caught.
 Deliberately cut, and recorded rather than silently skipped: no
 gallery piece or site/playground entry — the issue's own acceptance
 criteria ask for a "specimen page," not a gallery piece, and

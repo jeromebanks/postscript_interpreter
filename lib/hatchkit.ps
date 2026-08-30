@@ -66,15 +66,19 @@
 %           /Width number vs. range changes how many rolls a line
 %           consumes, which matters for reproducing an exact seeded
 %           arrangement. Default 1.
-%   /Wobble num >= 0  maximum random perpendicular offset applied to
-%           each line's position, drawn uniformly from
-%           [-Wobble, Wobble] (default 0, off — an /Wobble of 0
-%           consumes no roll at all, same reproducibility note as
-%           /Width). This is what keeps a hatch from reading as a
-%           mechanically perfect grid; it does not bend a line's
-%           course mid-stroke — for a genuinely shaky hand-drawn
-%           stroke, layer `lib/paintkit.ps`'s ribbon strokes instead.
-%   /Dropout num in [0,1]  probability a given candidate line is
+%   /Wobble num >= 0 (validated —
+%           `hatch-wobble-must-not-be-negative` otherwise)  maximum
+%           random perpendicular offset applied to each line's
+%           position, drawn uniformly from [-Wobble, Wobble] (default
+%           0, off — an /Wobble of 0 consumes no roll at all, same
+%           reproducibility note as /Width). This is what keeps a
+%           hatch from reading as a mechanically perfect grid; it does
+%           not bend a line's course mid-stroke — for a genuinely
+%           shaky hand-drawn stroke, layer `lib/paintkit.ps`'s ribbon
+%           strokes instead.
+%   /Dropout num in [0,1] (validated —
+%           `hatch-dropout-must-be-a-fraction-in-0-1` otherwise)
+%           probability a given candidate line is
 %           skipped entirely (default 0, off — like /Wobble and
 %           /Trim, a /Dropout of 0 consumes no roll at all). Rolled
 %           first, before any other roll for that line, so a kept
@@ -111,7 +115,10 @@
 %           <= /DensityThreshold draws no ink for that run at all —
 %           this is what lets a density field carve a shape's lit side
 %           out of the hatching entirely, not just thin it.
-%   /DensityThreshold num in [0,1]  see /Density (default 0).
+%   /DensityThreshold num in [0,1] (validated —
+%           `hatch-density-threshold-must-be-a-fraction-in-0-1`
+%           otherwise, since e.g. -1 would make even a density of 0
+%           count as ink)  see /Density (default 0).
 %   /Seed n  seeds the sweep with `n srand`, restoring the caller's own
 %           random stream afterward via `rrand` — the same convention
 %           `lib/artkit.ps`'s `scatter` documents, including the same
@@ -150,19 +157,31 @@
 % (this operator never flattens curves) is otherwise identical between
 % the two.
 %
-% Scratch prefix: hk- throughout (internal helpers and `hatch`'s own
-% working state alike) — a single self-contained file, unlike
-% artkit.ps's multi-section sc-/sq-/si- split, since /Density (the one
+% Scratch prefix: every internal helper and working-state name starts
+% with `h`, one self-contained file rather than artkit.ps's
+% multi-section sc-/sq-/si- split, since /Density (the one
 % caller-supplied proc here) never itself calls back into a public
-% `hatch`- prefixed name the way scatter's /Weight calls `scin`
+% `hatch`-prefixed name the way scatter's /Weight calls `scin`
 % mid-loop, so there is no second scratch prefix to keep separate from
 % the caller's own state. /Density is still called mid-loop, though,
 % with the same two obligations `scatter`'s own /Mark and /Weight
 % procs document: it MUST consume both of its operands (a proc that
 % doesn't leaks two numbers per sample onto the operand stack —
-% `--lint` reports exactly that), and it must not touch any hk-
-% prefixed name, since `hatch` resumes reading its own hk- scratch
-% immediately after the call returns.
+% `--lint` reports exactly that), and it must not touch any `h`-
+% prefixed name, since `hatch` resumes reading its own scratch
+% immediately after the call returns. The `hk`-prefixed subset
+% specifically (internal helper procedures, and the handful of values
+% — `hkspacing`/`hkstep`/`hktrimlo`/`hktrimhi` — that gate a loop
+% bound `/MaxLines` or `/MaxSamples` already approved) is what a
+% caller must never redefine even by accident: a proc that clobbers
+% one of those mid-call can make a *later* line or angle sweep more
+% work than the pre-flight budget ever saw, since each is read fresh
+% at the start of its own loop rather than captured once for the whole
+% call (Codex review, PR #121, round 2 — found by fuzzing exactly this
+% "reserved prefix" contract for a name it didn't actually cover).
+% Every other `h`-prefixed name only affects geometry or tone, not how
+% much work gets done, so corrupting one is merely undefined rendering
+% behavior, not a safety-limit bypass.
 
 % @internal
 /hkfrnd { rand 8192 idiv 262143 and 262143 div } def % -> 0.0..1.0
@@ -300,10 +319,10 @@
   /hcx hbx0 hbx1 add 2 div def
   /hcy hby0 hby1 add 2 div def
 
-  hopts /Spacing 6 hkgetdef /hspacing exch def
-  hspacing 0 le { hatch-spacing-must-be-positive } if
-  /hstep hspacing 0.5 mul def
-  hstep 0.25 lt { /hstep 0.25 def } if
+  hopts /Spacing 6 hkgetdef /hkspacing exch def
+  hkspacing 0 le { hatch-spacing-must-be-positive } if
+  /hkstep hkspacing 0.5 mul def
+  hkstep 0.25 lt { /hkstep 0.25 def } if
 
   hopts /Angles known
     { hopts /Angles get }
@@ -335,17 +354,19 @@
   ifelse
 
   hopts /Wobble 0 hkgetdef /hwobble exch def
+  hwobble 0 lt { hatch-wobble-must-not-be-negative } if
   hopts /Dropout 0 hkgetdef /hdropout exch def
+  hdropout 0 lt hdropout 1 gt or { hatch-dropout-must-be-a-fraction-in-0-1 } if
   hopts /Trim [ 0 0 ] hkgetdef /htrimopt exch def
-  /htrimlo htrimopt 0 get def
-  /htrimhi htrimopt 1 get def
+  /hktrimlo htrimopt 0 get def
+  /hktrimhi htrimopt 1 get def
   % Trim's fraction is only ever supposed to *shrink* a line's own
   % in-box span, never grow it -- an out-of-[0,1] or inverted range
   % (e.g. /Trim [-100 0.1]) can draw a negative fraction, which
   % lengthens the span instead, sampling well past what /MaxSamples's
   % pre-flight estimate (bounded on the assumption Trim only shrinks)
   % ever accounted for (Codex review, PR #121).
-  htrimlo 0 lt htrimlo 1 gt or htrimhi 0 lt or htrimhi 1 gt or htrimlo htrimhi gt or
+  hktrimlo 0 lt hktrimlo 1 gt or hktrimhi 0 lt or hktrimhi 1 gt or hktrimlo hktrimhi gt or
     { hatch-trim-must-be-ordered-fractions-in-0-1 }
   if
 
@@ -360,6 +381,7 @@
     { hdensityopt 0 get xcheck not { hatch-density-must-be-callable } if }
   if
   hopts /DensityThreshold 0 hkgetdef /hdthresh exch def
+  hdthresh 0 lt hdthresh 1 gt or { hatch-density-threshold-must-be-a-fraction-in-0-1 } if
   /hnbuckets 6 def
 
   hopts /MaxLines 20000 hkgetdef /hmaxlines exch def
@@ -390,9 +412,9 @@
     hbx1 hnx mul hby0 hny mul add hkmmfeed
     hbx0 hnx mul hby1 hny mul add hkmmfeed
     hbx1 hnx mul hby1 hny mul add hkmmfeed
-    hkmx hkmn sub hspacing div cvi 1 add /hnlines exch def
+    hkmx hkmn sub hkspacing div cvi 1 add /hnlines exch def
     /htotallines htotallines hnlines add def
-    hmaxseg hstep div cvi 1 add /hsamplesperline exch def
+    hmaxseg hkstep div cvi 1 add /hsamplesperline exch def
     /htotalsamples htotalsamples hnlines hsamplesperline mul add def
   } forall
   htotallines hmaxlines gt { hatch-line-count-exceeds-safety-limit } if
@@ -430,7 +452,7 @@
     /hkmin hkmn def
     /hkmax hkmx def
 
-    hkmin hspacing hkmax {
+    hkmin hkspacing hkmax {
       /hk exch def
       hdropout 0 gt { hkfrnd hdropout lt } { false } ifelse
         {}
@@ -444,9 +466,9 @@
           /hthi exch def
           /htlo exch def
           hhit {
-            htrimhi 0 gt
+            hktrimhi 0 gt
               {
-                hkfrnd htrimhi htrimlo sub mul htrimlo add /htfrac exch def
+                hkfrnd hktrimhi hktrimlo sub mul hktrimlo add /htfrac exch def
                 hkfrnd /htsplit exch def
               }
               {
@@ -477,7 +499,7 @@
                 {
                   /hrunb 0 def
                   /hrunt0 htlo2 def
-                  htlo2 hstep hthi2 {
+                  htlo2 hkstep hthi2 {
                     /ht exch def
                     hcx hnx hkk mul add hdx ht mul add /hsx exch def
                     hcy hny hkk mul add hdy ht mul add /hsy exch def
