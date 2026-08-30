@@ -82,28 +82,27 @@ endpanel
 0.15 0.13 0.1 setrgbcolor
 1 setlinecap
 
-% Every layered call below passes /BBox explicitly rather than relying
-% on the default (the current path's own pathbbox) -- hatch's own
-% strokes end in an implicit newpath (stroke's own PLRM contract), so
-% by the second call in a band the clip rectangle is no longer the
-% current path. See hatchkit.ps's /BBox docs for this exact caveat.
+% Each band's hatch calls all default /BBox from the clip path's own
+% pathbbox -- hatch brackets its own drawing in gsave/grestore, so the
+% clip path survives a call, and a second, layered call over the same
+% region can still rely on the default.
 
 gsave
 newpath 0 0 moveto 80 0 lineto 80 240 lineto 0 240 lineto closepath clip
-<< /BBox [0 0 80 240] /Angle 45 /Spacing 4 /Width 1 /Seed 31 >> hatch
+<< /Angle 45 /Spacing 4 /Width 1 /Seed 31 >> hatch
 grestore
 
 gsave
 newpath 80 0 moveto 160 0 lineto 160 240 lineto 80 240 lineto closepath clip
-<< /BBox [80 0 160 240] /Angle 45 /Spacing 4 /Width 1 /Seed 31 >> hatch
-<< /BBox [80 0 160 240] /Angle 135 /Spacing 4 /Width 1 /Seed 32 >> hatch
+<< /Angle 45 /Spacing 4 /Width 1 /Seed 31 >> hatch
+<< /Angle 135 /Spacing 4 /Width 1 /Seed 32 >> hatch
 grestore
 
 gsave
 newpath 160 0 moveto 240 0 lineto 240 240 lineto 160 240 lineto closepath clip
-<< /BBox [160 0 240 240] /Angle 45 /Spacing 4 /Width 1 /Seed 31 >> hatch
-<< /BBox [160 0 240 240] /Angle 135 /Spacing 4 /Width 1 /Seed 32 >> hatch
-<< /BBox [160 0 240 240] /Angle 0 /Spacing 4 /Width 1 /Seed 33 >> hatch
+<< /Angle 45 /Spacing 4 /Width 1 /Seed 31 >> hatch
+<< /Angle 135 /Spacing 4 /Width 1 /Seed 32 >> hatch
+<< /Angle 0 /Spacing 4 /Width 1 /Seed 33 >> hatch
 grestore
 
 endpanel

@@ -20,6 +20,19 @@ fn with_lib(w: u32, h: u32) -> Interp {
 fn run(it: &mut Interp, src: &str) {
     it.run_str(src)
         .unwrap_or_else(|e| panic!("eval of {src:?} failed: {}", it.error_report(&e)));
+    // `hatch`'s own contract is `opts hatch -`; a leftover operand
+    // here would be exactly the kind of leak (a /Density proc that
+    // doesn't consume both its operands, say) HANDOFF.md records
+    // `--lint` catching in `et-hatch` and `tfdrawline` -- assert it
+    // directly rather than relying on `--lint` being run separately.
+    assert!(
+        it.operand_stack().is_empty(),
+        "{src:?} left {:?} on the operand stack",
+        it.operand_stack()
+            .iter()
+            .map(|o| o.repr())
+            .collect::<Vec<_>>()
+    );
 }
 
 fn ink_count(it: &Interp) -> usize {
@@ -47,6 +60,14 @@ fn hatchkit_loads_without_drawing_anything() {
     let it = with_lib(100, 100);
     assert_eq!(ink_count(&it), 0, "loading hatchkit put ink on the page");
     assert!(!it.gfx().page_shown);
+    assert!(
+        it.operand_stack().is_empty(),
+        "loading hatchkit left {:?} on the operand stack",
+        it.operand_stack()
+            .iter()
+            .map(|o| o.repr())
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -269,6 +290,26 @@ fn density_return_value_is_clamped_not_rejected() {
         ink_count(&low),
         0,
         "a callback returning far below 0 should clamp to no ink, not error"
+    );
+}
+
+#[test]
+fn density_proc_that_leaks_an_operand_is_visible_on_the_stack() {
+    // /Density's contract (the library's own docs) is the same one
+    // scatter's /Mark and /Weight carry: it must consume both of its
+    // operands. A proc that only pops one leaks the other per sample
+    // -- not silently swallowed by `hatch`, which is what makes
+    // `--lint` able to catch it (HANDOFF.md records real leaks of
+    // exactly this shape it found in et-hatch and tfdrawline).
+    let mut it = with_lib(60, 60);
+    it.run_str(
+        "newpath 5 5 moveto 55 5 lineto 55 55 lineto 5 55 lineto closepath clip \
+         << /Angle 15 /Spacing 3 /Seed 2 /Density { pop 0.5 } >> hatch",
+    )
+    .expect("a leaking Density proc should not itself error");
+    assert!(
+        !it.operand_stack().is_empty(),
+        "a Density proc that only pops one operand should leave the other behind"
     );
 }
 

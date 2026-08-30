@@ -87,13 +87,19 @@ mid-stroke jitter; a genuinely shaky hand-drawn stroke stays
 per constant-bucket run along a line — `et-hatch`'s own technique,
 reused for the same reason: stroke count, not sample count, dominates
 render time), `/Seed` (srand + rrand-restore, `scatter`'s convention),
-`/MaxLines`, `/MaxSamples`. A documented caveat worth remembering: a
-*second* layered `hatch` call over the same clip cannot rely on the
-default `/BBox` (`pathbbox` of the current path) — `hatch`'s own
-strokes end with `stroke`'s ordinary implicit `newpath`, so by the
-second call the clip rectangle is no longer the current path,
-regardless of how it was built. `examples/hatching.ps`'s "layered
-cross-hatch" panel passes `/BBox` explicitly for exactly this reason.
+`/MaxLines`, `/MaxSamples`. `hatch` brackets its own drawing pass in
+`gsave`/`grestore` — an advisor review before the PR caught that
+every drawing branch calls `setlinewidth` with no restore, which would
+otherwise silently overwrite the caller's own line width with no way
+back (`et-draw` already brackets its own two `et-hatch` passes this
+way). That fix has a second effect worth stating: it also protects the
+current path, so a *second*, layered `hatch` call over the same clip
+can keep relying on the default `/BBox` (`pathbbox` of the current
+path) — an earlier draft needed every layered call in
+`examples/hatching.ps`'s cross-hatch panel to pass `/BBox` explicitly,
+since `hatch`'s own strokes used to end with `stroke`'s ordinary
+implicit `newpath`, leaving nothing for a second call's default to
+read; that workaround is gone now that the path survives.
 
 **Tag-migrated from the start, not added to `build.rs`'s
 `LEGACY_FILES`.** `lib/paintkit.ps` is still the only *pre-existing*
@@ -116,6 +122,17 @@ clamping an out-of-range return value instead of erroring, `/BBox`
 defaulting to `pathbbox` matching an explicit box pixel-for-pixel, and
 both safety limits rejecting *before* any ink lands — plus the
 `ghostscript_accepts_*` acceptance test every sibling library carries.
+Every `run()` call also asserts an empty operand stack afterward, not
+just a separate `--lint` pass — the same review that caught the
+`setlinewidth` leak flagged that none of the 16 original tests would
+have noticed a `/Density` proc leaking an operand (`--lint`'s own
+issue-#17 history already found two such leaks elsewhere in this
+codebase); `density_proc_that_leaks_an_operand_is_visible_on_the_stack`
+confirms the assertion actually fires rather than just existing. The
+same review also caught `/Dropout`'s roll firing unconditionally even
+at `/Dropout 0` — unlike `/Wobble`/`/Trim`, which were already guarded
+— silently consuming a random draw from the caller's ambient stream on
+every plain `hatch` call with no `/Seed`; now guarded the same way.
 Deliberately cut, and recorded rather than silently skipped: no
 gallery piece or site/playground entry — the issue's own acceptance
 criteria ask for a "specimen page," not a gallery piece, and

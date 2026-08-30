@@ -36,16 +36,14 @@
 %           `hatch` reads it from `pathbbox` — the *current path's*
 %           bounding box — so the usual call shape is
 %           `<path> clip << ... >> hatch` (`clip` does not consume the
-%           current path, so it is still there for `pathbbox` to read).
+%           current path, so it is still there for `pathbbox` to read;
+%           `hatch` itself brackets its own drawing in `gsave`/
+%           `grestore`, so the path survives a call too — a second,
+%           layered `hatch` call over the same clip, the classic
+%           cross-hatch composition, can keep relying on the default).
 %           A caller who clips from a path they no longer hold (built
 %           earlier, or via `clippath` itself) must pass /BBox
-%           explicitly — and so must a *second* layered `hatch` call
-%           over the same clip (the classic cross-hatch composition:
-%           two calls, two angles, one region): `hatch`'s own strokes
-%           end with `stroke`'s ordinary implicit `newpath`, so by the
-%           time a second call would read `pathbbox` the clip
-%           rectangle is no longer the current path, however it was
-%           built. Either way the box only decides how many
+%           explicitly. Either way the box only decides how many
 %           candidate lines get swept and where each one starts and
 %           ends before clipping — the real clip alone decides what
 %           actually inks the page, so a loose /BBox costs a few wasted
@@ -77,11 +75,11 @@
 %           course mid-stroke — for a genuinely shaky hand-drawn
 %           stroke, layer `lib/paintkit.ps`'s ribbon strokes instead.
 %   /Dropout num in [0,1]  probability a given candidate line is
-%           skipped entirely (default 0). Rolled once per candidate
-%           line, before any other roll for that line, regardless of
-%           whether /Wobble or /Width would otherwise roll — so
-%           /Dropout's presence alone does not change how many rolls a
-%           kept line consumes.
+%           skipped entirely (default 0, off — like /Wobble and
+%           /Trim, a /Dropout of 0 consumes no roll at all). Rolled
+%           first, before any other roll for that line, so a kept
+%           line's later rolls (/Wobble, /Trim, /Width) happen in the
+%           same relative order whether or not /Dropout is in play.
 %   /Trim [lo hi]  fraction, in [0,1], of a drawn line's own
 %           *in-region* length (the part `hatch` actually clips into
 %           the BBox — not the full sweep) to shorten it by, split at a
@@ -92,7 +90,10 @@
 %           lockstep. Default [0 0], off.
 %   /Density {x y -> d}  optional per-sample tone callback, called with
 %           a point along each line (in the same user-space coordinates
-%           as /BBox) and expected to leave one number; the result is
+%           as /BBox). MUST consume both operands and leave exactly one
+%           number (a proc that doesn't leaks two per sample — see the
+%           "Scratch prefix" note below) and must not touch any hk-
+%           prefixed name. The result is
 %           clamped into [0,1] regardless of what the proc actually
 %           returns, so a callback that returns something wild changes
 %           the *tone*, never the amount of geometry drawn. When given,
@@ -147,9 +148,17 @@
 %
 % Scratch prefix: hk- throughout (internal helpers and `hatch`'s own
 % working state alike) — a single self-contained file, unlike
-% artkit.ps's multi-section sc-/sq-/si- split, since nothing here calls
-% back into caller-supplied code the way scatter's /Weight calls `scin`
-% mid-loop.
+% artkit.ps's multi-section sc-/sq-/si- split, since /Density (the one
+% caller-supplied proc here) never itself calls back into a public
+% `hatch`- prefixed name the way scatter's /Weight calls `scin`
+% mid-loop, so there is no second scratch prefix to keep separate from
+% the caller's own state. /Density is still called mid-loop, though,
+% with the same two obligations `scatter`'s own /Mark and /Weight
+% procs document: it MUST consume both of its operands (a proc that
+% doesn't leaks two numbers per sample onto the operand stack —
+% `--lint` reports exactly that), and it must not touch any hk-
+% prefixed name, since `hatch` resumes reading its own hk- scratch
+% immediately after the call returns.
 
 % @internal
 /hkfrnd { rand 8192 idiv 262143 and 262143 div } def % -> 0.0..1.0
@@ -360,6 +369,16 @@
   hopts /Seed known /hseeded exch def
   hseeded { /hsaved rrand def hopts /Seed get cvi srand } if
 
+  % gsave/grestore, not just a bare setlinewidth: every drawing branch
+  % below sets its own line width (from /Width or a density bucket),
+  % which would otherwise silently overwrite the caller's own
+  % linewidth with no way back -- gsave/grestore also protects the
+  % current path, which is what lets a second, layered `hatch` call
+  % over the same clip still default /BBox from `pathbbox` (see the
+  % /BBox docs above): without it, the first call's own strokes end
+  % with `stroke`'s ordinary implicit newpath, leaving nothing for a
+  % second call's default to read.
+  gsave
   hangles {
     /hang exch def
     hang cos /hdx exch def
@@ -377,7 +396,7 @@
 
     hkmin hspacing hkmax {
       /hk exch def
-      hkfrnd hdropout lt
+      hdropout 0 gt { hkfrnd hdropout lt } { false } ifelse
         {}
         {
           hwobble 0 gt { hkfrnd 2 mul 1 sub hwobble mul } { 0 } ifelse
@@ -468,6 +487,7 @@
       ifelse
     } for
   } forall
+  grestore
 
   hseeded { hsaved srand } if
 } def
