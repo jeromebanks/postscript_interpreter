@@ -72,11 +72,31 @@ to avoid, documented in both `artkit.ps` and `hatchkit.ps` but easy to
 reintroduce in a new file that doesn't reuse their code). Fixed by
 wrapping `/Density`'s value in a 1-element array immediately and
 always reading it back via `spdensbox 0 get`, mirroring `hatchkit.ps`'s
-own `hdensityopt` exactly. Plain-numeric options (`/DotRadius`,
-`/MaxDensity` once validated as numeric) stay bare-bound, matching
-`hatchkit.ps`'s own precedent that the wrap is only needed for an
-option that is legitimately dual-typed (number-or-procedure), not for
-one that's always a scalar.
+own `hdensityopt` exactly.
+
+**A cross-model (Codex) review of PR #122 found the same hazard still
+open for `/DotRadius` and `/MaxDensity`.** The first draft left them
+bare-bound (`/spdotradius spopts /DotRadius 1.5 spgetdef def`, then a
+bare `spdotradius spisnum` to type-check it) on the reasoning that
+`hatchkit.ps`'s own `/Spacing`/`/Wobble`/`/Dropout` — genuinely
+scalar-only options — use exactly that pattern. The reasoning doesn't
+transfer: those options being scalar-only is convention, not something
+`hkgetdef` enforces, so a caller who hands *any* proc-typed option a
+procedure by mistake hits the identical auto-execution hazard there
+too (unfixed, out of scope for this PR) — this file just happened to
+get the fresh review that caught it. A malformed `/DotRadius {
+pop /gotexecuted true def }` would `def`-bind the procedure, then the
+very reference meant to type-check it would execute it instead,
+running arbitrary caller-supplied code (or crashing with a raw
+`stackunderflow` from the proc's own stack use) before the intended
+`stipple-dotradius-must-be-a-number` error ever had a chance to fire.
+Fixed the same way as `/Density`: both are now wrapped in a 1-element
+array immediately after `spgetdef`/`get` and validated through that,
+only bound to a bare name (`spdotradius`/`spmaxd`) once confirmed
+numeric — `tests/stipplekit.rs`'s
+`a_malformed_dotradius_procedure_never_gets_executed` and its
+`/MaxDensity` counterpart pin the fix directly, by giving the
+malformed procedure a side effect and asserting it never ran.
 
 **Two conflicts only `stipple` can catch; one it deliberately doesn't
 duplicate.** An explicit `/Weight` alongside a callable `/Density` is

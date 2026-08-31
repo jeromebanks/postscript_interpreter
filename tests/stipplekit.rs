@@ -319,6 +319,69 @@ fn dotradius_must_be_a_positive_number() {
 }
 
 #[test]
+fn a_malformed_dotradius_procedure_never_gets_executed() {
+    // A string (the test above) is inert either way -- this is the
+    // case that actually exercises the auto-execution hazard: /Count
+    // binds `def` directly to a *procedure*, then previously
+    // referenced it bare to type-check it, which auto-executes any
+    // name bound to a procedure. If that regressed, this proc's own
+    // side effect (setting /gotexecuted) would run before the type
+    // check ever gets a chance to reject it, and the call would fail
+    // with something other than the named error (a stackunderflow
+    // from the proc's own `pop`, most likely) instead (Codex review,
+    // PR #122).
+    let mut it = Interp::new();
+    load(&mut it);
+    let err = it
+        .run_str(
+            "/gotexecuted false def \
+             0 0 100 100 screct << /Count 1 /DotRadius { pop /gotexecuted true def } >> stipple",
+        )
+        .unwrap_err();
+    match err {
+        PsError::Undefined(name) => {
+            assert_eq!(name, "stipple-dotradius-must-be-a-number")
+        }
+        other => panic!("expected a self-documenting undefined name, got {other}"),
+    }
+    let is_set = it
+        .run_str("gotexecuted")
+        .map(|_| it.operand_stack().last().map(|o| o.repr()) == Some("true".to_string()))
+        .unwrap_or(false);
+    assert!(
+        !is_set,
+        "the malformed /DotRadius procedure was executed instead of being rejected"
+    );
+}
+
+#[test]
+fn a_malformed_maxdensity_procedure_never_gets_executed() {
+    let mut it = Interp::new();
+    load(&mut it);
+    let err = it
+        .run_str(
+            "/gotexecuted false def \
+             0 0 100 100 screct \
+             << /Density { pop pop 1 } /MaxDensity { pop /gotexecuted true def } >> stipple",
+        )
+        .unwrap_err();
+    match err {
+        PsError::Undefined(name) => {
+            assert_eq!(name, "stipple-maxdensity-must-be-a-number")
+        }
+        other => panic!("expected a self-documenting undefined name, got {other}"),
+    }
+    let is_set = it
+        .run_str("gotexecuted")
+        .map(|_| it.operand_stack().last().map(|o| o.repr()) == Some("true".to_string()))
+        .unwrap_or(false);
+    assert!(
+        !is_set,
+        "the malformed /MaxDensity procedure was executed instead of being rejected"
+    );
+}
+
+#[test]
 fn opts_must_be_a_dict() {
     assert_eq!(
         stipple_err("0 0 100 100 screct [ ] stipple"),

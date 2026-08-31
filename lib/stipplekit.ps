@@ -173,9 +173,19 @@
 
   spopts type /dicttype ne { stipple-opts-must-be-a-dict } if
 
-  /spdotradius spopts /DotRadius 1.5 spgetdef def
-  spdotradius spisnum not { stipple-dotradius-must-be-a-number } if
-  spdotradius 0 le { stipple-dotradius-must-be-positive } if
+  % Wrapped in a 1-element array before it's ever validated -- a
+  % malformed /DotRadius (a caller's procedure, say) would otherwise
+  % get bound to a bare name by `def` and then auto-executed by the
+  % very next bare reference meant only to type-check it (Codex
+  % review, PR #122 -- the same hazard /Density's own wrap exists to
+  % avoid, missed here on the first pass because plain-numeric options
+  % looked safe to bare-bind by analogy with hatchkit's own /Spacing/
+  % /Wobble/Dropout). Only after validation confirms it really is a
+  % number is it safe to bind bare -- spdefaultmark reads it that way.
+  spopts /DotRadius 1.5 spgetdef 1 array astore /spdrbox exch def
+  spdrbox 0 get spisnum not { stipple-dotradius-must-be-a-number } if
+  spdrbox 0 get 0 le { stipple-dotradius-must-be-positive } if
+  /spdotradius spdrbox 0 get def
 
   % A private copy -- scatter reads /Density/Weight/Mark from whatever
   % is handed to it, and the callback branch below rewrites both, so
@@ -201,9 +211,12 @@
         { stipple-weight-and-callable-density-are-mutually-exclusive } if
       spscopts /MaxDensity known not
         { stipple-maxdensity-required-when-density-is-callable } if
-      /spmaxd spscopts /MaxDensity get def
-      spmaxd spisnum not { stipple-maxdensity-must-be-a-number } if
-      spmaxd 0 lt { stipple-maxdensity-must-be-non-negative } if
+      % Same wrap, same reason as /DotRadius above -- a malformed
+      % /MaxDensity must fail with a named error, not auto-execute.
+      spscopts /MaxDensity get 1 array astore /spmaxdbox exch def
+      spmaxdbox 0 get spisnum not { stipple-maxdensity-must-be-a-number } if
+      spmaxdbox 0 get 0 lt { stipple-maxdensity-must-be-non-negative } if
+      /spmaxd spmaxdbox 0 get def
       spscopts /Weight spdensbox 0 get put
       spscopts /Density spmaxd put
       spscopts /MaxDensity undef
