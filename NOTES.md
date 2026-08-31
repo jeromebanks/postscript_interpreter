@@ -131,6 +131,37 @@ operand stack on every call with a caller-supplied `/Mark`, caught
 immediately by the existing test suite (a `run()` helper here, like
 `tests/hatchkit.rs`'s, asserts an empty stack after every call).
 
+**A third Codex round found the fix for round 2's third finding was
+itself wrong, plus two tests with false-positive coverage.** The
+`/MaxDensity`-required gate had been changed from `xcheck` to... still
+`xcheck` in spirit — the actual bug is that `xcheck` and `sccallable`
+are not the same predicate. `xcheck` is true for anything with its
+executable bit set, including a `cvx`-marked string or an undefined
+name `cvx`'d into looking executable; `sccallable` correctly rejects
+both after its own `xcheck` gate, via the type/name-chain checks that
+follow it. Gating on `xcheck` alone let exactly those malformed values
+reach the `/MaxDensity`-required branch and report the wrong error
+instead of `scatter`'s own `scatter-weight-must-be-a-procedure`. Fixed
+by calling `sccallable` itself — safe here, since it's pure and
+`scatter`'s own loop hasn't started yet, so there's no `sc-` scratch
+state alive to collide with — which by construction can never disagree
+with what `scatter`'s real `/Weight` validation will do, closing the
+gap for good rather than chasing another almost-equivalent predicate.
+
+The same round also caught two tests that would have passed under a
+broken implementation. `custom_mark_overrides_the_default_dot` only
+checked that ink increased after a custom `/Mark`, which is also true
+if `stipple` silently ignored the custom mark and drew its own default
+circles instead — fixed by giving the custom mark a side effect (its
+own running count) and asserting it equals `scplaced` exactly, which
+only holds if the *custom* proc is what actually ran. The specimen
+render test measured each full 240×240 panel, which includes the
+panel's own drawn border — several hundred pixels on its own,
+comfortably past the test's 500-pixel threshold even if a panel's
+`stipple` call silently placed nothing — fixed by measuring a 10px-
+inset interior instead, so a real-but-zero-ink regression can no
+longer hide behind the frame.
+
 **Two conflicts only `stipple` can catch; one it deliberately doesn't
 duplicate.** An explicit `/Weight` alongside a callable `/Density` is
 rejected by `stipple` itself

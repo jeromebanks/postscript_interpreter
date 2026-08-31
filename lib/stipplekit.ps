@@ -73,9 +73,12 @@
 % not touch `sc-`/`sq-`/`si-` names (it runs inside `scatter`'s own
 % placement loop, same as a raw `/Weight` would), and an uncallable
 % value surfaces as `scatter`'s own `scatter-weight-must-be-a-procedure`
-% — `stipple` does not re-validate callability itself, the same
-% "don't duplicate what the layer underneath already checks" choice
-% `/Count`-vs-callback-`/Density` conflicts rely on below.
+% — the *rejection* is entirely `scatter`'s own; `stipple` only calls
+% artkit's own `sccallable` predicate itself (not a reimplementation of
+% it) to decide, before drawing, whether `/MaxDensity` should be
+% demanded at all, the same "don't duplicate what the layer underneath
+% already checks" choice `/Count`-vs-callback-`/Density` conflicts
+% rely on below.
 %
 % `/Count` and a callback `/Density` are mutually exclusive the same
 % way `/Count`/`/Density` already are inside `scatter` itself — no
@@ -224,18 +227,21 @@
       spscopts /Weight known
         { stipple-weight-and-callable-density-are-mutually-exclusive } if
       % Only route through the /MaxDensity-required contract when the
-      % value actually looks callable -- `xcheck` is the same first
-      % gate `sccallable` itself applies (safe to call on any object
-      % type; it inspects the executable flag without invoking
-      % anything), so this never disagrees with what scatter's own
-      % real validation would ultimately accept. Something that isn't
-      % even executable (a bare string, say) skips straight to being
-      % forwarded as scatter's own /Weight below, undisguised, so
-      % scatter's real sccallable-backed check is what rejects it --
-      % otherwise a non-callable /Density with no /MaxDensity given
-      % surfaced the wrong, confusing error (Codex review, PR #122,
-      % round 2).
-      spdensbox 0 get xcheck {
+      % value is actually callable -- `sccallable` itself (artkit.ps),
+      % not a homemade approximation. A first attempt used `xcheck`
+      % alone on the theory that it's the same first gate sccallable
+      % applies, but that's not the same predicate: `xcheck` is true
+      % for anything with its executable bit set, including a
+      % `cvx`-marked string or an undefined name, both of which
+      % `sccallable` correctly rejects after `xcheck` passes (its own
+      % type/name-chain checks). Using only `xcheck` let exactly those
+      % values reach the /MaxDensity-required branch and report the
+      % wrong error (Codex review, PR #122, round 3) -- calling the
+      % real predicate, safe here since scatter's own loop hasn't
+      % started yet (no `sc-` scratch is live to collide with), is
+      % what actually guarantees agreement with scatter's own /Weight
+      % validation, which is the whole point.
+      spdensbox 0 get sccallable {
         spscopts /MaxDensity known not
           { stipple-maxdensity-required-when-density-is-callable } if
         % Same wrap, same reason as /DotRadius above -- a malformed

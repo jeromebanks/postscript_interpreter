@@ -213,19 +213,26 @@ fn default_mark_draws_a_circle_of_the_expected_radius() {
 
 #[test]
 fn custom_mark_overrides_the_default_dot() {
-    let mut it = with_lib(200, 200);
-    run(&mut it, "0 0 0 setrgbcolor");
-    let before = ink_count(&it);
-    run(
-        &mut it,
-        "0 0 200 200 screct \
+    // Ink alone doesn't distinguish "the custom /Mark ran" from "the
+    // default circle ran instead" -- both draw something, so an
+    // ink-only assertion would pass under either implementation. Give
+    // the custom mark a side effect (a running count in its own name,
+    // untouched by the default mark) and check it matches scplaced
+    // exactly -- proof the *custom* proc is what actually ran, once
+    // per placement (Codex review, PR #122, round 3).
+    let got = eval(
+        "/spdemo-hits 0 def \
+         0 0 200 200 screct \
          << /Count 30 /Seed 6 /MinSpacing 5 \
-            /Mark { pop pop pop pop 5 5 moveto 10 10 lineto stroke } >> stipple",
+            /Mark { pop pop pop pop /spdemo-hits spdemo-hits 1 add def } >> stipple \
+         spdemo-hits scplaced",
     );
-    assert!(
-        ink_count(&it) > before,
-        "a custom /Mark drew nothing (every mark drew a fixed line, not scaled by position)"
+    assert_eq!(
+        got[0], got[1],
+        "the custom /Mark's own hit count must equal scplaced -- \
+         a mismatch means stipplekit's default mark ran instead"
     );
+    assert_ne!(got[0], "0", "nothing was placed at all");
 }
 
 #[test]
@@ -446,6 +453,22 @@ fn a_non_callable_non_numeric_density_surfaces_scatters_own_weight_error() {
 }
 
 #[test]
+fn an_executable_but_not_callable_density_also_surfaces_scatters_own_weight_error() {
+    // `xcheck` alone is not the same predicate as `sccallable`: a
+    // `cvx`-marked string has its executable bit set (xcheck true)
+    // but is not a real callback (sccallable's own type check rejects
+    // it) -- an /Density gate built on xcheck alone misclassified this
+    // as "the callback form" and demanded /MaxDensity instead of
+    // letting scatter's own /Weight validation reject it (Codex
+    // review, PR #122, round 3). Fixed by calling artkit's own
+    // sccallable directly.
+    assert_eq!(
+        stipple_err("0 0 100 100 screct << /Density (nope) cvx >> stipple"),
+        "scatter-weight-must-be-a-procedure"
+    );
+}
+
+#[test]
 fn stipple_does_not_mutate_the_callers_options_dict() {
     // The callable branch rewrites /Density and /Weight internally --
     // it must do so on a private copy, never the dict the caller
@@ -506,10 +529,17 @@ fn the_stippling_specimen_sheet_renders_ink_in_every_panel() {
         .unwrap_or_else(|e| panic!("examples/stippling.ps failed: {}", it.error_report(&e)));
     assert!(it.gfx().page_shown, "showpage must have run");
 
+    // Inset well clear of each panel's own 0.75pt border stroke (drawn
+    // by `panel` in examples/stippling.ps) -- the full 240x240 box
+    // includes that frame, which alone contributes several hundred
+    // marked pixels regardless of whether `stipple` placed anything,
+    // so counting it would let a silently broken panel still pass
+    // (Codex review, PR #122, round 3).
+    const INSET: u32 = 10;
     for (label, x0) in [("constant", 40), ("ramp", 340), ("point-shading", 640)] {
         let mut marked = 0;
-        for dx in 0..240_u32 {
-            for dy in 0..240_u32 {
+        for dx in INSET..(240 - INSET) {
+            for dy in INSET..(240 - INSET) {
                 let px = x0 + dx;
                 let py = 360 - (40 + dy) - 1;
                 let p = it
@@ -523,8 +553,8 @@ fn the_stippling_specimen_sheet_renders_ink_in_every_panel() {
             }
         }
         assert!(
-            marked > 500,
-            "the {label} panel has only {marked} marked pixels -- its stipple placed nothing"
+            marked > 200,
+            "the {label} panel's interior has only {marked} marked pixels -- its stipple placed nothing"
         );
     }
 }
