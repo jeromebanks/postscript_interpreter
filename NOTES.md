@@ -3,6 +3,318 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Reusable hatching and cross-hatching primitives (issue #49, 2026-08-30)
+
+A sixth sibling library, `lib/hatchkit.ps` — no dependency on
+`artkit.ps` or any other sibling, matching `graph.ps`/`dataviz.ps`/
+`etching.ps`'s precedent. One operator, `hatch`: fills whatever region
+is currently *clipped* with a family of parallel line strokes. The
+caller supplies the region (an ordinary `<path> clip`) and, optionally,
+a tone-driving `/Density` callback; image analysis and tone extraction
+stay `lib/etching.ps`'s job, per the issue's own scope cut.
+
+**Lean on the real `clip`, don't reimplement polygon math.**
+`et-hatch` already proved the technique: sweep parallel lines across a
+bbox-sized area and let the graphics state's own clip cut them to
+shape. `hatch` generalizes that geometry — lines are drawn well past
+the region's actual boundary, so it clips to concave and
+self-intersecting paths exactly as well as convex ones, with no
+point-in-polygon or edge-crossing code anywhere in the file. This also
+sidesteps `clippath`'s known multi-clip bug (issue #120) entirely —
+`hatch` never calls `clippath`; `/BBox` defaults to `pathbbox` of the
+*current path* instead (which survives `clip`, since `clip` doesn't
+consume the path).
+
+**Bounding candidate work, not just marks — twice.** `scatter`'s own
+NOTES entry (issue #48) records the lesson this reuses: a deposit
+budget on *marks placed* doesn't bound *work done* when each candidate
+costs more than O(1) to test. Here that shows up as two independent,
+fully-deterministic-from-`/BBox`/`/Spacing`/`/Angles` pre-flight
+checks, both computed and enforced *before* any drawing or RNG draw:
+`/MaxLines` (total candidate lines across every angle) and
+`/MaxSamples` (total `/Density` callback invocations, gated only when
+`/Density` is given, bounded per-line by an exact projection formula —
+`|dx|*w + |dy|*h`, not the ~2x-larger bbox diagonal a cruder estimate
+would use). A first draft only had `/MaxLines`; an advisor review
+before implementation caught that a small `/Spacing` over a modest
+bbox already drives the sample count into the tens of millions —
+exactly the "bounds marks, not work" gap scatter's own history warns
+about — which is what actually makes "density callbacks cannot create
+unbounded output" (the issue's own acceptance criterion) hold.
+
+**A line's own clipped-in-region span, not the raw sweep, is what
+`/Trim` shortens.** An early draft trimmed a fraction of the full
+bbox-diagonal sweep length, which the same advisor review flagged as
+badly conditioned — a fixed fraction of an ~850-unit diagonal is
+invisible against a small centered shape and total against one in a
+bbox corner. Each candidate line is instead clipped analytically
+against the bbox first (a small unrolled Liang-Barsky, four boundary
+tests — by construction every offset this file sweeps already
+intersects the box, proven by convexity of the projection onto the
+sweep normal, so the general-purpose "parallel and outside" rejection
+branch is a defensive backstop, never a load-bearing path), and
+`/Trim`'s fraction applies to *that* real span.
+
+**Two real implementation bugs, caught by actually rendering, not by
+reasoning about the PostScript.** (1) `hkclipseg` was first called
+with an initial `t` range of `[0, 1]` — mimicking a unit-length probe
+— instead of a range wide enough to contain the whole bbox
+intersection; Liang-Barsky can only *shrink* a given range, never grow
+it, so every stroke silently clipped down to length ≤ 1 (rendered as a
+diagonal chain of dots, not lines) until the initial range became
+`[-diagonal, diagonal]`. (2) `/Density`'s value was stored under a
+bare name (`/hdensity`) rather than wrapped in the 1-element-array
+trick every other option-default helper in this codebase already uses
+for exactly this reason (`scgetdef`/`pkgetdef`/`pggetdef`, and this
+file's own `hkgetdef`) — a name bound directly to a *procedure*
+auto-executes on every bare reference, so each `hdensity null ne` /
+`hdensity xcheck` / `hsx hsy hdensity exec` was silently re-running the
+caller's own density callback mid-setup instead of testing or invoking
+it deliberately, corrupting the operand stack (`stackunderflow` at
+`pop`, sourced from inside the *caller's* proc, not `hatch`'s own
+code — a genuinely confusing symptom to trace back). Wrapping it as
+`hdensityopt`, retrieved via `hdensityopt 0 get`, fixed it; the same
+footgun this file's own `hkgetdef` exists to avoid, applied
+inconsistently to a second name in the same file.
+
+**API surface:** `/BBox`, `/Angle` or `/Angles` (each a full layered
+pass, in order — the mechanism behind cross-hatching and multi-angle
+engraving fills), `/Spacing`, `/Width` (number or `[lo hi]` range),
+`/Wobble` (seeded perpendicular offset — position only, not a
+mid-stroke jitter; a genuinely shaky hand-drawn stroke stays
+`paintkit.ps`'s territory), `/Dropout`, `/Trim`, `/Density` +
+`/DensityThreshold` (quantized into 6 fixed width buckets, one stroke
+per constant-bucket run along a line — `et-hatch`'s own technique,
+reused for the same reason: stroke count, not sample count, dominates
+render time), `/Seed` (srand + rrand-restore, `scatter`'s convention),
+`/MaxLines`, `/MaxSamples`. `hatch` brackets its own drawing pass in
+`gsave`/`grestore` — an advisor review before the PR caught that
+every drawing branch calls `setlinewidth` with no restore, which would
+otherwise silently overwrite the caller's own line width with no way
+back (`et-draw` already brackets its own two `et-hatch` passes this
+way). That fix has a second effect worth stating: it also protects the
+current path, so a *second*, layered `hatch` call over the same clip
+can keep relying on the default `/BBox` (`pathbbox` of the current
+path) — an earlier draft needed every layered call in
+`examples/hatching.ps`'s cross-hatch panel to pass `/BBox` explicitly,
+since `hatch`'s own strokes used to end with `stroke`'s ordinary
+implicit `newpath`, leaving nothing for a second call's default to
+read; that workaround is gone now that the path survives.
+
+**Tag-migrated from the start, not added to `build.rs`'s
+`LEGACY_FILES`.** `lib/paintkit.ps` is still the only *pre-existing*
+file migrated to the `% @kind:`/`@summary:`/`@example:`/`@param:`
+doc-comment catalog (issue #94) — migrating the rest is itchy-when-
+you-get-to-it follow-up work per `HANDOFF.md`. A brand-new file has no
+migration debt to defer, though: `build.rs`'s own docs frame
+`LEGACY_FILES` as distinguishing "deliberately uncataloged" from
+"forgotten" for files that predate the mechanism, not as a default for
+new ones, so `hatchkit.ps` tags every top-level definition (`@internal`
+for scratch helpers, a full block for `hatch` itself) and gets
+capability-catalog registration (issue #39) for free from
+`cargo build` — no hand-written `capabilities.rs` entry needed.
+
+`tests/hatchkit.rs`: reproducibility (identical pixels, same seed and
+options), a two-angle `/Angles` pass inking more than one angle alone,
+dropout measurably reducing ink, a concave (chevron) clip leaving its
+own bbox corners blank, `/Density` carving a hard region boundary and
+clamping an out-of-range return value instead of erroring, `/BBox`
+defaulting to `pathbbox` matching an explicit box pixel-for-pixel, and
+both safety limits rejecting *before* any ink lands — plus the
+`ghostscript_accepts_*` acceptance test every sibling library carries.
+Every `run()` call also asserts an empty operand stack afterward, not
+just a separate `--lint` pass — the same review that caught the
+`setlinewidth` leak flagged that none of the 16 original tests would
+have noticed a `/Density` proc leaking an operand (`--lint`'s own
+issue-#17 history already found two such leaks elsewhere in this
+codebase); `density_proc_that_leaks_an_operand_is_visible_on_the_stack`
+confirms the assertion actually fires rather than just existing. The
+same review also caught `/Dropout`'s roll firing unconditionally even
+at `/Dropout 0` — unlike `/Wobble`/`/Trim`, which were already guarded
+— silently consuming a random draw from the caller's ambient stream on
+every plain `hatch` call with no `/Seed`; now guarded the same way.
+
+**A Codex review of the PR (this issue's own #121) found three more —
+real bypasses of the documented safety limits, none caught by the 20
+tests above at the time.** (1) `/Trim`'s two fractions were never
+validated: an out-of-range or inverted pair (`/Trim [-100 0.1]`) could
+sample a *negative* trim fraction, which lengthens a line's span
+instead of shortening it — sampling well past what `/MaxSamples`'s
+pre-flight estimate ever accounted for, since that estimate is only
+sound on the assumption Trim can shrink a span, never grow it. Now
+validated up front (`hatch-trim-must-be-ordered-fractions-in-0-1`),
+closing the gap regardless of `/MaxSamples`. (2) `/Angles` read the
+caller's own array by reference, not a copy, and was read *twice* —
+once by the pre-flight budget, once by the drawing pass — with a
+`/Density` callback (caller-supplied code, called in between, mid-
+drawing-pass) able to mutate a not-yet-swept angle after the budget
+was already computed from its original value: a static `/Angles
+[0 45]` call correctly rejects against a tight `/MaxLines`, but the
+equivalent live-array version — start at `[0 0]` (budgeted low),
+mutate the second entry to `45` from inside `/Density` before that
+pass draws — silently swept the un-budgeted 45 anyway. Fixed by taking
+a private array copy immediately after reading `/Angles`, before the
+budget is computed, so nothing the caller's own code does afterward
+can change what gets swept or how it was budgeted. (3) The sweep
+normal was computed independently via `cos`/`sin(angle+90)` rather
+than derived from the already-computed direction vector — two separate
+floating-point trig evaluations of *different* input angles are not
+guaranteed exactly orthogonal, and for a region thinner than
+`/Spacing` at a plain axis-aligned angle, that sub-ulp slack could
+place the sole candidate offset just outside the box's true
+projection, so `hkclipseg` rejected it and the pass silently drew
+nothing. Fixed by deriving the normal algebraically as `(-hdy, hdx)`
+in both the pre-flight and drawing loops, which is exact relative to
+the already-computed `(hdx, hdy)` regardless of floating-point trig
+rounding. All three now have regression tests in `tests/hatchkit.rs`;
+fixing (1)'s validation itself needed a second pass after a
+self-introduced bug (a boolean `or` chain missing one combinator for
+five terms, caught immediately by testing the expression standalone
+rather than trusting it against the fix).
+
+**A second Codex review of the updated diff found two more, both the
+same underlying shape.** `hspacing`/`hstep`/`htrimlo`/`htrimhi` were
+internal working state that gates a loop bound — the exact kind of
+name the file's own docs claimed was protected by the `hk-` scratch
+prefix — but were never actually `hk`-prefixed. A `/Density` callback
+redefining the *unprefixed* `/hstep` mid-call (`/hstep 0.1 def`, well
+outside the documented `[0.25, spacing/2]` range) reads back in a
+later line's own sampling loop, since each line constructs its `for`
+loop fresh rather than capturing the value once — one 50×50 `/BBox`,
+`/MaxSamples 15` reproduction ran the callback 1005 times, not 15.
+`/Trim`'s validated bounds had the identical exposure for the same
+reason: the validation only runs once, so corrupting the same-named
+variables it validated reintroduces the negative-span-growth bug
+issue #49's *first* Codex round already closed for malformed *input*.
+Fixed by renaming all four to `hkspacing`/`hkstep`/`hktrimlo`/
+`hktrimhi`, which brings them under the contract the docs already
+state (and were, in every other name's case, already accurate about)
+— not a new mechanism, just closing a gap between what the docs
+claimed and what the code actually named. Every *other* `h`-prefixed
+working-state name (geometry, width, tone) only affects rendering
+correctness if corrupted, not how much work gets done, so left as-is;
+`hatchkit.ps`'s "Scratch prefix" section now says this explicitly
+rather than the earlier, inaccurate blanket "hk- throughout" claim.
+The same review's second finding — `/Wobble`, `/Dropout`, and
+`/DensityThreshold` silently accepting out-of-contract values (a
+negative `/DensityThreshold` making even a density-0 sample count as
+ink, the exact `le`-at-threshold behavior the design notes above
+specifically call out getting right for the *documented* range) —
+got the same validate-up-front treatment `/Spacing`/`/Trim` already
+had. Both rounds' fixes are covered by dedicated regression tests
+(`tests/hatchkit.rs`) that reproduce the exact clobber/malformed-input
+shape a docs-only reading wouldn't have caught.
+
+**A third Codex review found two more real bugs — neither adversarial,
+both hit by an ordinary caller — plus a third finding that's the same
+naming class round 2 already closed, restated against different
+names, and deliberately not fixed this time.**
+
+The one that mattered most: PostScript's own `for` loop, used for both
+the line sweep and the per-line density sampling, accumulates its step
+by repeated floating-point addition — `kmin spacing kmax { ... } for`
+— which does not always take the same number of trips as
+`cvi((kmax-kmin)/spacing)+1`, the formula the pre-flight budget uses to
+approve that same work. A 12-sample estimate saw a real 13th
+`/Density` call; no callback involved, just an ordinary `/BBox`/
+`/Spacing` combination landing on a case where the two computations
+disagreed. Fixed by making both loops integer-indexed —
+`0 1 n-1 { /i exch def kmin i spacing mul add ... } for` — so the real
+trip count *equals* the pre-flight formula by construction rather than
+merely agreeing with it in the common case; confirmed directly
+(printing both loops' own computed line count for the same non-trivial
+`/BBox`/`/Angle`/`/Spacing`, matching exactly) rather than trusted from
+the reasoning alone, and the specimen sheet was re-rendered to check
+the sub-ulp coordinate change (deriving each line from `kmin + i*spacing`
+instead of accumulated addition) didn't visibly shift anything.
+
+The second: `hkfrnd` can return exactly `1.0`, which a bare
+`hkfrnd hdropout lt` turns into "never dropped" even at a
+documented-certain `/Dropout` of 1 — `lib/artkit.ps`'s `scodds` already
+names and guards against this exact trap for the same reason; the
+dropout roll now mirrors its pattern (`>= 1` and `<= 0` both skip the
+roll entirely, matching `/Wobble`/`/Trim`'s existing convention of not
+consuming a random draw for a degenerate range). A third, unrelated bug
+in the same round: `/BBox` accepted any array `aload pop` could unpack,
+silently reading an oversized array's *last* four elements as
+coordinates and leaving the rest sitting on the operand stack —
+violating `hatch`'s own `opts hatch -` contract. Now validated to be
+exactly four elements.
+
+The finding *not* acted on: `hbx0`/`hbx1`/etc. (the bbox bounds) and
+`hangles` (the angles array binding) aren't `hk`-prefixed either, the
+same shape as round 2's `hspacing`/`hstep` finding. This class doesn't
+converge by renaming — `clobbering_hstep_from_density_...`
+(`tests/hatchkit.rs`) already proves a callback redefining the
+*already-`hk`-prefixed* `hkstep` directly still bypasses the cap, since
+PostScript has no mechanism that would stop it regardless of which
+name is targeted. `lib/artkit.ps`'s `scatter` (issue #48, cross-model
+reviewed in its own right) ships with the identical exposure and
+documents it as a plain contract: `/Mark`/`/Weight` "must not touch
+sc-, sq-, or si- names." `hatchkit.ps`'s own "Scratch prefix" section
+already states the equivalent contract over every `h`-prefixed name,
+with the `hk`-prefixed subset called out as the part that also gates a
+safety limit — this finding doesn't change that, it's the same
+documented risk restated against names the round-2 rename didn't
+happen to cover. Not a new exposure this PR introduced.
+
+**A fourth Codex review found two more floating-point robustness
+bugs, both non-adversarial — an ordinary `/BBox`/`/Angle`/`/Spacing`
+combination, no callback involved — and both fixed.** (1) The
+pre-flight budget computed its corner projections *raw* (uncentered),
+while the drawing loop centered them (subtracting the bbox center's
+own projection) before round 4 — mathematically the same difference,
+but raw and centered subtraction round differently in floating point
+for a large-magnitude `/BBox` far from the origin, so the two loops'
+own line counts could actually disagree: one repro passed `/MaxLines
+1`/`/MaxSamples 1` at pre-flight while the drawing loop computed two
+candidates and called `/Density` twice — the exact "two computations
+expected to agree" trap round 3's integer-loop fix closed for
+`for`-loop trip counts, recurring one level up in the corner-
+projection math that feeds those loops. Fixed by using the identical
+centered-projection formula in both loops, closing the gap by
+construction rather than by argument (this is also what round 3's own
+sanity check — "run one config through both and check they agree" —
+was checking for, and the config it happened to use didn't surface
+this one; round 4's repro used far-from-origin coordinates
+specifically). (2) A region thinner than `/Spacing` places its sole
+candidate line at its own swept range's boundary (`hkmin`), tangent to
+the bbox; at a near-axis-aligned angle, floating-point roundoff could
+make `hkclipseg` reject that exact tangent intersection, silently
+drawing nothing for a region that geometrically should get one line —
+a plain 0-degree hatch over the same region drew fine, only a
+near-0.0004-degree tilt triggered it. Fixed by centering the whole
+candidate distribution within `[hkmin, hkmax]` (splitting the leftover
+slack — the span rarely divides evenly by `/Spacing` — across both
+ends instead of anchoring flush at `hkmin`), which also fixes the
+general case, not just the single-candidate one: every candidate now
+sits a little inside the box rather than the first one always
+grazing its edge. Both fixes are covered by regression tests
+(`tests/hatchkit.rs`) using the review's own repro parameters; the
+specimen sheet was re-rendered and re-eyeballed after each (the
+"layered cross-hatch" panel's grid shifts by up to half a spacing unit
+at its seams from the centering change — cosmetic, not a defect).
+
+Four review rounds, nine fixed findings, one explicit disposition.
+Round 5 was not run: rounds 3 and 4 both surfaced genuine,
+non-adversarial floating-point edge cases worth fixing, but the
+returns are visibly narrowing (round 4's two findings needed
+far-from-origin coordinates and a ten-thousandth-of-a-degree tilt to
+surface), and the remaining exposure class (documented-contract
+scratch-name collisions) doesn't converge by further review — see the
+round-3 disposition above. `hatchkit.ps`'s own geometry now computes
+every safety-critical count and coordinate exactly once per shape
+(centered projections, integer-indexed loops, centered candidate
+placement) rather than through two paths expected to agree, which is
+the actual property that closes this whole class of finding, not
+another round of chasing individual repros.
+Deliberately cut, and recorded rather than silently skipped: no
+gallery piece or site/playground entry — the issue's own acceptance
+criteria ask for a "specimen page," not a gallery piece, and
+`examples/hatching.ps` (three panels: flat shading, a `/Density`-driven
+tonal band that reads as a curved, lit sphere from perfectly straight
+strokes, and layered cross-hatching) covers that.
+
 ## Deterministic scatter and distribution primitives for artkit (issue #48, 2026-08-29)
 
 The area-shaped counterpart to `alongpath`/`walkpath`: place a

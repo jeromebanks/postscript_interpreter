@@ -1,0 +1,614 @@
+%!PS-Adobe-3.0
+%%Title: hatchkit.ps — reusable hatching and cross-hatching primitives
+%%Creator: pscat — issue #49
+%%EndComments
+
+% A sixth sibling to graph.ps/dataviz.ps/etching.ps/pagekit.ps/paintkit.ps
+% (no dependency on any of them, like graph/dataviz/etching): a single
+% operator, `hatch`, that fills whatever region is currently clipped
+% with a family of parallel line strokes. Pen-and-ink shading,
+% engraving, architectural sketching, comics, and photo-to-sketch
+% rendering all lean on the same underlying vocabulary item; this is
+% that item, not a rendering pipeline of its own — the caller supplies
+% the region (via an ordinary `clip`) and, optionally, a tone-driving
+% callback. `lib/etching.ps`'s `et-hatch` already draws exactly this
+% kind of parallel-line pass over an image's tone map; `hatch`
+% generalizes that trick's *geometry* into something reusable, image
+% analysis and tone extraction stay out of scope (etching.ps's job).
+%
+%   << /Angle 30 /Spacing 4 >> hatch
+%
+% `hatch` does not clip on its own. Set the region you want filled as
+% the current clip *before* calling it — `<path> clip` — the same way
+% `et-draw` clips to the page rect before its own hatch passes. Lines
+% are drawn well past the region's actual boundary and rely entirely
+% on the graphics state's real clip to cut them to shape; `hatch`
+% never reimplements point-in-polygon or edge-crossing tests, so it
+% clips to concave and self-intersecting paths exactly as well as
+% convex ones — whatever the interpreter's own `clip` already handles.
+% This also sidesteps `clippath`'s known limitation (issue #120: it
+% reports only the newest of several nested clips, not their true
+% intersection) — `hatch` never calls `clippath` at all.
+%
+% Options, all optional except that a region must be establishable
+% one of two ways:
+%   /BBox [x0 y0 x1 y1]  the area to sweep lines across. If omitted,
+%           `hatch` reads it from `pathbbox` — the *current path's*
+%           bounding box — so the usual call shape is
+%           `<path> clip << ... >> hatch` (`clip` does not consume the
+%           current path, so it is still there for `pathbbox` to read;
+%           `hatch` itself brackets its own drawing in `gsave`/
+%           `grestore`, so the path survives a call too — a second,
+%           layered `hatch` call over the same clip, the classic
+%           cross-hatch composition, can keep relying on the default).
+%           A caller who clips from a path they no longer hold (built
+%           earlier, or via `clippath` itself) must pass /BBox
+%           explicitly. Either way the box only decides how many
+%           candidate lines get swept and where each one starts and
+%           ends before clipping — the real clip alone decides what
+%           actually inks the page, so a loose /BBox costs a few wasted
+%           candidates, never wrong output; a tight one is more
+%           efficient, never more correct.
+%   /Angle deg  a single hatch angle, degrees, 0 = horizontal (default
+%           45). Ignored when /Angles is given.
+%   /Angles [deg ...]  multiple angles, each swept as a full
+%           independent pass in array order — the mechanism behind
+%           cross-hatching (two angles 90 degrees apart) and
+%           multi-angle engraving fills (three or more). The random
+%           stream is consumed one full pass at a time, in this order,
+%           so reproducibility holds per angle as well as overall.
+%   /Spacing num  device units between adjacent lines within one pass;
+%           must be > 0 (default 6).
+%   /Width num-or-[lo hi]  stroke width. A single number draws every
+%           line at that width (unless /Density overrides it — see
+%           below). A [lo hi] range draws one line's width uniformly
+%           from that range — one random draw per drawn line, so a
+%           /Width number vs. range changes how many rolls a line
+%           consumes, which matters for reproducing an exact seeded
+%           arrangement. Default 1.
+%   /Wobble num >= 0 (validated —
+%           `hatch-wobble-must-not-be-negative` otherwise)  maximum
+%           random perpendicular offset applied to each line's
+%           position, drawn uniformly from [-Wobble, Wobble] (default
+%           0, off — an /Wobble of 0 consumes no roll at all, same
+%           reproducibility note as /Width). This is what keeps a
+%           hatch from reading as a mechanically perfect grid; it does
+%           not bend a line's course mid-stroke — for a genuinely
+%           shaky hand-drawn stroke, layer `lib/paintkit.ps`'s ribbon
+%           strokes instead.
+%   /Dropout num in [0,1] (validated —
+%           `hatch-dropout-must-be-a-fraction-in-0-1` otherwise)
+%           probability a given candidate line is
+%           skipped entirely (default 0, off — like /Wobble and
+%           /Trim, a /Dropout of 0 consumes no roll at all). Rolled
+%           first, before any other roll for that line, so a kept
+%           line's later rolls (/Wobble, /Trim, /Width) happen in the
+%           same relative order whether or not /Dropout is in play.
+%   /Trim [lo hi]  fraction, in [0,1] with lo <= hi (validated —
+%           `hatch-trim-must-be-ordered-fractions-in-0-1` otherwise,
+%           since an out-of-range or inverted pair could draw a
+%           *negative* fraction and lengthen a line instead of
+%           shortening it), of a drawn line's own *in-region* length
+%           (the part `hatch` actually clips into the BBox — not the
+%           full sweep) to shorten it by, split at a second random
+%           point between the two ends. Only rolled when the range's
+%           high end is > 0, two rolls (the fraction, then the front/
+%           back split) — the "length variation" that keeps hatch
+%           strokes from all reaching the region's edge in lockstep.
+%           Default [0 0], off.
+%   /Density {x y -> d}  optional per-sample tone callback, called with
+%           a point along each line (in the same user-space coordinates
+%           as /BBox). MUST consume both operands and leave exactly one
+%           number (a proc that doesn't leaks two per sample — see the
+%           "Scratch prefix" note below) and must not touch any hk-
+%           prefixed name. The result is
+%           clamped into [0,1] regardless of what the proc actually
+%           returns, so a callback that returns something wild changes
+%           the *tone*, never the amount of geometry drawn. When given,
+%           /Width's range (or its single number used for both ends)
+%           is interpolated by the clamped density into 6 fixed stroke-
+%           width buckets, quantized into runs — one stroke per
+%           constant-bucket run along the line, not one per sample,
+%           the same technique `lib/etching.ps`'s `et-hatch` uses and
+%           for the same reason (stroke count, not sample count,
+%           dominates render time). A sample whose clamped density is
+%           <= /DensityThreshold draws no ink for that run at all —
+%           this is what lets a density field carve a shape's lit side
+%           out of the hatching entirely, not just thin it.
+%   /DensityThreshold num in [0,1] (validated —
+%           `hatch-density-threshold-must-be-a-fraction-in-0-1`
+%           otherwise, since e.g. -1 would make even a density of 0
+%           count as ink)  see /Density (default 0).
+%   /Seed n  seeds the sweep with `n srand`, restoring the caller's own
+%           random stream afterward via `rrand` — the same convention
+%           `lib/artkit.ps`'s `scatter` documents, including the same
+%           caveat: the restore is skipped if the call errors out.
+%           Omit it to draw from the ambient stream, still
+%           deterministic under the caller's own `N srand`.
+%   /MaxLines n  hard cap on the total candidate line count summed
+%           across every angle in /Angles (default 20000). This count
+%           is fully determined by /BBox, /Spacing, and /Angles alone
+%           — no candidate is ever drawn or sampled before it is
+%           checked against this cap, so a pathologically small
+%           /Spacing over a large /BBox is rejected
+%           (`hatch-line-count-exceeds-safety-limit`) before anything
+%           happens, the same up-front-reject shape `scatter`'s own
+%           /Budget uses.
+%   /MaxSamples n  hard cap on the total /Density callback invocations
+%           summed across every angle (default 2000000), checked only
+%           when /Density is given (a call with no /Density never
+%           samples anything, so this bound is moot for it) and, like
+%           /MaxLines, computed purely from /BBox/Spacing/Angles before
+%           any drawing — an upper bound on each line's own in-box
+%           span, not the full sweep, so it tracks actual sampling work
+%           rather than the (up to 2x larger) diagonal a cruder estimate
+%           would use. This is the bound that actually keeps a
+%           /Density callback from creating unbounded output: a
+%           misbehaving callback can only change *what* gets sampled,
+%           never *how many* samples are taken
+%           (`hatch-sample-count-exceeds-safety-limit`).
+%
+% Reproducibility: for a given /BBox, /Angles order, and seed, the same
+% options draw the same picture, in this interpreter. As with every
+% other rand-driven procedure in this codebase, that pinning is local
+% to this interpreter's own `rand` — Ghostscript uses a different
+% generator, so a seeded hatch renders as a different, equally valid,
+% equally reproducible arrangement there; only straight-edged geometry
+% (this operator never flattens curves) is otherwise identical between
+% the two.
+%
+% Scratch prefix: every internal helper and working-state name starts
+% with `h`, one self-contained file rather than artkit.ps's
+% multi-section sc-/sq-/si- split, since /Density (the one
+% caller-supplied proc here) never itself calls back into a public
+% `hatch`-prefixed name the way scatter's /Weight calls `scin`
+% mid-loop, so there is no second scratch prefix to keep separate from
+% the caller's own state. /Density is still called mid-loop, though,
+% with the same two obligations `scatter`'s own /Mark and /Weight
+% procs document: it MUST consume both of its operands (a proc that
+% doesn't leaks two numbers per sample onto the operand stack —
+% `--lint` reports exactly that), and it must not touch any `h`-
+% prefixed name, since `hatch` resumes reading its own scratch
+% immediately after the call returns. The `hk`-prefixed subset
+% specifically (internal helper procedures, and the handful of values
+% — `hkspacing`/`hkstep`/`hktrimlo`/`hktrimhi` — that gate a loop
+% bound `/MaxLines` or `/MaxSamples` already approved) is what a
+% caller must never redefine even by accident: a proc that clobbers
+% one of those mid-call can make a *later* line or angle sweep more
+% work than the pre-flight budget ever saw, since each is read fresh
+% at the start of its own loop rather than captured once for the whole
+% call (Codex review, PR #121, round 2 — found by fuzzing exactly this
+% "reserved prefix" contract for a name it didn't actually cover).
+% Every other `h`-prefixed name only affects geometry or tone, not how
+% much work gets done, so corrupting one is merely undefined rendering
+% behavior, not a safety-limit bypass.
+
+% @internal
+/hkfrnd { rand 8192 idiv 262143 and 262143 div } def % -> 0.0..1.0
+
+% dict key default hkgetdef -> value
+% Same wrap-the-default-in-an-array trick as artkit's scgetdef /
+% paintkit's pkgetdef / pagekit's pggetdef: a name bound directly to a
+% procedure auto-executes on bare reference, so the default travels
+% inside a 1-element array instead.
+% @internal
+/hkgetdef {
+  /hkgdd exch 1 array astore def
+  /hkgdk exch def
+  /hkgdt exch def
+  hkgdt hkgdk known { hkgdt hkgdk get } { hkgdd 0 get } ifelse
+} def
+
+% v hkclamp01 -> v', clamped into [0,1]
+% @internal
+/hkclamp01 {
+  dup 0 lt { pop 0 } if
+  dup 1 gt { pop 1 } if
+} def
+
+% a b t hklerp -> value, a + (b-a)*t
+% @internal
+/hklerp {
+  /hkt exch def
+  /hkb exch def
+  /hka exch def
+  hka hkb hka sub hkt mul add
+} def
+
+% Running min/max over a handful of fed values — hkmmreset then
+% hkmmfeed per value, hkmn/hkmx hold the result. Named-variable style
+% (not a generic reduce) on purpose: this file has exactly one caller
+% of it (the per-angle BBox-corner projection below) and four values
+% every time.
+% @internal
+/hkmmreset {
+  /hkmn 1.0e30 def
+  /hkmx -1.0e30 def
+} def
+
+% v hkmmfeed -
+% @internal
+/hkmmfeed {
+  /hkv exch def
+  hkv hkmn lt { /hkmn hkv def } if
+  hkv hkmx gt { /hkmx hkv def } if
+} def
+
+% p q hkclip1 -  (mutates hktlo/hkthi/hkhit)
+% One boundary of a Liang-Barsky parametric line clip: p t <= q. p==0
+% (the line runs parallel to this boundary) skips straight through —
+% by construction every call site below only ever sweeps offsets whose
+% infinite line already intersects the box (see hkclipseg), so the
+% p==0-and-outside rejection branch a general-purpose Liang-Barsky
+% needs never actually fires here; hkhit exists as a defensive
+% backstop, not a load-bearing path.
+% @internal
+/hkclip1 {
+  /hkq exch def
+  /hkp exch def
+  hkp 0 eq {
+    hkq 0 lt { /hkhit false def } if
+  } {
+    hkq hkp div /hkr exch def
+    hkp 0 lt
+      { hkr hktlo gt { /hktlo hkr def } if }
+      { hkr hkthi lt { /hkthi hkr def } if }
+    ifelse
+  } ifelse
+} def
+
+% px py dx dy tlo thi hkclipseg -> tlo' thi' hit
+% Clips the parametric line (px,py) + t*(dx,dy), t in [tlo,thi], against
+% the box (hbx0,hby0)-(hbx1,hby1) — the four boundary tests unrolled
+% rather than looped, since there are always exactly four and this
+% keeps every term legible. Every candidate offset this file feeds in
+% (see the /BBox-corner projection in `hatch`) is chosen so the box's
+% projection onto the sweep normal already contains it, which by
+% convexity guarantees a genuine (possibly zero-length, at a corner
+% graze) intersection — so hit is a defensive final check, not
+% something normal calls are expected to fail.
+% @internal
+/hkclipseg {
+  /hkthi exch def
+  /hktlo exch def
+  /hkdy exch def
+  /hkdx exch def
+  /hkpy exch def
+  /hkpx exch def
+  /hkhit true def
+  hkdx neg hkpx hbx0 sub hkclip1
+  hkdx hbx1 hkpx sub hkclip1
+  hkdy neg hkpy hby0 sub hkclip1
+  hkdy hby1 hkpy sub hkclip1
+  hktlo hkthi gt { /hkhit false def } if
+  hktlo hkthi hkhit
+} def
+
+% opts hatch -
+% @kind: Procedure
+% @summary: Fills the current clip region with a family of parallel hatch lines — single or multi-angle, with seeded width, wobble, dropout, and length variation, and an optional per-point density callback for tonal shading. Does not clip on its own; set the region as the current clip before calling.
+% @example: newpath 20 20 moveto 180 20 lineto 180 180 lineto 20 180 lineto closepath clip << /Angle 30 /Spacing 4 /Seed 7 >> hatch
+% @param: /BBox [x0 y0 x1 y1] area to sweep; defaults to `pathbbox` of the current path
+% @param: /Angle single hatch angle in degrees (default 45), ignored when /Angles is given
+% @param: /Angles [deg ...] one full pass per angle, in order — cross-hatching and multi-angle fills
+% @param: /Spacing device units between lines within a pass; must be > 0 (default 6)
+% @param: /Width num or [lo hi] stroke width, or its range for a per-line uniform draw (default 1)
+% @param: /Wobble num >= 0 max random perpendicular offset per line (default 0)
+% @param: /Dropout num in [0,1] probability a candidate line is skipped (default 0)
+% @param: /Trim [lo hi] fraction of a line's in-region length to shorten by, split randomly between ends (default [0 0])
+% @param: /Density {x y -> d} optional per-sample tone callback in [0,1] (clamped); drives width buckets and a no-ink cutoff
+% @param: /DensityThreshold num in [0,1] samples at or below this draw no ink (default 0)
+% @param: /Seed n seeds with `n srand`, restores the caller's stream afterward via `rrand`
+% @param: /MaxLines n hard cap on total candidate lines across all angles, checked before drawing (default 20000)
+% @param: /MaxSamples n hard cap on total /Density calls across all angles, checked before drawing (default 2000000)
+/hatch {
+  /hopts exch def
+
+  hopts /BBox known
+    {
+      hopts /BBox get
+      % aload pushes every element (not just four) then the array
+      % itself; an oversized array would silently leave its leading
+      % elements sitting under the four this code actually consumes,
+      % violating `hatch`'s own `opts hatch -` contract (Codex review,
+      % PR #121, round 3).
+      dup length 4 ne { hatch-bbox-must-have-four-elements } if
+      aload pop
+    }
+    { pathbbox }
+  ifelse
+  /hby1 exch def
+  /hbx1 exch def
+  /hby0 exch def
+  /hbx0 exch def
+  hbx1 hbx0 le hby1 hby0 le or { hatch-bbox-degenerate } if
+  /hbw hbx1 hbx0 sub def
+  /hbh hby1 hby0 sub def
+  /hdiag hbw dup mul hbh dup mul add sqrt def
+  /hcx hbx0 hbx1 add 2 div def
+  /hcy hby0 hby1 add 2 div def
+
+  hopts /Spacing 6 hkgetdef /hkspacing exch def
+  hkspacing 0 le { hatch-spacing-must-be-positive } if
+  /hkstep hkspacing 0.5 mul def
+  hkstep 0.25 lt { /hkstep 0.25 def } if
+
+  hopts /Angles known
+    { hopts /Angles get }
+    { [ hopts /Angle 45 hkgetdef ] }
+  ifelse
+  /hangles exch def
+  % A private copy, not the caller's own array reference: /Angles is
+  % read twice (the pre-flight budget below, then the drawing pass),
+  % and a /Density callback runs in between, mid-drawing-pass, with
+  % nothing stopping it from mutating a caller-owned array in place.
+  % Without this copy, a later angle's value could change after the
+  % budget was computed from its original value but before that angle
+  % is actually swept -- silently drawing more (or different) geometry
+  % than /MaxLines ever saw and approved (Codex review, PR #121).
+  hangles hangles length array copy /hangles exch def
+
+  hopts /Width 1 hkgetdef /hwidthopt exch def
+  hwidthopt type /arraytype eq
+    {
+      /hwidthlo hwidthopt 0 get def
+      /hwidthhi hwidthopt 1 get def
+      /hwidthranged true def
+    }
+    {
+      /hwidthlo hwidthopt def
+      /hwidthhi hwidthopt def
+      /hwidthranged false def
+    }
+  ifelse
+
+  hopts /Wobble 0 hkgetdef /hwobble exch def
+  hwobble 0 lt { hatch-wobble-must-not-be-negative } if
+  hopts /Dropout 0 hkgetdef /hdropout exch def
+  hdropout 0 lt hdropout 1 gt or { hatch-dropout-must-be-a-fraction-in-0-1 } if
+  hopts /Trim [ 0 0 ] hkgetdef /htrimopt exch def
+  /hktrimlo htrimopt 0 get def
+  /hktrimhi htrimopt 1 get def
+  % Trim's fraction is only ever supposed to *shrink* a line's own
+  % in-box span, never grow it -- an out-of-[0,1] or inverted range
+  % (e.g. /Trim [-100 0.1]) can draw a negative fraction, which
+  % lengthens the span instead, sampling well past what /MaxSamples's
+  % pre-flight estimate (bounded on the assumption Trim only shrinks)
+  % ever accounted for (Codex review, PR #121).
+  hktrimlo 0 lt hktrimlo 1 gt or hktrimhi 0 lt or hktrimhi 1 gt or hktrimlo hktrimhi gt or
+    { hatch-trim-must-be-ordered-fractions-in-0-1 }
+  if
+
+  % Wrapped in a 1-element array, the same trick hkgetdef uses for its
+  % default: a name bound directly to a procedure auto-executes on
+  % every bare reference, which is exactly what /Density holds when
+  % the caller passes one. `hdensityopt 0 get` retrieves it as a plain
+  % value instead of re-running the caller's callback by accident.
+  hopts /Density known { hopts /Density get } { null } ifelse
+  1 array astore /hdensityopt exch def
+  hdensityopt 0 get null ne
+    { hdensityopt 0 get xcheck not { hatch-density-must-be-callable } if }
+  if
+  hopts /DensityThreshold 0 hkgetdef /hdthresh exch def
+  hdthresh 0 lt hdthresh 1 gt or { hatch-density-threshold-must-be-a-fraction-in-0-1 } if
+  /hnbuckets 6 def
+
+  hopts /MaxLines 20000 hkgetdef /hmaxlines exch def
+  hopts /MaxSamples 2000000 hkgetdef /hmaxsamples exch def
+
+  % ---- deterministic pre-flight budget check (no drawing, no RNG) ----
+  /htotallines 0 def
+  /htotalsamples 0 def
+  hangles {
+    /hang exch def
+    hang cos /hdx exch def
+    hang sin /hdy exch def
+    % Derived algebraically from hdx/hdy (a +90-degree rotation is
+    % exactly (-dy, dx)), not via an independent cos/sin(angle+90)
+    % call: two separate trig evaluations of a different input angle
+    % are not guaranteed exactly orthogonal in floating point, and for
+    % a region thinner than /Spacing that sub-ulp slack can be enough
+    % to place the sole candidate offset just outside the box's true
+    % projection, so hkclipseg rejects it and the pass silently draws
+    % nothing (Codex review, PR #121). Must match the drawing loop's
+    % own derivation below exactly, or the two loops' /MaxLines counts
+    % and actual candidate offsets could disagree.
+    hdy neg /hnx exch def
+    hdx /hny exch def
+    hdx abs hbw mul hdy abs hbh mul add /hmaxseg exch def
+    % Centered the same way the drawing loop below centers its own
+    % projections (subtracting hcproj) -- raw, uncentered corner dot
+    % products round differently in floating point than the centered
+    % ones the drawing loop actually uses (confirmed: a large-magnitude
+    % /BBox far from the origin can make the two disagree by one whole
+    % candidate line), so using anything else here risks a pre-flight
+    % count that doesn't match what the drawing loop can actually
+    % produce (Codex review, PR #121, round 4).
+    /hcproj hcx hnx mul hcy hny mul add def
+    hkmmreset
+    hbx0 hnx mul hby0 hny mul add hcproj sub hkmmfeed
+    hbx1 hnx mul hby0 hny mul add hcproj sub hkmmfeed
+    hbx0 hnx mul hby1 hny mul add hcproj sub hkmmfeed
+    hbx1 hnx mul hby1 hny mul add hcproj sub hkmmfeed
+    hkmx hkmn sub hkspacing div cvi 1 add /hnlines exch def
+    /htotallines htotallines hnlines add def
+    hmaxseg hkstep div cvi 1 add /hsamplesperline exch def
+    /htotalsamples htotalsamples hnlines hsamplesperline mul add def
+  } forall
+  htotallines hmaxlines gt { hatch-line-count-exceeds-safety-limit } if
+  hdensityopt 0 get null ne htotalsamples hmaxsamples gt and
+    { hatch-sample-count-exceeds-safety-limit }
+  if
+
+  hopts /Seed known /hseeded exch def
+  hseeded { /hsaved rrand def hopts /Seed get cvi srand } if
+
+  % gsave/grestore, not just a bare setlinewidth: every drawing branch
+  % below sets its own line width (from /Width or a density bucket),
+  % which would otherwise silently overwrite the caller's own
+  % linewidth with no way back -- gsave/grestore also protects the
+  % current path, which is what lets a second, layered `hatch` call
+  % over the same clip still default /BBox from `pathbbox` (see the
+  % /BBox docs above): without it, the first call's own strokes end
+  % with `stroke`'s ordinary implicit newpath, leaving nothing for a
+  % second call's default to read.
+  gsave
+  hangles {
+    /hang exch def
+    hang cos /hdx exch def
+    hang sin /hdy exch def
+    % Same algebraic derivation as the pre-flight loop above, and for
+    % the same reason -- must agree with it exactly.
+    hdy neg /hnx exch def
+    hdx /hny exch def
+    /hcproj hcx hnx mul hcy hny mul add def
+    hkmmreset
+    hbx0 hnx mul hby0 hny mul add hcproj sub hkmmfeed
+    hbx1 hnx mul hby0 hny mul add hcproj sub hkmmfeed
+    hbx0 hnx mul hby1 hny mul add hcproj sub hkmmfeed
+    hbx1 hnx mul hby1 hny mul add hcproj sub hkmmfeed
+    /hkmin hkmn def
+    /hkmax hkmx def
+    % Integer-indexed, not a floating-point `for` accumulating
+    % hkspacing repeatedly: PostScript's own `for` can take one extra
+    % (or one fewer) trip than cvi(span/step)+1 predicts, since it
+    % accumulates the step by repeated addition rather than computing
+    % that same division -- confirmed empirically (Codex review, PR
+    % #121, round 3): a 12-line pre-flight estimate saw a real 13th
+    % candidate. Deriving each line's own hk from the integer index
+    % instead makes the real trip count *equal* cvi(span/step)+1 by
+    % construction, matching the pre-flight formula exactly rather
+    % than merely hoping the two computations agree.
+    hkmax hkmin sub hkspacing div cvi 1 add /hknlines exch def
+    % The candidate set rarely divides the span evenly, so
+    % (hknlines-1)*hkspacing is usually a little short of hkmax --
+    % anchoring the whole run flush against hkmin puts the *first*
+    % candidate exactly tangent to the box's own boundary, and at a
+    % near-axis-aligned angle floating-point roundoff can then make
+    % hkclipseg reject that tangent intersection, silently drawing
+    % nothing for a thin region that geometrically should get one line
+    % (Codex review, PR #121, round 4). Splitting the leftover slack
+    % evenly across both ends centers every candidate a little inside
+    % the box instead, including -- especially -- the single-candidate
+    % case (hknlines 1), which used to sit exactly at hkmin with no
+    % margin at all.
+    hkmax hkmin sub hknlines 1 sub hkspacing mul sub 2 div /hkslack exch def
+    hkmin hkslack add /hkbase exch def
+    0 1 hknlines 1 sub {
+      /hki exch def
+      hkbase hki hkspacing mul add /hk exch def
+      % Mirrors artkit.ps's scodds exactly, for the same reason its own
+      % comment names: hkfrnd can land on exactly 1.0, which a bare
+      % `hkfrnd hdropout lt` turns into "never dropped" even for a
+      % documented-certain /Dropout of 1 (Codex review, PR #121, round
+      % 3 -- a seed exists where the sole candidate line in a one-line
+      % region survives a /Dropout of 1). >= 1 and <= 0 both skip the
+      % roll entirely, not just short-circuit after rolling.
+      hdropout 1 ge
+        { true }
+        { hdropout 0 le { false } { hkfrnd hdropout lt } ifelse }
+      ifelse
+        {}
+        {
+          hwobble 0 gt { hkfrnd 2 mul 1 sub hwobble mul } { 0 } ifelse
+          hk add /hkk exch def
+          hcx hnx hkk mul add /hpx exch def
+          hcy hny hkk mul add /hpy exch def
+          hpx hpy hdx hdy hdiag neg hdiag hkclipseg
+          /hhit exch def
+          /hthi exch def
+          /htlo exch def
+          hhit {
+            hktrimhi 0 gt
+              {
+                hkfrnd hktrimhi hktrimlo sub mul hktrimlo add /htfrac exch def
+                hkfrnd /htsplit exch def
+              }
+              {
+                /htfrac 0 def
+                /htsplit 0.5 def
+              }
+            ifelse
+            hthi htlo sub /hspan exch def
+            htlo hspan htfrac mul htsplit mul add /htlo2 exch def
+            hthi hspan htfrac mul 1 htsplit sub mul sub /hthi2 exch def
+            htlo2 hthi2 le {
+              hdensityopt 0 get null eq
+                {
+                  hwidthranged
+                    { hkfrnd hwidthhi hwidthlo sub mul hwidthlo add }
+                    { hwidthlo }
+                  ifelse
+                  setlinewidth
+                  newpath
+                  hcx hnx hkk mul add hdx htlo2 mul add
+                  hcy hny hkk mul add hdy htlo2 mul add
+                  moveto
+                  hcx hnx hkk mul add hdx hthi2 mul add
+                  hcy hny hkk mul add hdy hthi2 mul add
+                  lineto
+                  stroke
+                }
+                {
+                  /hrunb 0 def
+                  /hrunt0 htlo2 def
+                  % Integer-indexed for the same reason as the k-loop
+                  % above: the real trip count must equal
+                  % cvi(span/step)+1 by construction, not merely agree
+                  % with it. hthi2 htlo2 sub is this line's own
+                  % (already-clipped-and-trimmed) span, always <=
+                  % hmaxseg, so this count is always <= the pre-flight
+                  % per-line estimate that bounded /MaxSamples.
+                  hthi2 htlo2 sub hkstep div cvi 1 add /hknsamp exch def
+                  0 1 hknsamp 1 sub {
+                    /hti exch def
+                    htlo2 hti hkstep mul add /ht exch def
+                    hcx hnx hkk mul add hdx ht mul add /hsx exch def
+                    hcy hny hkk mul add hdy ht mul add /hsy exch def
+                    hsx hsy hdensityopt 0 get exec hkclamp01 /hdval exch def
+                    hdval hdthresh le
+                      { /hb 0 def }
+                      { hdval hnbuckets 1 sub mul cvi 1 add /hb exch def }
+                    ifelse
+                    hb hrunb ne {
+                      hrunb 0 gt {
+                        hwidthlo hwidthhi hrunb 1 sub hnbuckets 1 sub div hklerp
+                        setlinewidth
+                        newpath
+                        hcx hnx hkk mul add hdx hrunt0 mul add
+                        hcy hny hkk mul add hdy hrunt0 mul add
+                        moveto
+                        hcx hnx hkk mul add hdx ht mul add
+                        hcy hny hkk mul add hdy ht mul add
+                        lineto
+                        stroke
+                      } if
+                      /hrunt0 ht def
+                      /hrunb hb def
+                    } if
+                  } for
+                  hrunb 0 gt {
+                    hwidthlo hwidthhi hrunb 1 sub hnbuckets 1 sub div hklerp
+                    setlinewidth
+                    newpath
+                    hcx hnx hkk mul add hdx hrunt0 mul add
+                    hcy hny hkk mul add hdy hrunt0 mul add
+                    moveto
+                    hcx hnx hkk mul add hdx hthi2 mul add
+                    hcy hny hkk mul add hdy hthi2 mul add
+                    lineto
+                    stroke
+                  } if
+                }
+              ifelse
+            } if
+          } if
+        }
+      ifelse
+    } for
+  } forall
+  grestore
+
+  hseeded { hsaved srand } if
+} def
+%%EOF

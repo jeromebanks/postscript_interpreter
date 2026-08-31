@@ -1,0 +1,113 @@
+%!PS-Adobe-3.0
+%%Title: Three Hatches — a specimen sheet for hatchkit.ps
+%%BoundingBox: 0 0 900 360
+%%EndComments
+
+% Specimen sheet for the reusable hatching library (issue #49,
+% lib/hatchkit.ps): one panel per technique the library is meant to
+% cover. Left: flat shading, a single evenly spaced pass. Middle: a
+% curved-looking tonal band -- a density callback keyed to distance
+% from an imagined light source, the same trick that reads as a
+% rounded sphere in real engravings even though every stroke is
+% perfectly straight. Right: layered cross-hatching, built by calling
+% `hatch` two and three times over the same region at different
+% angles -- `hatch` itself only ever draws one family of lines per
+% call; layering is the caller's own composition, the same way
+% lib/etching.ps's et-draw layers a second crosshatch pass into its
+% shadows. Run from the repo root:
+%
+%   pscat --page 900x360 examples/hatching.ps
+
+(lib/hatchkit.ps) run
+
+/showctr { /tky exch def /tkx exch def /tks exch def
+    tkx tks stringwidth pop 2 div sub tky moveto tks show } def
+
+1 1 1 setrgbcolor clippath fill
+
+/Palatino-Bold findfont 24 scalefont setfont
+0.1 0.1 0.12 setrgbcolor
+(Three Hatches) 450 336 showctr
+/Palatino-Italic findfont 12 scalefont setfont
+(flat shading, a curved-looking tonal band, layered cross-hatching -- lib/hatchkit.ps) 450 316 showctr
+
+/Palatino findfont 11 scalefont setfont
+/panel { % x y w h -
+  /ph exch def /pw exch def /py exch def /px exch def
+  gsave
+    px py translate
+    0 0 0 setrgbcolor 0.75 setlinewidth
+    newpath 0 0 moveto pw 0 lineto pw ph lineto 0 ph lineto closepath stroke
+} def
+/endpanel { grestore } def
+
+% --- left: flat shading ---------------------------------------------------
+40 40 240 240 panel
+newpath 0 0 moveto 240 0 lineto 240 240 lineto 0 240 lineto closepath clip
+0.15 0.13 0.1 setrgbcolor
+1 setlinecap
+<< /Angle 42 /Spacing 4 /Width 1 /Seed 11 >> hatch
+endpanel
+0.1 0.1 0.12 setrgbcolor
+(flat shading: one even pass) 160 26 showctr
+
+% --- middle: a curved-looking tonal band ----------------------------------
+% A single light source above and left of the clipped circle. Density
+% falls off with distance from it, so a flat disc of straight hatch
+% lines reads as a lit sphere -- the same illusion an engraver gets
+% from tonal (not contour) hatching.
+/hkdemo-lightx 40 def
+/hkdemo-lighty 200 def
+/hkdemo-density {
+  /hddy exch hkdemo-lighty sub def
+  /hddx exch hkdemo-lightx sub def
+  hddx dup mul hddy dup mul add sqrt 230 div 1 exch sub
+} def
+
+340 40 240 240 panel
+newpath 120 120 100 0 360 arc closepath clip
+0.15 0.13 0.1 setrgbcolor
+1 setlinecap
+<< /Angle 55 /Spacing 2.2 /Width [ 0.3 2.2 ] /Seed 21
+   /Density { hkdemo-density } /DensityThreshold 0.05 >> hatch
+endpanel
+0.1 0.1 0.12 setrgbcolor
+(tonal band: /Density reads as curvature) 460 26 showctr
+
+% --- right: layered cross-hatch -------------------------------------------
+% Three vertical bands over the same region, each one more `hatch`
+% pass than the last -- the classic engraver's escalation from a
+% light wash to a dark shadow, entirely from straight lines.
+640 40 240 240 panel
+0.15 0.13 0.1 setrgbcolor
+1 setlinecap
+
+% Each band's hatch calls all default /BBox from the clip path's own
+% pathbbox -- hatch brackets its own drawing in gsave/grestore, so the
+% clip path survives a call, and a second, layered call over the same
+% region can still rely on the default.
+
+gsave
+newpath 0 0 moveto 80 0 lineto 80 240 lineto 0 240 lineto closepath clip
+<< /Angle 45 /Spacing 4 /Width 1 /Seed 31 >> hatch
+grestore
+
+gsave
+newpath 80 0 moveto 160 0 lineto 160 240 lineto 80 240 lineto closepath clip
+<< /Angle 45 /Spacing 4 /Width 1 /Seed 31 >> hatch
+<< /Angle 135 /Spacing 4 /Width 1 /Seed 32 >> hatch
+grestore
+
+gsave
+newpath 160 0 moveto 240 0 lineto 240 240 lineto 160 240 lineto closepath clip
+<< /Angle 45 /Spacing 4 /Width 1 /Seed 31 >> hatch
+<< /Angle 135 /Spacing 4 /Width 1 /Seed 32 >> hatch
+<< /Angle 0 /Spacing 4 /Width 1 /Seed 33 >> hatch
+grestore
+
+endpanel
+0.1 0.1 0.12 setrgbcolor
+(layered cross-hatch: 1, 2, 3 passes) 760 26 showctr
+
+showpage
+%%EOF

@@ -221,7 +221,35 @@ one, because the natural way to write a non-uniform scatter is a
 page is scattered and none placed by hand) demonstrate it (NOTES.md's
 entry has the full story, including why `/Seed` saves and restores the
 caller's random stream with `rrand` instead of just calling `srand`,
-and why gs agrees on scatter's counts but not its placements).
+and why gs agrees on scatter's counts but not its placements). Also
+done: issue #49, a reusable hatching and cross-hatching library — a
+sixth sibling, `lib/hatchkit.ps` (no dependency on `artkit.ps` or any
+other sibling): one operator, `hatch`, fills whatever region is
+currently *clipped* with parallel line strokes, leaning entirely on
+the graphics state's own `clip` rather than reimplementing
+point-in-polygon math — lines sweep past the region's real boundary
+and get cut to shape by the ambient clip, so concave and
+self-intersecting regions clip exactly as cleanly as convex ones.
+Single or multi-angle (`/Angles`, one full layered pass per angle —
+cross-hatching is just two calls 90 degrees apart), seeded
+width/wobble/dropout/length variation, and an optional `/Density`
+callback (clamped into `[0,1]` regardless of what it returns, and
+bounded by two independent deterministic-from-`/BBox`/`/Spacing`
+pre-flight checks — `/MaxLines` and `/MaxSamples` — computed and
+enforced before any drawing or RNG draw, so a pathological `/Spacing`
+or callback can change tone but never spawn unbounded geometry).
+`examples/hatching.ps` is a three-panel specimen sheet (flat shading,
+a `/Density`-driven tonal band that reads as a curved lit sphere from
+perfectly straight strokes, and layered cross-hatching). Tag-migrated
+into the doc-comment capability catalog (issue #94) from the start,
+rather than added to `build.rs`'s `LEGACY_FILES` (NOTES.md's entry has
+the full story, including two real implementation bugs a `--headless`
+render actually caught rather than reasoning about the PostScript: an
+`hkclipseg` initial range too narrow to ever draw a full-length line,
+and `/Density`'s own value stored under a bare name that silently
+auto-executed the caller's callback mid-setup — the exact footgun this
+file's own default-wrapping helper exists to avoid, applied
+inconsistently to a second name in the same file).
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
@@ -429,11 +457,12 @@ renders eight examples in both and compares block-downsampled output).
    `lib/*.ps`, parsed at build time by the new `build.rs` into
    `src/capabilities.rs`'s catalog — see `build.rs`'s own module docs
    for the tag grammar and NOTES.md's issue #94 entry for the full
-   story. Only `lib/paintkit.ps` is migrated so far (a deliberately
-   staged subset, matching the coupling doc's own worked example);
-   migrating the rest of `lib/*.ps` — `artkit.ps`/`pagekit.ps`/the
-   four style packs/`handscript.ps`/`hangul.ps` — is itchy-when-you-
-   get-to-it follow-up work, not a filed issue. The mechanism already
+   story. `lib/paintkit.ps` and `lib/hatchkit.ps` (issue #49 — a
+   brand-new file, so it started tagged rather than being added to
+   `LEGACY_FILES`) are migrated so far; migrating the rest of
+   `lib/*.ps` — `artkit.ps`/`pagekit.ps`/the four style packs/
+   `handscript.ps`/`hangul.ps` — is itchy-when-you-get-to-it follow-up
+   work, not a filed issue. The mechanism already
    handles `Template`/`Dial` generically (same `/name ... def`
    discovery as `Procedure`) — including `lib/styles/*.ps`'s
    `/name /othername def` shape (a Dial bound to another name literal,
