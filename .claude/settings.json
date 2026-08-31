@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh pr merge *)"
+    ]
+  },
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Bash(gh pr merge *)"
+    ]
+  }
+}
