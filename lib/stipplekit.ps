@@ -1,0 +1,266 @@
+%!PS-Adobe-3.0
+%%Title: stipplekit.ps — density-driven stippling and point-shading primitives
+%%Creator: pscat — issue #50
+%%EndComments
+% @requires: (lib/artkit.ps) run
+
+% A thin convenience layer over lib/artkit.ps's `scatter` (issue #48):
+% one operator, `stipple`, that places dots (or any caller-supplied
+% point mark) across a region according to a density — constant, or a
+% per-point callback for tonal stippling. It deliberately does not
+% invent a new placement engine or a competing options format —
+% regions, seeding, minimum spacing, attempt/deposit budgets, and size
+% variation are all `scatter`'s own vocabulary, unchanged. `stipple`'s
+% only real job is deciding what `/Density` means when it is a
+% callback, and supplying a sensible default `/Mark` (a filled circle)
+% so a caller who just wants stippled dots never has to write one.
+%
+%   0 0 200 200 screct << /Density 0.02 /Seed 3 >> stipple
+%
+%   0 0 200 200 screct
+%   << /Density { pop 100 div } /MaxDensity 0.02 /MinSpacing 3 >> stipple
+%
+% `stipple` takes a region exactly as `scatter` does — build one with
+% `screct`/`scpath` (a rectangle or the current path; see artkit.ps's
+% own docs for the full contract, including `clippath scpath` for
+% scattering inside the current clip). Every option below that isn't
+% listed is `scatter`'s own and forwarded unchanged: `/Count`,
+% `/MinSpacing`, `/Seed`, `/Tries`, `/Budget`, `/Scale`, `/Rotate`,
+% `/Mark`, `/Weight`. `scplaced` (artkit.ps) reports how many marks
+% actually landed after a `stipple` call, the same as after a raw
+% `scatter` one — `stipple` never invents a second readback for a
+% number `scatter` already publishes.
+%
+% `/Density`, constant form: a plain number, forwarded verbatim as
+% `scatter`'s own `/Density` (marks per unit area, resolved against
+% the region's real area) — uniform stippling, zero new arithmetic.
+%
+% `/Density`, callback form: a procedure `{x y -> w}`, `w` in [0,1]
+% (clamped by `scatter`'s own acceptance roll — see `scodds` in
+% artkit.ps — regardless of what the proc actually returns), read as a
+% *relative* tone at that point: 1 means "as dense as this stipple
+% ever gets here," 0 means "no ink here." This is the same convention
+% `lib/hatchkit.ps`'s `/Density` tone callback uses, not a
+% newly-invented one. The absolute scale comes from a second, required
+% option:
+%
+% `/MaxDensity num >= 0` — marks per unit area at a relative tone of 1.
+% Required only when `/Density` is a callback (ignored, harmless if
+% given alongside a constant `/Density` or `/Count`). Internally,
+% `stipple` hands `scatter` its own `/Density` as `/MaxDensity` (the
+% peak, which is what actually drives `scatter`'s own `Count =
+% truncate(MaxDensity * area)`) and the caller's callback as its own
+% `/Weight` (which thins acceptance down from that peak, point by
+% point). Read the consequence precisely: **the realized total tracks
+% `/MaxDensity` times the region's area, not the field's own spatial
+% integral** — a field whose average is well below its peak still
+% resolves close to the peak-driven count, just reshaped toward the
+% high-tone areas by the acceptance roll, exactly the way `scatter`'s
+% own `/Weight` has always worked (`scatter_weight_biases_where_marks_
+% land` in tests/artkit.rs already pins this for the raw primitive).
+% `stipple` does not attempt to make total count track ∫w dA instead —
+% that would mean forcing `scatter`'s own `/Tries` down to 1 to turn
+% each candidate into a single accept/reject Bernoulli trial rather
+% than a retry-until-accepted slot, silently changing what `/Tries`
+% means versus every other `scatter`-based library in this codebase.
+% A caller who genuinely needs total-count-tracks-the-integral has
+% that same option available directly: call `scatter` itself with
+% `/Tries 1` and its own `/Weight`.
+%
+% Since `stipple` hands the caller's own callback straight to `scatter`
+% as `/Weight`, it inherits that option's exact contract unchanged: the
+% proc MUST consume both operands and leave exactly one number, must
+% not touch `sc-`/`sq-`/`si-` names (it runs inside `scatter`'s own
+% placement loop, same as a raw `/Weight` would), and an uncallable
+% value surfaces as `scatter`'s own `scatter-weight-must-be-a-procedure`
+% — the *rejection* is entirely `scatter`'s own; `stipple` only calls
+% artkit's own `sccallable` predicate itself (not a reimplementation of
+% it) to decide, before drawing, whether `/MaxDensity` should be
+% demanded at all, the same "don't duplicate what the layer underneath
+% already checks" choice `/Count`-vs-callback-`/Density` conflicts
+% rely on below.
+%
+% `/Count` and a callback `/Density` are mutually exclusive the same
+% way `/Count`/`/Density` already are inside `scatter` itself — no
+% extra check here; after `stipple` substitutes its own peak/weight
+% pair, a caller-supplied `/Count` alongside them simply trips
+% `scatter`'s own `scatter-count-and-density-are-mutually-exclusive`.
+% `/Weight` and a callback `/Density` ARE checked here
+% (`stipple-weight-and-callable-density-are-mutually-exclusive`) —
+% unlike `/Count`, `stipple` cannot let this one propagate: it needs
+% the `/Weight` slot itself for the callback, and silently overwriting
+% a caller's own `/Weight` would be a silent conflict, not a caught
+% one. A constant `/Density` (or `/Count`) may still be paired with an
+% explicit `/Weight` — that combination isn't `stipple`'s to own, and
+% is forwarded straight through.
+%
+% `/Mark {x y scale angle -> -}` — optional, unlike `scatter`'s own
+% (required) `/Mark`. Default: a filled circle, `newpath`ed first (a
+% region built via `scpath` leaves the flattened region path behind on
+% purpose — see artkit.ps's own docs — so a mark that skipped `newpath`
+% would fill that leftover outline on its very first call only, before
+% `fill`'s own implicit `newpath` cleared it for every mark after;
+% subtle, and exactly the kind of one-shot corruption this file's own
+% tests check for directly) of radius `/DotRadius * scale` — `scale`
+% comes from `scatter`'s own `/Scale [lo hi]` range, so "dot-size
+% variation" is `scatter`'s existing vocabulary, not a new one.
+% `/DotRadius num > 0` (default 1.5) is the base radius the default
+% mark scales from; unused, harmless, if a caller supplies their own
+% `/Mark` — that override is exactly how `stipple` covers genuine
+% point-shading with arbitrary marks (crosses, ticks, glyphs), per
+% artkit.ps's own one-line index of `scatter`'s shapes: `region
+% <</Mark {x y s a ...}>> scatter`.
+%
+% Reproducibility, safety limits, and Ghostscript compatibility are
+% all inherited from `scatter` unchanged (same pinned draw order, same
+% `/Seed`/`rrand`/`srand` round-trip, same `/Budget`/`/Tries` bounds,
+% same rand generator caveat) — `stipple` adds no randomness of its
+% own.
+%
+% Scratch prefix: `sp-`, distinct from `scatter`'s own `sc-`/`sq-`/
+% `si-` and hatchkit's `h-`. A `/Density` callback must not touch
+% `sp-` names any more than it may touch `sc-`/`sq-`/`si-` ones —
+% `stipple`'s own pre-flight (building the private options copy,
+% reading `/DotRadius`) always finishes before `scatter` is ever
+% called, so there is no `sp-` state alive during the callback's own
+% invocation, but the reserved-prefix discipline is stated here for
+% the same reason hatchkit and artkit state theirs: so a future edit
+% to this file doesn't introduce one without noticing the contract.
+
+% dict key default spgetdef -> value
+% stipplekit's own copy of the wrap-the-default-in-an-array trick —
+% see artkit's scgetdef / hatchkit's hkgetdef / paintkit's pkgetdef
+% for the same reasoning, each library owning its own copy rather than
+% reaching into a sibling file's scratch namespace.
+% @internal
+/spgetdef {
+  /spgdd exch 1 array astore def
+  /spgdk exch def
+  /spgdt exch def
+  spgdt spgdk known { spgdt spgdk get } { spgdd 0 get } ifelse
+} def
+
+% v spisnum -> bool
+% stipplekit's own copy of artkit's scisnum, for the same reason
+% spgetdef is its own copy of scgetdef.
+% @internal
+/spisnum { type dup /integertype eq exch /realtype eq or } def
+
+% x y scale angle spdefaultmark -
+% The default /Mark: a filled circle of radius /DotRadius * scale.
+% `newpath` first — see this file's own header for why that isn't
+% optional. `spdotradius` is resolved once, before `scatter` runs, by
+% `stipple` itself.
+% @internal
+/spdefaultmark {
+  pop
+  /spmsc exch def
+  /spmy exch def
+  /spmx exch def
+  newpath
+  spmx spmy spdotradius spmsc mul 0 360 arc
+  closepath
+  fill
+} def
+
+% region opts stipple -
+% @kind: Procedure
+% @summary: Places dots (or a caller-supplied point mark) across a region according to a density — a constant number, or a per-point {x y -> w} tone callback for sparse-to-dense stippling. A thin convenience layer over artkit.ps's scatter; every option not listed here (/Count, /MinSpacing, /Seed, /Tries, /Budget, /Scale, /Rotate, /Mark, /Weight) is scatter's own, forwarded unchanged.
+% @example: 0 0 200 200 screct << /Density 0.02 /Seed 3 /MinSpacing 4 >> stipple
+% @param: /Density num or {x y -> w} marks per unit area (a number), or a relative [0,1] tone callback paired with /MaxDensity for the absolute scale
+% @param: /MaxDensity num >= 0 marks per unit area at a relative tone of 1; required only when /Density is a callback
+% @param: /DotRadius num > 0 base radius the default circular /Mark scales from via scatter's own /Scale range (default 1.5)
+/stipple {
+  % The whole options operand is wrapped before its own type is even
+  % checked -- the same auto-execution hazard as every proc-typed
+  % option below, just one level up: a caller passing a bare procedure
+  % where a dict belongs would otherwise get it bound by `def` and
+  % then executed by the very next bare reference meant only to
+  % type-check it (Codex review, PR #122, round 2).
+  1 array astore /spoptsbox exch def
+  /spregion exch def
+  spoptsbox 0 get type /dicttype ne { stipple-opts-must-be-a-dict } if
+  /spopts spoptsbox 0 get def
+
+  % A private copy -- scatter reads /Density/Weight/Mark from whatever
+  % is handed to it, and the callback branch below rewrites both, so
+  % the caller's own dict must never be the one mutated.
+  /spscopts spopts length 4 add dict def
+  spopts spscopts copy pop
+
+  % /DotRadius only feeds the *default* /Mark -- a caller who
+  % supplies their own must not be penalized for an unrelated (or
+  % malformed) /DotRadius sitting in a shared options dict (Codex
+  % review, PR #122, round 2; this file's own header already documents
+  % /DotRadius as "unused, harmless" here).
+  spscopts /Mark known
+  {}
+  {
+    % Wrapped in a 1-element array before it's ever validated -- a
+    % malformed /DotRadius (a caller's procedure, say) would otherwise
+    % get bound to a bare name by `def` and then auto-executed by the
+    % very next bare reference meant only to type-check it (Codex
+    % review, PR #122, round 1 -- the same hazard /Density's own wrap
+    % exists to avoid, missed here on the first pass because
+    % plain-numeric options looked safe to bare-bind by analogy with
+    % hatchkit's own /Spacing/Wobble/Dropout). Only after validation
+    % confirms it really is a number is it safe to bind bare --
+    % spdefaultmark reads it that way.
+    spopts /DotRadius 1.5 spgetdef 1 array astore /spdrbox exch def
+    spdrbox 0 get spisnum not { stipple-dotradius-must-be-a-number } if
+    spdrbox 0 get 0 le { stipple-dotradius-must-be-positive } if
+    /spdotradius spdrbox 0 get def
+    spscopts /Mark /spdefaultmark load put
+  } ifelse
+
+  spscopts /Density known {
+    % Wrapped in a 1-element array, the same trick spgetdef and
+    % hatchkit's own hdensityopt use: /Density is legitimately either
+    % a number or a procedure here, and a name bound directly to a
+    % procedure auto-executes on every bare reference -- fatal here,
+    % since nothing is on the operand stack yet for it to consume.
+    spscopts /Density get 1 array astore /spdensbox exch def
+    spdensbox 0 get spisnum not {
+      % Not a number. `stipple` still needs the /Weight slot for
+      % whatever this turns out to be (forwarded below regardless),
+      % so a caller-supplied /Weight is a conflict either way.
+      spscopts /Weight known
+        { stipple-weight-and-callable-density-are-mutually-exclusive } if
+      % Only route through the /MaxDensity-required contract when the
+      % value is actually callable -- `sccallable` itself (artkit.ps),
+      % not a homemade approximation. A first attempt used `xcheck`
+      % alone on the theory that it's the same first gate sccallable
+      % applies, but that's not the same predicate: `xcheck` is true
+      % for anything with its executable bit set, including a
+      % `cvx`-marked string or an undefined name, both of which
+      % `sccallable` correctly rejects after `xcheck` passes (its own
+      % type/name-chain checks). Using only `xcheck` let exactly those
+      % values reach the /MaxDensity-required branch and report the
+      % wrong error (Codex review, PR #122, round 3) -- calling the
+      % real predicate, safe here since scatter's own loop hasn't
+      % started yet (no `sc-` scratch is live to collide with), is
+      % what actually guarantees agreement with scatter's own /Weight
+      % validation, which is the whole point.
+      spdensbox 0 get sccallable {
+        spscopts /MaxDensity known not
+          { stipple-maxdensity-required-when-density-is-callable } if
+        % Same wrap, same reason as /DotRadius above -- a malformed
+        % /MaxDensity must fail with a named error, not auto-execute.
+        spscopts /MaxDensity get 1 array astore /spmaxdbox exch def
+        spmaxdbox 0 get spisnum not { stipple-maxdensity-must-be-a-number } if
+        spmaxdbox 0 get 0 lt { stipple-maxdensity-must-be-non-negative } if
+        /spmaxd spmaxdbox 0 get def
+        spscopts /Density spmaxd put
+      } {
+        % Not even executable -- scatter's own /Weight validation is
+        % what should reject this, not scatter's /Density validation
+        % (which a leftover /Density key here would hit first).
+        spscopts /Density undef
+      } ifelse
+      spscopts /Weight spdensbox 0 get put
+      spscopts /MaxDensity undef
+    } if
+  } if
+
+  spregion spscopts scatter
+} def
