@@ -3,6 +3,123 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Density-driven stippling and point-shading primitives (issue #50, 2026-08-31)
+
+A seventh sibling library, `lib/stipplekit.ps` — tag-migrated from
+birth (like `hatchkit.ps`, issue #49), so it registers with the
+`% @kind:`/`@summary:`/`@example:`/`@param:` capability catalog
+(issue #39/#94) automatically from `cargo build`, no hand-written
+`capabilities.rs` entry. Unlike `hatchkit.ps`, it *does* depend on a
+sibling: `@requires: (lib/artkit.ps) run`, the same declaration
+`paintkit.ps` already uses for the same reason.
+
+**One operator, `stipple`, a thin convenience layer over `scatter`
+(issue #48) — not a second placement engine.** The issue's own
+instruction ("build on the common placement conventions ... rather
+than introducing a competing options format") is taken literally:
+`stipple` takes the same `region` operand `scatter` does, and forwards
+`/Count`, `/MinSpacing`, `/Seed`, `/Tries`, `/Budget`, `/Scale`,
+`/Rotate` straight through unchanged. Reproducibility, the exact
+min-spacing hash grid, and the attempt/deposit budgets are inherited
+wholesale — no new arithmetic in territory PR #119 already spent eight
+Codex review rounds hardening. `scplaced` (already public via
+`artkit.ps`) reports a `stipple` call's count too; no duplicate
+readback was added.
+
+**`/Density`, extended, not replaced.** A plain number forwards
+verbatim as `scatter`'s own `/Density` (uniform). A callback `{x y ->
+w}` is read as a *relative* tone in [0,1] — the same convention
+`hatchkit.ps`'s own `/Density` tone callback already uses — paired
+with a required `/MaxDensity` (peak marks per unit area at a tone of
+1). Internally `stipple` does no count arithmetic of its own: it hands
+`scatter` `/MaxDensity` as its own `/Density` (which is what actually
+drives `scatter`'s `Count = truncate(MaxDensity * area)`) and the
+caller's callback, unwrapped, as `scatter`'s own `/Weight`. Two
+mechanisms `scatter` already had, recombined — zero new placement
+logic.
+
+**The advisor caught a real correctness bug in the first design before
+any of this was implemented.** The original plan defined the callback
+as returning absolute marks-per-area (the same units as the constant
+form) and computed `Count` from `truncate(MaxDensity * area)` while
+using `d / MaxDensity` as the acceptance weight, on the claim that the
+realized total would then track the field's own spatial integral. It
+doesn't: `scatter`'s placement loop retries up to `/Tries` (default
+20) times per candidate slot until one is accepted, so with any
+non-tiny mean acceptance probability the failure rate per slot is
+`(1-p̄)^20 ≈ 0` — the placed count converges on `Count` itself,
+essentially independent of the field's average. A concrete check
+(density 0.005 on the left half of a region, 0.01 on the right,
+`/MaxDensity 0.01`) would have realized ≈400 under the integral
+reading but ≈800 under the actual mechanism — confirmed once
+implemented (`callable_density_total_tracks_the_peak_not_the_average`
+in `tests/stipplekit.rs`). The fix taken is the smaller of the two the
+advisor offered: drop the units claim, document the callback as
+relative tone (matching `hatch`'s own convention), and state plainly
+that **the realized total tracks the peak times the area, not the
+field's own integral** — reshaping *where* marks land, not *how many*
+land overall. A caller who genuinely needs total-tracks-the-integral
+can call `scatter` directly with `/Tries 1`.
+
+**A second, purely mechanical bug surfaced during manual smoke
+testing, not code review: the auto-execution trap.** `/spdens
+spscopts /Density get def` followed by a bare `spdens spisnum` looked
+correct but crashed with a stack underflow on every callable-density
+call — binding a name directly to a procedure makes every *bare*
+reference to that name auto-execute it (the exact hazard
+`scgetdef`/`hkgetdef`/`hdensityopt`'s 1-element-array wrapping exists
+to avoid, documented in both `artkit.ps` and `hatchkit.ps` but easy to
+reintroduce in a new file that doesn't reuse their code). Fixed by
+wrapping `/Density`'s value in a 1-element array immediately and
+always reading it back via `spdensbox 0 get`, mirroring `hatchkit.ps`'s
+own `hdensityopt` exactly. Plain-numeric options (`/DotRadius`,
+`/MaxDensity` once validated as numeric) stay bare-bound, matching
+`hatchkit.ps`'s own precedent that the wrap is only needed for an
+option that is legitimately dual-typed (number-or-procedure), not for
+one that's always a scalar.
+
+**Two conflicts only `stipple` can catch; one it deliberately doesn't
+duplicate.** An explicit `/Weight` alongside a callable `/Density` is
+rejected by `stipple` itself
+(`stipple-weight-and-callable-density-are-mutually-exclusive`) —
+`scatter` has no way to see this conflict, since `stipple` would
+otherwise silently overwrite the caller's own `/Weight` rather than
+erroring. `/MaxDensity` missing when `/Density` is callable is the
+same shape (`stipple-maxdensity-required-when-density-is-callable`).
+By contrast, `/Count` given alongside a callable `/Density` is *not*
+separately checked — after `stipple`'s substitution the private
+options copy ends up with both `/Count` (the caller's) and `/Density`
+(the synthesized peak), which trips `scatter`'s own
+`scatter-count-and-density-are-mutually-exclusive` for free. Same
+reasoning for a non-callable, non-numeric `/Density` (e.g. a bare
+string): forwarded straight to `scatter` as `/Weight`, which surfaces
+`scatter-weight-must-be-a-procedure` — `stipple` never reimplements
+`sccallable`'s own (nontrivial, name-chain-resolving) validation.
+
+**Default `/Mark` is a filled circle, `newpath`ed first.** A region
+built via `scpath` deliberately leaves the flattened region path
+behind (`artkit.ps`'s own documented contract), so a mark that skipped
+`newpath` would fill that leftover outline on its first invocation
+only — `fill`'s own implicit `newpath` clears it for every mark after,
+making this a one-shot, easy-to-miss corruption if not caught early
+(caught during manual smoke testing before it reached the test suite).
+Radius is `/DotRadius * scale`, so "dot-size variation" is `scatter`'s
+existing `/Scale [lo hi]` range, not a new option. `/DotRadius`
+(default 1.5) is simply unused, not an error, when a caller supplies
+their own `/Mark` — the override path a genuine point-shading use
+(crosses, ticks, glyphs) needs.
+
+**Specimen sheet:** `examples/stippling.ps`, three 240x240 panels
+mirroring `hatching.ps`'s own layout — constant density, a
+callback-driven left-to-right sparse-to-dense tonal ramp, and
+point-shading with a custom rotated-cross `/Mark` sized by `/Scale`.
+No gallery/site entry, matching `hatchkit.ps`'s own precedent: a
+reusable primitive gets an `examples/` specimen, not a gallery card.
+
+**`sp-` scratch prefix**, distinct from `scatter`'s `sc-`/`sq-`/`si-`
+and `hatchkit.ps`'s `h-` (checked for collisions against every
+sibling library before picking it).
+
 ## Reusable hatching and cross-hatching primitives (issue #49, 2026-08-30)
 
 A sixth sibling library, `lib/hatchkit.ps` — no dependency on

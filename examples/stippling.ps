@@ -1,0 +1,91 @@
+%!PS-Adobe-3.0
+%%Title: Three Stipples — a specimen sheet for stipplekit.ps
+%%BoundingBox: 0 0 900 360
+%%EndComments
+
+% Specimen sheet for the density-driven stippling library (issue #50,
+% lib/stipplekit.ps): one panel per technique the library covers.
+% Left: a constant density -- flat, uniform stippling from a plain
+% number. Middle: a callback density -- a left-to-right tonal ramp
+% from sparse to dense, the classic stippling illustration technique,
+% built from nothing more than /Density { pop 240 div } and a peak
+% /MaxDensity. Right: point-shading -- a caller-supplied /Mark (small
+% rotated crosses, not dots) combined with /Scale for size variation
+% and /MinSpacing so marks never crowd. Run from the repo root:
+%
+%   pscat --page 900x360 examples/stippling.ps
+
+(lib/artkit.ps) run
+(lib/stipplekit.ps) run
+
+/showctr { /tky exch def /tkx exch def /tks exch def
+    tkx tks stringwidth pop 2 div sub tky moveto tks show } def
+
+1 1 1 setrgbcolor clippath fill
+
+/Palatino-Bold findfont 24 scalefont setfont
+0.1 0.1 0.12 setrgbcolor
+(Three Stipples) 450 336 showctr
+/Palatino-Italic findfont 12 scalefont setfont
+(constant density, a sparse-to-dense tonal ramp, custom-mark point-shading -- lib/stipplekit.ps) 450 316 showctr
+
+/Palatino findfont 11 scalefont setfont
+/panel { % x y w h -
+  /ph exch def /pw exch def /py exch def /px exch def
+  gsave
+    px py translate
+    0 0 0 setrgbcolor 0.75 setlinewidth
+    newpath 0 0 moveto pw 0 lineto pw ph lineto 0 ph lineto closepath stroke
+} def
+/endpanel { grestore } def
+
+% --- left: constant density -----------------------------------------------
+40 40 240 240 panel
+0.15 0.13 0.1 setrgbcolor
+0 0 240 240 screct
+<< /Density 0.03 /Seed 11 /MinSpacing 2.5 >> stipple
+endpanel
+0.1 0.1 0.12 setrgbcolor
+(constant density: one flat tone) 160 26 showctr
+
+% --- middle: a sparse-to-dense tonal ramp ----------------------------------
+% /Density's callback form reads as a *relative* tone (0 at the left
+% edge, 1 at the right); /MaxDensity sets the marks-per-area a tone of
+% 1 resolves to. The realized total tracks that peak times the
+% region's area, not the ramp's own average -- see stipplekit.ps's own
+% header -- which is exactly why the picture still reads left-to-right
+% as sparse to dense: the ramp reshapes *where* marks land, not merely
+% how many there are overall.
+340 40 240 240 panel
+0.15 0.13 0.1 setrgbcolor
+0 0 240 240 screct
+<< /Density { pop 240 div } /MaxDensity 0.035 /Seed 21 /MinSpacing 2 >> stipple
+endpanel
+0.1 0.1 0.12 setrgbcolor
+(tonal ramp: /Density reads as sparse-to-dense) 460 26 showctr
+
+% --- right: point-shading with a custom mark -------------------------------
+% A caller-supplied /Mark overrides stipplekit's own default dot
+% entirely -- here, small rotated crosses -- and /Scale (scatter's own
+% option, unchanged) is what gives them size variation; stipplekit
+% invents no separate size-range vocabulary for this.
+640 40 240 240 panel
+0.15 0.13 0.1 setrgbcolor
+0.6 setlinewidth
+0 0 240 240 screct
+<< /Count 220 /Seed 31 /MinSpacing 6 /Scale [ 0.5 2.5 ] /Rotate [ 0 360 ]
+   /Mark {
+     /spdemo-a exch def /spdemo-s exch def
+     /spdemo-y exch def /spdemo-x exch def
+     gsave
+       spdemo-x spdemo-y translate spdemo-a rotate
+       newpath 0 spdemo-s 3 mul neg moveto 0 spdemo-s 3 mul lineto stroke
+       newpath spdemo-s 3 mul neg 0 moveto spdemo-s 3 mul 0 lineto stroke
+     grestore
+   } >> stipple
+endpanel
+0.1 0.1 0.12 setrgbcolor
+(point-shading: a custom /Mark, sized by /Scale) 760 26 showctr
+
+showpage
+%%EOF

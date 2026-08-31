@@ -250,6 +250,34 @@ and `/Density`'s own value stored under a bare name that silently
 auto-executed the caller's callback mid-setup — the exact footgun this
 file's own default-wrapping helper exists to avoid, applied
 inconsistently to a second name in the same file).
+Also done: issue #50, density-driven stippling and point-shading — a
+seventh sibling, `lib/stipplekit.ps` (`@requires: (lib/artkit.ps) run`,
+tag-migrated from the start like hatchkit). One operator, `stipple`, a
+thin convenience layer over `scatter` (issue #48) rather than a second
+placement engine — the region operand and every option not about
+density (`/Count`, `/MinSpacing`, `/Seed`, `/Tries`, `/Budget`,
+`/Scale`, `/Rotate`) are `scatter`'s own, forwarded unchanged.
+`/Density` is a plain number (forwarded verbatim as `scatter`'s own
+`/Density`) or a `{x y -> w}` relative-tone callback paired with a
+required `/MaxDensity` (peak marks per area) — internally `stipple`
+hands `scatter` `/MaxDensity` as its own `/Density` (driving `Count`)
+and the callback, unwrapped, as `scatter`'s own `/Weight` (driving
+shape): two existing mechanisms recombined, no new placement
+arithmetic. The realized total deliberately tracks that peak times the
+region's area, not the field's own spatial integral — `scatter`'s
+retry-until-accepted `/Tries` loop makes the two diverge, a design bug
+the advisor caught before any code existed (NOTES.md's entry has the
+full story, including a second, independent bug hit during manual
+smoke testing: the exact same bare-name auto-execution footgun
+hatchkit's own entry above describes, in a brand-new file that didn't
+reuse hatchkit's code and so didn't inherit its fix). Default `/Mark`
+is a filled circle sized by `scatter`'s own `/Scale` range (no new
+size-variation vocabulary); a caller-supplied `/Mark` overrides it
+entirely for real point-shading. `examples/stippling.ps` is a
+three-panel specimen (constant density, a callback-driven sparse-to-
+dense tonal ramp, point-shading with a custom rotated-cross mark); no
+gallery/site entry, matching hatchkit's own precedent that a primitive
+gets an `examples/` specimen, not a gallery card.
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
