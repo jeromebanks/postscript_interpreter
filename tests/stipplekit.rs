@@ -161,27 +161,29 @@ fn callable_density_total_tracks_the_peak_not_the_average() {
     // scatter's default /Tries (20 retries per slot), a candidate
     // slot almost always finds *some* accepting position before
     // giving up, so the realized total tracks /MaxDensity * area, not
-    // the field's own spatial average. A field that's 1 almost
-    // everywhere and 0 on a sliver should place close to the full
-    // peak-driven count, not a count scaled down by the sliver.
+    // the field's own spatial average. The discriminating case is a
+    // genuinely different average, not a thin sliver (where both
+    // readings predict nearly the same number and the test would pass
+    // under either mechanism): half the region at a relative tone of
+    // 0.5, half at 1.0. Peak-driven Count is
+    // truncate(0.01 * 40000) = 400; a naive
+    // total-tracks-the-integral reading would instead predict roughly
+    // 400 * (0.5 + 1.0)/2 =~ 300. Confirmed empirically (headless
+    // pscat, this exact call) to land at 400, matching the peak
+    // reading, not the integral one -- pinned here as a regression
+    // guard for the design decision NOTES.md's issue #50 entry
+    // documents at length.
     let got = eval(
         "0 0 200 200 screct \
-         << /Density { /y exch def /x exch def x 1 lt { 0 } { 1 } ifelse } \
-            /MaxDensity 0.02 /Seed 4 /Mark { pop pop pop pop } >> stipple \
+         << /Density { /y exch def /x exch def x 100 lt { 0.5 } { 1 } ifelse } \
+            /MaxDensity 0.01 /Seed 4 /Mark { pop pop pop pop } >> stipple \
          scplaced",
     );
     let placed: i64 = got[0].parse().expect("scplaced is a number");
-    // Peak-driven Count is truncate(0.02 * 40000) = 800; a field
-    // that's 0 on a 1-unit-wide sliver out of 200 should still land
-    // close to that, not near zero and not near 4 (a naive
-    // integral-of-the-field reading would predict roughly 0.02*40000*
-    // (199/200) =~ 796 too -- the discriminating case is a much
-    // sparser field, covered by the min/max split test above; this
-    // one just guards against a regression to "total scales with
-    // Count directly" being accidentally lost).
     assert!(
-        placed > 700,
-        "expected the peak-driven count (~800) to survive a thin zero-tone sliver, got {placed}"
+        placed > 380,
+        "expected the peak-driven count (~400) rather than the integral-driven one \
+         (~300), got {placed}"
     );
 }
 
