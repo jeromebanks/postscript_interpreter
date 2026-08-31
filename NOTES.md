@@ -98,6 +98,39 @@ numeric — `tests/stipplekit.rs`'s
 `/MaxDensity` counterpart pin the fix directly, by giving the
 malformed procedure a side effect and asserting it never ran.
 
+**A second Codex round on the same PR found three more, related
+defects, all fixed the same way.** First, `stipple`'s own *options*
+operand had the identical auto-execution hazard one level up: `/spopts
+exch def` then a bare `spopts type` reference, so a caller passing a
+bare procedure where the whole options dict belongs would get it
+executed instead of rejected with `stipple-opts-must-be-a-dict` — now
+wrapped exactly like every proc-typed key inside it. Second,
+`/DotRadius` was validated unconditionally even when a caller supplied
+their own `/Mark` — directly contradicting this file's own documented
+"unused, harmless" claim for that combination; a malformed `/DotRadius`
+sitting in a shared options dict alongside a real custom `/Mark` used
+to fail a call that never touches `/DotRadius` at all. Fixed by only
+resolving and validating it inside the branch that actually installs
+the default mark. Third, a non-callable, non-numeric `/Density` (a
+bare string, say) with no `/MaxDensity` given used to report
+`stipple-maxdensity-required-when-density-is-callable` — wrong and
+confusing, since the value was never trying to be a callback in the
+first place; the documented contract (this file's own header) says it
+should surface `scatter`'s own `scatter-weight-must-be-a-procedure`
+instead, since it's forwarded as `/Weight` and never re-validated.
+Fixed by gating the whole `/MaxDensity`-required branch on `xcheck` —
+the same first check `sccallable` itself applies before it does any
+name-chain resolution, so it can never disagree with what `scatter`'s
+real validation would ultimately accept, without stipplekit
+reimplementing that chain-following logic itself. One implementation
+slip surfaced while fixing the first of these: an initial
+`spscopts /Mark known { {} } { ... } ifelse` doesn't push a genuine
+no-op — the *inner* `{}` is data, not an empty procedure body, so
+executing the outer one pushed a stray empty procedure onto the
+operand stack on every call with a caller-supplied `/Mark`, caught
+immediately by the existing test suite (a `run()` helper here, like
+`tests/hatchkit.rs`'s, asserts an empty stack after every call).
+
 **Two conflicts only `stipple` can catch; one it deliberately doesn't
 duplicate.** An explicit `/Weight` alongside a callable `/Density` is
 rejected by `stipple` itself

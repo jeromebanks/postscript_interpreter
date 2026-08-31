@@ -168,24 +168,16 @@
 % @param: /MaxDensity num >= 0 marks per unit area at a relative tone of 1; required only when /Density is a callback
 % @param: /DotRadius num > 0 base radius the default circular /Mark scales from via scatter's own /Scale range (default 1.5)
 /stipple {
-  /spopts exch def
+  % The whole options operand is wrapped before its own type is even
+  % checked -- the same auto-execution hazard as every proc-typed
+  % option below, just one level up: a caller passing a bare procedure
+  % where a dict belongs would otherwise get it bound by `def` and
+  % then executed by the very next bare reference meant only to
+  % type-check it (Codex review, PR #122, round 2).
+  1 array astore /spoptsbox exch def
   /spregion exch def
-
-  spopts type /dicttype ne { stipple-opts-must-be-a-dict } if
-
-  % Wrapped in a 1-element array before it's ever validated -- a
-  % malformed /DotRadius (a caller's procedure, say) would otherwise
-  % get bound to a bare name by `def` and then auto-executed by the
-  % very next bare reference meant only to type-check it (Codex
-  % review, PR #122 -- the same hazard /Density's own wrap exists to
-  % avoid, missed here on the first pass because plain-numeric options
-  % looked safe to bare-bind by analogy with hatchkit's own /Spacing/
-  % /Wobble/Dropout). Only after validation confirms it really is a
-  % number is it safe to bind bare -- spdefaultmark reads it that way.
-  spopts /DotRadius 1.5 spgetdef 1 array astore /spdrbox exch def
-  spdrbox 0 get spisnum not { stipple-dotradius-must-be-a-number } if
-  spdrbox 0 get 0 le { stipple-dotradius-must-be-positive } if
-  /spdotradius spdrbox 0 get def
+  spoptsbox 0 get type /dicttype ne { stipple-opts-must-be-a-dict } if
+  /spopts spoptsbox 0 get def
 
   % A private copy -- scatter reads /Density/Weight/Mark from whatever
   % is handed to it, and the callback branch below rewrites both, so
@@ -193,8 +185,30 @@
   /spscopts spopts length 4 add dict def
   spopts spscopts copy pop
 
-  spscopts /Mark known not
-    { spscopts /Mark /spdefaultmark load put } if
+  % /DotRadius only feeds the *default* /Mark -- a caller who
+  % supplies their own must not be penalized for an unrelated (or
+  % malformed) /DotRadius sitting in a shared options dict (Codex
+  % review, PR #122, round 2; this file's own header already documents
+  % /DotRadius as "unused, harmless" here).
+  spscopts /Mark known
+  {}
+  {
+    % Wrapped in a 1-element array before it's ever validated -- a
+    % malformed /DotRadius (a caller's procedure, say) would otherwise
+    % get bound to a bare name by `def` and then auto-executed by the
+    % very next bare reference meant only to type-check it (Codex
+    % review, PR #122, round 1 -- the same hazard /Density's own wrap
+    % exists to avoid, missed here on the first pass because
+    % plain-numeric options looked safe to bare-bind by analogy with
+    % hatchkit's own /Spacing/Wobble/Dropout). Only after validation
+    % confirms it really is a number is it safe to bind bare --
+    % spdefaultmark reads it that way.
+    spopts /DotRadius 1.5 spgetdef 1 array astore /spdrbox exch def
+    spdrbox 0 get spisnum not { stipple-dotradius-must-be-a-number } if
+    spdrbox 0 get 0 le { stipple-dotradius-must-be-positive } if
+    /spdotradius spdrbox 0 get def
+    spscopts /Mark /spdefaultmark load put
+  } ifelse
 
   spscopts /Density known {
     % Wrapped in a 1-element array, the same trick spgetdef and
@@ -204,21 +218,40 @@
     % since nothing is on the operand stack yet for it to consume.
     spscopts /Density get 1 array astore /spdensbox exch def
     spdensbox 0 get spisnum not {
-      % Not a number: the callback form. scatter validates it for
-      % real (as its own /Weight) when it tries to call it -- stipple
-      % does not re-implement that check.
+      % Not a number. `stipple` still needs the /Weight slot for
+      % whatever this turns out to be (forwarded below regardless),
+      % so a caller-supplied /Weight is a conflict either way.
       spscopts /Weight known
         { stipple-weight-and-callable-density-are-mutually-exclusive } if
-      spscopts /MaxDensity known not
-        { stipple-maxdensity-required-when-density-is-callable } if
-      % Same wrap, same reason as /DotRadius above -- a malformed
-      % /MaxDensity must fail with a named error, not auto-execute.
-      spscopts /MaxDensity get 1 array astore /spmaxdbox exch def
-      spmaxdbox 0 get spisnum not { stipple-maxdensity-must-be-a-number } if
-      spmaxdbox 0 get 0 lt { stipple-maxdensity-must-be-non-negative } if
-      /spmaxd spmaxdbox 0 get def
+      % Only route through the /MaxDensity-required contract when the
+      % value actually looks callable -- `xcheck` is the same first
+      % gate `sccallable` itself applies (safe to call on any object
+      % type; it inspects the executable flag without invoking
+      % anything), so this never disagrees with what scatter's own
+      % real validation would ultimately accept. Something that isn't
+      % even executable (a bare string, say) skips straight to being
+      % forwarded as scatter's own /Weight below, undisguised, so
+      % scatter's real sccallable-backed check is what rejects it --
+      % otherwise a non-callable /Density with no /MaxDensity given
+      % surfaced the wrong, confusing error (Codex review, PR #122,
+      % round 2).
+      spdensbox 0 get xcheck {
+        spscopts /MaxDensity known not
+          { stipple-maxdensity-required-when-density-is-callable } if
+        % Same wrap, same reason as /DotRadius above -- a malformed
+        % /MaxDensity must fail with a named error, not auto-execute.
+        spscopts /MaxDensity get 1 array astore /spmaxdbox exch def
+        spmaxdbox 0 get spisnum not { stipple-maxdensity-must-be-a-number } if
+        spmaxdbox 0 get 0 lt { stipple-maxdensity-must-be-non-negative } if
+        /spmaxd spmaxdbox 0 get def
+        spscopts /Density spmaxd put
+      } {
+        % Not even executable -- scatter's own /Weight validation is
+        % what should reject this, not scatter's /Density validation
+        % (which a leftover /Density key here would hit first).
+        spscopts /Density undef
+      } ifelse
       spscopts /Weight spdensbox 0 get put
-      spscopts /Density spmaxd put
       spscopts /MaxDensity undef
     } if
   } if

@@ -390,6 +390,62 @@ fn opts_must_be_a_dict() {
 }
 
 #[test]
+fn a_malformed_opts_procedure_never_gets_executed() {
+    // The whole options operand is wrapped the same way its individual
+    // proc-typed keys are -- a caller passing a bare procedure where
+    // the options dict belongs must get the named error, not have that
+    // procedure silently run (Codex review, PR #122, round 2).
+    let mut it = Interp::new();
+    load(&mut it);
+    let err = it
+        .run_str("/gotexecuted false def 0 0 100 100 screct { /gotexecuted true def } stipple")
+        .unwrap_err();
+    match err {
+        PsError::Undefined(name) => assert_eq!(name, "stipple-opts-must-be-a-dict"),
+        other => panic!("expected a self-documenting undefined name, got {other}"),
+    }
+    let is_set = it
+        .run_str("gotexecuted")
+        .map(|_| it.operand_stack().last().map(|o| o.repr()) == Some("true".to_string()))
+        .unwrap_or(false);
+    assert!(
+        !is_set,
+        "the malformed options procedure was executed instead of being rejected"
+    );
+}
+
+#[test]
+fn dotradius_is_ignored_when_a_custom_mark_is_supplied() {
+    // Documented contract (this file's own header): /DotRadius only
+    // feeds the default /Mark. A malformed /DotRadius alongside a
+    // caller's own /Mark must not fail the call (Codex review, PR
+    // #122, round 2).
+    let got = eval(
+        "0 0 100 100 screct \
+         << /Count 3 /Seed 1 /DotRadius 0 /Mark { pop pop pop pop } >> stipple \
+         scplaced",
+    );
+    assert_eq!(
+        got[0], "3",
+        "a malformed but unused /DotRadius must not block placement"
+    );
+}
+
+#[test]
+fn a_non_callable_non_numeric_density_surfaces_scatters_own_weight_error() {
+    // Without a /MaxDensity, the old logic misclassified any
+    // non-numeric /Density as "the callback form" and demanded
+    // /MaxDensity before ever checking whether the value was callable
+    // at all -- a bare string got the wrong, confusing error. Fixed by
+    // gating the /MaxDensity-required contract on the value actually
+    // looking callable (Codex review, PR #122, round 2).
+    assert_eq!(
+        stipple_err("0 0 100 100 screct << /Density (nope) >> stipple"),
+        "scatter-weight-must-be-a-procedure"
+    );
+}
+
+#[test]
 fn stipple_does_not_mutate_the_callers_options_dict() {
     // The callable branch rewrites /Density and /Weight internally --
     // it must do so on a private copy, never the dict the caller
