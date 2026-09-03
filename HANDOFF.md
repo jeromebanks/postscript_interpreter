@@ -278,6 +278,21 @@ three-panel specimen (constant density, a callback-driven sparse-to-
 dense tonal ramp, point-shading with a custom rotated-cross mark); no
 gallery/site entry, matching hatchkit's own precedent that a primitive
 gets an `examples/` specimen, not a gallery card.
+Also done: issue #51, paper/canvas/print-surface textures — an eighth
+sibling, `lib/surfacekit.ps` (`@requires: (lib/artkit.ps) run`,
+tag-migrated from the start). Five presets: `grain`/`fiber`/`scuff`/
+`misreg` are thin `scatter` wrappers (the same "no new placement
+engine" choice `stipplekit.ps` made); `weave` is its own grid-and-`scin`
+loop with two independent pre-flight budgets (`/MaxThreads` on cell
+count, `/MaxEdgeSamples` on cell-count-times-edge-count for a `scpath`
+path region — mirroring `hatchkit.ps`'s own `/MaxLines`/`/MaxSamples`
+shape). New `/Color`/`/Strength` options, each preset's call wrapped in
+its own `gsave`/`grestore` since every default mark sets color.
+`examples/surfacekit.ps` is a six-panel specimen sheet (NOTES.md's
+entry has the full story, including why the "scratches and scuffs"
+preset is named `scuff` rather than `scratch` — this codebase already
+uses "scratch" as a term of art for private working state throughout
+every sibling library's own docs).
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;
