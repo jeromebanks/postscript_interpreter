@@ -289,6 +289,18 @@ the reviewer's example expecting `halftone-maxcells-exceeded`
 multiple can push a small negative — still safe (zero trips, and
 the budget check only fires upward).
 
+**Codex round 6 never ran: three consecutive "Reviewer failed to
+output a response" failures (service-side, no verdict on the
+code).** Five successful rounds already covered the branch, and the
+round-5 delta is small (pass clamp, exact emptiness, two tests,
+comment corrections), so it got a line-by-line self-review instead:
+the clamp is identity on legit values (bit-identical walks, no
+render churn possible — suite confirms), the emptiness test is total
+real arithmetic, and all four budget shapes (absurd, narrow-empty,
+narrow-nonempty, over-budget product) are pinned. Proceeding to PR
+on that basis; a post-merge Codex pass can still be requested if
+the service recovers.
+
 ## Density-driven stippling and point-shading primitives (issue #50, 2026-08-31)
 
 A seventh sibling library, `lib/stipplekit.ps` — tag-migrated from
