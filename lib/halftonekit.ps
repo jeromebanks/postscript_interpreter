@@ -1,0 +1,455 @@
+%!PS-Adobe-3.0
+%%Title: halftonekit.ps — reusable halftone screens and misregistration offsets
+%%Creator: pscat — issue #53
+%%EndComments
+
+% A sibling to hatchkit.ps/stipplekit.ps (issues #49/#50): one operator,
+% `halftone`, that fills whatever region is currently clipped with a
+% regular print screen — dot, line, or cross-line — sized per cell by a
+% tone, with a per-layer registration offset for controlled
+% misregistration. Screen print, risograph, and comic-book halftones
+% are all the same underlying construction (a lattice of marks whose
+% size tracks a tone field, layered a few times with small offsets);
+% this is that construction, not a rendering pipeline of its own — the
+% caller supplies the region (via an ordinary `clip`), the tone (a
+% number or a `{x y -> w}` callback), and the layering (one call per
+% ink, each with its own color, angle, and offset).
+%
+%   newpath 40 40 moveto 200 40 lineto 200 200 lineto 40 200 lineto closepath clip
+%   << /Screen /dot /Frequency 9 /Tone { 100 div exch pop } >> halftone
+%
+% `halftone` does not clip on its own. Set the region you want screened
+% as the current clip *before* calling it — `<path> clip` — the same
+% way `hatch` works. The lattice is swept across /BBox (below) and
+% relies entirely on the graphics state's real clip to cut it to
+% shape, so it screens concave and self-intersecting paths exactly as
+% well as convex ones, with no point-in-polygon code anywhere in this
+% file. This also sidesteps `clippath`'s known limitation (issue #120:
+% it reports only the newest of several nested clips, not their true
+% intersection) — `halftone` never calls `clippath` at all.
+%
+% Deliberately NOT built on artkit.ps's `scatter`, though stipplekit.ps
+% is a thin layer over exactly that: `scatter` is a random,
+% retry-until-accepted placement engine, and a halftone is a
+% deterministic lattice — a different engine, not a differently
+% parameterized one. Routing a fixed grid through a random placer
+% would add noise the medium is defined by not having, and would
+% need a /Seed where none is wanted: this operator makes zero random
+% draws, so fixed options reproduce identical output in any
+% interpreter, with no stream to seed or restore. A /Tone callback
+% that calls `rand` itself still works, under the caller's own `srand`.
+%
+% Options:
+%   /BBox [x0 y0 x1 y1]  the area to sweep the lattice across. If
+%           omitted, read from `pathbbox` — the *current path's*
+%           bounding box — so the usual call shape is
+%           `<path> clip << ... >> halftone` (`clip` does not consume
+%           the current path, so it is still there for `pathbbox` to
+%           read; `halftone` itself brackets its drawing in `gsave`/
+%           `grestore`, so the path survives a call too — a second,
+%           layered call over the same clip, the classic misregistered
+%           second plate, can keep relying on the default). A caller
+%           who clips from a path they no longer hold must pass /BBox
+%           explicitly. Either way the box only decides which lattice
+%           cells get visited — the real clip alone decides what
+%           actually inks the page, so a loose /BBox costs a few wasted
+%           cells, never wrong output. Must be exactly four elements
+%           (`halftone-bbox-must-have-four-elements` otherwise — an
+%           oversized array would otherwise litter the operand stack
+%           past what `opts halftone -` promises) and non-degenerate
+%           (`halftone-bbox-degenerate`).
+%   /Screen /dot, /line, or /cross (default /dot — anything else,
+%           including a non-name, is
+%           `halftone-screen-must-be-dot-line-or-cross`). A dot screen
+%           draws one filled circle per cell; a line screen draws one
+%           round-capped segment per cell along /Angle, each exactly
+%           one pitch long so neighbors join into continuous rules at
+%           uniform tone; a cross screen draws the line pass twice in
+%           one call — at /Angle, then at /Angle + 90 over the *same*
+%           lattice origin, so the crosses stay centered on their
+%           cells. A multi-color cross (each direction its own ink) is
+%           two caller-side calls instead; both shapes compose, the
+%           same way layered `hatch` calls do.
+%   /Frequency num > 0  cells per inch, the print-native unit (lpi) —
+%           the issue's own vocabulary ("configurable angle,
+%           frequency, and mark size"), not a second name for a pitch
+%           (default 9, i.e. an 8-unit cell). The pitch is
+%           72/Frequency user units: under a scaled CTM the lattice
+%           scales with user space like everything else, the same
+%           caveat hatchkit's /Spacing already carries. Validated
+%           (`halftone-frequency-must-be-a-number` /
+%           `halftone-frequency-must-be-positive`).
+%   /Angle num  screen angle in degrees (default 45, print's own black-
+%           plate angle). Any number; validated only to *be* a number
+%           (`halftone-angle-must-be-a-number`). Per-layer rotation
+%           offsets — the issue's "translation/rotation offsets" — are
+%           just per-call /Angle values; no separate option exists for
+%           what a second call already expresses.
+%   /Tone num or {x y -> w}  the ink per cell: a plain number for a
+%           flat screen, or a procedure sampled once per cell center
+%           for procedural tone values (a gradient, a function plot, a
+%           radial vignette — the caller supplies the field, image
+%           analysis stays out of scope). The sample point is in the
+%           same pre-offset user-space coordinates as /BBox, so a
+%           /Tone field stays registered to the page while /Offset
+%           shifts the lattice — misregistration moves the *plate*,
+%           not the image, which is the whole point. The result is
+%           clamped into [0,1] *before* any size is derived from it,
+%           so a wild return changes the tone, never the geometry —
+%           and never reaches `sqrt` unclamped (a negative input is a
+%           domain error in both this interpreter and Ghostscript). A
+%           constant is clamped once up front; anything neither numeric
+%           nor a procedure is
+%           `halftone-tone-must-be-a-number-or-procedure`, reported
+%           before the value is ever executed. The proc MUST consume
+%           both operands and leave exactly one number, and must not
+%           touch any `hf-` name (see "Scratch prefix" below). A sample
+%           at or below 0 draws no mark at all — note this is load-
+%           bearing, not just an optimization: a zero-width stroke in
+%           PostScript is a hairline, not nothing, so the line/cross
+%           branches must skip rather than draw through zero.
+%   /MaxRadius num > 0  the dot radius at full tone (default half the
+%           cell pitch, so full-tone dots exactly touch). Only read on
+%           the /dot branch — validated there
+%           (`halftone-maxradius-must-be-a-number` /
+%           `halftone-maxradius-must-be-positive`), merely harmless
+%           elsewhere, so a shared options dict carrying a stale or
+%           exploratory /MaxRadius alongside a line screen is not
+%           penalized for an option the call never touches.
+%   /MaxWidth num > 0  the line width at full tone (default a full
+%           pitch, so full-tone rules exactly merge). Only read on the
+%           /line and /cross branches, same "harmless elsewhere" shape
+%           as /MaxRadius.
+%   /Offset [dx dy]  per-layer registration shift in user units
+%           (default [0 0]), applied with `translate` inside the call's
+%           own `gsave`/`grestore`, unconditionally — `translate 0 0`
+%           adds exactly 0.0, so "disabled" and "omitted" are the same
+%           operation, not two paths that must be kept agreeing. A
+%           risograph two-plate spread is two calls differing only in
+%           color and /Offset. Must be a two-element array of numbers
+%           (`halftone-offset-must-be-a-two-element-array` otherwise —
+%           checked *before* unpacking, so an oversized array cannot
+%           litter the stack the way an unchecked `aload pop` would).
+%   /MaxCells n  hard cap on visited lattice cells (default 200000),
+%           checked *before* any drawing or /Tone call. One budget is
+%           enough here, and deliberately the only one: exactly one
+%           /Tone sample happens per cell and each cell draws a fixed
+%           one mark (dot/line) or two (cross) known up front, so the
+%           cell count bounds callbacks, geometry, and ink uniformly —
+%           the two-budget shape hatchkit needs exists only because its
+%           per-line sample counts vary. Must be a number >= 1
+%           (`halftone-maxcells-must-be-a-number` /
+%           `halftone-maxcells-must-be-positive`); exceeding it is
+%           `halftone-maxcells-exceeded`, with nothing drawn.
+%
+% Size mapping: dot radius = /MaxRadius * sqrt(tone) — area-
+% proportional, the print-correct curve (ink coverage grows with the
+% dot's area, not its radius); line width = /MaxWidth * tone —
+% linear, since a rule's coverage grows with its width. Documented
+% here rather than merely implemented so the next reader doesn't
+% "simplify" the sqrt away.
+%
+% Reproducibility: no random draws anywhere in this file, so none of
+% the seeded-stream caveats the rand-driven siblings document apply —
+% the same options draw the same marks in this interpreter and in
+% Ghostscript alike, modulo each rasterizer's own arc rendering. The
+% caller's ambient `rand` stream is never touched.
+%
+% Layering recipe (the issue's "spot-color layering" and
+% "misregistration", caller-side): set the ink with `setrgbcolor` (or
+% whatever color operator the job uses), `clip` once, then one
+% `halftone` call per plate, varying /Offset by a few units and
+% usually /Angle and /Tone per plate too. `halftone` never sets the
+% color itself — like `hatch`, it inks in the current color.
+%
+% Scratch prefix: every internal helper and working-state name starts
+% with `hf` — checked against every sibling before picking it
+% (artkit's hyperbolic driver owns `ht*`, handscript owns `hs-*`,
+% hatchkit owns `h*`/`hk*`). /Tone runs mid-loop with the same two
+% obligations `scatter`'s /Mark and /Weight document: it MUST consume
+% both operands (a leaking proc shows up on the operand stack, which
+% the test harness asserts empty after every call), and it must not
+% touch any `hf-` name. Two tiers, mirroring hatchkit's own contract:
+% the loop-bound names (`hfncols`, `hfnrows`, `hfnpass`) are consumed as
+% integer `for` limits *once*, before the first sample — PostScript
+% evaluates a `for`'s limit up front, so redefining one of those
+% mid-call cannot change how much work the call does, and a /Tone
+% proc therefore cannot make a call exceed what /MaxCells approved no
+% matter what it redefines. Every other `hf-` name only affects
+% geometry or tone, so corrupting one is undefined rendering, not a
+% safety-limit bypass.
+%
+% Ghostscript: core Level 1/2 operators only (`arc`, `cos`, `sin`,
+% `sqrt`, `translate`, `pathbbox`, `xcheck`, `forall`/`for`) — the
+% specimen page runs unchanged under `gs` (pinned by
+% `ghostscript_accepts_the_halftone_specimen_sheet` in
+% tests/halftonekit.rs, the same shape as every sibling's).
+
+% dict key default hfgetdef -> value
+% The same wrap-the-default-in-an-array trick as hatchkit's hkgetdef /
+% artkit's scgetdef / paintkit's pkgetdef / pagekit's pggetdef: a name
+% bound directly to a procedure auto-executes on bare reference, so
+% the default travels inside a 1-element array instead.
+% @internal
+/hfgetdef {
+  /hfgdd exch 1 array astore def
+  /hfgdk exch def
+  /hfgdt exch def
+  hfgdt hfgdk known { hfgdt hfgdk get } { hfgdd 0 get } ifelse
+} def
+
+% v hfisnum -> bool, true for integers and reals alike
+% @internal
+/hfisnum {
+  dup type /integertype eq exch type /realtype eq or
+} def
+
+% v hfclamp01 -> v', clamped into [0,1]
+% @internal
+/hfclamp01 {
+  dup 0 lt { pop 0 } if
+  dup 1 gt { pop 1 } if
+} def
+
+% v hfcallable -> bool, true only for an executable array
+% Deliberately narrower than a bare `xcheck`: `xcheck` is also true
+% for a `cvx`-marked string or an executable name, which are not
+% things this file can `exec` with {x y -> w} calling convention —
+% accepting them would misroute a malformed /Tone to the drawing pass
+% instead of the validation error (stipplekit's round-3 lesson). A
+% caller holding a procedure under a name passes it loaded
+% (`/MyTone load`), which is already the plain executable array this
+% accepts; a bare executable name is rejected, documented in /Tone.
+% @internal
+/hfcallable {
+  dup type /arraytype eq exch xcheck and
+} def
+
+% opts halftone -
+% @kind: Procedure
+% @summary: Fills the current clip region with a regular print screen — dot, line, or cross-line — with per-cell tone-driven mark sizing and a per-layer registration offset. Set the region with <path> clip first; layer one call per ink for misregistered multi-plate work.
+% @example: newpath 40 40 moveto 200 40 lineto 200 200 lineto 40 200 lineto closepath clip << /Screen /dot /Frequency 9 /Tone 0.5 >> halftone
+% @param: /BBox [x0 y0 x1 y1] area to sweep the lattice across; defaults to pathbbox of the current path
+% @param: /Screen /dot, /line, or /cross — one filled circle, one round-capped rule segment, or two perpendicular rule segments per cell (default /dot)
+% @param: /Frequency num > 0 cells per inch (default 9)
+% @param: /Angle num screen angle in degrees; per-layer rotation offsets are per-call values (default 45)
+% @param: /Tone num or {x y -> w} flat ink or a per-cell-center tone callback in pre-offset user-space coordinates, clamped to [0,1] (default 1)
+% @param: /MaxRadius num > 0 dot radius at full tone, default half the cell pitch; read only for /dot, harmless otherwise
+% @param: /MaxWidth num > 0 rule width at full tone, default a full pitch; read only for /line and /cross, harmless otherwise
+% @param: /Offset [dx dy] per-layer registration shift in user units, applied unconditionally via translate (default [0 0])
+% @param: /MaxCells n hard cap on visited lattice cells, checked before any drawing or /Tone call (default 200000)
+/halftone {
+  % The options operand arrives wrapped: a caller who passes a bare
+  % procedure where the dict belongs must get
+  % halftone-opts-must-be-a-dict, not an execution of their proc off
+  % a bare reference (stipplekit's round-2 lesson — `get` never
+  % executes, a bare name bound to a proc always does).
+  1 array astore /hfoptsbox exch def
+  hfoptsbox 0 get type /dicttype ne { halftone-opts-must-be-a-dict } if
+  /hfopts hfoptsbox 0 get def
+
+  hfopts /BBox known
+    {
+      hfopts /BBox get
+      % aload unpacks every element, not just four — an oversized
+      % array would silently leave its leading elements on the
+      % operand stack, violating `opts halftone -` (hatchkit's
+      % round-3 lesson), so the length is pinned first.
+      dup length 4 ne { halftone-bbox-must-have-four-elements } if
+      aload pop
+    }
+    { pathbbox }
+  ifelse
+  /hfby1 exch def
+  /hfbx1 exch def
+  /hfby0 exch def
+  /hfbx0 exch def
+  hfbx1 hfbx0 le hfby1 hfby0 le or { halftone-bbox-degenerate } if
+
+  % /Screen collapses to a small int immediately: the value arrives
+  % boxed because a proc-typed /Screen must compare, never execute,
+  % and an int can never auto-execute no matter what the caller
+  % passed. 0 = dot, 1 = line, 2 = cross.
+  hfopts /Screen /dot hfgetdef 1 array astore /hfscreenbox exch def
+  hfscreenbox 0 get /dot eq { /hfscreenkind 0 def }
+  { hfscreenbox 0 get /line eq { /hfscreenkind 1 def }
+  { hfscreenbox 0 get /cross eq { /hfscreenkind 2 def }
+  { halftone-screen-must-be-dot-line-or-cross } ifelse } ifelse } ifelse
+
+  hfopts /Frequency 9 hfgetdef 1 array astore /hffreqbox exch def
+  hffreqbox 0 get hfisnum not { halftone-frequency-must-be-a-number } if
+  hffreqbox 0 get 0 le { halftone-frequency-must-be-positive } if
+  /hffreq hffreqbox 0 get def
+  /hfpitch 72 hffreq div def
+
+  hfopts /Angle 45 hfgetdef 1 array astore /hfangbox exch def
+  hfangbox 0 get hfisnum not { halftone-angle-must-be-a-number } if
+  /hfang hfangbox 0 get def
+  hfang cos /hfdx exch def
+  hfang sin /hfdy exch def
+  % The normal is derived algebraically from the direction — a
+  % +90-degree rotation is exactly (-dy, dx) — never via an
+  % independent cos/sin(angle+90): two separate trig evaluations of
+  % different inputs are not guaranteed exactly orthogonal in floating
+  % point (hatchkit's round-1 lesson), and the cross screen's second
+  % pass reuses this same normal as its direction, orthogonal to the
+  % first pass by construction.
+  hfdy neg /hfnx exch def
+  hfdx /hfny exch def
+
+  % Constant /Tone clamps once here; a callback's returns clamp per
+  % sample, right after `exec`, before `sqrt` can ever see a
+  % negative (a sqrt domain error in both interpreters).
+  hfopts /Tone 1 hfgetdef 1 array astore /hftonebox exch def
+  hftonebox 0 get hfisnum
+    { /hftoneconst true def /hftoneval hftonebox 0 get hfclamp01 def }
+    { hftonebox 0 get hfcallable not { halftone-tone-must-be-a-number-or-procedure } if
+      /hftoneconst false def }
+  ifelse
+
+  % Branch-conditional size options: only the branch that draws reads
+  % its knob, so an unused-but-malformed one in a shared dict is
+  % harmless, never an error (stipplekit's /DotRadius lesson).
+  hfscreenkind 0 eq
+    {
+      hfopts /MaxRadius known
+        { hfopts /MaxRadius get 1 array astore /hfmrbox exch def
+          hfmrbox 0 get hfisnum not { halftone-maxradius-must-be-a-number } if
+          hfmrbox 0 get 0 le { halftone-maxradius-must-be-positive } if
+          /hfmaxr hfmrbox 0 get def }
+        { /hfmaxr hfpitch 2 div def }
+      ifelse
+    }
+    {
+      hfopts /MaxWidth known
+        { hfopts /MaxWidth get 1 array astore /hfmwbox exch def
+          hfmwbox 0 get hfisnum not { halftone-maxwidth-must-be-a-number } if
+          hfmwbox 0 get 0 le { halftone-maxwidth-must-be-positive } if
+          /hfmaxw hfmwbox 0 get def }
+        { /hfmaxw hfpitch def }
+      ifelse
+    }
+  ifelse
+
+  % Read and validated element by element through boxes — never an
+  % `aload pop`, whose oversized-array litter is exactly what the
+  % /BBox length check above exists to prevent.
+  hfopts /Offset known { hfopts /Offset get } { [ 0 0 ] } ifelse
+  1 array astore /hfoffbox exch def
+  hfoffbox 0 get type /arraytype ne { halftone-offset-must-be-a-two-element-array } if
+  hfoffbox 0 get length 2 ne { halftone-offset-must-be-a-two-element-array } if
+  hfoffbox 0 get 0 get 1 array astore /hfoxbox exch def
+  hfoxbox 0 get hfisnum not { halftone-offset-must-be-a-two-element-array } if
+  hfoffbox 0 get 1 get 1 array astore /hfoybox exch def
+  hfoybox 0 get hfisnum not { halftone-offset-must-be-a-two-element-array } if
+  /hfox hfoxbox 0 get def
+  /hfoy hfoybox 0 get def
+
+  hfopts /MaxCells 200000 hfgetdef 1 array astore /hfmcbox exch def
+  hfmcbox 0 get hfisnum not { halftone-maxcells-must-be-a-number } if
+  hfmcbox 0 get 1 lt { halftone-maxcells-must-be-positive } if
+  /hfmaxcells hfmcbox 0 get def
+
+  % ---- lattice geometry, computed ONCE and stored ----
+  % The four /BBox corners are projected onto the screen direction
+  % and its normal; the lattice spans both ranges at one pitch step.
+  % These stored counts and origins feed the pre-flight check AND
+  % every drawing loop below — nothing is recomputed per pass, so
+  % the budget's arithmetic and the loops' actual trip counts agree
+  % by construction, not by parallel formulas that can drift apart
+  % in floating point (hatchkit's round-4 lesson: two computations
+  % expected to agree, evaluated on far-from-origin coordinates,
+  % genuinely disagreed by a whole candidate).
+  [ hfbx0 hfby0 hfbx1 hfby0 hfbx0 hfby1 hfbx1 hfby1 ]
+  /hfcorners exch def
+  /hfddmin 1.0e30 def
+  /hfddmax -1.0e30 def
+  /hfkkmin 1.0e30 def
+  /hfkkmax -1.0e30 def
+  0 2 6 {
+    /hfk exch def
+    hfcorners hfk get /hfcx exch def
+    hfcorners hfk 1 add get /hfcy exch def
+    hfcx hfdx mul hfcy hfdy mul add /hfdd exch def
+    hfcx hfnx mul hfcy hfny mul add /hfkk exch def
+    hfdd hfddmin lt { /hfddmin hfdd def } if
+    hfdd hfddmax gt { /hfddmax hfdd def } if
+    hfkk hfkkmin lt { /hfkkmin hfkk def } if
+    hfkk hfkkmax gt { /hfkkmax hfkk def } if
+  } for
+  hfddmax hfddmin sub hfpitch div cvi 1 add /hfncols exch def
+  hfkkmax hfkkmin sub hfpitch div cvi 1 add /hfnrows exch def
+
+  % ---- deterministic pre-flight budget check (no drawing, no /Tone call) ----
+  % One /Tone sample per cell and a fixed one mark (dot/line) or two
+  % (cross) per cell, so this single count bounds callbacks,
+  % geometry, and ink together.
+  hfncols hfnrows mul hfmaxcells gt { halftone-maxcells-exceeded } if
+
+  % gsave/grestore, not just a bare setlinewidth/setlinecap: the
+  % line/cross branches set both per mark, which would otherwise
+  % silently overwrite the caller's graphics state with no way back.
+  % It also protects the current path, so a second, layered call over
+  % the same clip keeps defaulting /BBox from `pathbbox`.
+  gsave
+  % Unconditional: `translate 0 0` adds exactly 0.0, so an omitted
+  % /Offset and an explicit [0 0] take the same path — one code path,
+  % no zero/nonzero branches to keep agreeing.
+  hfox hfoy translate
+  1 setlinecap
+  % The cross screen's second pass reuses the same stored lattice
+  % origin and counts — only the segment direction swaps — so its
+  % crosses stay centered on pass one's cells.
+  hfscreenkind 2 eq { /hfnpass 2 def } { /hfnpass 1 def } ifelse
+  0 1 hfnpass 1 sub {
+    /hfpass exch def
+    hfpass 0 eq
+      { /hfpdx hfdx def /hfpdy hfdy def }
+      { /hfpdx hfnx def /hfpdy hfny def }
+    ifelse
+    % Integer-indexed loops over the stored counts: the trip count
+    % IS the pre-flight formula's own count, and `for` evaluates its
+    % limit once up front, so a /Tone proc redefining hfncols/hfnrows/
+    % hfnpass mid-call cannot change how many cells a running loop visits.
+    0 1 hfnrows 1 sub {
+      /hfj exch def
+      /hfkk hfkkmin hfj hfpitch mul add def
+      0 1 hfncols 1 sub {
+        /hfi exch def
+        /hfdd hfddmin hfi hfpitch mul add def
+        /hfcx hfdd hfdx mul hfkk hfnx mul add def
+        /hfcy hfdd hfdy mul hfkk hfny mul add def
+        hftoneconst
+          { hftoneval }
+          { hfcx hfcy hftonebox 0 get exec hfclamp01 }
+        ifelse
+        /hfw exch def
+        % Zero tone draws no mark: skipped, never drawn through —
+        % a zero-width stroke would render as a hairline, not as
+        % nothing, so this branch is correctness, not optimization.
+        hfw 0 gt {
+          hfscreenkind 0 eq {
+            % Area-proportional dots (see the header for why sqrt).
+            % Per-mark newpath: without it every cell's arc would
+            % accumulate into one giant path (memory, time) and a
+            % leftover caller path would fill on first contact.
+            newpath hfcx hfcy hfmaxr hfw sqrt mul 0 360 arc fill
+          } {
+            % One pitch-long rule centered on the cell along the
+            % pass direction: neighbors join into continuous lines
+            % at uniform tone, round caps hiding the seams.
+            hfmaxw hfw mul setlinewidth
+            newpath
+            hfcx hfpdx hfpitch 2 div mul sub
+            hfcy hfpdy hfpitch 2 div mul sub
+            moveto
+            hfcx hfpdx hfpitch 2 div mul add
+            hfcy hfpdy hfpitch 2 div mul add
+            lineto stroke
+          } ifelse
+        } if
+      } for
+    } for
+  } for
+  grestore
+} def
