@@ -278,7 +278,27 @@ three-panel specimen (constant density, a callback-driven sparse-to-
 dense tonal ramp, point-shading with a custom rotated-cross mark); no
 gallery/site entry, matching hatchkit's own precedent that a primitive
 gets an `examples/` specimen, not a gallery card.
-Also done: issue #51, paper/canvas/print-surface textures — an eighth
+Also done: issue #53, reusable halftone screens and misregistration
+offsets — an eighth sibling, `lib/halftonekit.ps` (no sibling
+dependencies: a halftone is a deterministic lattice, not random
+placement, so routing it through `scatter` would add noise the medium
+is defined by not having). One operator, `halftone`, fills the current
+clip with a dot, line, or cross-line screen (`/Screen`, compared with
+the language's own `eq` — a `(dot)` string selects the same screen as
+`/dot`, verified identical in Ghostscript): per-cell tone from a
+number or `{x y -> w}` callback (clamped before `sqrt` ever sees it),
+`/Frequency` in cells per inch, per-layer `/Offset` via an
+unconditional `translate`, and a single deterministic `/MaxCells`
+pre-flight budget (one tone call and a fixed 1-or-2 marks per cell, so
+one count bounds callbacks, geometry, and ink together — hatchkit's
+two-budget shape exists only because its per-line sample counts vary).
+`examples/halftone.ps` is a four-panel specimen ending in a
+misregistered two-plate spread; no gallery/site entry, same primitive
+precedent (NOTES.md's entry has the full story, including two real
+bugs smoke-rendering caught: a two-operand `exch` on a one-operand
+operator, and a normal-vector/count name collision that parked the
+whole lattice at (560, 540)).
+Also done: issue #51, paper/canvas/print-surface textures — a ninth
 sibling, `lib/surfacekit.ps` (`@requires: (lib/artkit.ps) run`,
 tag-migrated from the start). Five presets: `grain`/`fiber`/`scuff`/
 `misreg` are thin `scatter` wrappers (the same "no new placement
@@ -292,7 +312,9 @@ its own `gsave`/`grestore` since every default mark sets color.
 entry has the full story, including why the "scratches and scuffs"
 preset is named `scuff` rather than `scratch` — this codebase already
 uses "scratch" as a term of art for private working state throughout
-every sibling library's own docs).
+every sibling library's own docs, and five review rounds' worth of
+auto-execution and unguarded-numeric-conversion hazards a caller-
+supplied value could trigger before its type was checked).
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;

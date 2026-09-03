@@ -583,7 +583,27 @@ newpath 40 40 moveto 260 40 lineto 260 260 lineto 40 260 lineto closepath clip
 << /Angle 30 /Spacing 4 /Seed 1 >> hatch
 ```
 
-An eighth sibling, `lib/surfacekit.ps` (issue #51), is a library of
+An eighth sibling, `lib/halftonekit.ps` (issue #53), covers print
+screens: `halftone` fills whatever region is currently clipped with a
+regular dot, line, or cross-line lattice, one mark per cell sized by a
+tone (a number, or a `{x y -> w}` callback clamped into `[0,1]`), with
+a per-layer `/Offset` for controlled misregistration -- one call per
+ink, each with its own color, angle, and shift, is a two-plate
+risograph spread. Frequency is cells-per-inch, dots scale by
+square-root (area-proportional, the print-correct curve), and a single
+deterministic `/MaxCells` budget rejects pathological lattices before
+anything is drawn. No random draws anywhere, so fixed options
+reproduce identically with no seed to manage. `examples/halftone.ps`
+is a four-panel specimen: a dot ramp, a line screen, a cross screen,
+and a misregistered second plate.
+
+```postscript
+(lib/halftonekit.ps) run
+newpath 40 40 moveto 200 40 lineto 200 200 lineto 40 200 lineto closepath clip
+<< /Screen /dot /Frequency 9 /Tone 0.5 >> halftone
+```
+
+A ninth sibling, `lib/surfacekit.ps` (issue #51), is a library of
 deterministic, seeded surface textures meant to sit under other marks
 the way a real surface sits under ink: `grain` (paper grain), `fiber`
 (paper fibers), and `scuff` (scratches and scuffs) are thin wrappers
