@@ -117,6 +117,41 @@ no position on paper grain. No `/DensityThreshold`-style cutoff: a
 zero tone already draws nothing, and a threshold knob is one more
 name for no demonstrated caller.
 
+**Implementation review (same subagent substitute) found eight more,
+seven fixed.** (1) The nested loops re-read `hfncols` as the inner
+limit per row — after /Tone runs — so a hostile callback redefining
+it multiplied every remaining row past the budget the header claimed
+was immune. Fixed with a single flat loop (limit fixed pre-sample)
+plus kind/const/shape snapshots on the operand stack under the walk,
+read back through fixed-depth `index`. (2) /BBox elements were never
+type-validated: a 4-long string silently reinterpreted as byte
+values. Now requires an array of four numbers (new
+`halftone-bbox-must-be-an-array-of-four-numbers`), read element by
+element through the box. (3) The contract said "`hf-` names" while
+every scratch name is `hf` with no hyphen — read literally it
+constrained nothing; fixed to "`hf`". (4) `hfscreenkind`/`hftoneconst`
+were re-read per cell, so a kind-flipping /Tone reached the branch
+whose knob was never validated — closed by the same stack snapshots.
+(5) A /Tone failing mid-loop unwinds past `grestore`: documented as
+fatal (hatchkit's own convention) rather than handled — the one
+explicit disposition. (6) The /BBox length error itself left the
+array stacked: subsumed by the box-read rewrite, pinned with a
+`stopped` stack-cleanliness test. (7) The dot-band test couldn't see
+a removed `sqrt` (19.6% sits inside the old band): added a
+tone-0.25 ink floor (without sqrt it renders literally zero) plus an
+ink-halves-with-tone ratio band, and a cross upper bound. (8) The
+/Offset edge strip (tight box + shift = un-inked strip) is inherent
+to translate-based offsets — one doc sentence, no code change.
+**The snapshot fix introduced its own bug, caught by the suite:**
+leaked /Tone operands shift every `index` read, failing deep under
+an internal name — so the consume-both-leave-one-number contract is
+now *enforced* per sample (`count`-based depth check plus a numeric
+check, unwound through a `mark` so even these exits are
+stack-clean), and the old leak-visibility test is a named-error
+test. Verifying the check's own arithmetic needed a live trace, not
+reasoning: E stays on the stack through `exec`, so the balanced
+condition is M − E = 1, not 2.
+
 ## Density-driven stippling and point-shading primitives (issue #50, 2026-08-31)
 
 A seventh sibling library, `lib/stipplekit.ps` — tag-migrated from
