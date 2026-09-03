@@ -53,7 +53,11 @@
 %           explicitly. Either way the box only decides which lattice
 %           cells get visited — the real clip alone decides what
 %           actually inks the page, so a loose /BBox costs a few wasted
-%           cells, never wrong output. Converse for /Offset users: the
+%           cells, never wrong output. The lattice phase itself is
+%           absolute — cell centers sit on integer multiples of the
+%           pitch measured from the user-space origin — so loosening
+%           the box only adds visited cells; no mark inside the old
+%           box moves. Converse for /Offset users: the
 %           lattice is swept across this box and shifted afterward, so
 %           a tight box plus a nonzero shift leaves an un-inked edge
 %           strip up to the shift width — inflate /BBox when shifting.
@@ -119,10 +123,12 @@
 %           `halftone-tone-proc-must-leave-exactly-one-result`, and a
 %           non-numeric single result gets
 %           `halftone-tone-must-return-a-number` — both unwind via
-%           counted operand-stack pops plus `grestore`, so even these
-%           exits leave a `stopped`-recovering caller exactly as found
-%           (a `mark` sentinel would do until a callback forged a mark
-%           of its own and shadowed `cleartomark`). (Enforcement
+%           `clear`, the entry-stack snapshot, plus `grestore`, so
+%           even these exits leave a `stopped`-recovering caller
+%           exactly as found, down to operands the callback itself
+%           consumed below its own two (a `mark` sentinel would do
+%           until a callback forged a mark of its own and shadowed
+%           `cleartomark`). (Enforcement
 %           matters here beyond hygiene: the walk
 %           reads its dispatch state through fixed-depth `index`, so a
 %           leaked operand would shift every read and fail deep in the
@@ -256,18 +262,25 @@
 } def
 
 % hfcleanup -
-% Pops the operand stack back to the recorded entry depth (clamped
-% at zero — a callback that over-consumed pushes the count
-% negative, and `repeat` must never see that), then restores the one
-% graphics save this call holds. Every per-sample contract exit runs
-% this before signaling, so a `stopped`-recovering caller resumes
-% with both stacks exactly as found. Positional on purpose: a `mark`
-% sentinel would work until a callback forges a mark of its own and
-% shadows `cleartomark`, stranding the snapshots — counted pops have
-% nothing to shadow.
+% Restores the operand stack from the entry snapshot (`hfsaved`),
+% then the one graphics save this call holds. Every per-sample
+% contract exit runs this before signaling, so a
+% `stopped`-recovering caller resumes with both stacks exactly as
+% found — even when the callback ate into the caller's own operands
+% (`clear`, over-popping below its two): the values are already
+% boxed away in a dict name, which `clear` cannot reach, so `clear`
+% plus pushing the saved items back restores them no matter what
+% the stack looks like. A `mark` sentinel would work until a
+% callback forged a mark of its own and shadowed `cleartomark`,
+% stranding the snapshots — `clear` plus a dict-kept snapshot has
+% nothing to shadow. (Reading `hfsaved` back is the one thing the
+% contract-error path trusts a dict name for; redefining it
+% mid-call corrupts the recovery, never the budget — the budget
+% travels on the stack, unreachable by redefinition.)
 % @internal
 /hfcleanup {
-  count hfdepth0 sub dup 0 lt { pop 0 } if { pop } repeat
+  clear
+  hfsaved aload pop
   grestore
 } def
 
@@ -433,31 +446,53 @@
     hfkk hfkkmin lt { /hfkkmin hfkk def } if
     hfkk hfkkmax gt { /hfkkmax hfkk def } if
   } for
-  hfddmax hfddmin sub /hfddspan exch def
-  hfkkmax hfkkmin sub /hfkkspan exch def
-  % The budget check precedes the integer conversion: for a valid but
-  % absurd /Frequency the real quotient can exceed the interpreter's
-  % integer range, and bare `cvi` would answer `rangecheck` instead
-  % of the documented `halftone-maxcells-exceeded`. This is sound in
-  % both directions — cvi(r)+1 always exceeds r itself, so a quotient
-  % past the budget means the count is past it too, and anything at
-  % or under the budget converts exactly. (Residual: a quotient past
-  % the budget but under an astronomically raised /MaxCells still
-  % `rangecheck`s in `cvi` — a genuinely unrepresentable lattice, for
-  % which `rangecheck` is the honest error.)
-  hfddspan hfpitch div /hfrawdd exch def
-  hfrawdd hfmaxcells gt { halftone-maxcells-exceeded } if
-  hfrawdd cvi 1 add /hfncols exch def
-  hfkkspan hfpitch div /hfrawkk exch def
-  hfrawkk hfmaxcells gt { halftone-maxcells-exceeded } if
-  hfrawkk cvi 1 add /hfnrows exch def
-  % Center the leftover slack (the span rarely divides evenly by the
-  % pitch) across both ends instead of anchoring flush at the minima:
-  % a flush first candidate grazes the box edge while full-tone marks
-  % stop a pitch short of the far edge, leaving a blank strip inside
-  % the clip. (Same geometry as hatchkit's round-4 centering fix.)
-  /hfddmin hfddmin hfddspan hfncols 1 sub hfpitch mul sub 2 div add def
-  /hfkkmin hfkkmin hfkkspan hfnrows 1 sub hfpitch mul sub 2 div add def
+  % Absolute lattice phase: a cell is drawn iff its center — an integer
+  % multiple of the pitch along the screen direction (and independently
+  % along its normal), measured from the user-space origin — falls
+  % inside the projected corner ranges. The box only selects which
+  % multiples are visited, so loosening or inflating it (the /Offset
+  % advice in the header) adds edge cells without moving a single
+  % mark inside the old box. (History: the first version centered the
+  % leftover slack across both ends, which made the phase a function
+  % of the sweep bounds — a loose box silently re-registered every
+  % mark, contradicting the header's own "never wrong output". Fixed
+  % phases are also what real screens do: the screen is fixed, the
+  % clip cuts it. Consequence, documented not hidden: a tight box now
+  % keeps only cells whose centers it contains, so full tone can stop
+  % a pitch short of the far edge — the price of registration that
+  % survives loosening.)
+  % The boxed counts below ARE the loop trip counts, so the budget
+  % check on them is exact in both directions — never an over-eager
+  % limitcheck on a valid call, never a missed over-budget walk. A
+  % real-valued guard still runs first because the check must also
+  % precede the integer conversion: for a valid but absurd
+  % /Frequency the real quotient exceeds the interpreter's integer
+  % range, and bare `cvi` would answer `rangecheck` instead of the
+  % documented `halftone-maxcells-exceeded`. The real guard carries
+  % +2 slack and stays sound: with lo/hi the projected range over
+  % the pitch, raw - n = (hi - floor hi) + (ceil lo - lo) lies in
+  % [0,2), so raw past budget+2 means the boxed count is past the
+  % budget too; anything it misses (within 2 of the budget) the
+  % exact boxed check catches. (Residuals, both honest: a quotient
+  % past the budget but under an astronomically raised /MaxCells
+  % still `rangecheck`s in `cvi` — a genuinely unrepresentable
+  % lattice; and projected coordinates past the integer range
+  % (boxes near 1e19 with 64-bit integers) `rangecheck` instead of
+  % screening — coordinates that large cannot rasterize anyway.)
+  % A degenerate-narrow box holds no multiple at all: the counts
+  % bottom out at 0 (never negative — floor hi - ceil lo + 1 with
+  % hi >= lo exceeds -1), the walk runs zero trips, and the call
+  % succeeds having drawn nothing.
+  hfddmax hfddmin sub hfpitch div 1 add /hfrawdd exch def
+  hfrawdd hfmaxcells 2 add gt { halftone-maxcells-exceeded } if
+  hfddmin hfpitch div ceiling cvi /hfi0 exch def
+  hfddmax hfpitch div floor cvi /hfi1 exch def
+  hfi1 hfi0 sub 1 add /hfncols exch def
+  hfkkmax hfkkmin sub hfpitch div 1 add /hfrawkk exch def
+  hfrawkk hfmaxcells 2 add gt { halftone-maxcells-exceeded } if
+  hfkkmin hfpitch div ceiling cvi /hfj0 exch def
+  hfkkmax hfpitch div floor cvi /hfj1 exch def
+  hfj1 hfj0 sub 1 add /hfnrows exch def
 
   % ---- deterministic pre-flight budget check (no drawing, no /Tone call) ----
   % One /Tone sample per cell and a fixed one mark (dot/line) or two
@@ -500,11 +535,20 @@
   % the trip count.)
   % No mark sentinel under the snapshots: a callback can forge a mark
   % of its own and shadow `cleartomark`, stranding the snapshots on a
-  % `stopped` caller's stack. Positional cleanup cannot be shadowed,
-  % so the entry depth is recorded instead and every contract exit
-  % pops exactly back to it — then `grestore`, so graphics state is
-  % restored too — before signaling. The success path pops all six.
-  count /hfdepth0 exch def
+  % `stopped` caller's stack. Instead the caller's operand stack —
+  % everything below the six snapshots about to be pushed — is copied
+  % into an array box WITHOUT consuming it: `count copy` duplicates
+  % the whole top range, and the duplicates are stored away. (The
+  % copy form of `copy` is core Level 1, verified under Ghostscript
+  % alongside everything else here.) Validation exits above never
+  % touched the stack and the success path below pops only its own
+  % six, so both leave the caller items exactly where they were; only
+  % the contract-error path needs the box, via `hfcleanup` — `clear`,
+  % push the saved items back in order, `grestore` — before
+  % signaling. The success path pops all six.
+  count /hfD0 exch def
+  hfD0 copy
+  hfD0 array astore /hfsaved exch def
   hfscreenkind hftoneconst hftoneconst { hftoneval } { 0 } ifelse hfncols hfnrows
   hfscreenkind 2 eq { 2 } { 1 } ifelse
   0 1 hfcells 1 sub {
@@ -517,8 +561,8 @@
     1 index /hfnr exch def
     /hfj hfcell hfnc idiv def
     /hfi hfcell hfnc mod def
-    /hfkk hfkkmin hfj hfpitch mul add def
-    /hfdd hfddmin hfi hfpitch mul add def
+    /hfkk hfj0 hfj add hfpitch mul def
+    /hfdd hfi0 hfi add hfpitch mul def
     /hfcx hfdd hfdx mul hfkk hfnx mul add def
     /hfcy hfdd hfdy mul hfkk hfny mul add def
     4 index

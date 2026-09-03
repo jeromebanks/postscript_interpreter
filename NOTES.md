@@ -193,6 +193,46 @@ both-stacks-clean. (4, P3) The specimen's "horizontal" ramp kept `y`
 (`exch pop`) instead of `x` — now `{ pop 240 div }`, verified
 numerically (left 3937 vs right 12764, top 7547 vs bottom 7565).
 
+**Codex round 3 found two P2s, both fixed — one of them reverts a
+round-2 decision.** (1) The round-2 centering made the lattice phase
+a function of the sweep bounds: loosening /BBox (the documented
+/Offset advice) silently re-registered every mark — e.g. at
+frequency 12, angle 0, `[0 0 10 10]` centered at (2,2) while
+`[-1 -1 11 11]` centered at (-1,-1) — contradicting the header's own
+"a loose /BBox costs a few wasted cells, never wrong output". The
+phase is now absolute: cells are drawn iff their centers (integer
+multiples of the pitch from the user-space origin) fall in the
+projected box ranges, so the box only selects multiples and never
+moves marks. The far-edge test became the phase test:
+`loosening_the_bbox_neither_moves_nor_adds_marks` renders a
+single-cell tone field (1 near (6,6), 0 elsewhere) under a tight and
+an inflated box and demands byte-identical pixmaps plus ink at
+(6,6) — verified to fail against the centered library. Documented
+consequence: a tight box keeps only cells whose centers it
+contains, so full tone can stop a pitch short of the far edge
+(fixed screens behave exactly so — the screen is fixed, the clip
+cuts it). Counts are now exact integers (floor/ceiling of the
+projected ranges), so the budget check on them is exact in both
+directions — no over-eager limitcheck, no missed walk; the real
+pre-guard survives with +2 slack (raw - n lies in [0,2), proved in
+the comment) purely to keep absurd quotients answering
+`halftone-maxcells-exceeded` instead of `rangecheck`. Side effect on
+old pins: the 50×50 @12/45° box visits 12×11 = 132 cells now, not
+12×12 = 144 (the normal projection [-35.4, 35.4] holds eleven
+multiples; the relative scheme had forced symmetry) — both count
+tests re-pinned, comments updated. (2) The positional cleanup popped
+back to the entry depth, which pops nothing when the callback ate
+the caller's own operands too (`42 ... /Tone { clear 0.5 }` lost
+the 42 and kept the 0.5) — violating the documented exact-restore
+guarantee the empty-stack test couldn't see. The entry stack is now
+copied into an array box without consuming it (`count copy ...
+array astore`, verified identical in gs), and `hfcleanup` is
+`clear`, push the saved items back, `grestore` — exact restoration
+even after `clear`, pinned by a pre-existing-operand variant of the
+stack-eating test (also negative-controlled). `hfdepth0` is gone;
+`hfsaved` is the one dict name the error path trusts (redefining it
+corrupts the recovery, never the budget — tiered in the comment).
+
 ## Density-driven stippling and point-shading primitives (issue #50, 2026-08-31)
 
 A seventh sibling library, `lib/stipplekit.ps` — tag-migrated from

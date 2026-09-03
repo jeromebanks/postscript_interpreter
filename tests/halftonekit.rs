@@ -320,26 +320,52 @@ fn a_string_screen_name_selects_by_content() {
 }
 
 #[test]
-fn full_tone_reaches_the_far_edge_of_the_box() {
-    // The lattice is centered in the box, not anchored at its minima:
-    // a 10-unit span at pitch 6 holds two cells with 4 units of slack,
-    // so the centers sit at 2 and 8. Pinned with dots rather than
-    // rules: a pitch-long rule's own round caps already reach past an
-    // edge-anchored endpoint, but dots centered at 0 and 6 genuinely
-    // leave the [9,10] strip blank (nearest center is over 3 units
-    // from PS (9, 5), exactly the default radius).
+fn loosening_the_bbox_neither_moves_nor_adds_marks() {
+    // The lattice phase is absolute — cell centers sit on integer
+    // multiples of the pitch from the user-space origin — so the
+    // sweep box only selects which multiples are visited. The tone
+    // callback below inks exactly one cell: the one centered on
+    // (6, 6), a multiple of the pitch-6 lattice at /Frequency 12
+    // and /Angle 0. Rendered once with a tight box and once with a
+    // box inflated 10 units each way, the two pixmaps must agree
+    // byte for byte: the inflated sweep visits more cells, but every
+    // extra cell samples tone 0 and draws nothing, and no mark
+    // inside the old box moves. (History: the first version
+    // centered the slack in the box, so this same pair rendered
+    // differently — the inflated box re-registered every mark,
+    // contradicting the documented "never wrong output".)
+    let tone = "/Tone { exch 6 sub abs exch 6 sub abs add 0.5 lt { 1 } { 0 } ifelse }";
+    let render_with = |bbox: &str| {
+        let mut it = with_lib(100, 100);
+        run(
+            &mut it,
+            &format!(
+                "0 0 0 setrgbcolor \
+                 newpath 0 0 moveto 10 0 lineto 10 10 lineto 0 10 lineto closepath clip \
+                 << /BBox {bbox} /Screen /dot /Frequency 12 /Angle 0 {tone} >> halftone"
+            ),
+        );
+        pixbuf(&it)
+    };
+    let tight = render_with("[0 0 10 10]");
+    let loose = render_with("[-10 -10 20 20]");
+    assert_eq!(
+        tight, loose,
+        "loosening /BBox moved a mark or added ink inside the clip"
+    );
+    // And the one cell genuinely inked: PS (6, 6) is pixmap (6, 93).
     let mut it = with_lib(100, 100);
     run(
         &mut it,
         "0 0 0 setrgbcolor \
          newpath 0 0 moveto 10 0 lineto 10 10 lineto 0 10 lineto closepath clip \
-         << /BBox [0 0 10 10] /Screen /dot /Frequency 12 /Angle 0 /Tone 1 >> halftone",
+         << /BBox [0 0 10 10] /Screen /dot /Frequency 12 /Angle 0 \
+            /Tone { exch 6 sub abs exch 6 sub abs add 0.5 lt { 1 } { 0 } ifelse } >> halftone",
     );
-    // PS (9, 5) is pixmap (9, 94).
-    let p = it.gfx().pixmap.pixel(9, 94).expect("in bounds");
+    let p = it.gfx().pixmap.pixel(6, 93).expect("in bounds");
     assert!(
         p.red() < 128,
-        "far edge strip unscreened at full tone (red {})",
+        "absolute-phase cell at (6, 6) left no ink (red {})",
         p.red()
     );
 }
@@ -380,6 +406,30 @@ fn a_stack_eating_tone_gets_a_named_error_and_clean_stacks() {
             .iter()
             .map(|o| o.repr())
             .collect::<Vec<_>>()
+    );
+    // And with a caller operand already on the stack: the entry
+    // snapshot must bring it back exactly. Before the snapshot the
+    // cleanup popped positionally back to the entry depth, which
+    // pops nothing when the callback already ate everything — so
+    // the 42 was lost and the callback's own 0.5 survived.
+    let mut it = with_lib(60, 60);
+    let err = it
+        .run_str(
+            "42 newpath 5 5 moveto 55 5 lineto 55 55 lineto 5 55 lineto closepath clip \
+             << /Screen /dot /Frequency 12 /Offset [6 0] /Tone { clear 0.5 } >> halftone",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "halftone-tone-proc-must-leave-exactly-one-result"),
+        "wrong error: {err:?}"
+    );
+    assert_eq!(
+        it.operand_stack()
+            .iter()
+            .map(|o| o.repr())
+            .collect::<Vec<_>>(),
+        vec!["42"],
+        "entry snapshot did not restore the caller's operand exactly"
     );
 }
 
@@ -435,8 +485,11 @@ fn bbox_length_error_leaves_a_clean_stack() {
 #[test]
 fn a_hostile_tone_cannot_change_the_sample_count() {
     // A 50x50 box at frequency 12 under the default 45-degree screen
-    // spans 12x12 cells (the rotated projection), so 144 /Tone calls
-    // are approved up front. A callback redefining the lattice
+    // visits 12x11 cells, so 132 /Tone calls are approved up front:
+    // the lattice phase is absolute, so the screen-direction
+    // projection [0, 70.7] holds twelve multiples of the pitch-6
+    // lattice while the normal projection [-35.4, 35.4] holds eleven
+    // (-30..30). A callback redefining the lattice
     // counts, the dispatch kind, and the pass count mid-call must
     // change where marks land, never how many samples run: the walk
     // is one flat loop with a pre-sampled limit, and kind/const/shape
@@ -450,7 +503,7 @@ fn a_hostile_tone_cannot_change_the_sample_count() {
             /Tone { /hfncols 99999 def /hfnrows 99999 def /hfscreenkind 2 def /hfnpass 9 def \
                     /cellcount cellcount 1 add def exch pop 100 div } >> halftone",
     );
-    it.run_str("cellcount 144 eq").expect("count probe");
+    it.run_str("cellcount 132 eq").expect("count probe");
     let last = it.operand_stack().last().expect("probe result").repr();
     assert_eq!(
         last, "true",
@@ -465,7 +518,8 @@ fn cross_with_a_callback_samples_once_per_cell() {
     // both cross arms. Sampling per pass instead would run a
     // callback twice per cell — doubled side effects, and differently
     // sized arms from a stateful or random callback. A 50x50 box at
-    // frequency 12 spans 12x12 cells, so exactly 144 samples, not 288.
+    // frequency 12 visits 12x11 cells under the absolute-phase
+    // lattice, so exactly 132 samples, not 264.
     let mut it = with_lib(100, 100);
     run(
         &mut it,
@@ -474,7 +528,7 @@ fn cross_with_a_callback_samples_once_per_cell() {
          << /BBox [0 0 50 50] /Frequency 12 /Screen /cross \
             /Tone { /cellcount cellcount 1 add def exch pop 100 div } >> halftone",
     );
-    it.run_str("cellcount 144 eq").expect("count probe");
+    it.run_str("cellcount 132 eq").expect("count probe");
     let last = it.operand_stack().last().expect("probe result").repr();
     assert_eq!(
         last, "true",
