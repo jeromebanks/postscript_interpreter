@@ -236,11 +236,7 @@ fn maxcells_rejects_before_any_ink_lands() {
         matches!(err, PsError::Undefined(ref n) if n == "halftone-maxcells-exceeded"),
         "wrong error: {err:?}"
     );
-    assert_eq!(
-        ink_count(&it),
-        0,
-        "a rejected call must draw nothing first"
-    );
+    assert_eq!(ink_count(&it), 0, "a rejected call must draw nothing first");
 }
 
 #[test]
@@ -250,7 +246,10 @@ fn tone_clamps_out_of_range_returns() {
     let clip = "0 0 0 setrgbcolor \
         newpath 10 10 moveto 90 10 lineto 90 90 lineto 10 90 lineto closepath clip";
     let mut a = with_lib(100, 100);
-    run(&mut a, &format!("{clip} << /Screen /dot /Frequency 12 /Tone 1 >> halftone"));
+    run(
+        &mut a,
+        &format!("{clip} << /Screen /dot /Frequency 12 /Tone 1 >> halftone"),
+    );
     let mut b = with_lib(100, 100);
     run(
         &mut b,
@@ -344,11 +343,20 @@ fn option_validation_reports_self_documenting_errors() {
             "newpath 0 0 moveto 50 0 lineto 50 50 lineto closepath clip << /BBox [0 0 50 50] {opts} >> halftone"
         ))
     };
-    assert_eq!(bad("/Screen /stipple"), "halftone-screen-must-be-dot-line-or-cross");
+    assert_eq!(
+        bad("/Screen /stipple"),
+        "halftone-screen-must-be-dot-line-or-cross"
+    );
     // `eq` compares a string and a name by content (Ghostscript
     // agrees), so only genuinely unequal values are rejected.
-    assert_eq!(bad("/Screen (dots)"), "halftone-screen-must-be-dot-line-or-cross");
-    assert_eq!(bad("/Screen 5"), "halftone-screen-must-be-dot-line-or-cross");
+    assert_eq!(
+        bad("/Screen (dots)"),
+        "halftone-screen-must-be-dot-line-or-cross"
+    );
+    assert_eq!(
+        bad("/Screen 5"),
+        "halftone-screen-must-be-dot-line-or-cross"
+    );
     assert_eq!(bad("/Frequency 0"), "halftone-frequency-must-be-positive");
     assert_eq!(bad("/Frequency -3"), "halftone-frequency-must-be-positive");
     assert_eq!(
@@ -356,7 +364,10 @@ fn option_validation_reports_self_documenting_errors() {
         "halftone-frequency-must-be-a-number"
     );
     assert_eq!(bad("/Angle (steep)"), "halftone-angle-must-be-a-number");
-    assert_eq!(bad("/Tone (loud)"), "halftone-tone-must-be-a-number-or-procedure");
+    assert_eq!(
+        bad("/Tone (loud)"),
+        "halftone-tone-must-be-a-number-or-procedure"
+    );
     assert_eq!(
         bad("/Screen /dot /MaxRadius 0"),
         "halftone-maxradius-must-be-positive"
@@ -369,10 +380,22 @@ fn option_validation_reports_self_documenting_errors() {
         bad("/Screen /line /MaxWidth 0"),
         "halftone-maxwidth-must-be-positive"
     );
-    assert_eq!(bad("/Offset [1 2 3]"), "halftone-offset-must-be-a-two-element-array");
-    assert_eq!(bad("/Offset [1]"), "halftone-offset-must-be-a-two-element-array");
-    assert_eq!(bad("/Offset (flat)"), "halftone-offset-must-be-a-two-element-array");
-    assert_eq!(bad("/Offset [0 (up)]"), "halftone-offset-must-be-a-two-element-array");
+    assert_eq!(
+        bad("/Offset [1 2 3]"),
+        "halftone-offset-must-be-a-two-element-array"
+    );
+    assert_eq!(
+        bad("/Offset [1]"),
+        "halftone-offset-must-be-a-two-element-array"
+    );
+    assert_eq!(
+        bad("/Offset (flat)"),
+        "halftone-offset-must-be-a-two-element-array"
+    );
+    assert_eq!(
+        bad("/Offset [0 (up)]"),
+        "halftone-offset-must-be-a-two-element-array"
+    );
     assert_eq!(bad("/MaxCells 0"), "halftone-maxcells-must-be-positive");
     assert_eq!(
         bad("/MaxCells (many)"),
@@ -427,7 +450,10 @@ fn an_executable_name_for_tone_is_rejected_never_executed() {
     it.run_str("/hfevilran where { pop true } { false } ifelse")
         .expect("probe");
     let last = it.operand_stack().last().expect("probe result").repr();
-    assert_eq!(last, "false", "the rejected /Tone value must never have run");
+    assert_eq!(
+        last, "false",
+        "the rejected /Tone value must never have run"
+    );
     it.run_str("clear").expect("clear");
 }
 
@@ -449,7 +475,10 @@ fn a_procedure_for_screen_is_rejected_never_executed() {
     it.run_str("/hfevilsran where { pop true } { false } ifelse")
         .expect("probe");
     let last = it.operand_stack().last().expect("probe result").repr();
-    assert_eq!(last, "false", "the rejected /Screen proc must never have run");
+    assert_eq!(
+        last, "false",
+        "the rejected /Screen proc must never have run"
+    );
     it.run_str("clear").expect("clear");
 }
 
