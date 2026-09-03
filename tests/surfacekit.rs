@@ -556,6 +556,50 @@ fn every_preset_rejects_a_non_region_dict_passed_as_the_region() {
     }
 }
 
+// --- independent-agent review (PR #125, round 5): sfregiondef only ---
+// --- checked /Kind, never /BBox -- weave is the one preset that -----
+// --- unpacks /BBox directly, so a hand-built region dict (not one --
+// --- screct/scpath produced) with a procedure planted in /BBox -----
+// --- auto-executed on that unpacking, before any check --------------
+
+#[test]
+fn weave_rejects_a_procedure_planted_in_bbox_without_running_it() {
+    // A `PsError::Undefined("boom")` here would mean it ran; the
+    // region-validation error means it never got the chance.
+    assert_eq!(
+        surfacekit_err("<< /Kind /rect /BBox [ 0 0 { boom } 100 ] >> << /Pitch 5 >> weave"),
+        "weave-region-must-be-a-region"
+    );
+}
+
+#[test]
+fn every_preset_rejects_a_region_missing_bbox() {
+    for call in ["grain", "fiber", "scuff", "misreg", "weave"] {
+        assert_eq!(
+            surfacekit_err(&format!("<< /Kind /rect >> <<>> {call}")),
+            format!("{call}-region-must-be-a-region")
+        );
+    }
+}
+
+#[test]
+fn every_preset_rejects_a_region_with_a_malformed_bbox() {
+    for call in ["grain", "fiber", "scuff", "misreg", "weave"] {
+        assert_eq!(
+            surfacekit_err(&format!("<< /Kind /rect /BBox [ 0 0 100 ] >> <<>> {call}")),
+            format!("{call}-region-must-be-a-region"),
+            "{call} accepted a 3-element /BBox"
+        );
+        assert_eq!(
+            surfacekit_err(&format!(
+                "<< /Kind /rect /BBox [ 0 0 (nope) 100 ] >> <<>> {call}"
+            )),
+            format!("{call}-region-must-be-a-region"),
+            "{call} accepted a non-numeric /BBox element"
+        );
+    }
+}
+
 #[test]
 fn color_rejects_an_executable_array_without_running_it() {
     // A procedure is itself an `arraytype` object -- `type /arraytype

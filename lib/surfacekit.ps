@@ -190,20 +190,36 @@
 % region errproc sfregiondef -> region
 % Validates the `region` operand every preset here takes as its first
 % argument: a dict whose `/Kind` is `/rect` or `/path` (`screct`/
-% `scpath`'s own two shapes) — else runs `errproc`, the same
-% self-documenting-error convention `sfbindnum` uses. `region` travels
-% in a private 1-element array until every check passes, checked only
-% via `type`/`get` (never a bare reference to the raw operand): a
+% `scpath`'s own two shapes) and whose `/BBox` is a well-formed
+% 4-number array — else runs `errproc`, the same self-documenting-
+% error convention `sfbindnum` uses. `region` (and, once fetched,
+% `/BBox`) travels in a private 1-element array until every check
+% passes, checked only via `type`/`get`/`length` (never a bare
+% reference to the raw operand or to the raw `/BBox` value): a
 % procedure passed as the region operand — `{ boom } opts grain`, say
 % — would otherwise auto-execute on this file's very first bare
 % reference to it, the same hazard `sfbindnum` exists to close for a
 % numeric option, just on the *first* operand this time rather than a
-% dict key (Codex review, PR #125). Once confirmed a well-formed
-% region dict, the value is safe for the caller to bind bare from
-% here on: a `dicttype` object is always pushed literally when
-% referenced bare regardless of any executable attribute (the same
-% reasoning `sccallable`'s own type list, artkit.ps, relies on in
-% never treating `dicttype` as executable).
+% dict key (Codex review, PR #125). `/BBox` gets the same treatment
+% for the same reason, one level deeper: `grain`/`fiber`/`scuff`/
+% `misreg` never touch `/BBox` themselves (they hand `sfregion` to
+% `scatter` untouched), but `weave` unpacks it directly with `aload`
+% and binds each of its four numbers bare — a hand-built region dict
+% (not one `screct`/`scpath` produced) with a procedure planted in
+% `/BBox` would auto-execute on that unpacking, before any check
+% (independent-agent review, PR #125, round 5). Validating it here,
+% once, for every preset — not just inside `weave` — means a region
+% dict this operator has already returned is unconditionally safe for
+% *any* caller code in this file to destructure however it needs to.
+% Once confirmed well-formed, the region dict itself is safe for the
+% caller to bind bare from here on: a `dicttype` object is always
+% pushed literally when referenced bare regardless of any executable
+% attribute (the same reasoning `sccallable`'s own type list,
+% artkit.ps, relies on in never treating `dicttype` as executable) —
+% and by this point every number reachable through it has already been
+% extracted via `get`, confirmed numeric, and left as plain numbers
+% inside `sfrdbox`'s own private array, never bound to a name of their
+% own until known safe.
 % @internal
 /sfregiondef {
   /sfrderr exch def
@@ -212,6 +228,16 @@
   sfrdbox 0 get /Kind known not { sfrderr exec } if
   sfrdbox 0 get /Kind get dup /rect eq exch /path eq or not
     { sfrderr exec } if
+  sfrdbox 0 get /BBox known not { sfrderr exec } if
+  sfrdbox 0 get /BBox get 1 array astore /sfrdbbox exch def
+  sfrdbbox 0 get type /arraytype ne { sfrderr exec } if
+  sfrdbbox 0 get length 4 ne { sfrderr exec } if
+  /sfrdok true def
+  sfrdbbox 0 get 0 get sfisnum not { /sfrdok false def } if
+  sfrdbbox 0 get 1 get sfisnum not { /sfrdok false def } if
+  sfrdbbox 0 get 2 get sfisnum not { /sfrdok false def } if
+  sfrdbbox 0 get 3 get sfisnum not { /sfrdok false def } if
+  sfrdok not { sfrderr exec } if
   sfrdbox 0 get
 } def
 
