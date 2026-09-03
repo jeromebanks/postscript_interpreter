@@ -71,8 +71,9 @@ newpath 0 0 moveto 720 0 lineto 720 900 lineto 0 900 lineto closepath clip
 0.16 0.54 0.58 setrgbcolor
 << /BBox [-8 -8 728 908] /Screen /dot /Frequency 10 /Angle 15 /Offset [4 2]
    /Tone {
-     % x y -> w. Sky: ramps up with height. Water: ramps down with
-     % depth, plus a sun streak under x=360.
+     % x y -> w. Sky: deepest at the horizon (0.50), paling to
+     % 0.04 at the zenith. Water: ramps down with depth, plus a
+     % sun streak under x=360.
      dup 470 gt
        { 470 sub 430 div 1 exch sub 0.46 mul 0.04 add
          oorclamp01 exch pop }
@@ -99,8 +100,9 @@ newpath 0 0 moveto 720 0 lineto 720 900 lineto 0 900 lineto closepath clip
 0.16 0.13 0.16 setrgbcolor
 << /BBox [-8 -8 728 908] /Screen /line /Frequency 10 /Angle 45 /Offset [2 -2]
    /Tone {
-     % x y -> w. Two shaded ridge bands, maxed; x is reused via the
-     % stack (exch-pop-exch) so both operands are consumed exactly.
+     % x y -> w. Two shaded ridge bands, maxed; the first call
+     % leaves [x y w1] and 3 1 roll rotates it to [w1 x y] for the
+     % second, so both operands are consumed exactly.
      2 copy 600 260 0.5 150 OORridge
      3 1 roll
      540 480 0.45 120 OORridge
