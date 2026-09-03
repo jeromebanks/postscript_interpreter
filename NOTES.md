@@ -260,6 +260,35 @@ index` shape with the trap documented in its comment. Truth table
 probed directly in both interpreters (proc true; number, cvx-string,
 executable name false; packed proc true in gs).
 
+**Codex round 5 found two P2s, both confirmed real and both fixed.**
+(1) Snapshot forgery: a *balanced* /Tone (`{ pop pop pop 100000 1 }`
+eats x, y, and the npass snapshot, net -1) passed the count-only
+check and drove 100000 pass trips on a one-cell screen — the
+"immune by construction" claim was wrong; snapshots are
+forgery-evident, not forgery-proof. Fixed by clamping the pass
+limit to [1,2] at the loop (identity on the legit 1/2): a forged
+100000 draws twice, a forged -5 draws once instead of zero trips.
+Enumerated the other five slots to confirm the clamp is complete —
+kind/const/cols/rows only reshape or misplace their own cell's
+marks (tier-2), and the cell loop's limit was evaluated once
+throughout, so pass trips were the only unbounded channel. The
+header tiering, the walk comment, and the pass-loop comment now say
+"bounded, not prevented". Pinned by a one-cell test asserting ink
+for both the -5 (discriminating: blank pre-fix) and the verbatim
+100000 shape (bounded completion, clean stack) — negative control
+trips on the first half. (2) The round-4 raw guards used a
+full-pitch-span proxy (raw >= 2) for "the other axis holds a cell",
+so a narrow-but-nonempty axis beside an astronomic count skipped
+both guards and died in `cvi` with `rangecheck` (`[0 0 100 3.6e-29]`
+@1e30: one row, ~1e30 columns — confirmed in both interpreters).
+The proxy is now exact emptiness in pure real arithmetic
+(ceil(lo) > floor(hi); floor/ceiling never rangecheck), pinned by
+the reviewer's example expecting `halftone-maxcells-exceeded`
+(negative-controlled: `rangecheck` pre-fix). Also softened the
+"counts never negative" note: float rounding around a straddled
+multiple can push a small negative — still safe (zero trips, and
+the budget check only fires upward).
+
 ## Density-driven stippling and point-shading primitives (issue #50, 2026-08-31)
 
 A seventh sibling library, `lib/stipplekit.ps` — tag-migrated from

@@ -206,12 +206,22 @@
 % the dispatch kind, the const/proc choice, the lattice shape, and
 % the pass count travel on the operand stack *under* the whole walk,
 % read back only through fixed-depth `index` — a dict redefinition
-% mid-call cannot reach them, so a /Tone proc cannot make a call
-% exceed what /MaxCells approved no matter what it redefines. The
-% walk is cell-major: one flat loop over cells, sampling once per
-% cell, with an inner pass loop (one trip, two for cross) whose limit
-% re-reads the npass *snapshot* per cell — safe, because a stack
-% value cannot be redefined, unlike a dict limit re-read per row.
+% mid-call cannot reach them. A /Tone proc still cannot make a call
+% exceed what /MaxCells approved no matter what it redefines — but
+% the mechanism is stated honestly: a *balanced* callback can pop
+% snapshots and push forged replacements with net -1, passing the
+% per-sample count check, so the snapshots are forgery-evident, not
+% forgery-proof. Forgery is bounded, not prevented: kind/const/cols/
+% rows only reshape or misplace their own cell's marks (tier-2), and
+% the pass count is clamped to [1,2] at the loop — a forged 100000
+% draws twice, a forged -5 draws once — so the
+% one-or-two-marks-per-cell premise /MaxCells is built on holds by
+% enforcement. The walk is cell-major: one flat loop over cells,
+% sampling once per cell, with an inner pass loop (one trip, two for
+% cross) whose limit re-reads the npass *snapshot* per cell, clamped
+% to [1,2] — a dict limit re-read per row (the pre-flat-loop shape)
+% could be redefined past the budget, while a stack slot can only be
+% forged within the clamp.
 % Every other `hf` name only affects geometry or tone, so corrupting
 % one is undefined rendering, not a safety-limit bypass.
 %
@@ -484,17 +494,20 @@
   % /Frequency the real quotient exceeds the interpreter's integer
   % range, and bare `cvi` would answer `rangecheck` instead of the
   % documented `halftone-maxcells-exceeded`. Each raw guard carries
-  % +2 slack AND requires the other axis to provably hold a cell
-  % (raw >= 2 means its span covers a full pitch, so some multiple
-  % falls inside): with lo/hi the projected range over the pitch,
-  % raw - n = (hi - floor hi) + (ceil lo - lo) lies in [0,2), so raw
-  % past budget+2 means that axis's boxed count is past the budget,
-  % and with the other axis non-empty the product is past it too.
-  % The other-axis condition is load-bearing, not caution: a narrow
-  % box holds no multiple on one axis (count 0, product 0, zero
-  % trips) while the other axis innocently spans past budget+2 raw
-  % cells — firing on the raw size alone would reject a call that
-  % draws nothing. Anything the raw guards miss (within 2 of the
+  % +2 slack AND requires the other axis to actually hold a cell:
+  % with lo/hi the projected range over the pitch, raw - n =
+  % (hi - floor hi) + (ceil lo - lo) lies in [0,2), so raw past
+  % budget+2 means that axis's boxed count is past the budget, and
+  % with the other axis non-empty the product is past it too. The
+  % other-axis test is exact emptiness in pure real arithmetic —
+  % ceil(lo) > floor(hi) — never a full-pitch-span proxy: a narrow
+  % box can span less than a pitch while still straddling a multiple
+  % (one row beside an astronomic column count must still fire), and
+  % a narrow box holding no multiple (count 0, product 0, zero
+  % trips) must still succeed. `floor`/`ceiling` never `rangecheck`,
+  % so the test itself is total; only the later `cvi` conversion of
+  % a genuinely unrepresentable index can still fail (a documented
+  % residual below). Anything the raw guards miss (within 2 of the
   % budget, or beside an empty axis) the exact boxed check catches,
   % so they are purely a `rangecheck`-preemption fast path, never
   % the decider. (Residuals, both honest: a quotient past the budget
@@ -504,13 +517,18 @@
   % integers) `rangecheck` instead of screening — coordinates that
   % large cannot rasterize anyway.)
   % A degenerate-narrow box holds no multiple at all: the counts
-  % bottom out at 0 (never negative — floor hi - ceil lo + 1 with
-  % hi >= lo exceeds -1), the walk runs zero trips, and the call
-  % succeeds having drawn nothing.
+  % bottom out at 0 (floor hi - ceil lo + 1 with hi >= lo exceeds -1
+  % in exact arithmetic; floating-point rounding around a straddled
+  % multiple can push a small negative — still safe, since any count
+  % at or below 0 runs zero trips and fails the budget check only
+  % upward), the walk runs zero trips, and the call succeeds having
+  % drawn nothing.
   hfddmax hfddmin sub hfpitch div 1 add /hfrawdd exch def
   hfkkmax hfkkmin sub hfpitch div 1 add /hfrawkk exch def
-  hfrawdd hfmaxcells 2 add gt hfrawkk 2 ge and
-  hfrawkk hfmaxcells 2 add gt hfrawdd 2 ge and or
+  hfkkmin hfpitch div ceiling hfkkmax hfpitch div floor gt /hfkkempty exch def
+  hfddmin hfpitch div ceiling hfddmax hfpitch div floor gt /hfddempty exch def
+  hfrawdd hfmaxcells 2 add gt hfkkempty not and
+  hfrawkk hfmaxcells 2 add gt hfddempty not and or
   { halftone-maxcells-exceeded } if
   hfddmin hfpitch div ceiling cvi /hfi0 exch def
   hfddmax hfpitch div floor cvi /hfi1 exch def
@@ -548,16 +566,19 @@
   % only its own limit/proc/initial (pushed after these) and a
   % well-behaved /Tone leaves the stack exactly as it found it, so
   % fixed-depth `index` reads below can never observe a dict
-  % redefinition — the dispatch kind, the const/proc choice, the
-  % lattice shape, and the pass count are immune to mid-call
-  % tampering by construction, not by promise. (History, newest
-  % first: the flat pass-major loop sampled /Tone once per *trip*,
-  % i.e. twice per cross cell; the nested loops before it re-read a
-  % dict limit per row, so redefining it multiplied every remaining
-  % row past the approved budget. Cell-major with a stack-read inner
-  % pass loop closes both; redefinition now corrupts placement at
-  % worst — tier-2 geometry, per the header's own tiering — never
-  % the trip count.)
+  % redefinition. Stack forgery (popping snapshots, pushing balanced
+  % replacements) is a different channel and IS reachable — so it is
+  % bounded instead of wished away: kind/const/cols/rows reshape or
+  % misplace at most their own cell's marks (tier-2, per the header),
+  % and the pass limit below is clamped to [1,2]. (History, newest
+  % first: an unclamped stack-read pass limit let a forged npass run
+  % 100000 trips on a one-cell screen; the flat pass-major loop
+  % before that sampled /Tone once per *trip*, i.e. twice per cross
+  % cell; the nested loops before that re-read a dict limit per row,
+  % so redefining it multiplied every remaining row past the
+  % approved budget. The cell loop's own limit was evaluated once
+  % throughout — cell trips were never forgeable, only pass trips
+  % were, and now those are clamped.)
   % No mark sentinel under the snapshots: a callback can forge a mark
   % of its own and shadow `cleartomark`, stranding the snapshots on a
   % `stopped` caller's stack. Instead the caller's operand stack —
@@ -578,10 +599,12 @@
   hfscreenkind 2 eq { 2 } { 1 } ifelse
   0 1 hfcells 1 sub {
     /hfcell exch def
-    % Per-cell copies from the immune snapshots: everything below is
+    % Per-cell copies from the stack snapshots: everything below is
     % derived before /Tone runs, so a hostile callback redefining
     % the dict originals changes where this cell inks, never how
-    % many cells run.
+    % many cells run. (Forging the stack copies themselves is the
+    % bounded channel the header tiers — placement and shape only,
+    % with the pass count clamped below.)
     2 index /hfnc exch def
     1 index /hfnr exch def
     /hfj hfcell hfnc idiv def
@@ -618,10 +641,13 @@
         hfclamp01 }
     ifelse
     /hfw exch def
-    % The inner pass limit re-reads the npass *snapshot* per cell —
-    % safe, because a stack value cannot be redefined, unlike the
-    % dict limit the pre-flat-loop version re-read per row.
-    0 1 2 index 1 sub {
+    % The inner pass limit re-reads the npass *snapshot* per cell,
+    % clamped to [1,2]: legit values are 1 (dot/line) or 2 (cross),
+    % so the clamp is identity on honest calls and a hard bound on
+    % forged ones — a forged 100000 draws twice, a forged -5 draws
+    % once. The documented one-or-two-marks-per-cell premise holds
+    % by enforcement, and /MaxCells keeps bounding total work.
+    0 1 2 index 1 max 2 min 1 sub {
       /hfpass exch def
       hfpass 0 eq
         { /hfpdx hfdx def /hfpdy hfdy def }

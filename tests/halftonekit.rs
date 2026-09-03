@@ -382,6 +382,23 @@ fn absurd_frequency_hits_the_budget_not_rangecheck() {
 }
 
 #[test]
+fn a_narrow_nonempty_axis_still_hits_the_budget() {
+    // One projected axis spans less than a pitch but still straddles
+    // a lattice center ([0, 3.6e-29] at pitch 7.2e-29 holds the
+    // multiple 0: exactly one row), while the other axis is
+    // astronomically over budget. The other-axis test is exact
+    // emptiness — ceil(lo) > floor(hi) in real arithmetic, never a
+    // full-pitch-span proxy — so the raw guard still fires
+    // `halftone-maxcells-exceeded` instead of reaching `cvi` and
+    // answering `rangecheck` (which is what both interpreters did
+    // before the emptiness test existed).
+    assert_eq!(
+        halftone_err("<< /BBox [0 0 100 3.6e-29] /Angle 0 /Frequency 10 30 exp >> halftone"),
+        "halftone-maxcells-exceeded"
+    );
+}
+
+#[test]
 fn a_stack_eating_tone_gets_a_named_error_and_clean_stacks() {
     // A callback that destroys the stack itself (`clear`) must still
     // surface the contract error: every check reads `count` or dict
@@ -510,6 +527,39 @@ fn a_hostile_tone_cannot_change_the_sample_count() {
         "a /Tone redefining the lattice state changed the approved sample count"
     );
     it.run_str("clear").expect("clear");
+}
+
+#[test]
+fn a_forged_pass_count_is_clamped_not_executed() {
+    // A balanced callback can pop snapshots and push forged
+    // replacements with net -1, passing the per-sample count check:
+    // `{ pop pop pop -5 1 }` eats x, y, and the npass snapshot and
+    // leaves a forged -5 below its 1.0 result. The pass limit is
+    // clamped to [1,2], so the forged -5 draws once instead of
+    // running zero trips — a one-cell line screen still inks, where
+    // the unclamped loop drew nothing.
+    let mut it = with_lib(100, 100);
+    run(
+        &mut it,
+        "0 0 0 setrgbcolor \
+         newpath 0 0 moveto 5.9 0 lineto 5.9 5.9 lineto 0 5.9 lineto closepath clip \
+         << /BBox [0 0 5.9 5.9] /Screen /line /Frequency 12 /Angle 0 /Tone { pop pop pop -5 1 } >> halftone",
+    );
+    assert!(ink_count(&it) > 0, "a forged -5 pass count drew nothing");
+    // And upward, the reported shape: a forged 100000 completes with
+    // a clean stack — two clamped strokes on a /MaxCells 1 call, not
+    // one hundred thousand trips past the approved budget.
+    let mut it = with_lib(100, 100);
+    run(
+        &mut it,
+        "0 0 0 setrgbcolor \
+         newpath 0 0 moveto 5.9 0 lineto 5.9 5.9 lineto 0 5.9 lineto closepath clip \
+         << /BBox [0 0 5.9 5.9] /Screen /line /Frequency 12 /Angle 0 /MaxCells 1 /Tone { pop pop pop 100000 1 } >> halftone",
+    );
+    assert!(
+        ink_count(&it) > 0,
+        "a forged 100000 pass count drew nothing"
+    );
 }
 
 #[test]
