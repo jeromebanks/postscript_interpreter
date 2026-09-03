@@ -1,0 +1,115 @@
+%!PS-Adobe-3.0
+%%Title: Nightfall, Three Cuts
+%%BoundingBox: 0 0 640 480
+%%EndComments
+
+% A moonlit ridge over water, built entirely to put lib/printkit.ps's
+% three presets (issue #52) to work in one scene rather than three
+% separate specimen boxes: the sky is engraving's fine crosshatch
+% (dusk texture, straight off a flat wash); the mountains are woodcut;
+% the water is engraving again, a different /Angle; the foreground
+% reeds are linocut.
+%
+% Every mark this file draws that isn't the moon or the flat washes
+% comes from a preset call -- but printkit's presets only ever *add*
+% ink, they never subtract, so a woodcut/linocut/engraving pass alone
+% can only draw a dark shape on a pale ground, not a genuine "carved
+% through solid ink" print. The trick used throughout: fill the
+% silhouette solid first with an ordinary `fill` (the inked block),
+% then run the preset a second time over the *same* path with `/Color`
+% set to a *lighter* tone instead of the usual dark ink -- the preset
+% doesn't know or care that its own strokes are lighter than the
+% ground they land on, so what it draws reads as moonlit highlight cut
+% through the block: the actual look real relief printmaking gets from
+% gouging a line's worth of wood or lino away and leaving it uninked.
+
+(lib/artkit.ps) run
+(lib/hatchkit.ps) run
+(lib/surfacekit.ps) run
+(lib/printkit.ps) run
+
+% --- palette (plain 3-element arrays -- both setrgbcolor and /Color
+% read the same object directly, no procedure/array mismatch) --------
+/paper    [ 0.96 0.93 0.86 ] def
+/skywash  [ 0.62 0.66 0.74 ] def
+/skyink   [ 0.42 0.46 0.56 ] def
+/mtnink   [ 0.12 0.10 0.09 ] def
+/mtnhi    [ 0.68 0.62 0.50 ] def
+/waterink [ 0.10 0.14 0.22 ] def
+/waterhi  [ 0.55 0.62 0.72 ] def
+/reedink  [ 0.06 0.06 0.07 ] def
+/reedhi   [ 0.78 0.70 0.52 ] def
+/moonfill [ 0.97 0.95 0.88 ] def
+
+/setink { aload pop setrgbcolor } def
+
+paper setink
+0 0 640 480 rectfill
+
+% --- sky: a flat dusk wash, engraving crosshatch for texture ----------
+skywash setink
+0 170 640 310 rectfill
+
+gsave
+newpath 0 170 moveto 640 170 lineto 640 480 lineto 0 480 lineto closepath
+<< /Scale 2.2 /Density 0.08 /Roughness 0.1 /Seed 40 /Angle 20
+   /Color skyink >> engraving
+grestore
+
+% --- moon ---------------------------------------------------------------
+moonfill setink
+newpath 500 380 38 0 360 arc closepath fill
+mtnink setink
+1 setlinewidth
+newpath 500 380 38 0 360 arc closepath stroke
+
+% --- mountains: solid ink block, woodcut cuts the moonlit highlight ----
+/mtnpath {
+  newpath
+    0 150 moveto
+    80 240 lineto 170 180 lineto 260 290 lineto 350 200 lineto
+    430 260 lineto 520 175 lineto 600 235 lineto 640 180 lineto
+    640 90 lineto 0 90 lineto
+  closepath
+} def
+
+mtnpath mtnink setink fill
+
+gsave
+mtnpath
+<< /Scale 1.1 /Density 0.55 /Roughness 0.75 /Seed 41 /Angle 62
+   /Color mtnhi >> woodcut
+grestore
+
+% --- water: solid ink block, engraving cuts pale ripple highlights ----
+% Covers the mountain silhouette's submerged lower band (y 90-190)
+% with plain water first.
+waterink setink
+0 0 640 190 rectfill
+
+gsave
+newpath 0 0 moveto 640 0 lineto 640 190 lineto 0 190 lineto closepath
+<< /Scale 2.4 /Density 0.22 /Roughness 0.15 /Seed 42 /Angle 3
+   /Color waterhi >> engraving
+grestore
+
+% --- foreground reeds: solid silhouettes, linocut cuts the rim light --
+/reedclump { % x -
+  /rcx exch def
+  newpath
+    rcx 8 sub 0 moveto rcx 6 sub 55 lineto rcx 4 sub 0 lineto closepath
+    rcx 2 sub 0 moveto rcx 68 lineto rcx 2 add 0 lineto closepath
+    rcx 4 add 0 moveto rcx 6 add 45 lineto rcx 8 add 0 lineto closepath
+} def
+
+[ 55 150 480 585 ] {
+  reedclump reedink setink fill
+  gsave
+  rcx reedclump
+  << /Scale 0.7 /Density 0.6 /Roughness 0.35 /Seed 43 /Angle 90
+     /Color reedhi >> linocut
+  grestore
+} forall
+
+showpage
+%%EOF
