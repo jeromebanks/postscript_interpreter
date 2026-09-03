@@ -561,6 +561,25 @@ fn an_over_budget_call_samples_tone_zero_times() {
 }
 
 #[test]
+fn zero_cells_are_a_no_op_not_a_budget_error() {
+    // One axis holds no lattice center at all ([1, 2] at pitch 8:
+    // ceil(1/8) = 1 > floor(2/8) = 0, so zero columns), while the
+    // other spans 13 raw rows — past /MaxCells 10 + 2. The product
+    // is 0 and the walk runs zero trips, so the call must succeed
+    // having drawn nothing: each per-axis raw guard fires only when
+    // the other axis provably holds a cell, and the exact boxed
+    // check decides the rest.
+    let mut it = with_lib(100, 100);
+    run(
+        &mut it,
+        "0 0 0 setrgbcolor \
+         newpath 1 0 moveto 2 0 lineto 2 100 lineto 1 100 lineto closepath clip \
+         << /BBox [1 0 2 100] /Frequency 9 /Angle 0 /MaxCells 10 >> halftone",
+    );
+    assert_eq!(ink_count(&it), 0, "a zero-cell lattice left ink");
+}
+
+#[test]
 fn dot_size_tracks_the_square_root_of_tone() {
     // Area-proportional dots: halving the tone halves the ink, it
     // does not quarter it. Without the `sqrt` (radius proportional
@@ -711,6 +730,32 @@ fn an_executable_name_for_tone_is_rejected_never_executed() {
         "the rejected /Tone value must never have run"
     );
     it.run_str("clear").expect("clear");
+}
+
+#[test]
+fn setpacking_true_keeps_tone_working() {
+    // Partial regression coverage for a Codex-round-4 finding: under
+    // a Level 2 interpreter with packing enabled, a plain procedure
+    // literal like the /Tone callback below has type
+    // packedarraytype, not arraytype — the original type guard
+    // rejected it outright. pscat itself doesn't actually produce
+    // packedarraytype under `setpacking` (its `packedarray` returns
+    // plain arrays), so this can only assert the call still works
+    // with packing toggled on, not exercise the packedarraytype
+    // branch itself — ghostscript_accepts_packed_tone_callbacks
+    // below does that part, against real Ghostscript, where packing
+    // actually changes the type.
+    let mut it = with_lib(100, 100);
+    run(
+        &mut it,
+        "0 0 0 setrgbcolor true setpacking \
+         newpath 0 0 moveto 50 0 lineto 50 50 lineto 0 50 lineto closepath clip \
+         << /BBox [0 0 50 50] /Screen /dot /Frequency 12 /Tone { exch pop 100 div } >> halftone",
+    );
+    assert!(
+        ink_count(&it) > 100,
+        "expected the screen to still render under setpacking"
+    );
 }
 
 /// And once more for /Screen: a procedure compares, never executes.
@@ -979,4 +1024,54 @@ fn ghostscript_accepts_the_halftone_specimen_sheet() {
         .status()
         .expect("run gs");
     assert!(status.success(), "gs rejected examples/halftone.ps");
+}
+
+#[test]
+fn ghostscript_accepts_packed_tone_callbacks() {
+    // The acceptance side of the setpacking finding covered
+    // partially by setpacking_true_keeps_tone_working above: `true
+    // setpacking` makes real Ghostscript pack subsequently-parsed
+    // procedure literals into packedarraytype (confirmed directly;
+    // pscat itself doesn't), so running all three screens with
+    // callback tones under packing is what actually exercises the
+    // packedarraytype half of `hfcallable`. The library is inlined
+    // into the temp driver so gs needs no file access (no -dNOSAFER,
+    // unlike the specimen test) — same harness shape as paintkit's
+    // own packed-driver test.
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let lib = std::fs::read_to_string("lib/halftonekit.ps").expect("library present");
+    let driver = "true setpacking \
+        0 0 0 setrgbcolor \
+        newpath 0 0 moveto 50 0 lineto 50 50 lineto 0 50 lineto closepath clip \
+        << /BBox [0 0 50 50] /Screen /dot /Frequency 12 /Tone { exch pop 100 div } >> halftone \
+        newpath 60 0 moveto 110 0 lineto 110 50 lineto 60 50 lineto closepath clip \
+        << /BBox [60 0 110 50] /Screen /line /Frequency 12 /Angle 0 /Tone { exch pop 100 div } >> halftone \
+        newpath 0 60 moveto 50 60 lineto 50 110 lineto 0 110 lineto closepath clip \
+        << /BBox [0 60 50 110] /Screen /cross /Frequency 12 /Angle 0 /Tone { exch pop 100 div } >> halftone \
+        showpage";
+    let dir = std::env::temp_dir().join(format!("pscat-halftone-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let combined = dir.join("halftone_gs.ps");
+    std::fs::write(&combined, format!("{lib}\n{driver}\n")).expect("write");
+    let status = std::process::Command::new("gs")
+        .args([
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g120x120",
+            "-r72",
+            "-o/dev/null",
+        ])
+        .arg(&combined)
+        .status()
+        .expect("run gs");
+    assert!(status.success(), "gs rejected packed /Tone callbacks");
 }

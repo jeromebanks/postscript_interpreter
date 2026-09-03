@@ -247,7 +247,7 @@
   dup 1 gt { pop 1 } if
 } def
 
-% v hfcallable -> bool, true only for an executable array
+% v hfcallable -> bool, true only for an executable (packed) array
 % Deliberately narrower than a bare `xcheck`: `xcheck` is also true
 % for a `cvx`-marked string or an executable name, which are not
 % things this file can `exec` with {x y -> w} calling convention —
@@ -256,9 +256,24 @@
 % caller holding a procedure under a name passes it loaded
 % (`/MyTone load`), which is already the plain executable array this
 % accepts; a bare executable name is rejected, documented in /Tone.
+% But NOT as narrow as `arraytype` alone: Ghostscript packs procedure
+% literals into `packedarraytype` under `true setpacking`, where this
+% interpreter leaves them plain — requiring `arraytype` would reject
+% an ordinary `{ ... }` /Tone there (paintkit's round-5 lesson, same
+% fix; artkit's guard lists the same three callable shapes). pscat
+% itself never produces `packedarraytype` (its `packedarray` returns
+% plain arrays), so that half of the `or` is Ghostscript-observable
+% only — pinned by the gs packed-driver test, with a `setpacking`
+% partial-coverage test on this side. No temporaries for the
+% typename: `type` answers an *executable* name, so `def`ing it and
+% reading it back executes it (`arraytype` lookup → undefined) — the
+% same auto-execution trap the array boxes exist for — hence the
+% inline `1 index` shape instead.
 % @internal
 /hfcallable {
-  dup type /arraytype eq exch xcheck and
+  dup type /arraytype eq
+  1 index type /packedarraytype eq or
+  exch xcheck and
 } def
 
 % hfcleanup -
@@ -464,32 +479,42 @@
   % The boxed counts below ARE the loop trip counts, so the budget
   % check on them is exact in both directions — never an over-eager
   % limitcheck on a valid call, never a missed over-budget walk. A
-  % real-valued guard still runs first because the check must also
+  % real-valued guards still run first because the check must also
   % precede the integer conversion: for a valid but absurd
   % /Frequency the real quotient exceeds the interpreter's integer
   % range, and bare `cvi` would answer `rangecheck` instead of the
-  % documented `halftone-maxcells-exceeded`. The real guard carries
-  % +2 slack and stays sound: with lo/hi the projected range over
-  % the pitch, raw - n = (hi - floor hi) + (ceil lo - lo) lies in
-  % [0,2), so raw past budget+2 means the boxed count is past the
-  % budget too; anything it misses (within 2 of the budget) the
-  % exact boxed check catches. (Residuals, both honest: a quotient
-  % past the budget but under an astronomically raised /MaxCells
-  % still `rangecheck`s in `cvi` — a genuinely unrepresentable
-  % lattice; and projected coordinates past the integer range
-  % (boxes near 1e19 with 64-bit integers) `rangecheck` instead of
-  % screening — coordinates that large cannot rasterize anyway.)
+  % documented `halftone-maxcells-exceeded`. Each raw guard carries
+  % +2 slack AND requires the other axis to provably hold a cell
+  % (raw >= 2 means its span covers a full pitch, so some multiple
+  % falls inside): with lo/hi the projected range over the pitch,
+  % raw - n = (hi - floor hi) + (ceil lo - lo) lies in [0,2), so raw
+  % past budget+2 means that axis's boxed count is past the budget,
+  % and with the other axis non-empty the product is past it too.
+  % The other-axis condition is load-bearing, not caution: a narrow
+  % box holds no multiple on one axis (count 0, product 0, zero
+  % trips) while the other axis innocently spans past budget+2 raw
+  % cells — firing on the raw size alone would reject a call that
+  % draws nothing. Anything the raw guards miss (within 2 of the
+  % budget, or beside an empty axis) the exact boxed check catches,
+  % so they are purely a `rangecheck`-preemption fast path, never
+  % the decider. (Residuals, both honest: a quotient past the budget
+  % but under an astronomically raised /MaxCells still `rangecheck`s
+  % in `cvi` — a genuinely unrepresentable lattice; and projected
+  % coordinates past the integer range (boxes near 1e19 with 64-bit
+  % integers) `rangecheck` instead of screening — coordinates that
+  % large cannot rasterize anyway.)
   % A degenerate-narrow box holds no multiple at all: the counts
   % bottom out at 0 (never negative — floor hi - ceil lo + 1 with
   % hi >= lo exceeds -1), the walk runs zero trips, and the call
   % succeeds having drawn nothing.
   hfddmax hfddmin sub hfpitch div 1 add /hfrawdd exch def
-  hfrawdd hfmaxcells 2 add gt { halftone-maxcells-exceeded } if
+  hfkkmax hfkkmin sub hfpitch div 1 add /hfrawkk exch def
+  hfrawdd hfmaxcells 2 add gt hfrawkk 2 ge and
+  hfrawkk hfmaxcells 2 add gt hfrawdd 2 ge and or
+  { halftone-maxcells-exceeded } if
   hfddmin hfpitch div ceiling cvi /hfi0 exch def
   hfddmax hfpitch div floor cvi /hfi1 exch def
   hfi1 hfi0 sub 1 add /hfncols exch def
-  hfkkmax hfkkmin sub hfpitch div 1 add /hfrawkk exch def
-  hfrawkk hfmaxcells 2 add gt { halftone-maxcells-exceeded } if
   hfkkmin hfpitch div ceiling cvi /hfj0 exch def
   hfkkmax hfpitch div floor cvi /hfj1 exch def
   hfj1 hfj0 sub 1 add /hfnrows exch def

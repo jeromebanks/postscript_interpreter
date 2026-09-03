@@ -233,6 +233,33 @@ stack-eating test (also negative-controlled). `hfdepth0` is gone;
 `hfsaved` is the one dict name the error path trusts (redefining it
 corrupts the recovery, never the budget — tiered in the comment).
 
+**Codex round 4 found two P2s, both fixed — plus one self-inflicted
+bug caught by probing before any test existed.** (1) `hfcallable`
+admitted only `arraytype`, so under `true setpacking` Ghostscript
+packed every `{ ... }` /Tone into `packedarraytype` and the call
+failed — paintkit's round-5 lesson, same fix (artkit's guard lists
+the same callable shapes). pscat itself never produces
+packedarraytype (its `packedarray` returns plain arrays), so the new
+half is gs-observable only: a `setpacking` partial-coverage test on
+this side plus an inline-driver gs test running all three screens
+with callback tones under packing (inlined lib, no -dNOSAFER —
+paintkit's harness shape), both negative-controlled where
+controllable. (2) The round-3 per-axis raw guards fired on one
+axis's raw size alone, rejecting zero-cell lattices (`[1 0 2 100]`
+@9/Angle 0/MaxCells 10: zero columns, 13 raw rows) that draw
+nothing — each raw guard now also requires the other axis to
+provably hold a cell (raw >= 2 covers a full pitch), with the exact
+boxed check still deciding everything the raw guards miss; the
+soundness proof is in the comment. Pinned by a zero-cell no-op test
+(also negative-controlled). The self-inflicted bug: the first
+packed-accepting `hfcallable` stashed the typename in `/hftn` — but
+`type` answers an *executable* name, so the bare `hftn` read
+executed it (`arraytype` lookup → undefined). Same auto-execution
+trap the array boxes exist for; the predicate is now an inline `1
+index` shape with the trap documented in its comment. Truth table
+probed directly in both interpreters (proc true; number, cvx-string,
+executable name false; packed proc true in gs).
+
 ## Density-driven stippling and point-shading primitives (issue #50, 2026-08-31)
 
 A seventh sibling library, `lib/stipplekit.ps` — tag-migrated from
