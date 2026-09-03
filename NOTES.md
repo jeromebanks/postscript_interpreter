@@ -3,6 +3,304 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Reusable halftone screens and misregistration offsets (issue #53, 2026-09-03)
+
+An eighth sibling library, `lib/halftonekit.ps` — tag-migrated from
+birth (like `hatchkit.ps`/`stipplekit.ps`, issues #49/#50), so it
+registers with the `% @kind:`/`@summary:`/`@example:`/`@param:`
+capability catalog automatically from `cargo build`, no hand-written
+`capabilities.rs` entry. One operator, `halftone`: `opts halftone -`
+fills whatever region is currently *clipped* with a regular dot, line,
+or cross-line screen. Zero sibling dependencies — deliberately, not
+by omission: `scatter` (issue #48) is a random retry-until-accepted
+placement engine and a halftone is a deterministic lattice, so routing
+a fixed grid through a random placer would add noise the medium is
+defined by not having, plus a `/Seed` where none is wanted. This
+operator makes no random draws at all: fixed options reproduce
+identically with no stream to seed or restore (a /Tone callback that
+calls `rand` itself still works, under the caller's own `srand`).
+
+**The plan review (a subagent standing in for `advisor`, which this
+runtime doesn't provide) changed the design before code existed.**
+Six findings, all taken: (1) the planned `ht-` scratch prefix is owned
+by artkit's hyperbolic-tiling driver (`htmax`, `httile`, 15+ names) —
+my own collision check had only grepped `/ht-` with the hyphen and
+missed them; the file uses `hf-` (verified clean) instead. (2) /Tone
+callability is a local `hfcallable` predicate (executable array, not
+bare `xcheck` — `xcheck` also admits `cvx`-marked strings and
+executable names, stipplekit's round-3 lesson), with a same-file
+precedent comment explaining why a bare executable name is rejected
+rather than `load`ed. (3) /Offset and /BBox lengths pinned before
+unpacking (hatchkit's round-3 `aload` lesson), element by element for
+/Offset. (4) per-mark `newpath` — `gsave`/`grestore` alone restores
+the caller's path at the end but accumulates one giant path within
+the call, and consecutive line segments without it would stroke as
+one joined polyline. (5) clamp-then-derive order explicit, since
+`sqrt` of a negative is a domain error in both interpreters.
+(6) the drawing loops reuse the *stored* counts/origins, never
+recomputed — plus the note that integer `for` evaluates its limit
+once, immunizing loop bounds against mid-loop /Tone redefinition.
+Design calls settled: `/Frequency` in cells per inch (the issue's own
+"frequency" vocabulary, print's lpi); ONE budget (`/MaxCells` — one
+tone call and a fixed 1-or-2 marks per cell, so cells bound
+everything; hatchkit's two budgets exist only because its per-line
+sample counts vary); cross-in-one-call over a shared lattice origin
+*and* caller-side layering, both (misregistration needs separate
+calls anyway); always-`translate`, even for [0 0], so omitted and
+zero take one path.
+
+**Two real bugs, both caught by rendering rather than reasoning.**
+(1) `/halftone { exch 1 array astore ...` — a two-operand `exch`
+copied from `stipple`'s two-operand shape onto a one-operand
+operator: every call died with `stackunderflow` before drawing
+anything. (2) After fixing that, every screen rendered *blank*: the
+screen normal (`hfnx`/`hfny`) and the lattice cell counts (also
+`hfnx`/`hfny`) shared names, so the counts overwrote the normal and
+the whole 161×161 lattice parked at (560, 540), far outside any
+clip — decoded from one debug print of the first cell's coordinates
+(20 + 20·27 = 560 gives it away once you see it). The counts are now
+`hfncols`/`hfnrows`; the normal keeps `hfnx`/`hfny`.
+
+**One behavior the tests first got wrong and Ghostscript settled:**
+`/Screen (dot)` — a string, not a name — selects the dot screen,
+because `eq` compares strings and names by content. Verified `true`
+in `gs` itself before accepting it: the library follows the
+language's equality rather than narrowing it, and the header
+documents that instead of the original "including a non-name"
+wording. A red second plate in the layering test similarly taught
+that the test harness's own ink metric counts dark pixels only —
+the plate is blue now.
+
+**API surface:** `/BBox` (default `pathbbox`), `/Screen`
+/dot|/line|/cross (default /dot; cross is two passes over one
+lattice origin in a single call), `/Frequency` (default 9),
+`/Angle` (default 45; per-layer rotation is per-call values),
+`/Tone` number or `{x y -> w}` in pre-offset user space (default 1;
+zero draws no mark — load-bearing, since a zero-width stroke is a
+PostScript hairline, not nothing), `/MaxRadius` (dot branch only,
+default half pitch) / `/MaxWidth` (line/cross only, default full
+pitch — each validated only where read, merely harmless elsewhere,
+stipplekit's lesson), `/Offset` (default [0 0]), `/MaxCells`
+(default 200000). Dots scale by `sqrt` (area-proportional, the
+print-correct curve — documented so nobody "simplifies" it away);
+rules scale linearly; line segments run one full pitch with round
+caps so neighbors join seamlessly at uniform tone. `halftone` never
+sets the color — like `hatch`, it inks in the current color, and the
+header documents the one-call-per-plate layering recipe.
+
+**`tests/halftonekit.rs` (22 tests):** loads-clean, clip fill plus a
+concave chevron, two-interp pixel-identical reproducibility (with a
+/Tone callback in the loop), three-screens-distinct ink bands plus
+ordering, offset-omitted-identical and offset-shifts-marks,
+budget-rejects-before-ink, tone clamp (5≡1, −1≡blank),
+pathbbox-default equivalence, malformed boxes, the full validation
+error table, three never-execute side-effect tests (opts proc,
+executable-name /Tone, /Screen proc), a leaking-proc stack test,
+zero-tone line silence, harmless-unused-size-options, a two-plate
+layering test, a four-panel inset-measured specimen test (the
+full-box false-positive lesson from stipplekit's round 3 applied
+from the start), and the standard `ghostscript_accepts_*` test.
+
+**Specimen:** `examples/halftone.ps` — dot ramp, 45° line screen over
+a circular clip, 30° cross screen, and a misregistered two-plate
+spread (teal + red-orange, second plate shifted 5 over 3 up, second
+call reusing the surviving path for its default /BBox). No
+gallery/site entry, matching the reusable-primitive precedent. README
+gains a paragraph mirroring hatchkit's (stipplekit skipped README;
+a short entry is the better call for a user-visible print
+capability — flagged here so the next sibling-file author can see
+the choice was deliberate, not drift).
+
+**Deferred:** interplay with surfacekit (#51, in progress elsewhere)
+stays #52's problem — this file draws marks, not surfaces, and takes
+no position on paper grain. No `/DensityThreshold`-style cutoff: a
+zero tone already draws nothing, and a threshold knob is one more
+name for no demonstrated caller.
+
+**Implementation review (same subagent substitute) found eight more,
+seven fixed.** (1) The nested loops re-read `hfncols` as the inner
+limit per row — after /Tone runs — so a hostile callback redefining
+it multiplied every remaining row past the budget the header claimed
+was immune. Fixed with a single flat loop (limit fixed pre-sample)
+plus kind/const/shape snapshots on the operand stack under the walk,
+read back through fixed-depth `index`. (2) /BBox elements were never
+type-validated: a 4-long string silently reinterpreted as byte
+values. Now requires an array of four numbers (new
+`halftone-bbox-must-be-an-array-of-four-numbers`), read element by
+element through the box. (3) The contract said "`hf-` names" while
+every scratch name is `hf` with no hyphen — read literally it
+constrained nothing; fixed to "`hf`". (4) `hfscreenkind`/`hftoneconst`
+were re-read per cell, so a kind-flipping /Tone reached the branch
+whose knob was never validated — closed by the same stack snapshots.
+(5) A /Tone failing mid-loop unwinds past `grestore`: documented as
+fatal (hatchkit's own convention) rather than handled — the one
+explicit disposition. (6) The /BBox length error itself left the
+array stacked: subsumed by the box-read rewrite, pinned with a
+`stopped` stack-cleanliness test. (7) The dot-band test couldn't see
+a removed `sqrt` (19.6% sits inside the old band): added a
+tone-0.25 ink floor (without sqrt it renders literally zero) plus an
+ink-halves-with-tone ratio band, and a cross upper bound. (8) The
+/Offset edge strip (tight box + shift = un-inked strip) is inherent
+to translate-based offsets — one doc sentence, no code change.
+**The snapshot fix introduced its own bug, caught by the suite:**
+leaked /Tone operands shift every `index` read, failing deep under
+an internal name — so the consume-both-leave-one-number contract is
+now *enforced* per sample (`count`-based depth check plus a numeric
+check, unwound through a `mark` so even these exits are
+stack-clean), and the old leak-visibility test is a named-error
+test. Verifying the check's own arithmetic needed a live trace, not
+reasoning: E stays on the stack through `exec`, so the balanced
+condition is M − E = 1, not 2.
+
+**Independent (Codex) review found three more P2s, all fixed.**
+(1) The flat pass-major walk sampled /Tone once per *trip* — twice
+per cross cell, doubling side effects and splitting stateful arms.
+The walk is now cell-major (one flat loop over cells, one sample
+each) with an inner pass loop whose limit re-reads the npass stack
+snapshot per cell — safe, because a stack value cannot be
+redefined. (2) The per-sample contract errors unwound the operand
+stack but skipped `grestore`, leaving a translated CTM for a
+`stopped`-recovering caller — pinned by a test that draws after a
+caught failure and diffs against a fresh interp (verified to fail
+against the pre-fix library). Both contract exits now run counted
+pops plus `grestore`. (3) A callback returning a lone `mark` passed
+the count check and shadowed `cleartomark`, stranding the snapshots
+— the mark sentinel is gone entirely, replaced by entry-depth
+counted pops that no forged object can shadow (also pinned by a
+test, same negative-control treatment). The `cross_with_a_callback_
+samples_once_per_cell` test pins (1): 144 samples on a 12×12 box,
+not 288. Single-pass panels re-render pixel-identical; the cross
+panel churns ~3% of its ink pixels from paint reordering alone
+(pass-major to cell-major overlap order under coverage blending) —
+geometry unchanged, bands still green.
+
+**Codex round 2 found three P2s and a P3, all fixed.** (1) Residual
+lattice slack pooled at the far edge (full-tone marks stopped a
+pitch short) — the origins are now centered like hatchkit's round-4
+fix; pinned with dots, not rules (a rule's own round caps already
+reach past an edge-anchored endpoint, so only the dot variant
+discriminates — the first, rule-based version of the test passed
+against pre-fix code and had to be rewritten). (2) An absurd
+/Frequency (`10 30 exp`) `rangecheck`ed in `cvi` before /MaxCells
+was checked — the budget now runs on the real quotient first (sound:
+cvi(r)+1 always exceeds r, so a past-budget quotient means a
+past-budget count). (3) An over-consuming /Tone (`clear`) destroyed
+the stack slots the depth check itself read — every check now reads
+only `count` and dict names (the pre-call depth lives in `hfN`,
+which `clear` cannot remove), and cleanup is positional pops back
+to the recorded entry depth plus `grestore`, so even that unwinds
+both-stacks-clean. (4, P3) The specimen's "horizontal" ramp kept `y`
+(`exch pop`) instead of `x` — now `{ pop 240 div }`, verified
+numerically (left 3937 vs right 12764, top 7547 vs bottom 7565).
+
+**Codex round 3 found two P2s, both fixed — one of them reverts a
+round-2 decision.** (1) The round-2 centering made the lattice phase
+a function of the sweep bounds: loosening /BBox (the documented
+/Offset advice) silently re-registered every mark — e.g. at
+frequency 12, angle 0, `[0 0 10 10]` centered at (2,2) while
+`[-1 -1 11 11]` centered at (-1,-1) — contradicting the header's own
+"a loose /BBox costs a few wasted cells, never wrong output". The
+phase is now absolute: cells are drawn iff their centers (integer
+multiples of the pitch from the user-space origin) fall in the
+projected box ranges, so the box only selects multiples and never
+moves marks. The far-edge test became the phase test:
+`loosening_the_bbox_neither_moves_nor_adds_marks` renders a
+single-cell tone field (1 near (6,6), 0 elsewhere) under a tight and
+an inflated box and demands byte-identical pixmaps plus ink at
+(6,6) — verified to fail against the centered library. Documented
+consequence: a tight box keeps only cells whose centers it
+contains, so full tone can stop a pitch short of the far edge
+(fixed screens behave exactly so — the screen is fixed, the clip
+cuts it). Counts are now exact integers (floor/ceiling of the
+projected ranges), so the budget check on them is exact in both
+directions — no over-eager limitcheck, no missed walk; the real
+pre-guard survives with +2 slack (raw - n lies in [0,2), proved in
+the comment) purely to keep absurd quotients answering
+`halftone-maxcells-exceeded` instead of `rangecheck`. Side effect on
+old pins: the 50×50 @12/45° box visits 12×11 = 132 cells now, not
+12×12 = 144 (the normal projection [-35.4, 35.4] holds eleven
+multiples; the relative scheme had forced symmetry) — both count
+tests re-pinned, comments updated. (2) The positional cleanup popped
+back to the entry depth, which pops nothing when the callback ate
+the caller's own operands too (`42 ... /Tone { clear 0.5 }` lost
+the 42 and kept the 0.5) — violating the documented exact-restore
+guarantee the empty-stack test couldn't see. The entry stack is now
+copied into an array box without consuming it (`count copy ...
+array astore`, verified identical in gs), and `hfcleanup` is
+`clear`, push the saved items back, `grestore` — exact restoration
+even after `clear`, pinned by a pre-existing-operand variant of the
+stack-eating test (also negative-controlled). `hfdepth0` is gone;
+`hfsaved` is the one dict name the error path trusts (redefining it
+corrupts the recovery, never the budget — tiered in the comment).
+
+**Codex round 4 found two P2s, both fixed — plus one self-inflicted
+bug caught by probing before any test existed.** (1) `hfcallable`
+admitted only `arraytype`, so under `true setpacking` Ghostscript
+packed every `{ ... }` /Tone into `packedarraytype` and the call
+failed — paintkit's round-5 lesson, same fix (artkit's guard lists
+the same callable shapes). pscat itself never produces
+packedarraytype (its `packedarray` returns plain arrays), so the new
+half is gs-observable only: a `setpacking` partial-coverage test on
+this side plus an inline-driver gs test running all three screens
+with callback tones under packing (inlined lib, no -dNOSAFER —
+paintkit's harness shape), both negative-controlled where
+controllable. (2) The round-3 per-axis raw guards fired on one
+axis's raw size alone, rejecting zero-cell lattices (`[1 0 2 100]`
+@9/Angle 0/MaxCells 10: zero columns, 13 raw rows) that draw
+nothing — each raw guard now also requires the other axis to
+provably hold a cell (raw >= 2 covers a full pitch), with the exact
+boxed check still deciding everything the raw guards miss; the
+soundness proof is in the comment. Pinned by a zero-cell no-op test
+(also negative-controlled). The self-inflicted bug: the first
+packed-accepting `hfcallable` stashed the typename in `/hftn` — but
+`type` answers an *executable* name, so the bare `hftn` read
+executed it (`arraytype` lookup → undefined). Same auto-execution
+trap the array boxes exist for; the predicate is now an inline `1
+index` shape with the trap documented in its comment. Truth table
+probed directly in both interpreters (proc true; number, cvx-string,
+executable name false; packed proc true in gs).
+
+**Codex round 5 found two P2s, both confirmed real and both fixed.**
+(1) Snapshot forgery: a *balanced* /Tone (`{ pop pop pop 100000 1 }`
+eats x, y, and the npass snapshot, net -1) passed the count-only
+check and drove 100000 pass trips on a one-cell screen — the
+"immune by construction" claim was wrong; snapshots are
+forgery-evident, not forgery-proof. Fixed by clamping the pass
+limit to [1,2] at the loop (identity on the legit 1/2): a forged
+100000 draws twice, a forged -5 draws once instead of zero trips.
+Enumerated the other five slots to confirm the clamp is complete —
+kind/const/cols/rows only reshape or misplace their own cell's
+marks (tier-2), and the cell loop's limit was evaluated once
+throughout, so pass trips were the only unbounded channel. The
+header tiering, the walk comment, and the pass-loop comment now say
+"bounded, not prevented". Pinned by a one-cell test asserting ink
+for both the -5 (discriminating: blank pre-fix) and the verbatim
+100000 shape (bounded completion, clean stack) — negative control
+trips on the first half. (2) The round-4 raw guards used a
+full-pitch-span proxy (raw >= 2) for "the other axis holds a cell",
+so a narrow-but-nonempty axis beside an astronomic count skipped
+both guards and died in `cvi` with `rangecheck` (`[0 0 100 3.6e-29]`
+@1e30: one row, ~1e30 columns — confirmed in both interpreters).
+The proxy is now exact emptiness in pure real arithmetic
+(ceil(lo) > floor(hi); floor/ceiling never rangecheck), pinned by
+the reviewer's example expecting `halftone-maxcells-exceeded`
+(negative-controlled: `rangecheck` pre-fix). Also softened the
+"counts never negative" note: float rounding around a straddled
+multiple can push a small negative — still safe (zero trips, and
+the budget check only fires upward).
+
+**Codex round 6 never ran: three consecutive "Reviewer failed to
+output a response" failures (service-side, no verdict on the
+code).** Five successful rounds already covered the branch, and the
+round-5 delta is small (pass clamp, exact emptiness, two tests,
+comment corrections), so it got a line-by-line self-review instead:
+the clamp is identity on legit values (bit-identical walks, no
+render churn possible — suite confirms), the emptiness test is total
+real arithmetic, and all four budget shapes (absurd, narrow-empty,
+narrow-nonempty, over-budget product) are pinned. Proceeding to PR
+on that basis; a post-merge Codex pass can still be requested if
+the service recovers.
+
 ## Density-driven stippling and point-shading primitives (issue #50, 2026-08-31)
 
 A seventh sibling library, `lib/stipplekit.ps` — tag-migrated from

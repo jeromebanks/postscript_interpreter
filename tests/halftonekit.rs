@@ -1,0 +1,1127 @@
+//! The reusable halftone library (issue #53, `lib/halftonekit.ps`): a
+//! single operator, `halftone`, that fills whatever region is currently
+//! clipped with a regular dot, line, or cross-line screen, sized per
+//! cell by a tone and shiftable per layer by a registration offset.
+//! Lattice geometry is fully deterministic from /BBox/Frequency/Angle,
+//! so the pre-flight cell budget is asserted on directly; anything
+//! that actually draws is asserted on ink coverage (the corpus policy
+//! for sibling-library tests, see tests/hatchkit.rs).
+
+use pscat::{Interp, PsError};
+
+fn with_lib(w: u32, h: u32) -> Interp {
+    let lib = std::fs::read("lib/halftonekit.ps").expect("library present");
+    let mut it = Interp::with_page(w, h).expect("page");
+    it.run_source(&lib)
+        .unwrap_or_else(|e| panic!("halftonekit.ps failed: {}", it.error_report(&e)));
+    it
+}
+
+fn run(it: &mut Interp, src: &str) {
+    it.run_str(src)
+        .unwrap_or_else(|e| panic!("eval of {src:?} failed: {}", it.error_report(&e)));
+    // `halftone`'s own contract is `opts halftone -`; a leftover
+    // operand here would be exactly the kind of leak (a /Tone proc
+    // that doesn't consume both its operands) `--lint` catches
+    // elsewhere -- assert it directly rather than relying on `--lint`
+    // being run separately.
+    assert!(
+        it.operand_stack().is_empty(),
+        "{src:?} left {:?} on the operand stack",
+        it.operand_stack()
+            .iter()
+            .map(|o| o.repr())
+            .collect::<Vec<_>>()
+    );
+}
+
+fn ink_count(it: &Interp) -> usize {
+    it.gfx()
+        .pixmap
+        .pixels()
+        .iter()
+        .filter(|p| p.red() < 128)
+        .count()
+}
+
+/// The self-documenting-undefined-name error idiom this codebase uses
+/// throughout (`halftone-frequency-must-be-positive` and friends) --
+/// same helper shape as tests/hatchkit.rs's `hatch_err`.
+fn halftone_err(src: &str) -> String {
+    let mut it = with_lib(100, 100);
+    match it.run_str(src).unwrap_err() {
+        PsError::Undefined(name) => name,
+        other => panic!("expected a self-documenting undefined name, got {other}"),
+    }
+}
+
+fn pixbuf(it: &Interp) -> Vec<u8> {
+    it.gfx().pixmap.data().to_vec()
+}
+
+#[test]
+fn halftonekit_loads_without_drawing_anything() {
+    let it = with_lib(100, 100);
+    assert_eq!(ink_count(&it), 0, "loading halftonekit put ink on the page");
+    assert!(!it.gfx().page_shown);
+    assert!(
+        it.operand_stack().is_empty(),
+        "loading halftonekit left {:?} on the operand stack",
+        it.operand_stack()
+            .iter()
+            .map(|o| o.repr())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn flat_dot_fills_the_clip_and_nothing_outside_it() {
+    let mut it = with_lib(200, 200);
+    run(
+        &mut it,
+        "0 0 0 setrgbcolor \
+         newpath 40 40 moveto 160 40 lineto 160 160 lineto 40 160 lineto closepath clip \
+         << /Screen /dot /Frequency 12 /Angle 0 /Tone 0.5 >> halftone",
+    );
+    assert!(ink_count(&it) > 0, "halftone drew nothing inside the clip");
+
+    let pm = &it.gfx().pixmap;
+    let w = pm.width();
+    for (i, p) in pm.pixels().iter().enumerate() {
+        let x = (i as u32) % w;
+        let y = (i as u32) / w;
+        let outside = !(40..160).contains(&x) || !(40..160).contains(&y);
+        if outside {
+            assert!(
+                p.red() >= 250,
+                "ink at ({x},{y}), outside the [40,160)x[40,160) clip"
+            );
+        }
+    }
+}
+
+#[test]
+fn halftone_clips_to_a_concave_region() {
+    // An arrow/chevron: concave, and its bounding box's own corners
+    // sit outside the shape entirely -- exactly the case a bbox-only
+    // region would get wrong, and the one `halftone` never attempts
+    // on its own (it leans on the real `clip`, see the library's own
+    // header).
+    let mut it = with_lib(120, 120);
+    run(
+        &mut it,
+        "0 0 0 setrgbcolor \
+         newpath 10 10 moveto 50 90 lineto 90 10 lineto 50 40 lineto closepath clip \
+         << /Screen /dot /Frequency 12 /Angle 0 /Tone 1 >> halftone",
+    );
+    assert!(ink_count(&it) > 0, "nothing drawn inside the chevron");
+
+    let pm = &it.gfx().pixmap;
+    assert!(pm.pixel(5, 5).unwrap().red() >= 250);
+    assert!(pm.pixel(115, 115).unwrap().red() >= 250);
+}
+
+#[test]
+fn same_options_reproduce_identical_pixels() {
+    // No random draws anywhere in the operator -- not even a /Seed
+    // option -- so this must hold trivially, including with a
+    // caller-supplied /Tone callback in the loop.
+    let src = "0 0 0 setrgbcolor \
+        newpath 10 10 moveto 90 10 lineto 90 90 lineto 10 90 lineto closepath clip \
+        << /Screen /cross /Frequency 8 /Angle 25 /Tone { add 200 div } >> halftone";
+    let mut a = with_lib(100, 100);
+    run(&mut a, src);
+    let mut b = with_lib(100, 100);
+    run(&mut b, src);
+    assert_eq!(
+        pixbuf(&a),
+        pixbuf(&b),
+        "same options should reproduce pixel-for-pixel"
+    );
+}
+
+#[test]
+fn the_three_screens_are_visually_distinct() {
+    // Same region, same flat mid tone: a dot screen covers ~39% of
+    // the area (pi/4 times the tone), a line screen ~50% plus its
+    // round-cap seams, a cross screen roughly both directions at
+    // once. Wide bands, not exact counts -- the point is three
+    // clearly separated ink levels, the issue's first acceptance
+    // criterion.
+    let ink = |screen: &str| {
+        let mut it = with_lib(200, 200);
+        run(
+            &mut it,
+            &format!(
+                "0 0 0 setrgbcolor \
+                 newpath 20 20 moveto 180 20 lineto 180 180 lineto 20 180 lineto closepath clip \
+                 << /Screen /{screen} /Frequency 12 /Angle 0 /Tone 0.5 >> halftone"
+            ),
+        );
+        ink_count(&it)
+    };
+    let (dot, line, cross) = (ink("dot"), ink("line"), ink("cross"));
+    assert!(
+        (7000..11000).contains(&dot),
+        "dot screen ink {dot} outside its band"
+    );
+    assert!(
+        (11000..17500).contains(&line),
+        "line screen ink {line} outside its band"
+    );
+    assert!(
+        (19000..25000).contains(&cross),
+        "cross screen ink {cross} outside its band"
+    );
+    assert!(
+        dot < line && line < cross,
+        "screens not ordered dot ({dot}) < line ({line}) < cross ({cross})"
+    );
+}
+
+#[test]
+fn zero_offset_matches_an_omitted_offset() {
+    // "Misregistration can be disabled exactly": the default path and
+    // an explicit [0 0] are the same `translate`, not two branches.
+    let clip = "0 0 0 setrgbcolor \
+        newpath 10 10 moveto 90 10 lineto 90 90 lineto 10 90 lineto closepath clip";
+    let mut a = with_lib(100, 100);
+    run(
+        &mut a,
+        &format!("{clip} << /Screen /line /Frequency 10 /Tone 0.6 >> halftone"),
+    );
+    let mut b = with_lib(100, 100);
+    run(
+        &mut b,
+        &format!("{clip} << /Screen /line /Frequency 10 /Tone 0.6 /Offset [0 0] >> halftone"),
+    );
+    assert_eq!(
+        pixbuf(&a),
+        pixbuf(&b),
+        "omitted /Offset must match an explicit [0 0]"
+    );
+}
+
+#[test]
+fn a_nonzero_offset_visibly_shifts_the_screen() {
+    let clip = "0 0 0 setrgbcolor \
+        newpath 10 10 moveto 90 10 lineto 90 90 lineto 10 90 lineto closepath clip";
+    let mut a = with_lib(100, 100);
+    run(
+        &mut a,
+        &format!("{clip} << /Screen /dot /Frequency 12 /Tone 0.6 /Offset [0 0] >> halftone"),
+    );
+    let mut b = with_lib(100, 100);
+    run(
+        &mut b,
+        &format!("{clip} << /Screen /dot /Frequency 12 /Tone 0.6 /Offset [4 0] >> halftone"),
+    );
+    let (pa, pb) = (pixbuf(&a), pixbuf(&b));
+    assert_eq!(pa.len(), pb.len());
+    let diff = pa.iter().zip(pb.iter()).filter(|(x, y)| x != y).count();
+    assert!(
+        diff > 200,
+        "a 4-unit /Offset should shift marks visibly, only {diff} bytes differ"
+    );
+}
+
+#[test]
+fn maxcells_rejects_before_any_ink_lands() {
+    let mut it = with_lib(200, 200);
+    let err = it
+        .run_str(
+            "0 0 0 setrgbcolor \
+             newpath 20 20 moveto 180 20 lineto 180 180 lineto 20 180 lineto closepath clip \
+             << /Screen /dot /Frequency 400 /MaxCells 10 >> halftone",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "halftone-maxcells-exceeded"),
+        "wrong error: {err:?}"
+    );
+    assert_eq!(ink_count(&it), 0, "a rejected call must draw nothing first");
+}
+
+#[test]
+fn tone_clamps_out_of_range_returns() {
+    // A constant above 1 behaves as full tone, pixel-for-pixel; a
+    // constant below 0 behaves as zero tone (blank).
+    let clip = "0 0 0 setrgbcolor \
+        newpath 10 10 moveto 90 10 lineto 90 90 lineto 10 90 lineto closepath clip";
+    let mut a = with_lib(100, 100);
+    run(
+        &mut a,
+        &format!("{clip} << /Screen /dot /Frequency 12 /Tone 1 >> halftone"),
+    );
+    let mut b = with_lib(100, 100);
+    run(
+        &mut b,
+        &format!("{clip} << /Screen /dot /Frequency 12 /Tone {{ exch pop pop 5 }} >> halftone"),
+    );
+    assert_eq!(
+        pixbuf(&a),
+        pixbuf(&b),
+        "a /Tone callback returning 5 must clamp to full tone"
+    );
+
+    let mut c = with_lib(100, 100);
+    run(
+        &mut c,
+        &format!("{clip} << /Screen /dot /Frequency 12 /Tone {{ exch pop pop -1 }} >> halftone"),
+    );
+    assert_eq!(ink_count(&c), 0, "a fully negative tone must draw nothing");
+}
+
+#[test]
+fn bbox_defaults_to_pathbbox() {
+    let clip = "0 0 0 setrgbcolor \
+        newpath 10 10 moveto 90 10 lineto 90 90 lineto 10 90 lineto closepath clip";
+    let mut a = with_lib(100, 100);
+    run(
+        &mut a,
+        &format!("{clip} << /Screen /line /Frequency 10 /Angle 20 /Tone 0.5 >> halftone"),
+    );
+    let mut b = with_lib(100, 100);
+    run(
+        &mut b,
+        &format!(
+            "{clip} << /Screen /line /Frequency 10 /Angle 20 /Tone 0.5 /BBox [10 10 90 90] >> halftone"
+        ),
+    );
+    assert_eq!(
+        pixbuf(&a),
+        pixbuf(&b),
+        "default /BBox must match an explicit pathbbox"
+    );
+}
+
+#[test]
+fn a_string_screen_name_selects_by_content() {
+    // `/Screen (dot)` works exactly like `/Screen /dot`: screen
+    // selection uses the language's own `eq`, which compares a
+    // string and a name by content (Ghostscript agrees).
+    let clip = "0 0 0 setrgbcolor \
+        newpath 10 10 moveto 90 10 lineto 90 90 lineto 10 90 lineto closepath clip";
+    let mut a = with_lib(100, 100);
+    run(
+        &mut a,
+        &format!("{clip} << /Screen /dot /Frequency 12 /Tone 0.5 >> halftone"),
+    );
+    let mut b = with_lib(100, 100);
+    run(
+        &mut b,
+        &format!("{clip} << /Screen (dot) /Frequency 12 /Tone 0.5 >> halftone"),
+    );
+    assert_eq!(
+        pixbuf(&a),
+        pixbuf(&b),
+        "`(dot)` must select the same screen as `/dot`"
+    );
+}
+
+#[test]
+fn loosening_the_bbox_neither_moves_nor_adds_marks() {
+    // The lattice phase is absolute — cell centers sit on integer
+    // multiples of the pitch from the user-space origin — so the
+    // sweep box only selects which multiples are visited. The tone
+    // callback below inks exactly one cell: the one centered on
+    // (6, 6), a multiple of the pitch-6 lattice at /Frequency 12
+    // and /Angle 0. Rendered once with a tight box and once with a
+    // box inflated 10 units each way, the two pixmaps must agree
+    // byte for byte: the inflated sweep visits more cells, but every
+    // extra cell samples tone 0 and draws nothing, and no mark
+    // inside the old box moves. (History: the first version
+    // centered the slack in the box, so this same pair rendered
+    // differently — the inflated box re-registered every mark,
+    // contradicting the documented "never wrong output".)
+    let tone = "/Tone { exch 6 sub abs exch 6 sub abs add 0.5 lt { 1 } { 0 } ifelse }";
+    let render_with = |bbox: &str| {
+        let mut it = with_lib(100, 100);
+        run(
+            &mut it,
+            &format!(
+                "0 0 0 setrgbcolor \
+                 newpath 0 0 moveto 10 0 lineto 10 10 lineto 0 10 lineto closepath clip \
+                 << /BBox {bbox} /Screen /dot /Frequency 12 /Angle 0 {tone} >> halftone"
+            ),
+        );
+        pixbuf(&it)
+    };
+    let tight = render_with("[0 0 10 10]");
+    let loose = render_with("[-10 -10 20 20]");
+    assert_eq!(
+        tight, loose,
+        "loosening /BBox moved a mark or added ink inside the clip"
+    );
+    // And the one cell genuinely inked: PS (6, 6) is pixmap (6, 93).
+    let mut it = with_lib(100, 100);
+    run(
+        &mut it,
+        "0 0 0 setrgbcolor \
+         newpath 0 0 moveto 10 0 lineto 10 10 lineto 0 10 lineto closepath clip \
+         << /BBox [0 0 10 10] /Screen /dot /Frequency 12 /Angle 0 \
+            /Tone { exch 6 sub abs exch 6 sub abs add 0.5 lt { 1 } { 0 } ifelse } >> halftone",
+    );
+    let p = it.gfx().pixmap.pixel(6, 93).expect("in bounds");
+    assert!(
+        p.red() < 128,
+        "absolute-phase cell at (6, 6) left no ink (red {})",
+        p.red()
+    );
+}
+
+#[test]
+fn absurd_frequency_hits_the_budget_not_rangecheck() {
+    // A real quotient past the integer range must still answer the
+    // documented budget error: the check runs on the real quotient
+    // before `cvi` ever sees it.
+    assert_eq!(
+        halftone_err("<< /BBox [0 0 100 100] /Frequency 10 30 exp >> halftone"),
+        "halftone-maxcells-exceeded"
+    );
+}
+
+#[test]
+fn a_narrow_nonempty_axis_still_hits_the_budget() {
+    // One projected axis spans less than a pitch but still straddles
+    // a lattice center ([0, 3.6e-29] at pitch 7.2e-29 holds the
+    // multiple 0: exactly one row), while the other axis is
+    // astronomically over budget. The other-axis test is exact
+    // emptiness — ceil(lo) > floor(hi) in real arithmetic, never a
+    // full-pitch-span proxy — so the raw guard still fires
+    // `halftone-maxcells-exceeded` instead of reaching `cvi` and
+    // answering `rangecheck` (which is what both interpreters did
+    // before the emptiness test existed).
+    assert_eq!(
+        halftone_err("<< /BBox [0 0 100 3.6e-29] /Angle 0 /Frequency 10 30 exp >> halftone"),
+        "halftone-maxcells-exceeded"
+    );
+}
+
+#[test]
+fn a_stack_eating_tone_gets_a_named_error_and_clean_stacks() {
+    // A callback that destroys the stack itself (`clear`) must still
+    // surface the contract error: every check reads `count` or dict
+    // names, never `index` into depths the callback controls — and
+    // cleanup pops positionally back to the recorded entry depth,
+    // then restores graphics state.
+    let mut it = with_lib(60, 60);
+    let err = it
+        .run_str(
+            "newpath 5 5 moveto 55 5 lineto 55 55 lineto 5 55 lineto closepath clip \
+             << /Screen /dot /Frequency 12 /Offset [6 0] /Tone { clear 0.5 } >> halftone",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "halftone-tone-proc-must-leave-exactly-one-result"),
+        "wrong error: {err:?}"
+    );
+    assert!(
+        it.operand_stack().is_empty(),
+        "cleanup after a stack-eating Tone left {:?}",
+        it.operand_stack()
+            .iter()
+            .map(|o| o.repr())
+            .collect::<Vec<_>>()
+    );
+    // And with a caller operand already on the stack: the entry
+    // snapshot must bring it back exactly. Before the snapshot the
+    // cleanup popped positionally back to the entry depth, which
+    // pops nothing when the callback already ate everything — so
+    // the 42 was lost and the callback's own 0.5 survived.
+    let mut it = with_lib(60, 60);
+    let err = it
+        .run_str(
+            "42 newpath 5 5 moveto 55 5 lineto 55 55 lineto 5 55 lineto closepath clip \
+             << /Screen /dot /Frequency 12 /Offset [6 0] /Tone { clear 0.5 } >> halftone",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "halftone-tone-proc-must-leave-exactly-one-result"),
+        "wrong error: {err:?}"
+    );
+    assert_eq!(
+        it.operand_stack()
+            .iter()
+            .map(|o| o.repr())
+            .collect::<Vec<_>>(),
+        vec!["42"],
+        "entry snapshot did not restore the caller's operand exactly"
+    );
+}
+
+#[test]
+fn malformed_bboxes_are_rejected() {
+    assert_eq!(
+        halftone_err("<< /BBox [10 10 10] /Tone 1 >> halftone"),
+        "halftone-bbox-must-have-four-elements"
+    );
+    assert_eq!(
+        halftone_err("<< /BBox [10 10 90 90 100] /Tone 1 >> halftone"),
+        "halftone-bbox-must-have-four-elements"
+    );
+    assert_eq!(
+        halftone_err("<< /BBox [10 10 10 20] /Tone 1 >> halftone"),
+        "halftone-bbox-degenerate"
+    );
+    assert_eq!(
+        halftone_err("<< /BBox [20 20 10 10] /Tone 1 >> halftone"),
+        "halftone-bbox-degenerate"
+    );
+    assert_eq!(
+        halftone_err("<< /BBox 5 /Tone 1 >> halftone"),
+        "halftone-bbox-must-be-an-array-of-four-numbers"
+    );
+    assert_eq!(
+        halftone_err("<< /BBox (abcd) /Tone 1 >> halftone"),
+        "halftone-bbox-must-be-an-array-of-four-numbers"
+    );
+    assert_eq!(
+        halftone_err("<< /BBox [10 (x) 20 30] /Tone 1 >> halftone"),
+        "halftone-bbox-must-be-an-array-of-four-numbers"
+    );
+}
+
+#[test]
+fn bbox_length_error_leaves_a_clean_stack() {
+    // The length pin exists to protect `opts halftone -`; the error
+    // exit itself must honor it too, so a `stopped`-recovering caller
+    // observes nothing left behind.
+    let mut it = with_lib(100, 100);
+    it.run_str("{ << /BBox [1 2 3] /Tone 1 >> halftone } stopped pop")
+        .expect("stopped");
+    it.run_str("count 0 eq").expect("count probe");
+    let last = it.operand_stack().last().expect("probe result").repr();
+    assert_eq!(
+        last, "true",
+        "the failing /BBox check left junk on the stack"
+    );
+    it.run_str("clear").expect("clear");
+}
+
+#[test]
+fn a_hostile_tone_cannot_change_the_sample_count() {
+    // A 50x50 box at frequency 12 under the default 45-degree screen
+    // visits 12x11 cells, so 132 /Tone calls are approved up front:
+    // the lattice phase is absolute, so the screen-direction
+    // projection [0, 70.7] holds twelve multiples of the pitch-6
+    // lattice while the normal projection [-35.4, 35.4] holds eleven
+    // (-30..30). A callback redefining the lattice
+    // counts, the dispatch kind, and the pass count mid-call must
+    // change where marks land, never how many samples run: the walk
+    // is one flat loop with a pre-sampled limit, and kind/const/shape
+    // ride the operand stack under it, out of dict reach.
+    let mut it = with_lib(100, 100);
+    run(
+        &mut it,
+        "/cellcount 0 def \
+         newpath 0 0 moveto 50 0 lineto 50 50 lineto closepath clip \
+         << /BBox [0 0 50 50] /Frequency 12 \
+            /Tone { /hfncols 99999 def /hfnrows 99999 def /hfscreenkind 2 def /hfnpass 9 def \
+                    /cellcount cellcount 1 add def exch pop 100 div } >> halftone",
+    );
+    it.run_str("cellcount 132 eq").expect("count probe");
+    let last = it.operand_stack().last().expect("probe result").repr();
+    assert_eq!(
+        last, "true",
+        "a /Tone redefining the lattice state changed the approved sample count"
+    );
+    it.run_str("clear").expect("clear");
+}
+
+#[test]
+fn a_forged_pass_count_is_clamped_not_executed() {
+    // A balanced callback can pop snapshots and push forged
+    // replacements with net -1, passing the per-sample count check:
+    // `{ pop pop pop -5 1 }` eats x, y, and the npass snapshot and
+    // leaves a forged -5 below its 1.0 result. The pass limit is
+    // clamped to [1,2], so the forged -5 draws once instead of
+    // running zero trips — a one-cell line screen still inks, where
+    // the unclamped loop drew nothing.
+    let mut it = with_lib(100, 100);
+    run(
+        &mut it,
+        "0 0 0 setrgbcolor \
+         newpath 0 0 moveto 5.9 0 lineto 5.9 5.9 lineto 0 5.9 lineto closepath clip \
+         << /BBox [0 0 5.9 5.9] /Screen /line /Frequency 12 /Angle 0 /Tone { pop pop pop -5 1 } >> halftone",
+    );
+    assert!(ink_count(&it) > 0, "a forged -5 pass count drew nothing");
+    // And upward, the reported shape: a forged 100000 completes with
+    // a clean stack — two clamped strokes on a /MaxCells 1 call, not
+    // one hundred thousand trips past the approved budget.
+    let mut it = with_lib(100, 100);
+    run(
+        &mut it,
+        "0 0 0 setrgbcolor \
+         newpath 0 0 moveto 5.9 0 lineto 5.9 5.9 lineto 0 5.9 lineto closepath clip \
+         << /BBox [0 0 5.9 5.9] /Screen /line /Frequency 12 /Angle 0 /MaxCells 1 /Tone { pop pop pop 100000 1 } >> halftone",
+    );
+    assert!(
+        ink_count(&it) > 0,
+        "a forged 100000 pass count drew nothing"
+    );
+}
+
+#[test]
+fn cross_with_a_callback_samples_once_per_cell() {
+    // The walk is cell-major: one /Tone sample per cell, shared by
+    // both cross arms. Sampling per pass instead would run a
+    // callback twice per cell — doubled side effects, and differently
+    // sized arms from a stateful or random callback. A 50x50 box at
+    // frequency 12 visits 12x11 cells under the absolute-phase
+    // lattice, so exactly 132 samples, not 264.
+    let mut it = with_lib(100, 100);
+    run(
+        &mut it,
+        "/cellcount 0 def \
+         newpath 0 0 moveto 50 0 lineto 50 50 lineto closepath clip \
+         << /BBox [0 0 50 50] /Frequency 12 /Screen /cross \
+            /Tone { /cellcount cellcount 1 add def exch pop 100 div } >> halftone",
+    );
+    it.run_str("cellcount 132 eq").expect("count probe");
+    let last = it.operand_stack().last().expect("probe result").repr();
+    assert_eq!(
+        last, "true",
+        "cross sampled /Tone once per pass, not once per cell"
+    );
+    it.run_str("clear").expect("clear");
+}
+
+#[test]
+fn an_over_budget_call_samples_tone_zero_times() {
+    // The budget fires before the first mark AND the first /Tone
+    // call: a side-effecting callback must observe nothing.
+    let mut it = with_lib(100, 100);
+    let err = it
+        .run_str(
+            "/budgetcount 0 def \
+             newpath 0 0 moveto 50 0 lineto 50 50 lineto closepath clip \
+             << /BBox [0 0 50 50] /Frequency 400 /MaxCells 10 \
+                /Tone { /budgetcount budgetcount 1 add def exch pop 100 div } >> halftone",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "halftone-maxcells-exceeded"),
+        "wrong error: {err:?}"
+    );
+    it.run_str("budgetcount 0 eq").expect("count probe");
+    let last = it.operand_stack().last().expect("probe result").repr();
+    assert_eq!(last, "true", "the rejected call sampled /Tone first");
+    it.run_str("clear").expect("clear");
+}
+
+#[test]
+fn zero_cells_are_a_no_op_not_a_budget_error() {
+    // One axis holds no lattice center at all ([1, 2] at pitch 8:
+    // ceil(1/8) = 1 > floor(2/8) = 0, so zero columns), while the
+    // other spans 13 raw rows — past /MaxCells 10 + 2. The product
+    // is 0 and the walk runs zero trips, so the call must succeed
+    // having drawn nothing: each per-axis raw guard fires only when
+    // the other axis provably holds a cell, and the exact boxed
+    // check decides the rest.
+    let mut it = with_lib(100, 100);
+    run(
+        &mut it,
+        "0 0 0 setrgbcolor \
+         newpath 1 0 moveto 2 0 lineto 2 100 lineto 1 100 lineto closepath clip \
+         << /BBox [1 0 2 100] /Frequency 9 /Angle 0 /MaxCells 10 >> halftone",
+    );
+    assert_eq!(ink_count(&it), 0, "a zero-cell lattice left ink");
+}
+
+#[test]
+fn dot_size_tracks_the_square_root_of_tone() {
+    // Area-proportional dots: halving the tone halves the ink, it
+    // does not quarter it. Without the `sqrt` (radius proportional
+    // to tone instead), tone 0.25 renders literally nothing — its
+    // sub-pixel dots vanish — so a floor on low-tone ink plus a
+    // ratio band pins the curve independently of absolute
+    // rasterizer counts.
+    let ink_at = |tone: f64| {
+        let mut it = with_lib(200, 200);
+        run(
+            &mut it,
+            &format!(
+                "0 0 0 setrgbcolor \
+                 newpath 20 20 moveto 180 20 lineto 180 180 lineto 20 180 lineto closepath clip \
+                 << /Screen /dot /Frequency 12 /Angle 0 /Tone {tone} >> halftone"
+            ),
+        );
+        ink_count(&it)
+    };
+    let (quarter, half) = (ink_at(0.25), ink_at(0.5));
+    assert!(
+        quarter > 1500,
+        "tone-0.25 dots should cover real area, got {quarter}"
+    );
+    let ratio = half as f64 / quarter as f64;
+    assert!(
+        (2.0..4.5).contains(&ratio),
+        "ink should halve with tone (ratio ~2-3 with rasterization), got {ratio}"
+    );
+}
+
+#[test]
+fn option_validation_reports_self_documenting_errors() {
+    let bad = |opts: &str| {
+        halftone_err(&format!(
+            "newpath 0 0 moveto 50 0 lineto 50 50 lineto closepath clip << /BBox [0 0 50 50] {opts} >> halftone"
+        ))
+    };
+    assert_eq!(
+        bad("/Screen /stipple"),
+        "halftone-screen-must-be-dot-line-or-cross"
+    );
+    // `eq` compares a string and a name by content (Ghostscript
+    // agrees), so only genuinely unequal values are rejected.
+    assert_eq!(
+        bad("/Screen (dots)"),
+        "halftone-screen-must-be-dot-line-or-cross"
+    );
+    assert_eq!(
+        bad("/Screen 5"),
+        "halftone-screen-must-be-dot-line-or-cross"
+    );
+    assert_eq!(bad("/Frequency 0"), "halftone-frequency-must-be-positive");
+    assert_eq!(bad("/Frequency -3"), "halftone-frequency-must-be-positive");
+    assert_eq!(
+        bad("/Frequency (fast)"),
+        "halftone-frequency-must-be-a-number"
+    );
+    assert_eq!(bad("/Angle (steep)"), "halftone-angle-must-be-a-number");
+    assert_eq!(
+        bad("/Tone (loud)"),
+        "halftone-tone-must-be-a-number-or-procedure"
+    );
+    assert_eq!(
+        bad("/Screen /dot /MaxRadius 0"),
+        "halftone-maxradius-must-be-positive"
+    );
+    assert_eq!(
+        bad("/Screen /dot /MaxRadius (huge)"),
+        "halftone-maxradius-must-be-a-number"
+    );
+    assert_eq!(
+        bad("/Screen /line /MaxWidth 0"),
+        "halftone-maxwidth-must-be-positive"
+    );
+    assert_eq!(
+        bad("/Offset [1 2 3]"),
+        "halftone-offset-must-be-a-two-element-array"
+    );
+    assert_eq!(
+        bad("/Offset [1]"),
+        "halftone-offset-must-be-a-two-element-array"
+    );
+    assert_eq!(
+        bad("/Offset (flat)"),
+        "halftone-offset-must-be-a-two-element-array"
+    );
+    assert_eq!(
+        bad("/Offset [0 (up)]"),
+        "halftone-offset-must-be-a-two-element-array"
+    );
+    assert_eq!(bad("/MaxCells 0"), "halftone-maxcells-must-be-positive");
+    assert_eq!(
+        bad("/MaxCells (many)"),
+        "halftone-maxcells-must-be-a-number"
+    );
+    assert_eq!(
+        halftone_err("/hfbogus { pop } def /hfbogus load halftone"),
+        "halftone-opts-must-be-a-dict"
+    );
+}
+
+/// A caller-supplied procedure in a spot that must hold a dict must be
+/// rejected, never executed: `get` doesn't execute, but a bare name
+/// bound to a proc does, so the options operand travels boxed until
+/// it has proven to be a dict.
+#[test]
+fn a_procedure_for_opts_is_rejected_never_executed() {
+    let mut it = with_lib(100, 100);
+    let err = it
+        .run_str("/hfevilopts { /hfeviloptran true def } def /hfevilopts load halftone")
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "halftone-opts-must-be-a-dict"),
+        "wrong error: {err:?}"
+    );
+    // `run` asserts an empty stack, so the boolean probe below goes
+    // through bare `run_str` and reads the stack directly instead.
+    // (Boolean reprs are bare `true`/`false`.)
+    it.run_str("/hfeviloptran where { pop true } { false } ifelse")
+        .expect("probe");
+    let last = it.operand_stack().last().expect("probe result").repr();
+    assert_eq!(last, "false", "the rejected opts proc must never have run");
+    it.run_str("clear").expect("clear");
+}
+
+/// Same shape one level down: an executable *name* is not a callable
+/// /Tone (only an executable array is), and checking must not run it.
+#[test]
+fn an_executable_name_for_tone_is_rejected_never_executed() {
+    let mut it = with_lib(100, 100);
+    let err = it
+        .run_str(
+            "newpath 0 0 moveto 50 0 lineto 50 50 lineto closepath clip \
+             /hfevil { /hfevilran true def } def \
+             << /BBox [0 0 50 50] /Tone /hfevil cvx >> halftone",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "halftone-tone-must-be-a-number-or-procedure"),
+        "wrong error: {err:?}"
+    );
+    it.run_str("/hfevilran where { pop true } { false } ifelse")
+        .expect("probe");
+    let last = it.operand_stack().last().expect("probe result").repr();
+    assert_eq!(
+        last, "false",
+        "the rejected /Tone value must never have run"
+    );
+    it.run_str("clear").expect("clear");
+}
+
+#[test]
+fn setpacking_true_keeps_tone_working() {
+    // Partial regression coverage for a Codex-round-4 finding: under
+    // a Level 2 interpreter with packing enabled, a plain procedure
+    // literal like the /Tone callback below has type
+    // packedarraytype, not arraytype — the original type guard
+    // rejected it outright. pscat itself doesn't actually produce
+    // packedarraytype under `setpacking` (its `packedarray` returns
+    // plain arrays), so this can only assert the call still works
+    // with packing toggled on, not exercise the packedarraytype
+    // branch itself — ghostscript_accepts_packed_tone_callbacks
+    // below does that part, against real Ghostscript, where packing
+    // actually changes the type.
+    let mut it = with_lib(100, 100);
+    run(
+        &mut it,
+        "0 0 0 setrgbcolor true setpacking \
+         newpath 0 0 moveto 50 0 lineto 50 50 lineto 0 50 lineto closepath clip \
+         << /BBox [0 0 50 50] /Screen /dot /Frequency 12 /Tone { exch pop 100 div } >> halftone",
+    );
+    assert!(
+        ink_count(&it) > 100,
+        "expected the screen to still render under setpacking"
+    );
+}
+
+/// And once more for /Screen: a procedure compares, never executes.
+#[test]
+fn a_procedure_for_screen_is_rejected_never_executed() {
+    let mut it = with_lib(100, 100);
+    let err = it
+        .run_str(
+            "newpath 0 0 moveto 50 0 lineto 50 50 lineto closepath clip \
+             /hfevils { /hfevilsran true def } def \
+             << /BBox [0 0 50 50] /Screen /hfevils load >> halftone",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "halftone-screen-must-be-dot-line-or-cross"),
+        "wrong error: {err:?}"
+    );
+    it.run_str("/hfevilsran where { pop true } { false } ifelse")
+        .expect("probe");
+    let last = it.operand_stack().last().expect("probe result").repr();
+    assert_eq!(
+        last, "false",
+        "the rejected /Screen proc must never have run"
+    );
+    it.run_str("clear").expect("clear");
+}
+
+#[test]
+fn tone_proc_that_leaks_an_operand_gets_a_named_error() {
+    // /Tone's contract (consume both operands, leave exactly one
+    // number) is enforced per sample, not just lint-visible: the
+    // walk reads its dispatch state through fixed-depth `index`, so
+    // a leaked operand would shift every read and fail confusingly
+    // deep inside. A proc that only pops one gets a contract error
+    // naming the violation instead -- and unwinds stack-clean, so a
+    // `stopped`-recovering caller observes nothing left behind.
+    let mut it = with_lib(60, 60);
+    let err = it
+        .run_str(
+            "newpath 5 5 moveto 55 5 lineto 55 55 lineto 5 55 lineto closepath clip \
+             << /Screen /dot /Frequency 12 /Tone { pop 0.5 } >> halftone",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "halftone-tone-proc-must-leave-exactly-one-result"),
+        "wrong error: {err:?}"
+    );
+    assert!(
+        it.operand_stack().is_empty(),
+        "the contract error must unwind stack-clean, left {:?}",
+        it.operand_stack()
+            .iter()
+            .map(|o| o.repr())
+            .collect::<Vec<_>>()
+    );
+
+    // Same shape for a non-numeric single result.
+    let mut jt = with_lib(60, 60);
+    let err = jt
+        .run_str(
+            "newpath 5 5 moveto 55 5 lineto 55 55 lineto 5 55 lineto closepath clip \
+             << /Screen /dot /Frequency 12 /Tone { pop pop (high) } >> halftone",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "halftone-tone-must-return-a-number"),
+        "wrong error: {err:?}"
+    );
+    assert!(
+        jt.operand_stack().is_empty(),
+        "the contract error must unwind stack-clean, left {:?}",
+        jt.operand_stack()
+            .iter()
+            .map(|o| o.repr())
+            .collect::<Vec<_>>()
+    );
+
+    // A lone `mark` passes the result-count check (it is one object)
+    // and fails the numeric one. Positional cleanup must not mistake
+    // it for a cleanup sentinel: the stack still unwinds clean.
+    let mut kt = with_lib(60, 60);
+    let err = kt
+        .run_str(
+            "newpath 5 5 moveto 55 5 lineto 55 55 lineto 5 55 lineto closepath clip \
+             << /Screen /dot /Frequency 12 /Tone { pop pop mark } >> halftone",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "halftone-tone-must-return-a-number"),
+        "wrong error: {err:?}"
+    );
+    assert!(
+        kt.operand_stack().is_empty(),
+        "a forged mark must not shadow stack cleanup, left {:?}",
+        kt.operand_stack()
+            .iter()
+            .map(|o| o.repr())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn contract_error_leaves_graphics_state_clean() {
+    // The per-sample contract errors restore graphics state before
+    // signaling: a `stopped`-caught failure (here with a nonzero
+    // /Offset, whose translate would otherwise linger) must not
+    // shift or otherwise alter later drawing.
+    let bad = "{ << /BBox [0 0 50 50] /Frequency 12 /Offset [6 0] \
+                 /Tone { pop 0.5 } >> halftone } stopped pop";
+    let good = "0 0 0 setrgbcolor \
+        newpath 0 0 moveto 50 0 lineto 50 50 lineto closepath clip \
+        << /BBox [0 0 50 50] /Frequency 12 /Tone 0.5 >> halftone";
+    let mut a = with_lib(100, 100);
+    run(&mut a, &format!("{bad} {good}"));
+    let mut b = with_lib(100, 100);
+    run(&mut b, good);
+    assert_eq!(
+        pixbuf(&a),
+        pixbuf(&b),
+        "a caught contract error altered later drawing"
+    );
+}
+
+#[test]
+fn zero_tone_draws_nothing_even_for_line_screens() {
+    // Load-bearing, not an optimization: a zero-width stroke is a
+    // hairline in PostScript, not nothing, so the line/cross branches
+    // must skip zero-tone cells rather than draw through them.
+    let mut it = with_lib(200, 200);
+    run(
+        &mut it,
+        "0 0 0 setrgbcolor \
+         newpath 20 20 moveto 180 20 lineto 180 180 lineto 20 180 lineto closepath clip \
+         << /Screen /line /Frequency 12 /Tone 0 >> halftone",
+    );
+    assert_eq!(ink_count(&it), 0, "zero tone must draw no marks");
+}
+
+#[test]
+fn an_unused_malformed_size_option_is_harmless() {
+    // /MaxRadius only feeds the /dot branch; a line call carrying a
+    // malformed one in a shared dict must not fail for an option it
+    // never touches (stipplekit's /DotRadius lesson). Mirror image
+    // for /MaxWidth under /dot.
+    let mut it = with_lib(100, 100);
+    run(
+        &mut it,
+        "0 0 0 setrgbcolor \
+         newpath 10 10 moveto 90 10 lineto 90 90 lineto 10 90 lineto closepath clip \
+         << /Screen /line /Frequency 12 /Tone 0.5 /MaxRadius (huge) >> halftone",
+    );
+    assert!(ink_count(&it) > 0);
+    let mut jt = with_lib(100, 100);
+    run(
+        &mut jt,
+        "0 0 0 setrgbcolor \
+         newpath 10 10 moveto 90 10 lineto 90 90 lineto 10 90 lineto closepath clip \
+         << /Screen /dot /Frequency 12 /Tone 0.5 /MaxWidth -4 >> halftone",
+    );
+    assert!(ink_count(&jt) > 0);
+}
+
+#[test]
+fn a_second_layered_call_reuses_the_surviving_path() {
+    // The misregistration layering the issue asks for: two calls over
+    // one clip, the second relying on the default /BBox from the path
+    // the first call's gsave/grestore preserved -- and landing
+    // visibly offset from the first plate.
+    let clip = "newpath 10 10 moveto 90 10 lineto 90 90 lineto 10 90 lineto closepath clip";
+    let mut one = with_lib(100, 100);
+    run(
+        &mut one,
+        &format!(
+            "0 0 0 setrgbcolor {clip} \
+             << /Screen /dot /Frequency 12 /Tone 0.6 /Offset [0 0] >> halftone"
+        ),
+    );
+    let ink_one = ink_count(&one);
+    let mut two = with_lib(100, 100);
+    run(
+        &mut two,
+        &format!(
+            "0 0 0 setrgbcolor {clip} \
+             << /Screen /dot /Frequency 12 /Tone 0.6 /Offset [0 0] >> halftone \
+             0 0 1 setrgbcolor \
+             << /Screen /dot /Frequency 12 /Tone 0.6 /Offset [3 2] >> halftone"
+        ),
+    );
+    assert!(
+        ink_count(&two) > ink_one,
+        "a second offset plate should add ink ({0} vs {ink_one})",
+        ink_count(&two)
+    );
+}
+
+#[test]
+fn the_halftone_specimen_sheet_renders_ink_in_every_panel() {
+    let source = std::fs::read("examples/halftone.ps").expect("read the specimen");
+    let mut it = Interp::with_page(1100, 360).expect("page");
+    it.run_source(&source)
+        .unwrap_or_else(|e| panic!("examples/halftone.ps failed: {}", it.error_report(&e)));
+    assert!(it.gfx().page_shown, "showpage must have run");
+
+    // Inset well clear of each panel's own 0.75pt border stroke --
+    // the full 240x240 box includes that frame, which alone
+    // contributes marked pixels regardless of whether `halftone`
+    // screened anything, so counting it would let a silently broken
+    // panel still pass (the false-positive-coverage lesson from
+    // tests/stipplekit.rs).
+    const INSET: u32 = 10;
+    for (label, x0) in [
+        ("ramp", 40),
+        ("line", 300),
+        ("cross", 560),
+        ("two-plate", 820),
+    ] {
+        let mut marked = 0;
+        for dx in INSET..(240 - INSET) {
+            for dy in INSET..(240 - INSET) {
+                let px = x0 + dx;
+                let py = 360 - (40 + dy) - 1;
+                let p = it
+                    .gfx()
+                    .pixmap
+                    .pixel(px, py)
+                    .unwrap_or_else(|| panic!("pixel ({px},{py}) out of bounds"));
+                if (p.red(), p.green(), p.blue()) != (255, 255, 255) {
+                    marked += 1;
+                }
+            }
+        }
+        assert!(
+            marked > 200,
+            "{label} panel looks unscreened ({marked} non-white interior pixels)"
+        );
+    }
+}
+
+#[test]
+fn ghostscript_accepts_the_halftone_specimen_sheet() {
+    // The acceptance criterion itself -- the specimen page runs
+    // unchanged in both interpreters. `-dNOSAFER` is needed because
+    // the file does `(lib/halftonekit.ps) run` from disk, which gs's
+    // default sandbox blocks (same reasoning as every other sibling
+    // library's own version of this test).
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let status = std::process::Command::new("gs")
+        .args([
+            "-dNOSAFER",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g1100x360",
+            "-r72",
+            "-o/dev/null",
+            "examples/halftone.ps",
+        ])
+        .status()
+        .expect("run gs");
+    assert!(status.success(), "gs rejected examples/halftone.ps");
+}
+
+#[test]
+fn ghostscript_accepts_packed_tone_callbacks() {
+    // The acceptance side of the setpacking finding covered
+    // partially by setpacking_true_keeps_tone_working above: `true
+    // setpacking` makes real Ghostscript pack subsequently-parsed
+    // procedure literals into packedarraytype (confirmed directly;
+    // pscat itself doesn't), so running all three screens with
+    // callback tones under packing is what actually exercises the
+    // packedarraytype half of `hfcallable`. The library is inlined
+    // into the temp driver so gs needs no file access (no -dNOSAFER,
+    // unlike the specimen test) — same harness shape as paintkit's
+    // own packed-driver test.
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let lib = std::fs::read_to_string("lib/halftonekit.ps").expect("library present");
+    let driver = "true setpacking \
+        0 0 0 setrgbcolor \
+        newpath 0 0 moveto 50 0 lineto 50 50 lineto 0 50 lineto closepath clip \
+        << /BBox [0 0 50 50] /Screen /dot /Frequency 12 /Tone { exch pop 100 div } >> halftone \
+        newpath 60 0 moveto 110 0 lineto 110 50 lineto 60 50 lineto closepath clip \
+        << /BBox [60 0 110 50] /Screen /line /Frequency 12 /Angle 0 /Tone { exch pop 100 div } >> halftone \
+        newpath 0 60 moveto 50 60 lineto 50 110 lineto 0 110 lineto closepath clip \
+        << /BBox [0 60 50 110] /Screen /cross /Frequency 12 /Angle 0 /Tone { exch pop 100 div } >> halftone \
+        showpage";
+    let dir = std::env::temp_dir().join(format!("pscat-halftone-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let combined = dir.join("halftone_gs.ps");
+    std::fs::write(&combined, format!("{lib}\n{driver}\n")).expect("write");
+    let status = std::process::Command::new("gs")
+        .args([
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g120x120",
+            "-r72",
+            "-o/dev/null",
+        ])
+        .arg(&combined)
+        .status()
+        .expect("run gs");
+    assert!(status.success(), "gs rejected packed /Tone callbacks");
+}
