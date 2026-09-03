@@ -1,0 +1,766 @@
+%!PS-Adobe-3.0
+%%Title: surfacekit.ps — paper, canvas, and print-surface textures
+%%Creator: pscat — issue #51
+%%EndComments
+% @requires: (lib/artkit.ps) run
+
+% An eighth sibling library: deterministic, seeded, stylized-vector
+% surface textures — paper grain, paper fibers, canvas weave,
+% scratches/scuffs, and print-registration imperfections — meant to
+% sit *under* other marks (dry brush, watercolor, collage, print work)
+% the way a real surface sits under ink. This is not raster bump-map
+% or physical-simulation texture; every preset is ordinary vector
+% drawing, reproducible bit-for-bit under a fixed `/Seed`.
+%
+% Four of the five presets (`grain`, `fiber`, `scuff`, `misreg`) are
+% thin wrappers over `lib/artkit.ps`'s `scatter` (issue #48) — the
+% same "no new placement engine" choice `lib/stipplekit.ps` (issue
+% #50) already made. A region built with `screct`/`scpath` is the
+% first operand, exactly as `scatter`/`stipple` take it; every option
+% below that isn't listed for a given preset is `scatter`'s own,
+% forwarded unchanged: `/Count`, `/Density`, `/MinSpacing`, `/Seed`,
+% `/Tries`, `/Budget`, `/Scale`, `/Rotate`, `/Mark`, `/Weight`. Unlike
+% `stipple`, none of these four repurpose `/Weight` or give `/Density`
+% a second (callback) meaning — a texture's "how strong" knob is the
+% new `/Strength` option below, not a per-point tone callback, so
+% there is no option-conflict surface to police here the way
+% `stipple` has to.
+%
+% The fifth, `weave`, is *not* scatter-based — a basket weave is a
+% regular grid, not a random scatter, so it walks its own grid across
+% the region's `/BBox` and tests each cell's center with `scin`
+% (artkit.ps) the same way `scatter` tests a candidate point: inside
+% only by that one test, not by an exact clip. That is deliberate and
+% consistent with every scatter-based preset here (and with `scatter`
+% itself) — a mark can overhang a curved or concave region's true
+% boundary by up to its own size. A caller who needs an exact edge
+% clips the ambient graphics state first, the same mechanism
+% `lib/hatchkit.ps`'s own `hatch` relies on:
+%
+%   gsave
+%   newpath 100 100 moveto 300 100 300 260 260 300 curveto closepath clip
+%   0 0 612 792 screct << /Density 0.02 /Seed 3 >> grain
+%   grestore
+%
+% `examples/surfacekit.ps`'s last panel demonstrates exactly this.
+%
+% New options this file owns, shared by all five presets:
+%
+%   /Color [r g b]   each component in [0,1]; a per-preset default in
+%                     the muted range real, undyed material sits in.
+%   /Strength num    0..1, default 0.5 (0.35 for `misreg`). How
+%                     strongly a mark reads against the paper:
+%                     `Strength 0` is invisible (paper white),
+%                     `Strength 1` is `/Color` at full saturation.
+%                     This file assumes a light ground — every blend
+%                     lerps *toward white*, not toward transparent
+%                     (deliberately not `setalpha`: real Ghostscript
+%                     has no PostScript-callable alpha operator at
+%                     all, the same portability constraint
+%                     `lib/paintkit.ps`'s watercolor section
+%                     documents, and this is stylized print/paper
+%                     texture, not glazed paint). A caller texturing
+%                     *over* dark artwork should pass a light `/Color`
+%                     directly rather than expecting `Strength` to
+%                     fade toward transparent.
+%
+% `scatter`'s own per-mark `scale` (from `/Scale [lo hi]`, default
+% [1 1]) already gives every mark a random size a caller can shape —
+% `grain`/`fiber`/`scuff` reuse that *same* draw to also drive shade (a
+% bigger fleck reads a little darker) and, for `fiber`/`scuff`, length.
+% That is a deliberate simplification, not an oversight: it means
+% every preset's visual variation rides entirely on the one random
+% draw `scatter` already makes and validates, so none of these default
+% `/Mark` procedures consumes any of `scatter`'s random stream
+% themselves — the same "no new placement arithmetic" discipline
+% `stipple` documents, extended to shading. `misreg`'s nested rings
+% shade by ring position instead (isotropic, no `scale`-tied length).
+% None of `grain`/`fiber`/`scuff` validate `/Scale` themselves, even
+% though they read it: `scatter` validates every option it owns,
+% `/Scale` included, before invoking any mark at all, so by the time a
+% default mark here reads it, a bad value has already been rejected
+% under `scatter`'s own error name — validating it a second time here
+% would either duplicate that check or, worse, disagree with it
+% (report a different name depending on whether a caller overrode
+% `/Mark`, since an override skips this file's own preprocessing
+% entirely but never touches `scatter`'s). Each default mark reads
+% `/Scale` fresh off the shared options dict on every call rather than
+% caching it once, for exactly that reason — but a shallow dict `copy`
+% still shares the `/Scale` *array itself* with whatever the caller
+% passed in, so `grain`/`fiber`/`scuff` each call `sfscalesnapshot`
+% once, before `scatter` ever runs, to replace it with a private copy:
+% a `/Weight` callback that closes over the caller's own array and
+% mutates it in place would otherwise corrupt what a later mark reads,
+% after `scatter`'s own validation of the *original* values already
+% ran and cannot re-run.
+% `weave`, having no `scatter` draw to ride on, seeds its own stream
+% when `/Seed` is given, using the save/restore-via-`rrand` convention
+% `hatch` already established, and only for a small per-cell shade
+% jitter — its grid geometry itself is always exactly regular, seeded
+% or not.
+%
+% Each preset's whole call (after its options are validated) runs
+% inside its own `gsave`/`grestore` — every default mark sets color
+% and/or line width, and without this that state would leak into
+% whatever the caller does next, the same reason `hatch` wraps its own
+% drawing loop. A caller-supplied `/Mark` override runs inside that
+% same `gsave`/`grestore` too, for the same reason (`weave` has no
+% `/Mark` option at all — it never wraps a caller-supplied drawing
+% callback, so there is nothing to run inside its `gsave` but its own
+% code). Every default mark still `newpath`s before drawing, and
+% `weave` does too, once, before its own grid loop: a region built via
+% `scpath` deliberately leaves its flattened path behind (`scatter`'s
+% own docs), so a mark that skipped `newpath` would fill or stroke
+% that leftover outline on its very first call only — `stipple`'s own
+% header documents the exact same footgun, so it's stated here too
+% rather than left to be rediscovered.
+%
+% Reproducibility, the mark budget, and Ghostscript compatibility for
+% `grain`/`fiber`/`scuff`/`misreg` are entirely `scatter`'s own,
+% unchanged. `weave` has no `/Budget` to inherit, so it pre-flights its
+% own: a grid at a pathologically small `/Pitch` is rejected by
+% `/MaxThreads` (a cap on cell count, cheap to check for any region)
+% *and*, only when the region is a `scpath` path region (not a plain
+% `screct` rectangle), a second `/MaxEdgeSamples` cap on cell count
+% times edge count. Both checks matter: `scin`'s cost against a
+% `/Kind /rect` region is O(1) (a bare bbox test), but against a
+% `/Kind /path` region it is linear in that region's edge count
+% (artkit.ps's own `scarea` documents the same asymmetry for its
+% measurement pass) — a cell-count cap alone bounds neither case
+% together, since a modest grid over a many-thousand-edge path region
+% can still cost far more work than the cell count alone suggests.
+%
+% Scratch prefix: `sf-`, checked against every other sibling's own
+% (`sc-`/`sq-`/`si-` in artkit.ps, `sp-` in stipplekit, `h-`/`hk-` in
+% hatchkit, `pk-` in paintkit) — none collide. A caller-supplied
+% `/Mark` override must not touch `sf-` names, the same discipline
+% every sibling's own header states for its own prefix.
+%
+% Deliberate scope cuts: no raster bump maps, no absorption/wet-pigment
+% simulation (the issue's own scope note) — and, inside that, no
+% per-point tone *callback* for `/Density` the way `stipple`'s own
+% `/Density` accepts one. A caller who wants a texture that fades
+% across a region can already get that by clipping to a shaped region
+% (the `gsave`/clip idiom above) rather than this file inventing a
+% second density vocabulary on top of `scatter`'s own.
+
+% --- shared helpers ----------------------------------------------------
+
+% v sfisnum -> bool
+% surfacekit's own copy of artkit's scisnum / stipplekit's spisnum —
+% each sibling owns its copy rather than reaching into another file's
+% scratch namespace (stipplekit's own header states the same choice).
+% @internal
+/sfisnum { type dup /integertype eq exch /realtype eq or } def
+
+% dict key default sfgetdef -> value
+% surfacekit's own copy of the wrap-the-default-in-an-array trick —
+% see artkit's scgetdef / stipplekit's spgetdef for the reasoning.
+% @internal
+/sfgetdef {
+  /sfgdd exch 1 array astore def
+  /sfgdk exch def
+  /sfgdt exch def
+  sfgdt sfgdk known { sfgdt sfgdk get } { sfgdd 0 get } ifelse
+} def
+
+% val errproc name sfbindnum -
+% Validates `val` is a number (else runs `errproc` — a literal `{
+% some-self-documenting-name }` procedure, executed only on failure,
+% so the failure itself is the self-documenting `undefined` error
+% every other option check in this codebase raises the same way), then
+% binds it to `name`. `val` travels in a private 1-element array until
+% that check passes — the same wrap-before-bare-`def` discipline
+% `stipple`'s own header describes (its `/DotRadius` was exactly a
+% "plain numeric option that looked safe to bare-bind" that a Codex
+% review caught) — collapsed into one call so each of this file's many
+% scalar options doesn't repeat the wrap/check/bind sequence by hand.
+% `errproc` is a manifest `{...}` literal at every call site, never a
+% name bound and later referenced bare, so it carries no auto-exec risk
+% of its own regardless of what `val` turns out to be.
+% @internal
+/sfbindnum {
+  /sfbnname exch def
+  /sfbnerr exch def
+  1 array astore /sfbnbox exch def
+  sfbnbox 0 get sfisnum not { sfbnerr exec } if
+  sfbnname sfbnbox 0 get def
+} def
+
+% region errproc sfregiondef -> region
+% Validates the `region` operand every preset here takes as its first
+% argument: a dict whose `/Kind` is `/rect` or `/path` (`screct`/
+% `scpath`'s own two shapes) and whose `/BBox` is a well-formed
+% 4-number array — else runs `errproc`, the same self-documenting-
+% error convention `sfbindnum` uses. `region` (and, once fetched,
+% `/BBox`) travels in a private 1-element array until every check
+% passes, checked only via `type`/`get`/`length` (never a bare
+% reference to the raw operand or to the raw `/BBox` value): a
+% procedure passed as the region operand — `{ boom } opts grain`, say
+% — would otherwise auto-execute on this file's very first bare
+% reference to it, the same hazard `sfbindnum` exists to close for a
+% numeric option, just on the *first* operand this time rather than a
+% dict key (Codex review, PR #125). `/BBox` gets the same treatment
+% for the same reason, one level deeper: `grain`/`fiber`/`scuff`/
+% `misreg` never touch `/BBox` themselves (they hand `sfregion` to
+% `scatter` untouched), but `weave` unpacks it directly with `aload`
+% and binds each of its four numbers bare — a hand-built region dict
+% (not one `screct`/`scpath` produced) with a procedure planted in
+% `/BBox` would auto-execute on that unpacking, before any check
+% (independent-agent review, PR #125, round 5). Validating it here,
+% once, for every preset — not just inside `weave` — means a region
+% dict this operator has already returned is unconditionally safe for
+% *any* caller code in this file to destructure however it needs to.
+% Once confirmed well-formed, the region dict itself is safe for the
+% caller to bind bare from here on: a `dicttype` object is always
+% pushed literally when referenced bare regardless of any executable
+% attribute (the same reasoning `sccallable`'s own type list,
+% artkit.ps, relies on in never treating `dicttype` as executable) —
+% and by this point every number reachable through it has already been
+% extracted via `get`, confirmed numeric, and left as plain numbers
+% inside `sfrdbox`'s own private array, never bound to a name of their
+% own until known safe.
+% @internal
+/sfregiondef {
+  /sfrderr exch def
+  1 array astore /sfrdbox exch def
+  sfrdbox 0 get type /dicttype ne { sfrderr exec } if
+  sfrdbox 0 get /Kind known not { sfrderr exec } if
+  sfrdbox 0 get /Kind get dup /rect eq exch /path eq or not
+    { sfrderr exec } if
+  sfrdbox 0 get /BBox known not { sfrderr exec } if
+  sfrdbox 0 get /BBox get 1 array astore /sfrdbbox exch def
+  sfrdbbox 0 get type /arraytype ne { sfrderr exec } if
+  sfrdbbox 0 get length 4 ne { sfrderr exec } if
+  /sfrdok true def
+  sfrdbbox 0 get 0 get sfisnum not { /sfrdok false def } if
+  sfrdbbox 0 get 1 get sfisnum not { /sfrdok false def } if
+  sfrdbbox 0 get 2 get sfisnum not { /sfrdok false def } if
+  sfrdbbox 0 get 3 get sfisnum not { /sfrdok false def } if
+  sfrdok not { sfrderr exec } if
+  sfrdbox 0 get
+} def
+
+% opts sfscalesnapshot -
+% If `opts` has an array-typed `/Scale`, replaces it in place with a
+% fresh copy of the same array; a non-array (or absent) `/Scale` is
+% left untouched, so `scatter`'s own validation still rejects a
+% malformed one exactly as if this never ran. `grain`/`fiber`/`scuff`
+% each re-read `/Scale` fresh from their own private options dict on
+% every mark call rather than caching it once (see each default
+% mark's own comment for why), but a private dict from a shallow
+% `copy` still *shares* the `/Scale` array object itself with whatever
+% the caller passed in — a `/Weight` callback that closes over that
+% same array and mutates it in place (a caller can always hold onto a
+% reference to their own literal) would otherwise corrupt what a
+% mark reads on a later call, after `scatter`'s own validation of the
+% *original* values already ran and cannot re-run (Codex review, PR
+% #125, round 2 — a real, reproducible bug: a `/Weight` that swaps in
+% a string mid-run raised a raw `typecheck` deep in `sflerpfrac`
+% instead of anything self-documenting). Called once per preset call,
+% before `scatter` ever runs, so every candidate's `/Weight` — however
+% many run before the first accepted `/Mark` — only ever sees this
+% file's own private copy, never the caller's original.
+% @internal
+/sfscalesnapshot {
+  /sfssopts exch def
+  sfssopts /Scale known {
+    sfssopts /Scale get
+    dup type /arraytype eq {
+      dup length array copy
+      /sfsscopy exch def
+      sfssopts /Scale sfsscopy put
+    } { pop } ifelse
+  } if
+} def
+
+% v lo hi sflerpfrac -> t   (0..1, clamped; 0.5 for a degenerate range)
+% Where `v` falls inside `[lo hi]`, for reuse by both a mark's shade
+% and (for `fiber`/`scuff`) its length — one random draw (`scatter`'s
+% own per-mark `scale`) feeding two correlated effects rather than two
+% independent ones, per this file's own header.
+% @internal
+/sflerpfrac {
+  /sflfhi exch def /sflflo exch def /sflfv exch def
+  sflfhi sflflo sub abs 1e-9 lt
+    { 0.5 }
+    { sflfv sflflo sub sflfhi sflflo sub div
+      dup 0 lt { pop 0 } if
+      dup 1 gt { pop 1 } if }
+  ifelse
+} def
+
+% lo hi t sflerp1 -> v
+% @internal
+/sflerp1 {
+  /sfl1t exch def /sfl1hi exch def /sfl1lo exch def
+  sfl1lo sfl1hi sfl1lo sub sfl1t mul add
+} def
+
+% r g b strength t sfshade -   (sets the current color)
+% Lerps from paper-white toward [r g b] by `strength`, scaled a little
+% by `t` (0..1 — a bigger/further-along mark reads slightly stronger):
+% mix = strength * (0.6 + 0.4*t), clamped to [0,1]. Not a physical
+% model of anything — a single, deliberately simple formula every
+% preset in this file shares so "how strong" means the same thing
+% everywhere.
+% @internal
+/sfshade {
+  /sfsht exch def /sfshst exch def
+  /sfshb exch def /sfshg exch def /sfshr exch def
+  /sfshmix sfshst 0.6 sfsht 0.4 mul add mul def
+  sfshmix 0 lt { /sfshmix 0 def } if
+  sfshmix 1 gt { /sfshmix 1 def } if
+  1 sfshmix sub sfshr sfshmix mul add
+  1 sfshmix sub sfshg sfshmix mul add
+  1 sfshmix sub sfshb sfshmix mul add
+  setrgbcolor
+} def
+
+% opts default3arr sfcolordef -> r g b
+% Resolves and validates `/Color` (or `default3arr` if absent): a
+% 3-element array, each component a number in [0,1]. The resolved
+% value travels in a private 1-element array (`sfcdbox`) until every
+% check passes, read only via `sfcdbox 0 get ... get` — never bound to
+% a bare name of its own — so an executable `/Color` (`{ boom }`, a
+% procedure and an `arraytype` object both) cannot auto-execute on a
+% bare reference before its type is even checked (Codex review, PR
+% #125: an earlier draft bound it bare first and validated after,
+% which is backwards — `type /arraytype eq` alone doesn't rule out a
+% procedure, since a procedure *is* an executable array). The three
+% numbers this leaves on the stack are already validated and safe for
+% the caller to `def` bare (numbers have no executable behavior).
+% @internal
+/sfcolordef {
+  /sfcddef exch def
+  /sfcdopts exch def
+  sfcdopts /Color sfcddef sfgetdef 1 array astore /sfcdbox exch def
+  sfcdbox 0 get type /arraytype ne { surfacekit-color-must-be-an-rgb-array } if
+  sfcdbox 0 get length 3 ne { surfacekit-color-must-be-an-rgb-array } if
+  sfcdbox 0 get 0 get sfisnum sfcdbox 0 get 1 get sfisnum and
+    sfcdbox 0 get 2 get sfisnum and not
+    { surfacekit-color-must-be-an-rgb-array } if
+  sfcdbox 0 get 0 get dup 0 lt exch 1 gt or
+  sfcdbox 0 get 1 get dup 0 lt exch 1 gt or or
+  sfcdbox 0 get 2 get dup 0 lt exch 1 gt or or
+    { surfacekit-color-components-must-be-0-to-1 } if
+  sfcdbox 0 get 0 get sfcdbox 0 get 1 get sfcdbox 0 get 2 get
+} def
+
+% opts default sfstrengthdef -> strength
+% @internal
+/sfstrengthdef {
+  /sfsddef exch def
+  /sfsdopts exch def
+  sfsdopts /Strength sfsddef sfgetdef
+    { surfacekit-strength-must-be-a-number } /sfsdval sfbindnum
+  sfsdval 0 lt sfsdval 1 gt or { surfacekit-strength-must-be-0-to-1 } if
+  sfsdval
+} def
+
+% --- grain ---------------------------------------------------------
+
+% x y scale angle sfgraindefaultmark -
+% @internal
+/sfgraindefaultmark {
+  pop
+  /sfmsc exch def /sfmy exch def /sfmx exch def
+  newpath
+  % /Scale is read fresh here rather than validated and cached up
+  % front: `scatter` has already validated it (as its own option, not
+  % this file's) before invoking any mark at all, so re-reading it
+  % here defers all rejection to `scatter`'s own error names instead
+  % of risking a second, inconsistent one -- see this file's own
+  % header note on why grain/fiber/scuff don't validate /Scale
+  % themselves.
+  sfscopts /Scale [ 1 1 ] sfgetdef aload pop /sfgschi exch def /sfgsclo exch def
+  sfmsc sfgsclo sfgschi sflerpfrac /sfgt exch def
+  sfgrainR sfgrainG sfgrainB sfgrainstrength sfgt sfshade
+  sfmx sfmy sfgrainradius sfmsc mul 0 360 arc
+  closepath
+  fill
+} def
+
+% region opts grain -
+% @kind: Procedure
+% @summary: Paper grain speckling — a scatter of tiny flecks. Fine vs. coarse grain is a choice of /Density and /Scale on this one preset, not two separate operators. Every option not listed here (/Count, /Density, /MinSpacing, /Seed, /Tries, /Budget, /Scale, /Rotate, /Mark, /Weight) is scatter's own (artkit.ps), forwarded unchanged.
+% @example: 0 0 200 200 screct << /Density 0.3 /Scale [0.4 1.4] /Seed 3 >> grain
+% @param: /Color [r g b] speck color, each in [0,1] (default a warm paper-fleck gray)
+% @param: /Strength num 0..1, how strongly flecks read against the paper (default 0.5)
+% @param: /Radius num > 0 base speck radius before scatter's own /Scale (default 0.6)
+/grain {
+  1 array astore /sfoptsbox exch def
+  { grain-region-must-be-a-region } sfregiondef /sfregion exch def
+  sfoptsbox 0 get type /dicttype ne { grain-opts-must-be-a-dict } if
+  /sfopts sfoptsbox 0 get def
+  /sfscopts sfopts length 2 add dict def
+  sfopts sfscopts copy pop
+  sfscopts sfscalesnapshot
+
+  sfscopts /Mark known not {
+    sfscopts [ 0.55 0.52 0.46 ] sfcolordef
+      /sfgrainB exch def /sfgrainG exch def /sfgrainR exch def
+    sfscopts 0.5 sfstrengthdef /sfgrainstrength exch def
+    sfscopts /Radius 0.6 sfgetdef
+      { grain-radius-must-be-a-number } /sfgrainradius sfbindnum
+    sfgrainradius 0 le { grain-radius-must-be-positive } if
+    sfscopts /Mark /sfgraindefaultmark load put
+  } if
+
+  gsave
+  sfregion sfscopts scatter
+  grestore
+} def
+
+% --- fiber -----------------------------------------------------------
+
+% x y scale angle sffiberdefaultmark -
+% @internal
+/sffiberdefaultmark {
+  /sfmang exch def
+  /sfmsc exch def
+  /sfmy exch def
+  /sfmx exch def
+  newpath
+  % /Scale read fresh, not validated here -- see sfgraindefaultmark's
+  % own comment for why.
+  sfscopts /Scale [ 1 1 ] sfgetdef aload pop /sffschi exch def /sffsclo exch def
+  sfmsc sffsclo sffschi sflerpfrac /sfft exch def
+  sffiberR sffiberG sffiberB sffiberstrength sfft sfshade
+  sffiberlen0 sffiberlen1 sfft sflerp1 /sfflen exch def
+  sfmang cos sfflen mul 2 div /sffhx exch def
+  sfmang sin sfflen mul 2 div /sffhy exch def
+  /sffx0 sfmx sffhx sub def
+  /sffy0 sfmy sffhy sub def
+  /sffx1 sfmx sffhx add def
+  /sffy1 sfmy sffhy add def
+  sffx0 sffy0 moveto
+  sffx1 sffy1 lineto
+  sffiberwidth sfmsc mul setlinewidth
+  1 setlinecap
+  stroke
+} def
+
+% region opts fiber -
+% @kind: Procedure
+% @summary: Paper fibers — short, thin, randomly oriented strokes scattered across a region. Orientation comes from scatter's own /Rotate, not a new random draw. Every option not listed here (/Count, /Density, /MinSpacing, /Seed, /Tries, /Budget, /Scale, /Rotate, /Mark, /Weight) is scatter's own (artkit.ps), forwarded unchanged.
+% @example: 0 0 200 200 screct << /Density 0.3 /Rotate [0 360] /Seed 5 >> fiber
+% @param: /Color [r g b] fiber color, each in [0,1] (default a warm pale fiber tone)
+% @param: /Strength num 0..1, how strongly fibers read against the paper (default 0.5)
+% @param: /Length [lo hi] fiber length range in user-space units (default [3 9])
+% @param: /Width num > 0 base stroke width before scatter's own /Scale (default 0.5)
+/fiber {
+  1 array astore /sfoptsbox exch def
+  { fiber-region-must-be-a-region } sfregiondef /sfregion exch def
+  sfoptsbox 0 get type /dicttype ne { fiber-opts-must-be-a-dict } if
+  /sfopts sfoptsbox 0 get def
+  /sfscopts sfopts length 2 add dict def
+  sfopts sfscopts copy pop
+  sfscopts sfscalesnapshot
+
+  sfscopts /Mark known not {
+    sfscopts [ 0.62 0.58 0.5 ] sfcolordef
+      /sffiberB exch def /sffiberG exch def /sffiberR exch def
+    sfscopts 0.5 sfstrengthdef /sffiberstrength exch def
+    % Wrapped before any bare reference -- same reason sfcolordef's
+    % own header gives: an executable `/Length` (`{ boom }`) would
+    % otherwise auto-execute the instant it's referenced bare, before
+    % `scokrange` (or anything else) ever got a chance to check its
+    % type (Codex review, PR #125).
+    sfscopts /Length [ 3 9 ] sfgetdef 1 array astore /sfflenbox exch def
+    sfflenbox 0 get scokrange not
+      { fiber-length-must-be-a-two-number-range } if
+    /sffiberlen0 sfflenbox 0 get 0 get def
+    /sffiberlen1 sfflenbox 0 get 1 get def
+    sfscopts /Width 0.5 sfgetdef
+      { fiber-width-must-be-a-number } /sffiberwidth sfbindnum
+    sffiberwidth 0 le { fiber-width-must-be-positive } if
+    sfscopts /Mark /sffiberdefaultmark load put
+  } if
+
+  gsave
+  sfregion sfscopts scatter
+  grestore
+} def
+
+% --- scuff -------------------------------------------------------------
+
+% x y scale angle sfscuffdefaultmark -
+% @internal
+/sfscuffdefaultmark {
+  /sfmang exch def
+  /sfmsc exch def
+  /sfmy exch def
+  /sfmx exch def
+  newpath
+  % /Scale read fresh, not validated here -- see sfgraindefaultmark's
+  % own comment for why.
+  sfscopts /Scale [ 1 1 ] sfgetdef aload pop /sfuchi exch def /sfuclo exch def
+  sfmsc sfuclo sfuchi sflerpfrac /sfut exch def
+  sfscuffR sfscuffG sfscuffB sfscuffstrength sfut sfshade
+  sfscufflen0 sfscufflen1 sfut sflerp1 /sfulen exch def
+  sfmang cos /sfudx exch def
+  sfmang sin /sfudy exch def
+  sfudx sfulen mul 2 div /sfuhx exch def
+  sfudy sfulen mul 2 div /sfuhy exch def
+  /sfux0 sfmx sfuhx sub def
+  /sfuy0 sfmy sfuhy sub def
+  /sfux1 sfmx sfuhx add def
+  /sfuy1 sfmy sfuhy add def
+  % A small perpendicular kink at the midpoint -- a deterministic
+  % function of the mark's own angle (sin of 3x the angle), not a new
+  % random draw, so a scuff mark stays reproducible purely off
+  % scatter's own seeded rotation/scale, per this file's own header.
+  % Perpendicular unit vector to (dx,dy) is (-dy,dx) (a +90-degree
+  % rotation), the same derivation hatchkit's own header uses.
+  sfscuffkink sfulen mul sfmang 3 mul sin mul /sfukoff exch def
+  /sfukx sfmx sfudy neg sfukoff mul add def
+  /sfuky sfmy sfudx sfukoff mul add def
+  sfux0 sfuy0 moveto
+  sfukx sfuky lineto
+  sfux1 sfuy1 lineto
+  sfscuffwidth sfmsc mul setlinewidth
+  1 setlinecap
+  1 setlinejoin
+  stroke
+} def
+
+% region opts scuff -
+% @kind: Procedure
+% @summary: Scratches and scuffs — sparse long strokes with a small deterministic kink at the midpoint, scattered across a region. Named `scuff` rather than `scratch` since this codebase already uses "scratch" as a term of art for private working state throughout every sibling library's own docs. Every option not listed here (/Count, /Density, /MinSpacing, /Seed, /Tries, /Budget, /Scale, /Rotate, /Mark, /Weight) is scatter's own (artkit.ps), forwarded unchanged.
+% @example: 0 0 200 200 screct << /Count 8 /Rotate [0 360] /Seed 9 >> scuff
+% @param: /Color [r g b] scuff color, each in [0,1] (default a dark scuffed tone)
+% @param: /Strength num 0..1, how strongly scuffs read against the paper (default 0.5)
+% @param: /Length [lo hi] scuff length range in user-space units (default [14 40])
+% @param: /Width num > 0 base stroke width before scatter's own /Scale (default 0.7)
+% @param: /Kink num perpendicular kink amount, a fraction of length (default 0.18)
+/scuff {
+  1 array astore /sfoptsbox exch def
+  { scuff-region-must-be-a-region } sfregiondef /sfregion exch def
+  sfoptsbox 0 get type /dicttype ne { scuff-opts-must-be-a-dict } if
+  /sfopts sfoptsbox 0 get def
+  /sfscopts sfopts length 2 add dict def
+  sfopts sfscopts copy pop
+  sfscopts sfscalesnapshot
+
+  sfscopts /Mark known not {
+    sfscopts [ 0.25 0.24 0.26 ] sfcolordef
+      /sfscuffB exch def /sfscuffG exch def /sfscuffR exch def
+    sfscopts 0.5 sfstrengthdef /sfscuffstrength exch def
+    % Wrapped before any bare reference -- see fiber's own /Length
+    % handling and sfcolordef's header for why.
+    sfscopts /Length [ 14 40 ] sfgetdef 1 array astore /sfulenbox exch def
+    sfulenbox 0 get scokrange not
+      { scuff-length-must-be-a-two-number-range } if
+    /sfscufflen0 sfulenbox 0 get 0 get def
+    /sfscufflen1 sfulenbox 0 get 1 get def
+    sfscopts /Width 0.7 sfgetdef
+      { scuff-width-must-be-a-number } /sfscuffwidth sfbindnum
+    sfscuffwidth 0 le { scuff-width-must-be-positive } if
+    sfscopts /Kink 0.18 sfgetdef
+      { scuff-kink-must-be-a-number } /sfscuffkink sfbindnum
+    sfscopts /Mark /sfscuffdefaultmark load put
+  } if
+
+  gsave
+  sfregion sfscopts scatter
+  grestore
+} def
+
+% --- misreg --------------------------------------------------------
+
+% x y scale angle sfmisregdefaultmark -
+% @internal
+/sfmisregdefaultmark {
+  pop
+  /sfmsc exch def /sfmy exch def /sfmx exch def
+  0 1 sfmisregrings 1 sub {
+    /sfmr exch def
+    sfmr 1 add sfmisregrings div /sfmmix exch def
+    sfmisregR sfmisregG sfmisregB sfmisregstrength sfmmix sfshade
+    sfmisregrings sfmr sub sfmisregrings div /sfmrf exch def
+    newpath
+    sfmx sfmy sfmisregradius sfmsc mul sfmrf mul 0 360 arc
+    closepath
+    fill
+  } for
+} def
+
+% region opts misreg -
+% @kind: Procedure
+% @summary: Subtle print/registration imperfections — sparse soft smudge blobs (nested lightening rings, largest and faintest outermost) suggesting a mis-registered ink layer. A stylized single-color mark, not a multi-plate CMY simulation. Every option not listed here (/Count, /Density, /MinSpacing, /Seed, /Tries, /Budget, /Scale, /Rotate, /Mark, /Weight) is scatter's own (artkit.ps), forwarded unchanged.
+% @example: 0 0 200 200 screct << /Count 6 /Scale [0.8 1.6] /Seed 11 >> misreg
+% @param: /Color [r g b] smudge color, each in [0,1] (default a cool muted tone)
+% @param: /Strength num 0..1, how strongly the innermost ring reads (default 0.35)
+% @param: /Radius num > 0 outermost-ring base radius before scatter's own /Scale (default 3)
+% @param: /Rings int >= 1 number of nested rings (default 3)
+/misreg {
+  1 array astore /sfoptsbox exch def
+  { misreg-region-must-be-a-region } sfregiondef /sfregion exch def
+  sfoptsbox 0 get type /dicttype ne { misreg-opts-must-be-a-dict } if
+  /sfopts sfoptsbox 0 get def
+  /sfscopts sfopts length 2 add dict def
+  sfopts sfscopts copy pop
+
+  sfscopts /Mark known not {
+    sfscopts [ 0.55 0.5 0.65 ] sfcolordef
+      /sfmisregB exch def /sfmisregG exch def /sfmisregR exch def
+    sfscopts 0.35 sfstrengthdef /sfmisregstrength exch def
+    sfscopts /Radius 3 sfgetdef
+      { misreg-radius-must-be-a-number } /sfmisregradius sfbindnum
+    sfmisregradius 0 le { misreg-radius-must-be-positive } if
+    sfscopts /Rings 3 sfgetdef
+      { misreg-rings-must-be-a-number } /sfmisregrings sfbindnum
+    sfmisregrings 1 lt { misreg-rings-must-be-at-least-1 } if
+    % /Budget bounds scatter's own mark count, not per-mark cost --
+    % /Rings multiplies the work *inside* every mark, so it needs its
+    % own cap independent of /Budget for "mark budgets keep rendering
+    % practical" to actually hold (100 is already far past any visual
+    % use of nested rings). Checked *before* the integer check below,
+    % as a plain real-number comparison: a finite but extreme /Rings
+    % (1e300, say) is safely > 100 without ever needing conversion,
+    % whereas `cvi` on a value that far outside this interpreter's i64
+    % range raises a raw `rangecheck` instead of this file's own named
+    % error (Codex review, PR #125, round 3).
+    sfmisregrings 100 gt { misreg-rings-must-be-100-or-fewer } if
+    sfmisregrings cvi sfmisregrings ne { misreg-rings-must-be-an-integer } if
+    sfscopts /Mark /sfmisregdefaultmark load put
+  } if
+
+  gsave
+  sfregion sfscopts scatter
+  grestore
+} def
+
+% --- weave -----------------------------------------------------------
+
+% region opts weave -
+% @kind: Procedure
+% @summary: Canvas weave — a regular grid of alternating over/under thread bumps across a region, testing each cell's center with scin (artkit.ps) rather than a caller-supplied mark; not scatter-based, since a weave is a fixed structure rather than a random placement. Clip the ambient graphics state first for an exact edge on a non-rectangular region (see this file's own header).
+% @example: 0 0 200 200 screct << /Pitch 5 /Seed 2 >> weave
+% @param: /Color [r g b] thread color, each in [0,1] (default a canvas tan)
+% @param: /Strength num 0..1, how strongly threads read against the paper (default 0.5)
+% @param: /Pitch num > 0 grid spacing between thread centers (default 6)
+% @param: /Width num > 0 thread thickness (default 1.2)
+% @param: /Seed n seeds a small per-cell shade jitter with `n srand`, restoring the caller's stream afterward via `rrand` (hatchkit's own convention) -- the grid geometry itself is always exactly regular, seeded or not
+% @param: /MaxThreads int pre-flight cap on grid cell count (default 20000)
+% @param: /MaxEdgeSamples int pre-flight cap on cell count times region edge count, checked only for a scpath path region (default 2000000)
+/weave {
+  1 array astore /sfoptsbox exch def
+  { weave-region-must-be-a-region } sfregiondef /sfregion exch def
+  sfoptsbox 0 get type /dicttype ne { weave-opts-must-be-a-dict } if
+  /sfopts sfoptsbox 0 get def
+
+  sfopts [ 0.5 0.42 0.3 ] sfcolordef
+    /sfweaveB exch def /sfweaveG exch def /sfweaveR exch def
+  sfopts 0.5 sfstrengthdef /sfweavestrength exch def
+
+  sfopts /Pitch 6 sfgetdef
+    { weave-pitch-must-be-a-number } /sfweavepitch sfbindnum
+  sfweavepitch 0 le { weave-pitch-must-be-positive } if
+
+  sfopts /Width 1.2 sfgetdef
+    { weave-width-must-be-a-number } /sfweavewidth sfbindnum
+  sfweavewidth 0 le { weave-width-must-be-positive } if
+
+  sfopts /MaxThreads 20000 sfgetdef
+    { weave-maxthreads-must-be-a-number } /sfweavemaxthreads sfbindnum
+
+  sfregion /BBox get aload pop
+  /sfwy1 exch def /sfwx1 exch def /sfwy0 exch def /sfwx0 exch def
+  /sfwbw sfwx1 sfwx0 sub def
+  /sfwbh sfwy1 sfwy0 sub def
+
+  % Raw (real-valued) column/row counts, sanity-capped *before* any
+  % `cvi`: an extreme /Pitch (say 1e-300) divided into an ordinary
+  % bbox produces a real so large that converting it straight to this
+  % interpreter's i64 int type would overflow well before /MaxThreads
+  % below ever gets a chance to reject it -- the same overflow class
+  % tests/sweep.rs's own extreme-range tests guard against elsewhere in
+  % this codebase. 1e7 is far above any sane /MaxThreads and safely
+  % within i64 range even after the row*col multiply further down.
+  /sfwcolsf sfwbw sfweavepitch div def
+  /sfwrowsf sfwbh sfweavepitch div def
+  sfwcolsf 1e7 gt sfwrowsf 1e7 gt or
+    { weave-cell-count-exceeds-safety-limit } if
+
+  % Round (not ceiling) to the nearest whole cell count, then re-derive
+  % the *actual* per-axis spacing (`sfwpx`/`sfwpy`) from that count
+  % rather than drawing at the nominal /Pitch directly. Ceiling plus a
+  % fixed /Pitch left the last row/column's center outside the bbox
+  % whenever the bbox wasn't an exact multiple of /Pitch -- `scin`
+  % rejects any candidate outside the bbox on its own bare bbox test,
+  % so that dropped a whole edge strip silently (or, for a region
+  % narrower than /Pitch/2, every cell). Rounding to fit means the
+  % realized spacing can differ from /Pitch by up to half a cell, but
+  % every cell's center is now guaranteed inside the bbox.
+  sfwcolsf 0.5 add cvi /sfwcols exch def
+  sfwrowsf 0.5 add cvi /sfwrows exch def
+  sfwcols 1 lt { /sfwcols 1 def } if
+  sfwrows 1 lt { /sfwrows 1 def } if
+  /sfwcells sfwcols sfwrows mul def
+  sfwcells sfweavemaxthreads gt { weave-cell-count-exceeds-safety-limit } if
+
+  sfregion /Kind get /path eq {
+    sfopts /MaxEdgeSamples 2000000 sfgetdef
+      { weave-maxedgesamples-must-be-a-number } /sfweavemaxedges sfbindnum
+    /sfwedges sfregion /Edges get length 4 idiv def
+    sfwcells sfwedges mul sfweavemaxedges gt
+      { weave-region-too-complex-for-this-pitch } if
+  } if
+
+  /sfwpx sfwbw sfwcols div def
+  /sfwpy sfwbh sfwrows div def
+
+  sfopts /Seed known /sfweaveseeded exch def
+  sfweaveseeded {
+    % Validated and magnitude-capped before `cvi`, the same discipline
+    % every other numeric option here follows (and the one `/Rings`
+    % itself was missing until round 3 of review): an extreme but
+    % finite /Seed (1e300, say) is well outside this interpreter's
+    % i64 range, so `cvi` alone would raise a raw `rangecheck` instead
+    % of a self-documenting name, and a non-numeric /Seed would raise
+    % a raw `typecheck` (independent-agent review, PR #125, round 4 --
+    % the same bug class as round 3's /Rings fix, just missed here).
+    sfopts /Seed get { weave-seed-must-be-a-number } /sfweaveseed sfbindnum
+    sfweaveseed abs 1e15 gt { weave-seed-must-be-a-reasonable-integer } if
+    /sfweavesaved rrand def
+    sfweaveseed cvi srand
+  } if
+
+  gsave
+  newpath
+  0 1 sfwrows 1 sub {
+    /sfwrow exch def
+    0 1 sfwcols 1 sub {
+      /sfwcol exch def
+      /sfwcx sfwx0 sfwcol 0.5 add sfwpx mul add def
+      /sfwcy sfwy0 sfwrow 0.5 add sfwpy mul add def
+      sfwcx sfwcy sfregion scin {
+        sfwrow sfwcol add cvi 2 mod 0 eq /sfwover exch def
+        sfweaveseeded { frnd 0.1 mul 0.05 sub } { 0 } ifelse /sfwjit exch def
+        sfwover
+          { sfweaveR sfweaveG sfweaveB sfweavestrength sfwjit 0.75 add sfshade }
+          { sfweaveR sfweaveG sfweaveB sfweavestrength sfwjit 0.35 add sfshade }
+        ifelse
+        newpath
+        sfwover {
+          sfwcx sfwpx 0.9 mul 2 div sub sfwcy sfweavewidth 2 div sub moveto
+          sfwpx 0.9 mul 0 rlineto
+          0 sfweavewidth rlineto
+          sfwpx 0.9 mul neg 0 rlineto
+          closepath
+        } {
+          sfwcx sfweavewidth 2 div sub sfwcy sfwpy 0.9 mul 2 div sub moveto
+          sfweavewidth 0 rlineto
+          0 sfwpy 0.9 mul rlineto
+          sfweavewidth neg 0 rlineto
+          closepath
+        } ifelse
+        fill
+      } if
+    } for
+  } for
+  grestore
+  sfweaveseeded { sfweavesaved srand } if
+} def

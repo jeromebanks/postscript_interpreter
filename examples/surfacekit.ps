@@ -1,0 +1,87 @@
+%!PS-Adobe-3.0
+%%Title: Six Surfaces — a specimen sheet for surfacekit.ps
+%%BoundingBox: 0 0 900 640
+%%EndComments
+
+% Specimen sheet for the surface-texture library (issue #51,
+% lib/surfacekit.ps): one panel per preset, plus a sixth panel
+% demonstrating the exact-edge clip idiom the library's own header
+% recommends for a non-rectangular region. Run from the repo root:
+%
+%   pscat --page 900x640 examples/surfacekit.ps
+
+(lib/artkit.ps) run
+(lib/surfacekit.ps) run
+
+/showctr { /tky exch def /tkx exch def /tks exch def
+    tkx tks stringwidth pop 2 div sub tky moveto tks show } def
+
+1 1 1 setrgbcolor clippath fill
+
+/Palatino-Bold findfont 24 scalefont setfont
+0.1 0.1 0.12 setrgbcolor
+(Six Surfaces) 450 606 showctr
+/Palatino-Italic findfont 12 scalefont setfont
+(paper grain, fibers, weave, scuffs, print misregistration, and an exact-edge clip -- lib/surfacekit.ps)
+  450 586 showctr
+
+/Palatino findfont 11 scalefont setfont
+/panel { % x y w h -
+  /ph exch def /pw exch def /py exch def /px exch def
+  gsave
+    px py translate
+    0 0 0 setrgbcolor 0.75 setlinewidth
+    newpath 0 0 moveto pw 0 lineto pw ph lineto 0 ph lineto closepath stroke
+} def
+/endpanel { grestore } def
+
+% --- bottom row: grain, fiber, scuff ---------------------------------
+
+40 40 240 240 panel
+0 0 240 240 screct << /Count 1400 /Scale [ 0.4 1.6 ] /Seed 3 >> grain
+endpanel
+0.1 0.1 0.12 setrgbcolor
+(paper grain: a scatter of tiny flecks) 160 26 showctr
+
+340 40 240 240 panel
+0 0 240 240 screct << /Count 500 /Rotate [ 0 360 ] /Seed 5 >> fiber
+endpanel
+0.1 0.1 0.12 setrgbcolor
+(paper fibers: short, randomly oriented strokes) 460 26 showctr
+
+640 40 240 240 panel
+0 0 240 240 screct << /Count 20 /Rotate [ 0 360 ] /Seed 9 >> scuff
+endpanel
+0.1 0.1 0.12 setrgbcolor
+(scratches and scuffs: sparse, kinked strokes) 760 26 showctr
+
+% --- top row: misreg, weave, exact-edge clip -------------------------
+
+40 320 240 240 panel
+0 0 240 240 screct << /Count 12 /Scale [ 0.8 1.8 ] /Seed 11 >> misreg
+endpanel
+0.1 0.1 0.12 setrgbcolor
+(print misregistration: nested soft smudges) 160 306 showctr
+
+340 320 240 240 panel
+0 0 240 240 screct << /Pitch 6 /Seed 2 >> weave
+endpanel
+0.1 0.1 0.12 setrgbcolor
+(canvas weave: an alternating grid, not a scatter) 460 306 showctr
+
+% A caller who needs an exact edge on a non-rectangular region clips
+% the ambient graphics state first -- the same idiom lib/hatchkit.ps's
+% own `hatch` relies on -- rather than surfacekit inventing exact
+% per-point clipping of its own (every preset here tests only a mark's
+% placement *point*, per this file's own header).
+640 320 240 240 panel
+gsave
+  newpath 20 20 moveto 220 20 lineto 120 220 lineto closepath clip
+  0 0 240 240 screct << /Count 900 /Seed 4 >> grain
+grestore
+endpanel
+0.1 0.1 0.12 setrgbcolor
+(exact edges: clip first, then texture) 760 306 showctr
+
+showpage
+%%EOF

@@ -603,6 +603,30 @@ newpath 40 40 moveto 200 40 lineto 200 200 lineto 40 200 lineto closepath clip
 << /Screen /dot /Frequency 9 /Tone 0.5 >> halftone
 ```
 
+A ninth sibling, `lib/surfacekit.ps` (issue #51), is a library of
+deterministic, seeded surface textures meant to sit under other marks
+the way a real surface sits under ink: `grain` (paper grain), `fiber`
+(paper fibers), and `scuff` (scratches and scuffs) are thin wrappers
+over `scatter` (issue #48), the same "no new placement engine" choice
+`lib/stipplekit.ps` made; `misreg` (print/registration imperfections)
+is too, drawing nested lightening rings instead of a single mark;
+`weave` (canvas weave) is its own grid-and-`scin` loop instead, since a
+basket weave is a regular structure, not a random one, with its own
+two independent pre-flight budgets mirroring `hatch`'s own
+`/MaxLines`/`/MaxSamples` shape. New `/Color`/`/Strength` options lerp
+each mark from paper-white toward a given color rather than toward
+transparent (gs has no PostScript-callable alpha operator). A caller
+needing an exact edge on a non-rectangular region clips the ambient
+graphics state first, the same idiom `hatch` itself relies on.
+`examples/surfacekit.ps` is a six-panel specimen sheet: one per preset,
+plus a sixth demonstrating that exact-edge clip.
+
+```postscript
+(lib/artkit.ps) run
+(lib/surfacekit.ps) run
+0 0 200 200 screct << /Density 0.4 /Scale [0.4 1.4] /Seed 3 >> grain
+```
+
 ## The website
 
 **[jeromebanks.github.io/postscript_interpreter](https://jeromebanks.github.io/postscript_interpreter/)**

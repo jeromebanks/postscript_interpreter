@@ -3,6 +3,104 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Paper, canvas, and print-surface textures (issue #51, 2026-09-03)
+
+A ninth sibling library, `lib/surfacekit.ps` — tag-migrated from
+birth like `hatchkit.ps`/`stipplekit.ps`, `@requires: (lib/artkit.ps)
+run` for the same reason `stipplekit.ps`/`paintkit.ps` do. Five
+presets: `grain` (paper grain speckle), `fiber` (paper fibers),
+`scuff` (scratches and scuffs), `misreg` (print/registration
+imperfections), and `weave` (canvas weave).
+
+**Four of the five are thin `scatter` wrappers, not a new placement
+engine** — the same choice `stipplekit.ps` (issue #50) already made,
+now extended a second time. `grain`/`fiber`/`scuff`/`misreg` take the
+same `region` operand `scatter`/`stipple` do and forward every option
+they don't own (`/Count`, `/Density`, `/MinSpacing`, `/Seed`, `/Tries`,
+`/Budget`, `/Scale`, `/Rotate`, `/Mark`, `/Weight`) unchanged. Unlike
+`stipple`, none of them repurpose `/Weight` or give `/Density` a
+second meaning — this file's "how strong" knob is a new `/Strength`
+option instead of a tone callback, so there's no option-conflict
+surface to police the way `stipple` has one. Visual variation
+(shade, and for `fiber`/`scuff` length) rides entirely on `scatter`'s
+own already-random `scale` per mark, rather than each default `/Mark`
+drawing its own extra random numbers — zero new placement arithmetic,
+same discipline `stipple`'s own header states.
+
+**`weave` is deliberately not scatter-based.** A basket weave is a
+regular grid, not a random scatter, so it walks its own grid over the
+region's `/BBox` and tests each cell's center with `scin` — the same
+"a mark can overhang a curved region's true edge, clip first for an
+exact one" contract every scatter-based preset here already has.
+Since it has no `/Budget` to inherit, it pre-flights its own **two**
+independent caps, mirroring `hatchkit.ps`'s `/MaxLines`/`/MaxSamples`
+shape exactly: `/MaxThreads` bounds cell count (cheap for any region),
+and `/MaxEdgeSamples` additionally bounds cell-count-times-edge-count,
+checked only for a `scpath` path region — `scin`'s own cost is O(1)
+against a `/Kind /rect` region but linear in edge count against a
+`/Kind /path` one (the same asymmetry `scarea`'s own measurement pass
+documents), so a cell-count cap alone doesn't bound the path case. A
+dedicated regression test builds a ~300-edge path region sized so cell
+count alone stays comfortably under `/MaxThreads` while
+cells-times-edges still trips `/MaxEdgeSamples`, proving the two caps
+are independently enforced rather than one silently covering for the
+other.
+
+**Naming: `scuff`, not `scratch`.** The issue's own wording is
+"scratches and scuffs," but this codebase already uses "scratch"
+throughout every sibling library's own docs as a term of art for
+private working state (a library's own scratch prefix, scratch dict,
+scratch names) — a public operator named `scratch` would collide with
+that vocabulary in prose and search, not just code, so the preset is
+named `scuff` instead.
+
+**`/Color`/`/Strength`, new to this file, not inherited from any
+sibling.** Every preset's whole call runs inside its own
+`gsave`/`grestore` (a caller-supplied `/Mark` override runs inside it
+too) since every default mark sets color — the same reason `hatch`
+wraps its own drawing loop — and every default mark (`weave`'s own
+grid loop included) `newpath`s before drawing, since a `scpath` region
+deliberately leaves its flattened path behind and a mark that skipped
+`newpath` would fill it on its very first call only (the same footgun
+`stipple`'s own header documents; a dedicated regression test builds a
+region from a triangle and confirms its interior stays unpainted).
+`/Strength` lerps toward paper-white rather than toward transparent —
+deliberately not `setalpha`, for the same gs-portability reason
+`lib/paintkit.ps`'s watercolor section documents (real Ghostscript has
+no PostScript-callable alpha operator at all).
+
+`examples/surfacekit.ps` is a six-panel specimen sheet (one per preset
+plus a sixth demonstrating the exact-edge clip idiom); no gallery/site
+entry, matching `hatchkit.ps`/`stipplekit.ps`'s own precedent that a
+primitive gets a specimen, not a gallery card.
+
+**Six review rounds, six real bugs, all in two families.** Three
+Codex passes plus three same-family Claude-agent fallbacks (Codex
+intermittently failed to produce output — confirmed a healthy,
+authenticated runtime via `codex:setup`, so this was transient
+resource contention on a machine running many concurrent Codex
+sessions, not an auth or repo issue) converged on: (1) a caller-
+supplied procedure passed as the region operand, or as `/Color`/
+`/Length`, could auto-execute before its type was ever checked — every
+option here now stays inside a private 1-element array until confirmed
+safe, the same discipline `stipple`'s own `/DotRadius` fix already
+established, just missed for these; (2) a `/Weight` callback closing
+over and mutating the caller's own `/Scale` array (shared, not copied,
+by a shallow dict `copy`) could corrupt a later mark's read of it,
+after `scatter`'s own validation of the original values had already
+run; (3) `weave`'s ceiling-based grid could drop an entire boundary
+row/column for a non-exact pitch/bbox ratio, or draw nothing at all
+for a region narrower than half a pitch — fixed by rounding to fit and
+re-deriving per-axis spacing; (4)-(6) three separate numeric options
+(`misreg`'s `/Rings`, `weave`'s `/Seed`, twice) ran `cvi` before
+checking whether the value was even in a convertible range, so an
+extreme but finite input (`1e300`) raised a raw `rangecheck` instead
+of a self-documenting name — and `sfregiondef` validated a region's
+`/Kind` but not its `/BBox`, so `weave` (the one preset that unpacks
+`/BBox` directly) inherited the same auto-execution hazard as (1) one
+level deeper. 40 tests total, most added specifically to reproduce
+each finding before fixing it.
+
 ## Reusable halftone screens and misregistration offsets (issue #53, 2026-09-03)
 
 An eighth sibling library, `lib/halftonekit.ps` — tag-migrated from
