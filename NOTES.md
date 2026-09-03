@@ -3,6 +3,120 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Reusable halftone screens and misregistration offsets (issue #53, 2026-09-03)
+
+An eighth sibling library, `lib/halftonekit.ps` — tag-migrated from
+birth (like `hatchkit.ps`/`stipplekit.ps`, issues #49/#50), so it
+registers with the `% @kind:`/`@summary:`/`@example:`/`@param:`
+capability catalog automatically from `cargo build`, no hand-written
+`capabilities.rs` entry. One operator, `halftone`: `opts halftone -`
+fills whatever region is currently *clipped* with a regular dot, line,
+or cross-line screen. Zero sibling dependencies — deliberately, not
+by omission: `scatter` (issue #48) is a random retry-until-accepted
+placement engine and a halftone is a deterministic lattice, so routing
+a fixed grid through a random placer would add noise the medium is
+defined by not having, plus a `/Seed` where none is wanted. This
+operator makes no random draws at all: fixed options reproduce
+identically with no stream to seed or restore (a /Tone callback that
+calls `rand` itself still works, under the caller's own `srand`).
+
+**The plan review (a subagent standing in for `advisor`, which this
+runtime doesn't provide) changed the design before code existed.**
+Six findings, all taken: (1) the planned `ht-` scratch prefix is owned
+by artkit's hyperbolic-tiling driver (`htmax`, `httile`, 15+ names) —
+my own collision check had only grepped `/ht-` with the hyphen and
+missed them; the file uses `hf-` (verified clean) instead. (2) /Tone
+callability is a local `hfcallable` predicate (executable array, not
+bare `xcheck` — `xcheck` also admits `cvx`-marked strings and
+executable names, stipplekit's round-3 lesson), with a same-file
+precedent comment explaining why a bare executable name is rejected
+rather than `load`ed. (3) /Offset and /BBox lengths pinned before
+unpacking (hatchkit's round-3 `aload` lesson), element by element for
+/Offset. (4) per-mark `newpath` — `gsave`/`grestore` alone restores
+the caller's path at the end but accumulates one giant path within
+the call, and consecutive line segments without it would stroke as
+one joined polyline. (5) clamp-then-derive order explicit, since
+`sqrt` of a negative is a domain error in both interpreters.
+(6) the drawing loops reuse the *stored* counts/origins, never
+recomputed — plus the note that integer `for` evaluates its limit
+once, immunizing loop bounds against mid-loop /Tone redefinition.
+Design calls settled: `/Frequency` in cells per inch (the issue's own
+"frequency" vocabulary, print's lpi); ONE budget (`/MaxCells` — one
+tone call and a fixed 1-or-2 marks per cell, so cells bound
+everything; hatchkit's two budgets exist only because its per-line
+sample counts vary); cross-in-one-call over a shared lattice origin
+*and* caller-side layering, both (misregistration needs separate
+calls anyway); always-`translate`, even for [0 0], so omitted and
+zero take one path.
+
+**Two real bugs, both caught by rendering rather than reasoning.**
+(1) `/halftone { exch 1 array astore ...` — a two-operand `exch`
+copied from `stipple`'s two-operand shape onto a one-operand
+operator: every call died with `stackunderflow` before drawing
+anything. (2) After fixing that, every screen rendered *blank*: the
+screen normal (`hfnx`/`hfny`) and the lattice cell counts (also
+`hfnx`/`hfny`) shared names, so the counts overwrote the normal and
+the whole 161×161 lattice parked at (560, 540), far outside any
+clip — decoded from one debug print of the first cell's coordinates
+(20 + 20·27 = 560 gives it away once you see it). The counts are now
+`hfncols`/`hfnrows`; the normal keeps `hfnx`/`hfny`.
+
+**One behavior the tests first got wrong and Ghostscript settled:**
+`/Screen (dot)` — a string, not a name — selects the dot screen,
+because `eq` compares strings and names by content. Verified `true`
+in `gs` itself before accepting it: the library follows the
+language's equality rather than narrowing it, and the header
+documents that instead of the original "including a non-name"
+wording. A red second plate in the layering test similarly taught
+that the test harness's own ink metric counts dark pixels only —
+the plate is blue now.
+
+**API surface:** `/BBox` (default `pathbbox`), `/Screen`
+/dot|/line|/cross (default /dot; cross is two passes over one
+lattice origin in a single call), `/Frequency` (default 9),
+`/Angle` (default 45; per-layer rotation is per-call values),
+`/Tone` number or `{x y -> w}` in pre-offset user space (default 1;
+zero draws no mark — load-bearing, since a zero-width stroke is a
+PostScript hairline, not nothing), `/MaxRadius` (dot branch only,
+default half pitch) / `/MaxWidth` (line/cross only, default full
+pitch — each validated only where read, merely harmless elsewhere,
+stipplekit's lesson), `/Offset` (default [0 0]), `/MaxCells`
+(default 200000). Dots scale by `sqrt` (area-proportional, the
+print-correct curve — documented so nobody "simplifies" it away);
+rules scale linearly; line segments run one full pitch with round
+caps so neighbors join seamlessly at uniform tone. `halftone` never
+sets the color — like `hatch`, it inks in the current color, and the
+header documents the one-call-per-plate layering recipe.
+
+**`tests/halftonekit.rs` (22 tests):** loads-clean, clip fill plus a
+concave chevron, two-interp pixel-identical reproducibility (with a
+/Tone callback in the loop), three-screens-distinct ink bands plus
+ordering, offset-omitted-identical and offset-shifts-marks,
+budget-rejects-before-ink, tone clamp (5≡1, −1≡blank),
+pathbbox-default equivalence, malformed boxes, the full validation
+error table, three never-execute side-effect tests (opts proc,
+executable-name /Tone, /Screen proc), a leaking-proc stack test,
+zero-tone line silence, harmless-unused-size-options, a two-plate
+layering test, a four-panel inset-measured specimen test (the
+full-box false-positive lesson from stipplekit's round 3 applied
+from the start), and the standard `ghostscript_accepts_*` test.
+
+**Specimen:** `examples/halftone.ps` — dot ramp, 45° line screen over
+a circular clip, 30° cross screen, and a misregistered two-plate
+spread (teal + red-orange, second plate shifted 5 over 3 up, second
+call reusing the surviving path for its default /BBox). No
+gallery/site entry, matching the reusable-primitive precedent. README
+gains a paragraph mirroring hatchkit's (stipplekit skipped README;
+a short entry is the better call for a user-visible print
+capability — flagged here so the next sibling-file author can see
+the choice was deliberate, not drift).
+
+**Deferred:** interplay with surfacekit (#51, in progress elsewhere)
+stays #52's problem — this file draws marks, not surfaces, and takes
+no position on paper grain. No `/DensityThreshold`-style cutoff: a
+zero tone already draws nothing, and a threshold knob is one more
+name for no demonstrated caller.
+
 ## Density-driven stippling and point-shading primitives (issue #50, 2026-08-31)
 
 A seventh sibling library, `lib/stipplekit.ps` — tag-migrated from
