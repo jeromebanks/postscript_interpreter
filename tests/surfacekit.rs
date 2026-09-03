@@ -327,6 +327,24 @@ fn weave_rejects_a_non_positive_pitch_or_width() {
 }
 
 #[test]
+fn weave_rejects_a_bad_seed_cleanly_instead_of_a_raw_error() {
+    // /Seed went straight to `cvi` with no validation at all -- a
+    // non-numeric value raised a raw `typecheck`, and a finite but
+    // extreme one (1e300) raised a raw `rangecheck` from `cvi` itself
+    // rather than either being caught as a named error first
+    // (independent-agent review, PR #125, round 4 -- the exact bug
+    // class round 3's /Rings fix addressed, just missed for /Seed).
+    assert_eq!(
+        surfacekit_err("0 0 100 100 screct << /Pitch 6 /Seed (nope) >> weave"),
+        "weave-seed-must-be-a-number"
+    );
+    assert_eq!(
+        surfacekit_err("0 0 100 100 screct << /Pitch 6 /Seed 1e300 >> weave"),
+        "weave-seed-must-be-a-reasonable-integer"
+    );
+}
+
+#[test]
 fn weave_covers_the_far_edge_when_pitch_does_not_evenly_divide_the_bbox() {
     // A ceiling-based grid at a fixed /Pitch would center its last
     // column outside the bbox whenever the width isn't an exact

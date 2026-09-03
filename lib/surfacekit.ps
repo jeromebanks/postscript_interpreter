@@ -687,7 +687,20 @@
   /sfwpy sfwbh sfwrows div def
 
   sfopts /Seed known /sfweaveseeded exch def
-  sfweaveseeded { /sfweavesaved rrand def sfopts /Seed get cvi srand } if
+  sfweaveseeded {
+    % Validated and magnitude-capped before `cvi`, the same discipline
+    % every other numeric option here follows (and the one `/Rings`
+    % itself was missing until round 3 of review): an extreme but
+    % finite /Seed (1e300, say) is well outside this interpreter's
+    % i64 range, so `cvi` alone would raise a raw `rangecheck` instead
+    % of a self-documenting name, and a non-numeric /Seed would raise
+    % a raw `typecheck` (independent-agent review, PR #125, round 4 --
+    % the same bug class as round 3's /Rings fix, just missed here).
+    sfopts /Seed get { weave-seed-must-be-a-number } /sfweaveseed sfbindnum
+    sfweaveseed abs 1e15 gt { weave-seed-must-be-a-reasonable-integer } if
+    /sfweavesaved rrand def
+    sfweaveseed cvi srand
+  } if
 
   gsave
   newpath
