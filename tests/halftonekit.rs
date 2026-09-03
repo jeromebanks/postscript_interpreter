@@ -320,6 +320,70 @@ fn a_string_screen_name_selects_by_content() {
 }
 
 #[test]
+fn full_tone_reaches_the_far_edge_of_the_box() {
+    // The lattice is centered in the box, not anchored at its minima:
+    // a 10-unit span at pitch 6 holds two cells with 4 units of slack,
+    // so the centers sit at 2 and 8. Pinned with dots rather than
+    // rules: a pitch-long rule's own round caps already reach past an
+    // edge-anchored endpoint, but dots centered at 0 and 6 genuinely
+    // leave the [9,10] strip blank (nearest center is over 3 units
+    // from PS (9, 5), exactly the default radius).
+    let mut it = with_lib(100, 100);
+    run(
+        &mut it,
+        "0 0 0 setrgbcolor \
+         newpath 0 0 moveto 10 0 lineto 10 10 lineto 0 10 lineto closepath clip \
+         << /BBox [0 0 10 10] /Screen /dot /Frequency 12 /Angle 0 /Tone 1 >> halftone",
+    );
+    // PS (9, 5) is pixmap (9, 94).
+    let p = it.gfx().pixmap.pixel(9, 94).expect("in bounds");
+    assert!(
+        p.red() < 128,
+        "far edge strip unscreened at full tone (red {})",
+        p.red()
+    );
+}
+
+#[test]
+fn absurd_frequency_hits_the_budget_not_rangecheck() {
+    // A real quotient past the integer range must still answer the
+    // documented budget error: the check runs on the real quotient
+    // before `cvi` ever sees it.
+    assert_eq!(
+        halftone_err("<< /BBox [0 0 100 100] /Frequency 10 30 exp >> halftone"),
+        "halftone-maxcells-exceeded"
+    );
+}
+
+#[test]
+fn a_stack_eating_tone_gets_a_named_error_and_clean_stacks() {
+    // A callback that destroys the stack itself (`clear`) must still
+    // surface the contract error: every check reads `count` or dict
+    // names, never `index` into depths the callback controls — and
+    // cleanup pops positionally back to the recorded entry depth,
+    // then restores graphics state.
+    let mut it = with_lib(60, 60);
+    let err = it
+        .run_str(
+            "newpath 5 5 moveto 55 5 lineto 55 55 lineto 5 55 lineto closepath clip \
+             << /Screen /dot /Frequency 12 /Offset [6 0] /Tone { clear 0.5 } >> halftone",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "halftone-tone-proc-must-leave-exactly-one-result"),
+        "wrong error: {err:?}"
+    );
+    assert!(
+        it.operand_stack().is_empty(),
+        "cleanup after a stack-eating Tone left {:?}",
+        it.operand_stack()
+            .iter()
+            .map(|o| o.repr())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn malformed_bboxes_are_rejected() {
     assert_eq!(
         halftone_err("<< /BBox [10 10 10] /Tone 1 >> halftone"),

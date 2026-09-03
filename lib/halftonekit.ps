@@ -433,8 +433,31 @@
     hfkk hfkkmin lt { /hfkkmin hfkk def } if
     hfkk hfkkmax gt { /hfkkmax hfkk def } if
   } for
-  hfddmax hfddmin sub hfpitch div cvi 1 add /hfncols exch def
-  hfkkmax hfkkmin sub hfpitch div cvi 1 add /hfnrows exch def
+  hfddmax hfddmin sub /hfddspan exch def
+  hfkkmax hfkkmin sub /hfkkspan exch def
+  % The budget check precedes the integer conversion: for a valid but
+  % absurd /Frequency the real quotient can exceed the interpreter's
+  % integer range, and bare `cvi` would answer `rangecheck` instead
+  % of the documented `halftone-maxcells-exceeded`. This is sound in
+  % both directions — cvi(r)+1 always exceeds r itself, so a quotient
+  % past the budget means the count is past it too, and anything at
+  % or under the budget converts exactly. (Residual: a quotient past
+  % the budget but under an astronomically raised /MaxCells still
+  % `rangecheck`s in `cvi` — a genuinely unrepresentable lattice, for
+  % which `rangecheck` is the honest error.)
+  hfddspan hfpitch div /hfrawdd exch def
+  hfrawdd hfmaxcells gt { halftone-maxcells-exceeded } if
+  hfrawdd cvi 1 add /hfncols exch def
+  hfkkspan hfpitch div /hfrawkk exch def
+  hfrawkk hfmaxcells gt { halftone-maxcells-exceeded } if
+  hfrawkk cvi 1 add /hfnrows exch def
+  % Center the leftover slack (the span rarely divides evenly by the
+  % pitch) across both ends instead of anchoring flush at the minima:
+  % a flush first candidate grazes the box edge while full-tone marks
+  % stop a pitch short of the far edge, leaving a blank strip inside
+  % the clip. (Same geometry as hatchkit's round-4 centering fix.)
+  /hfddmin hfddmin hfddspan hfncols 1 sub hfpitch mul sub 2 div add def
+  /hfkkmin hfkkmin hfkkspan hfnrows 1 sub hfpitch mul sub 2 div add def
 
   % ---- deterministic pre-flight budget check (no drawing, no /Tone call) ----
   % One /Tone sample per cell and a fixed one mark (dot/line) or two
@@ -509,14 +532,18 @@
         % stack- *and* graphics-clean (counted pops plus `grestore`),
         % so even these exits leave a `stopped`-recovering caller
         % exactly as found.
-        % E (kept on the stack through `exec`) is the pre-call
-        % count minus one, so post-call M satisfies M - E = 1 iff the
-        % proc left exactly one result: E itself is still counted in M.
-        hfcx hfcy count 1 sub 3 1 roll
+        % Every read below is safe against a callback that eats the
+        % stack itself (`clear`, over-popping): the pre-call depth
+        % lives in a dict name, which `clear` cannot remove, and
+        % `count` works on any stack — no `index` or `roll` into
+        % depths the callback controls. With N the pre-call depth
+        % (operands included) and M the post-call one, exactly one
+        % result means M - N = -1.
+        hfcx hfcy
+        count /hfN exch def
         hftonebox 0 get exec
-        count 2 index sub 1 ne
+        count hfN sub 1 add 0 ne
           { hfcleanup halftone-tone-proc-must-leave-exactly-one-result } if
-        exch pop
         dup hfisnum not
           { hfcleanup halftone-tone-must-return-a-number } if
         hfclamp01 }
