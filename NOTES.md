@@ -169,7 +169,10 @@ the count check and shadowed `cleartomark`, stranding the snapshots
 counted pops that no forged object can shadow (also pinned by a
 test, same negative-control treatment). The `cross_with_a_callback_
 samples_once_per_cell` test pins (1): 144 samples on a 12×12 box,
-not 288.
+not 288. Single-pass panels re-render pixel-identical; the cross
+panel churns ~3% of its ink pixels from paint reordering alone
+(pass-major to cell-major overlap order under coverage blending) —
+geometry unchanged, bands still green.
 
 ## Density-driven stippling and point-shading primitives (issue #50, 2026-08-31)
 
