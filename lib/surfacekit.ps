@@ -586,13 +586,18 @@
     sfscopts /Rings 3 sfgetdef
       { misreg-rings-must-be-a-number } /sfmisregrings sfbindnum
     sfmisregrings 1 lt { misreg-rings-must-be-at-least-1 } if
-    sfmisregrings cvi sfmisregrings ne { misreg-rings-must-be-an-integer } if
     % /Budget bounds scatter's own mark count, not per-mark cost --
     % /Rings multiplies the work *inside* every mark, so it needs its
     % own cap independent of /Budget for "mark budgets keep rendering
     % practical" to actually hold (100 is already far past any visual
-    % use of nested rings).
+    % use of nested rings). Checked *before* the integer check below,
+    % as a plain real-number comparison: a finite but extreme /Rings
+    % (1e300, say) is safely > 100 without ever needing conversion,
+    % whereas `cvi` on a value that far outside this interpreter's i64
+    % range raises a raw `rangecheck` instead of this file's own named
+    % error (Codex review, PR #125, round 3).
     sfmisregrings 100 gt { misreg-rings-must-be-100-or-fewer } if
+    sfmisregrings cvi sfmisregrings ne { misreg-rings-must-be-an-integer } if
     sfscopts /Mark /sfmisregdefaultmark load put
   } if
 

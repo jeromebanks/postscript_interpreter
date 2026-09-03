@@ -485,6 +485,20 @@ fn misreg_rings_has_its_own_cap_independent_of_budget() {
 }
 
 #[test]
+fn misreg_rejects_an_extreme_rings_cleanly_instead_of_a_raw_rangecheck() {
+    // The integer check (`cvi`) originally ran *before* the 100 cap --
+    // a finite but extreme /Rings (1e300) is well outside this
+    // interpreter's i64 range, so `cvi` itself raised a raw
+    // `rangecheck` instead of this file's own named error (Codex
+    // review, PR #125, round 3). The cap must be a plain real-number
+    // comparison checked first, since that never needs a conversion.
+    assert_eq!(
+        surfacekit_err("0 0 100 100 screct << /Count 1 /Rings 1e300 >> misreg"),
+        "misreg-rings-must-be-100-or-fewer"
+    );
+}
+
+#[test]
 fn every_preset_rejects_a_non_dict_opts() {
     for call in ["grain", "fiber", "scuff", "misreg", "weave"] {
         assert_eq!(
