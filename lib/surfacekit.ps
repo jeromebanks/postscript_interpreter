@@ -180,6 +180,34 @@
   sfbnname sfbnbox 0 get def
 } def
 
+% region errproc sfregiondef -> region
+% Validates the `region` operand every preset here takes as its first
+% argument: a dict whose `/Kind` is `/rect` or `/path` (`screct`/
+% `scpath`'s own two shapes) — else runs `errproc`, the same
+% self-documenting-error convention `sfbindnum` uses. `region` travels
+% in a private 1-element array until every check passes, checked only
+% via `type`/`get` (never a bare reference to the raw operand): a
+% procedure passed as the region operand — `{ boom } opts grain`, say
+% — would otherwise auto-execute on this file's very first bare
+% reference to it, the same hazard `sfbindnum` exists to close for a
+% numeric option, just on the *first* operand this time rather than a
+% dict key (Codex review, PR #125). Once confirmed a well-formed
+% region dict, the value is safe for the caller to bind bare from
+% here on: a `dicttype` object is always pushed literally when
+% referenced bare regardless of any executable attribute (the same
+% reasoning `sccallable`'s own type list, artkit.ps, relies on in
+% never treating `dicttype` as executable).
+% @internal
+/sfregiondef {
+  /sfrderr exch def
+  1 array astore /sfrdbox exch def
+  sfrdbox 0 get type /dicttype ne { sfrderr exec } if
+  sfrdbox 0 get /Kind known not { sfrderr exec } if
+  sfrdbox 0 get /Kind get dup /rect eq exch /path eq or not
+    { sfrderr exec } if
+  sfrdbox 0 get
+} def
+
 % v lo hi sflerpfrac -> t   (0..1, clamped; 0.5 for a degenerate range)
 % Where `v` falls inside `[lo hi]`, for reuse by both a mark's shade
 % and (for `fiber`/`scuff`) its length — one random draw (`scatter`'s
@@ -225,27 +253,32 @@
 
 % opts default3arr sfcolordef -> r g b
 % Resolves and validates `/Color` (or `default3arr` if absent): a
-% 3-element array, each component a number in [0,1]. Every check here
-% reads the value only via `get`/`length`/`type` — it is never bound to
-% a bare name — so an ill-typed `/Color` (even a stray procedure)
-% cannot auto-execute regardless of the wrap-before-bare-def discipline
-% used elsewhere in this file; the three numbers this leaves on the
-% stack are already validated and safe for the caller to `def` bare.
+% 3-element array, each component a number in [0,1]. The resolved
+% value travels in a private 1-element array (`sfcdbox`) until every
+% check passes, read only via `sfcdbox 0 get ... get` — never bound to
+% a bare name of its own — so an executable `/Color` (`{ boom }`, a
+% procedure and an `arraytype` object both) cannot auto-execute on a
+% bare reference before its type is even checked (Codex review, PR
+% #125: an earlier draft bound it bare first and validated after,
+% which is backwards — `type /arraytype eq` alone doesn't rule out a
+% procedure, since a procedure *is* an executable array). The three
+% numbers this leaves on the stack are already validated and safe for
+% the caller to `def` bare (numbers have no executable behavior).
 % @internal
 /sfcolordef {
   /sfcddef exch def
   /sfcdopts exch def
-  sfcdopts /Color sfcddef sfgetdef /sfcdval exch def
-  sfcdval type /arraytype ne { surfacekit-color-must-be-an-rgb-array } if
-  sfcdval length 3 ne { surfacekit-color-must-be-an-rgb-array } if
-  sfcdval 0 get sfisnum sfcdval 1 get sfisnum and
-    sfcdval 2 get sfisnum and not
+  sfcdopts /Color sfcddef sfgetdef 1 array astore /sfcdbox exch def
+  sfcdbox 0 get type /arraytype ne { surfacekit-color-must-be-an-rgb-array } if
+  sfcdbox 0 get length 3 ne { surfacekit-color-must-be-an-rgb-array } if
+  sfcdbox 0 get 0 get sfisnum sfcdbox 0 get 1 get sfisnum and
+    sfcdbox 0 get 2 get sfisnum and not
     { surfacekit-color-must-be-an-rgb-array } if
-  sfcdval 0 get dup 0 lt exch 1 gt or
-  sfcdval 1 get dup 0 lt exch 1 gt or or
-  sfcdval 2 get dup 0 lt exch 1 gt or or
+  sfcdbox 0 get 0 get dup 0 lt exch 1 gt or
+  sfcdbox 0 get 1 get dup 0 lt exch 1 gt or or
+  sfcdbox 0 get 2 get dup 0 lt exch 1 gt or or
     { surfacekit-color-components-must-be-0-to-1 } if
-  sfcdval 0 get sfcdval 1 get sfcdval 2 get
+  sfcdbox 0 get 0 get sfcdbox 0 get 1 get sfcdbox 0 get 2 get
 } def
 
 % opts default sfstrengthdef -> strength
@@ -291,7 +324,7 @@
 % @param: /Radius num > 0 base speck radius before scatter's own /Scale (default 0.6)
 /grain {
   1 array astore /sfoptsbox exch def
-  /sfregion exch def
+  { grain-region-must-be-a-region } sfregiondef /sfregion exch def
   sfoptsbox 0 get type /dicttype ne { grain-opts-must-be-a-dict } if
   /sfopts sfoptsbox 0 get def
   /sfscopts sfopts length 2 add dict def
@@ -351,7 +384,7 @@
 % @param: /Width num > 0 base stroke width before scatter's own /Scale (default 0.5)
 /fiber {
   1 array astore /sfoptsbox exch def
-  /sfregion exch def
+  { fiber-region-must-be-a-region } sfregiondef /sfregion exch def
   sfoptsbox 0 get type /dicttype ne { fiber-opts-must-be-a-dict } if
   /sfopts sfoptsbox 0 get def
   /sfscopts sfopts length 2 add dict def
@@ -361,10 +394,16 @@
     sfscopts [ 0.62 0.58 0.5 ] sfcolordef
       /sffiberB exch def /sffiberG exch def /sffiberR exch def
     sfscopts 0.5 sfstrengthdef /sffiberstrength exch def
-    sfscopts /Length [ 3 9 ] sfgetdef /sfflenarr exch def
-    sfflenarr scokrange not { fiber-length-must-be-a-two-number-range } if
-    /sffiberlen0 sfflenarr 0 get def
-    /sffiberlen1 sfflenarr 1 get def
+    % Wrapped before any bare reference -- same reason sfcolordef's
+    % own header gives: an executable `/Length` (`{ boom }`) would
+    % otherwise auto-execute the instant it's referenced bare, before
+    % `scokrange` (or anything else) ever got a chance to check its
+    % type (Codex review, PR #125).
+    sfscopts /Length [ 3 9 ] sfgetdef 1 array astore /sfflenbox exch def
+    sfflenbox 0 get scokrange not
+      { fiber-length-must-be-a-two-number-range } if
+    /sffiberlen0 sfflenbox 0 get 0 get def
+    /sffiberlen1 sfflenbox 0 get 1 get def
     sfscopts /Width 0.5 sfgetdef
       { fiber-width-must-be-a-number } /sffiberwidth sfbindnum
     sffiberwidth 0 le { fiber-width-must-be-positive } if
@@ -429,7 +468,7 @@
 % @param: /Kink num perpendicular kink amount, a fraction of length (default 0.18)
 /scuff {
   1 array astore /sfoptsbox exch def
-  /sfregion exch def
+  { scuff-region-must-be-a-region } sfregiondef /sfregion exch def
   sfoptsbox 0 get type /dicttype ne { scuff-opts-must-be-a-dict } if
   /sfopts sfoptsbox 0 get def
   /sfscopts sfopts length 2 add dict def
@@ -439,10 +478,13 @@
     sfscopts [ 0.25 0.24 0.26 ] sfcolordef
       /sfscuffB exch def /sfscuffG exch def /sfscuffR exch def
     sfscopts 0.5 sfstrengthdef /sfscuffstrength exch def
-    sfscopts /Length [ 14 40 ] sfgetdef /sfulenarr exch def
-    sfulenarr scokrange not { scuff-length-must-be-a-two-number-range } if
-    /sfscufflen0 sfulenarr 0 get def
-    /sfscufflen1 sfulenarr 1 get def
+    % Wrapped before any bare reference -- see fiber's own /Length
+    % handling and sfcolordef's header for why.
+    sfscopts /Length [ 14 40 ] sfgetdef 1 array astore /sfulenbox exch def
+    sfulenbox 0 get scokrange not
+      { scuff-length-must-be-a-two-number-range } if
+    /sfscufflen0 sfulenbox 0 get 0 get def
+    /sfscufflen1 sfulenbox 0 get 1 get def
     sfscopts /Width 0.7 sfgetdef
       { scuff-width-must-be-a-number } /sfscuffwidth sfbindnum
     sfscuffwidth 0 le { scuff-width-must-be-positive } if
@@ -485,7 +527,7 @@
 % @param: /Rings int >= 1 number of nested rings (default 3)
 /misreg {
   1 array astore /sfoptsbox exch def
-  /sfregion exch def
+  { misreg-region-must-be-a-region } sfregiondef /sfregion exch def
   sfoptsbox 0 get type /dicttype ne { misreg-opts-must-be-a-dict } if
   /sfopts sfoptsbox 0 get def
   /sfscopts sfopts length 2 add dict def
@@ -531,7 +573,7 @@
 % @param: /MaxEdgeSamples int pre-flight cap on cell count times region edge count, checked only for a scpath path region (default 2000000)
 /weave {
   1 array astore /sfoptsbox exch def
-  /sfregion exch def
+  { weave-region-must-be-a-region } sfregiondef /sfregion exch def
   sfoptsbox 0 get type /dicttype ne { weave-opts-must-be-a-dict } if
   /sfopts sfoptsbox 0 get def
 

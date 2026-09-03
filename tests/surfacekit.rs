@@ -494,6 +494,60 @@ fn every_preset_rejects_a_non_dict_opts() {
     }
 }
 
+// --- Codex review (PR #125): auto-execution hazards on unvalidated ----
+// --- operands, closed by sfregiondef and by wrapping /Color//Length --
+// --- before any bare reference (see lib/surfacekit.ps's own headers) -
+
+#[test]
+fn every_preset_rejects_a_procedure_passed_as_the_region_and_never_runs_it() {
+    // Before sfregiondef existed, `sfregion` was bound bare straight
+    // from the caller's first operand with no type check at all --
+    // `{ boom } opts grain` would bind `boom`'s procedure to
+    // `sfregion` and auto-execute it on the very next bare reference.
+    // A `PsError::Undefined("boom")` here would mean it ran.
+    for call in ["grain", "fiber", "scuff", "misreg", "weave"] {
+        assert_eq!(
+            surfacekit_err(&format!("{{ boom }} <<>> {call}")),
+            format!("{call}-region-must-be-a-region"),
+            "{call} either ran the procedure or reported the wrong error"
+        );
+    }
+}
+
+#[test]
+fn every_preset_rejects_a_non_region_dict_passed_as_the_region() {
+    for call in ["grain", "fiber", "scuff", "misreg", "weave"] {
+        assert_eq!(
+            surfacekit_err(&format!("<< /Kind /bogus >> <<>> {call}")),
+            format!("{call}-region-must-be-a-region")
+        );
+    }
+}
+
+#[test]
+fn color_rejects_an_executable_array_without_running_it() {
+    // A procedure is itself an `arraytype` object -- `type /arraytype
+    // eq` alone doesn't rule it out. Before the fix, `/Color { boom
+    // }` bound the procedure to `sfcdval` and executed it on the next
+    // bare reference instead of reporting a color error.
+    assert_eq!(
+        surfacekit_err("0 0 100 100 screct << /Count 1 /Color { boom } >> grain"),
+        "surfacekit-color-must-be-an-rgb-array"
+    );
+}
+
+#[test]
+fn length_rejects_an_executable_array_without_running_it() {
+    assert_eq!(
+        surfacekit_err("0 0 100 100 screct << /Count 1 /Length { boom } >> fiber"),
+        "fiber-length-must-be-a-two-number-range"
+    );
+    assert_eq!(
+        surfacekit_err("0 0 100 100 screct << /Count 1 /Length { boom } >> scuff"),
+        "scuff-length-must-be-a-two-number-range"
+    );
+}
+
 #[test]
 fn every_example_tag_runs_clean() {
     // The `% @example:` lines are what `--capabilities`/`pscat-mcp`
