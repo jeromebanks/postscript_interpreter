@@ -162,14 +162,17 @@ fn the_three_screens_are_visually_distinct() {
     };
     let (dot, line, cross) = (ink("dot"), ink("line"), ink("cross"));
     assert!(
-        (5000..11000).contains(&dot),
+        (7000..11000).contains(&dot),
         "dot screen ink {dot} outside its band"
     );
     assert!(
         (11000..17500).contains(&line),
         "line screen ink {line} outside its band"
     );
-    assert!(cross > 19000, "cross screen ink {cross} too low");
+    assert!(
+        (19000..25000).contains(&cross),
+        "cross screen ink {cross} outside its band"
+    );
     assert!(
         dot < line && line < cross,
         "screens not ordered dot ({dot}) < line ({line}) < cross ({cross})"
@@ -334,6 +337,114 @@ fn malformed_bboxes_are_rejected() {
         halftone_err("<< /BBox [20 20 10 10] /Tone 1 >> halftone"),
         "halftone-bbox-degenerate"
     );
+    assert_eq!(
+        halftone_err("<< /BBox 5 /Tone 1 >> halftone"),
+        "halftone-bbox-must-be-an-array-of-four-numbers"
+    );
+    assert_eq!(
+        halftone_err("<< /BBox (abcd) /Tone 1 >> halftone"),
+        "halftone-bbox-must-be-an-array-of-four-numbers"
+    );
+    assert_eq!(
+        halftone_err("<< /BBox [10 (x) 20 30] /Tone 1 >> halftone"),
+        "halftone-bbox-must-be-an-array-of-four-numbers"
+    );
+}
+
+#[test]
+fn bbox_length_error_leaves_a_clean_stack() {
+    // The length pin exists to protect `opts halftone -`; the error
+    // exit itself must honor it too, so a `stopped`-recovering caller
+    // observes nothing left behind.
+    let mut it = with_lib(100, 100);
+    it.run_str("{ << /BBox [1 2 3] /Tone 1 >> halftone } stopped pop")
+        .expect("stopped");
+    it.run_str("count 0 eq").expect("count probe");
+    let last = it.operand_stack().last().expect("probe result").repr();
+    assert_eq!(last, "true", "the failing /BBox check left junk on the stack");
+    it.run_str("clear").expect("clear");
+}
+
+#[test]
+fn a_hostile_tone_cannot_change_the_sample_count() {
+    // A 50x50 box at frequency 12 under the default 45-degree screen
+    // spans 12x12 cells (the rotated projection), so 144 /Tone calls
+    // are approved up front. A callback redefining the lattice
+    // counts, the dispatch kind, and the pass count mid-call must
+    // change where marks land, never how many samples run: the walk
+    // is one flat loop with a pre-sampled limit, and kind/const/shape
+    // ride the operand stack under it, out of dict reach.
+    let mut it = with_lib(100, 100);
+    run(
+        &mut it,
+        "/cellcount 0 def \
+         newpath 0 0 moveto 50 0 lineto 50 50 lineto closepath clip \
+         << /BBox [0 0 50 50] /Frequency 12 \
+            /Tone { /hfncols 99999 def /hfnrows 99999 def /hfscreenkind 2 def /hfnpass 9 def \
+                    /cellcount cellcount 1 add def exch pop 100 div } >> halftone",
+    );
+    it.run_str("cellcount 144 eq").expect("count probe");
+    let last = it.operand_stack().last().expect("probe result").repr();
+    assert_eq!(
+        last, "true",
+        "a /Tone redefining the lattice state changed the approved sample count"
+    );
+    it.run_str("clear").expect("clear");
+}
+
+#[test]
+fn an_over_budget_call_samples_tone_zero_times() {
+    // The budget fires before the first mark AND the first /Tone
+    // call: a side-effecting callback must observe nothing.
+    let mut it = with_lib(100, 100);
+    let err = it
+        .run_str(
+            "/budgetcount 0 def \
+             newpath 0 0 moveto 50 0 lineto 50 50 lineto closepath clip \
+             << /BBox [0 0 50 50] /Frequency 400 /MaxCells 10 \
+                /Tone { /budgetcount budgetcount 1 add def exch pop 100 div } >> halftone",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "halftone-maxcells-exceeded"),
+        "wrong error: {err:?}"
+    );
+    it.run_str("budgetcount 0 eq").expect("count probe");
+    let last = it.operand_stack().last().expect("probe result").repr();
+    assert_eq!(last, "true", "the rejected call sampled /Tone first");
+    it.run_str("clear").expect("clear");
+}
+
+#[test]
+fn dot_size_tracks_the_square_root_of_tone() {
+    // Area-proportional dots: halving the tone halves the ink, it
+    // does not quarter it. Without the `sqrt` (radius proportional
+    // to tone instead), tone 0.25 renders literally nothing — its
+    // sub-pixel dots vanish — so a floor on low-tone ink plus a
+    // ratio band pins the curve independently of absolute
+    // rasterizer counts.
+    let ink_at = |tone: f64| {
+        let mut it = with_lib(200, 200);
+        run(
+            &mut it,
+            &format!(
+                "0 0 0 setrgbcolor \
+                 newpath 20 20 moveto 180 20 lineto 180 180 lineto 20 180 lineto closepath clip \
+                 << /Screen /dot /Frequency 12 /Angle 0 /Tone {tone} >> halftone"
+            ),
+        );
+        ink_count(&it)
+    };
+    let (quarter, half) = (ink_at(0.25), ink_at(0.5));
+    assert!(
+        quarter > 1500,
+        "tone-0.25 dots should cover real area, got {quarter}"
+    );
+    let ratio = half as f64 / quarter as f64;
+    assert!(
+        (2.0..4.5).contains(&ratio),
+        "ink should halve with tone (ratio ~2-3 with rasterization), got {ratio}"
+    );
 }
 
 #[test]
@@ -483,21 +594,53 @@ fn a_procedure_for_screen_is_rejected_never_executed() {
 }
 
 #[test]
-fn tone_proc_that_leaks_an_operand_is_visible_on_the_stack() {
-    // /Tone's contract (the library's own docs) is the same one
-    // scatter's /Mark and /Weight carry: it must consume both of its
-    // operands. A proc that only pops one leaks the other per cell --
-    // not silently swallowed by `halftone`, which is what makes
-    // `--lint` able to catch it.
+fn tone_proc_that_leaks_an_operand_gets_a_named_error() {
+    // /Tone's contract (consume both operands, leave exactly one
+    // number) is enforced per sample, not just lint-visible: the
+    // walk reads its dispatch state through fixed-depth `index`, so
+    // a leaked operand would shift every read and fail confusingly
+    // deep inside. A proc that only pops one gets a contract error
+    // naming the violation instead -- and unwinds stack-clean, so a
+    // `stopped`-recovering caller observes nothing left behind.
     let mut it = with_lib(60, 60);
-    it.run_str(
-        "newpath 5 5 moveto 55 5 lineto 55 55 lineto 5 55 lineto closepath clip \
-         << /Screen /dot /Frequency 12 /Tone { pop 0.5 } >> halftone",
-    )
-    .expect("a leaking Tone proc should not itself error");
+    let err = it
+        .run_str(
+            "newpath 5 5 moveto 55 5 lineto 55 55 lineto 5 55 lineto closepath clip \
+             << /Screen /dot /Frequency 12 /Tone { pop 0.5 } >> halftone",
+        )
+        .unwrap_err();
     assert!(
-        !it.operand_stack().is_empty(),
-        "a Tone proc that only pops one operand should leave the other behind"
+        matches!(err, PsError::Undefined(ref n) if n == "halftone-tone-proc-must-leave-exactly-one-result"),
+        "wrong error: {err:?}"
+    );
+    assert!(
+        it.operand_stack().is_empty(),
+        "the contract error must unwind stack-clean, left {:?}",
+        it.operand_stack()
+            .iter()
+            .map(|o| o.repr())
+            .collect::<Vec<_>>()
+    );
+
+    // Same shape for a non-numeric single result.
+    let mut jt = with_lib(60, 60);
+    let err = jt
+        .run_str(
+            "newpath 5 5 moveto 55 5 lineto 55 55 lineto 5 55 lineto closepath clip \
+             << /Screen /dot /Frequency 12 /Tone { pop pop (high) } >> halftone",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "halftone-tone-must-return-a-number"),
+        "wrong error: {err:?}"
+    );
+    assert!(
+        jt.operand_stack().is_empty(),
+        "the contract error must unwind stack-clean, left {:?}",
+        jt.operand_stack()
+            .iter()
+            .map(|o| o.repr())
+            .collect::<Vec<_>>()
     );
 }
 

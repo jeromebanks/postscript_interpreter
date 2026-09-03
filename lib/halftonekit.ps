@@ -53,11 +53,18 @@
 %           explicitly. Either way the box only decides which lattice
 %           cells get visited — the real clip alone decides what
 %           actually inks the page, so a loose /BBox costs a few wasted
-%           cells, never wrong output. Must be exactly four elements
-%           (`halftone-bbox-must-have-four-elements` otherwise — an
-%           oversized array would otherwise litter the operand stack
-%           past what `opts halftone -` promises) and non-degenerate
-%           (`halftone-bbox-degenerate`).
+%           cells, never wrong output. Converse for /Offset users: the
+%           lattice is swept across this box and shifted afterward, so
+%           a tight box plus a nonzero shift leaves an un-inked edge
+%           strip up to the shift width — inflate /BBox when shifting.
+%           Must be an array of exactly four numbers
+%           (`halftone-bbox-must-be-an-array-of-four-numbers` for a
+%           non-array or non-numeric elements — a 4-long string would
+%           otherwise silently reinterpret as byte values — and
+%           `halftone-bbox-must-have-four-elements` for any other
+%           length, since an oversized array would otherwise litter
+%           the operand stack past what `opts halftone -` promises)
+%           and non-degenerate (`halftone-bbox-degenerate`).
 %   /Screen /dot, /line, or /cross (default /dot — anything not
 %           `eq` to one of the three is
 %           `halftone-screen-must-be-dot-line-or-cross`). Comparison is
@@ -106,7 +113,21 @@
 %           `halftone-tone-must-be-a-number-or-procedure`, reported
 %           before the value is ever executed. The proc MUST consume
 %           both operands and leave exactly one number, and must not
-%           touch any `hf-` name (see "Scratch prefix" below). A sample
+%           touch any `hf` name (see "Scratch prefix" below). The
+%           consume-both-leave-one-number half is enforced per sample,
+%           not just documented: a proc that leaves anything else gets
+%           `halftone-tone-proc-must-leave-exactly-one-result`, and a
+%           non-numeric single result gets
+%           `halftone-tone-must-return-a-number` — both unwound through
+%           a mark, so even these exits leave the caller's stack as
+%           found. (Enforcement matters here beyond hygiene: the walk
+%           reads its dispatch state through fixed-depth `index`, so a
+%           leaked operand would shift every read and fail deep in the
+%           walk under an internal name.) A proc that fails mid-call
+%           in any other way (typecheck, stackunderflow, its own
+%           error) unwinds past the call's `grestore` — treat that as
+%           fatal, the same convention hatchkit's /Density carries,
+%           not something to catch with `stopped` and continue from. A sample
 %           at or below 0 draws no mark at all — note this is load-
 %           bearing, not just an optimization: a zero-width stroke in
 %           PostScript is a hairline, not nothing, so the line/cross
@@ -172,15 +193,16 @@
 % obligations `scatter`'s /Mark and /Weight document: it MUST consume
 % both operands (a leaking proc shows up on the operand stack, which
 % the test harness asserts empty after every call), and it must not
-% touch any `hf-` name. Two tiers, mirroring hatchkit's own contract:
-% the loop-bound names (`hfncols`, `hfnrows`, `hfnpass`) are consumed as
-% integer `for` limits *once*, before the first sample — PostScript
-% evaluates a `for`'s limit up front, so redefining one of those
-% mid-call cannot change how much work the call does, and a /Tone
-% proc therefore cannot make a call exceed what /MaxCells approved no
-% matter what it redefines. Every other `hf-` name only affects
-% geometry or tone, so corrupting one is undefined rendering, not a
-% safety-limit bypass.
+% touch any `hf` name. Two tiers, mirroring hatchkit's own contract:
+% the dispatch kind, the const/proc choice, and the lattice shape
+% travel on the operand stack *under* the whole walk, read back only
+% through fixed-depth `index` — a dict redefinition mid-call cannot
+% reach them, so a /Tone proc cannot make a call exceed what /MaxCells
+% approved no matter what it redefines (the walk is one flat loop
+% whose limit is fixed before the first sample, not nested loops
+% whose inner limit would re-evaluate per row). Every other `hf` name
+% only affects geometry or tone, so corrupting one is undefined
+% rendering, not a safety-limit bypass.
 %
 % Ghostscript: core Level 1/2 operators only (`arc`, `cos`, `sin`,
 % `sqrt`, `translate`, `pathbbox`, `xcheck`, `forall`/`for`) — the
@@ -232,7 +254,7 @@
 % @kind: Procedure
 % @summary: Fills the current clip region with a regular print screen — dot, line, or cross-line — with per-cell tone-driven mark sizing and a per-layer registration offset. Set the region with <path> clip first; layer one call per ink for misregistered multi-plate work.
 % @example: newpath 40 40 moveto 200 40 lineto 200 200 lineto 40 200 lineto closepath clip << /Screen /dot /Frequency 9 /Tone 0.5 >> halftone
-% @param: /BBox [x0 y0 x1 y1] area to sweep the lattice across; defaults to pathbbox of the current path
+% @param: /BBox [x0 y0 x1 y1] area to sweep the lattice across; defaults to pathbbox of the current path; must be an array of exactly four numbers
 % @param: /Screen /dot, /line, or /cross — one filled circle, one round-capped rule segment, or two perpendicular rule segments per cell (default /dot)
 % @param: /Frequency num > 0 cells per inch (default 9)
 % @param: /Angle num screen angle in degrees; per-layer rotation offsets are per-call values (default 45)
@@ -253,20 +275,30 @@
 
   hfopts /BBox known
     {
-      hfopts /BBox get
-      % aload unpacks every element, not just four — an oversized
-      % array would silently leave its leading elements on the
-      % operand stack, violating `opts halftone -` (hatchkit's
-      % round-3 lesson), so the length is pinned first.
-      dup length 4 ne { halftone-bbox-must-have-four-elements } if
-      aload pop
+      % Boxed, like every other caller-supplied value in this file:
+      % the elements are read out through `get` (which never
+      % executes) and only bound to bare names after proving numeric
+      % — a procedure smuggled in as an element must fail validation,
+      % never run off a bare reference in the arithmetic below.
+      hfopts /BBox get 1 array astore /hfbbox exch def
+      hfbbox 0 get type /arraytype ne { halftone-bbox-must-be-an-array-of-four-numbers } if
+      % Length first: `aload` unpacks every element, not just four,
+      % and an oversized array would otherwise litter the operand
+      % stack past what `opts halftone -` promises (hatchkit's
+      % round-3 lesson). Reading through the box leaves nothing
+      % behind on any path, so the error exits are clean too.
+      hfbbox 0 get length 4 ne { halftone-bbox-must-have-four-elements } if
+      hfbbox 0 get 0 get hfisnum not { halftone-bbox-must-be-an-array-of-four-numbers } if
+      hfbbox 0 get 1 get hfisnum not { halftone-bbox-must-be-an-array-of-four-numbers } if
+      hfbbox 0 get 2 get hfisnum not { halftone-bbox-must-be-an-array-of-four-numbers } if
+      hfbbox 0 get 3 get hfisnum not { halftone-bbox-must-be-an-array-of-four-numbers } if
+      hfbbox 0 get 0 get /hfbx0 exch def
+      hfbbox 0 get 1 get /hfby0 exch def
+      hfbbox 0 get 2 get /hfbx1 exch def
+      hfbbox 0 get 3 get /hfby1 exch def
     }
-    { pathbbox }
+    { pathbbox /hfby1 exch def /hfbx1 exch def /hfby0 exch def /hfbx0 exch def }
   ifelse
-  /hfby1 exch def
-  /hfbx1 exch def
-  /hfby0 exch def
-  /hfbx0 exch def
   hfbx1 hfbx0 le hfby1 hfby0 le or { halftone-bbox-degenerate } if
 
   % /Screen collapses to a small int immediately: the value arrives
@@ -404,55 +436,94 @@
   % origin and counts — only the segment direction swaps — so its
   % crosses stay centered on pass one's cells.
   hfscreenkind 2 eq { /hfnpass 2 def } { /hfnpass 1 def } ifelse
-  0 1 hfnpass 1 sub {
-    /hfpass exch def
+  /hftotal hfnpass hfncols mul hfnrows mul def
+  % Five snapshots live on the operand stack under the whole walk,
+  % bottom to top: kind const val cols rows. `for` consumes only its
+  % own limit/proc/initial (pushed after these) and a well-behaved
+  % /Tone leaves the stack exactly as it found it, so fixed-depth
+  % `index` reads below can never observe a dict redefinition — the
+  % dispatch kind, the const/proc choice, and the lattice shape are
+  % immune to mid-call tampering by construction, not by promise.
+  % (The first version read `hfncols` as a nested loop's limit, which
+  % re-evaluates per row — after /Tone has run — so redefining it
+  % multiplied every remaining row past the approved budget. A single
+  % flat loop whose limit is fixed before the first sample closes
+  % that; redefinition now corrupts placement at worst — tier-2
+  % geometry, per the header's own tiering — never the trip count.)
+  % A mark goes under the snapshots: the per-sample contract checks
+  % below restore the caller's exact stack with `cleartomark` before
+  % signaling, so even a failing /Tone unwinds cleanly for a
+  % `stopped`-recovering caller. The success path pops all six.
+  mark
+  hfscreenkind hftoneconst hftoneconst { hftoneval } { 0 } ifelse hfncols hfnrows
+  0 1 hftotal 1 sub {
+    /hfidx exch def
+    % Per-trip copies from the immune snapshots: everything below is
+    % derived before /Tone runs (or re-derived from snapshots after),
+    % so a hostile callback redefining the dict originals changes
+    % where this trip inks, never how many trips run.
+    1 index /hfnc exch def
+    0 index /hfnr exch def
+    /hfcellperpass hfnc hfnr mul def
+    /hfpass hfidx hfcellperpass idiv def
+    /hfrem hfidx hfcellperpass mod def
+    /hfj hfrem hfnc idiv def
+    /hfi hfrem hfnc mod def
     hfpass 0 eq
       { /hfpdx hfdx def /hfpdy hfdy def }
       { /hfpdx hfnx def /hfpdy hfny def }
     ifelse
-    % Integer-indexed loops over the stored counts: the trip count
-    % IS the pre-flight formula's own count, and `for` evaluates its
-    % limit once up front, so a /Tone proc redefining hfncols/hfnrows/
-    % hfnpass mid-call cannot change how many cells a running loop visits.
-    0 1 hfnrows 1 sub {
-      /hfj exch def
-      /hfkk hfkkmin hfj hfpitch mul add def
-      0 1 hfncols 1 sub {
-        /hfi exch def
-        /hfdd hfddmin hfi hfpitch mul add def
-        /hfcx hfdd hfdx mul hfkk hfnx mul add def
-        /hfcy hfdd hfdy mul hfkk hfny mul add def
-        hftoneconst
-          { hftoneval }
-          { hfcx hfcy hftonebox 0 get exec hfclamp01 }
-        ifelse
-        /hfw exch def
-        % Zero tone draws no mark: skipped, never drawn through —
-        % a zero-width stroke would render as a hairline, not as
-        % nothing, so this branch is correctness, not optimization.
-        hfw 0 gt {
-          hfscreenkind 0 eq {
-            % Area-proportional dots (see the header for why sqrt).
-            % Per-mark newpath: without it every cell's arc would
-            % accumulate into one giant path (memory, time) and a
-            % leftover caller path would fill on first contact.
-            newpath hfcx hfcy hfmaxr hfw sqrt mul 0 360 arc fill
-          } {
-            % One pitch-long rule centered on the cell along the
-            % pass direction: neighbors join into continuous lines
-            % at uniform tone, round caps hiding the seams.
-            hfmaxw hfw mul setlinewidth
-            newpath
-            hfcx hfpdx hfpitch 2 div mul sub
-            hfcy hfpdy hfpitch 2 div mul sub
-            moveto
-            hfcx hfpdx hfpitch 2 div mul add
-            hfcy hfpdy hfpitch 2 div mul add
-            lineto stroke
-          } ifelse
-        } if
-      } for
-    } for
+    /hfkk hfkkmin hfj hfpitch mul add def
+    /hfdd hfddmin hfi hfpitch mul add def
+    /hfcx hfdd hfdx mul hfkk hfnx mul add def
+    /hfcy hfdd hfdy mul hfkk hfny mul add def
+    3 index
+      { 2 index }
+      { % The snapshots above make a stack-imbalanced /Tone actively
+        % confusing rather than merely lint-visible: leaked operands
+        % would shift every `index` read below, failing deep in the
+        % walk under an internal name. So the contract (consume both,
+        % leave exactly one number) is enforced per sample, not just
+        % documented — with errors that name the contract and unwind
+        % through the mark, leaving the caller's stack as found.
+        % E (kept on the stack through `exec`) is the pre-call
+        % count minus one, so post-call M satisfies M - E = 1 iff the
+        % proc left exactly one result: E itself is still counted in M.
+        hfcx hfcy count 1 sub 3 1 roll
+        hftonebox 0 get exec
+        count 2 index sub 1 ne
+          { cleartomark halftone-tone-proc-must-leave-exactly-one-result } if
+        exch pop
+        dup hfisnum not
+          { cleartomark halftone-tone-must-return-a-number } if
+        hfclamp01 }
+    ifelse
+    /hfw exch def
+    % Zero tone draws no mark: skipped, never drawn through —
+    % a zero-width stroke would render as a hairline, not as
+    % nothing, so this branch is correctness, not optimization.
+    hfw 0 gt {
+      4 index 0 eq {
+        % Area-proportional dots (see the header for why sqrt).
+        % Per-mark newpath: without it every cell's arc would
+        % accumulate into one giant path (memory, time) and a
+        % leftover caller path would fill on first contact.
+        newpath hfcx hfcy hfmaxr hfw sqrt mul 0 360 arc fill
+      } {
+        % One pitch-long rule centered on the cell along the
+        % pass direction: neighbors join into continuous lines
+        % at uniform tone, round caps hiding the seams.
+        hfmaxw hfw mul setlinewidth
+        newpath
+        hfcx hfpdx hfpitch 2 div mul sub
+        hfcy hfpdy hfpitch 2 div mul sub
+        moveto
+        hfcx hfpdx hfpitch 2 div mul add
+        hfcy hfpdy hfpitch 2 div mul add
+        lineto stroke
+      } ifelse
+    } if
   } for
+  pop pop pop pop pop pop
   grestore
 } def
