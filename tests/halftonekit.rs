@@ -361,7 +361,10 @@ fn bbox_length_error_leaves_a_clean_stack() {
         .expect("stopped");
     it.run_str("count 0 eq").expect("count probe");
     let last = it.operand_stack().last().expect("probe result").repr();
-    assert_eq!(last, "true", "the failing /BBox check left junk on the stack");
+    assert_eq!(
+        last, "true",
+        "the failing /BBox check left junk on the stack"
+    );
     it.run_str("clear").expect("clear");
 }
 
