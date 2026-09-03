@@ -174,6 +174,25 @@ panel churns ~3% of its ink pixels from paint reordering alone
 (pass-major to cell-major overlap order under coverage blending) —
 geometry unchanged, bands still green.
 
+**Codex round 2 found three P2s and a P3, all fixed.** (1) Residual
+lattice slack pooled at the far edge (full-tone marks stopped a
+pitch short) — the origins are now centered like hatchkit's round-4
+fix; pinned with dots, not rules (a rule's own round caps already
+reach past an edge-anchored endpoint, so only the dot variant
+discriminates — the first, rule-based version of the test passed
+against pre-fix code and had to be rewritten). (2) An absurd
+/Frequency (`10 30 exp`) `rangecheck`ed in `cvi` before /MaxCells
+was checked — the budget now runs on the real quotient first (sound:
+cvi(r)+1 always exceeds r, so a past-budget quotient means a
+past-budget count). (3) An over-consuming /Tone (`clear`) destroyed
+the stack slots the depth check itself read — every check now reads
+only `count` and dict names (the pre-call depth lives in `hfN`,
+which `clear` cannot remove), and cleanup is positional pops back
+to the recorded entry depth plus `grestore`, so even that unwinds
+both-stacks-clean. (4, P3) The specimen's "horizontal" ramp kept `y`
+(`exch pop`) instead of `x` — now `{ pop 240 div }`, verified
+numerically (left 3937 vs right 12764, top 7547 vs bottom 7565).
+
 ## Density-driven stippling and point-shading primitives (issue #50, 2026-08-31)
 
 A seventh sibling library, `lib/stipplekit.ps` — tag-migrated from
