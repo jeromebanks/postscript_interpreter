@@ -549,6 +549,34 @@ fn length_rejects_an_executable_array_without_running_it() {
 }
 
 #[test]
+fn a_weight_callback_mutating_the_shared_scale_array_does_not_corrupt_shading() {
+    // grain/fiber/scuff re-read /Scale fresh from their own private
+    // options dict on every mark call (each default mark's own
+    // comment explains why), but a shallow dict `copy` still shares
+    // the /Scale *array itself* with whatever the caller passed in --
+    // a /Weight callback that closes over that same array and mutates
+    // it in place corrupted what a later mark read, after scatter's
+    // own validation of the *original* values had already run and
+    // couldn't re-run (Codex review, PR #125, round 2: this raised a
+    // raw `typecheck` deep in sflerpfrac before the fix, rather than
+    // anything self-documenting or even running to completion).
+    // sfscalesnapshot closes it by copying /Scale into a private array
+    // before scatter ever runs, so no /Weight callback can reach it.
+    let mut it = with_lib(100, 100);
+    it.run_str(
+        "/myscale [ 0.5 1.5 ] def \
+         0 0 100 100 screct \
+         << /Count 20 /Seed 3 /Scale myscale \
+            /Weight { pop pop myscale 0 (bogus) put 1 } >> grain",
+    )
+    .unwrap_or_else(|e| panic!("mutated /Scale corrupted the run: {}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 0,
+        "grain drew nothing once /Scale was mutated mid-run"
+    );
+}
+
+#[test]
 fn every_example_tag_runs_clean() {
     // The `% @example:` lines are what `--capabilities`/`pscat-mcp`
     // hand an agent to try first (issue #39's catalog); parsing them

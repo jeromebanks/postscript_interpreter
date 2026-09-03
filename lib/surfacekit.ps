@@ -85,7 +85,14 @@
 % `/Mark`, since an override skips this file's own preprocessing
 % entirely but never touches `scatter`'s). Each default mark reads
 % `/Scale` fresh off the shared options dict on every call rather than
-% caching it once, for exactly that reason.
+% caching it once, for exactly that reason — but a shallow dict `copy`
+% still shares the `/Scale` *array itself* with whatever the caller
+% passed in, so `grain`/`fiber`/`scuff` each call `sfscalesnapshot`
+% once, before `scatter` ever runs, to replace it with a private copy:
+% a `/Weight` callback that closes over the caller's own array and
+% mutates it in place would otherwise corrupt what a later mark reads,
+% after `scatter`'s own validation of the *original* values already
+% ran and cannot re-run.
 % `weave`, having no `scatter` draw to ride on, seeds its own stream
 % when `/Seed` is given, using the save/restore-via-`rrand` convention
 % `hatch` already established, and only for a small per-cell shade
@@ -206,6 +213,39 @@
   sfrdbox 0 get /Kind get dup /rect eq exch /path eq or not
     { sfrderr exec } if
   sfrdbox 0 get
+} def
+
+% opts sfscalesnapshot -
+% If `opts` has an array-typed `/Scale`, replaces it in place with a
+% fresh copy of the same array; a non-array (or absent) `/Scale` is
+% left untouched, so `scatter`'s own validation still rejects a
+% malformed one exactly as if this never ran. `grain`/`fiber`/`scuff`
+% each re-read `/Scale` fresh from their own private options dict on
+% every mark call rather than caching it once (see each default
+% mark's own comment for why), but a private dict from a shallow
+% `copy` still *shares* the `/Scale` array object itself with whatever
+% the caller passed in — a `/Weight` callback that closes over that
+% same array and mutates it in place (a caller can always hold onto a
+% reference to their own literal) would otherwise corrupt what a
+% mark reads on a later call, after `scatter`'s own validation of the
+% *original* values already ran and cannot re-run (Codex review, PR
+% #125, round 2 — a real, reproducible bug: a `/Weight` that swaps in
+% a string mid-run raised a raw `typecheck` deep in `sflerpfrac`
+% instead of anything self-documenting). Called once per preset call,
+% before `scatter` ever runs, so every candidate's `/Weight` — however
+% many run before the first accepted `/Mark` — only ever sees this
+% file's own private copy, never the caller's original.
+% @internal
+/sfscalesnapshot {
+  /sfssopts exch def
+  sfssopts /Scale known {
+    sfssopts /Scale get
+    dup type /arraytype eq {
+      dup length array copy
+      /sfsscopy exch def
+      sfssopts /Scale sfsscopy put
+    } { pop } ifelse
+  } if
 } def
 
 % v lo hi sflerpfrac -> t   (0..1, clamped; 0.5 for a degenerate range)
@@ -329,6 +369,7 @@
   /sfopts sfoptsbox 0 get def
   /sfscopts sfopts length 2 add dict def
   sfopts sfscopts copy pop
+  sfscopts sfscalesnapshot
 
   sfscopts /Mark known not {
     sfscopts [ 0.55 0.52 0.46 ] sfcolordef
@@ -389,6 +430,7 @@
   /sfopts sfoptsbox 0 get def
   /sfscopts sfopts length 2 add dict def
   sfopts sfscopts copy pop
+  sfscopts sfscalesnapshot
 
   sfscopts /Mark known not {
     sfscopts [ 0.62 0.58 0.5 ] sfcolordef
@@ -473,6 +515,7 @@
   /sfopts sfoptsbox 0 get def
   /sfscopts sfopts length 2 add dict def
   sfopts sfscopts copy pop
+  sfscopts sfscalesnapshot
 
   sfscopts /Mark known not {
     sfscopts [ 0.25 0.24 0.26 ] sfcolordef
