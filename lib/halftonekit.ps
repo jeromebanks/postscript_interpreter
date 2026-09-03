@@ -58,9 +58,12 @@
 %           oversized array would otherwise litter the operand stack
 %           past what `opts halftone -` promises) and non-degenerate
 %           (`halftone-bbox-degenerate`).
-%   /Screen /dot, /line, or /cross (default /dot — anything else,
-%           including a non-name, is
-%           `halftone-screen-must-be-dot-line-or-cross`). A dot screen
+%   /Screen /dot, /line, or /cross (default /dot — anything not
+%           `eq` to one of the three is
+%           `halftone-screen-must-be-dot-line-or-cross`). Comparison is
+%           the language's own `eq`, so a string with the same
+%           characters (`(dot)`) selects the same screen as the name —
+%           verified identical in Ghostscript, not a pscat quirk. A dot screen
 %           draws one filled circle per cell; a line screen draws one
 %           round-capped segment per cell along /Angle, each exactly
 %           one pitch long so neighbors join into continuous rules at
