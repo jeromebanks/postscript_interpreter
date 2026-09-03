@@ -396,6 +396,30 @@ fn a_hostile_tone_cannot_change_the_sample_count() {
 }
 
 #[test]
+fn cross_with_a_callback_samples_once_per_cell() {
+    // The walk is cell-major: one /Tone sample per cell, shared by
+    // both cross arms. Sampling per pass instead would run a
+    // callback twice per cell — doubled side effects, and differently
+    // sized arms from a stateful or random callback. A 50x50 box at
+    // frequency 12 spans 12x12 cells, so exactly 144 samples, not 288.
+    let mut it = with_lib(100, 100);
+    run(
+        &mut it,
+        "/cellcount 0 def \
+         newpath 0 0 moveto 50 0 lineto 50 50 lineto closepath clip \
+         << /BBox [0 0 50 50] /Frequency 12 /Screen /cross \
+            /Tone { /cellcount cellcount 1 add def exch pop 100 div } >> halftone",
+    );
+    it.run_str("cellcount 144 eq").expect("count probe");
+    let last = it.operand_stack().last().expect("probe result").repr();
+    assert_eq!(
+        last, "true",
+        "cross sampled /Tone once per pass, not once per cell"
+    );
+    it.run_str("clear").expect("clear");
+}
+
+#[test]
 fn an_over_budget_call_samples_tone_zero_times() {
     // The budget fires before the first mark AND the first /Tone
     // call: a side-effecting callback must observe nothing.
@@ -644,6 +668,51 @@ fn tone_proc_that_leaks_an_operand_gets_a_named_error() {
             .iter()
             .map(|o| o.repr())
             .collect::<Vec<_>>()
+    );
+
+    // A lone `mark` passes the result-count check (it is one object)
+    // and fails the numeric one. Positional cleanup must not mistake
+    // it for a cleanup sentinel: the stack still unwinds clean.
+    let mut kt = with_lib(60, 60);
+    let err = kt
+        .run_str(
+            "newpath 5 5 moveto 55 5 lineto 55 55 lineto 5 55 lineto closepath clip \
+             << /Screen /dot /Frequency 12 /Tone { pop pop mark } >> halftone",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "halftone-tone-must-return-a-number"),
+        "wrong error: {err:?}"
+    );
+    assert!(
+        kt.operand_stack().is_empty(),
+        "a forged mark must not shadow stack cleanup, left {:?}",
+        kt.operand_stack()
+            .iter()
+            .map(|o| o.repr())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn contract_error_leaves_graphics_state_clean() {
+    // The per-sample contract errors restore graphics state before
+    // signaling: a `stopped`-caught failure (here with a nonzero
+    // /Offset, whose translate would otherwise linger) must not
+    // shift or otherwise alter later drawing.
+    let bad = "{ << /BBox [0 0 50 50] /Frequency 12 /Offset [6 0] \
+                 /Tone { pop 0.5 } >> halftone } stopped pop";
+    let good = "0 0 0 setrgbcolor \
+        newpath 0 0 moveto 50 0 lineto 50 50 lineto closepath clip \
+        << /BBox [0 0 50 50] /Frequency 12 /Tone 0.5 >> halftone";
+    let mut a = with_lib(100, 100);
+    run(&mut a, &format!("{bad} {good}"));
+    let mut b = with_lib(100, 100);
+    run(&mut b, good);
+    assert_eq!(
+        pixbuf(&a),
+        pixbuf(&b),
+        "a caught contract error altered later drawing"
     );
 }
 

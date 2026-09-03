@@ -152,6 +152,25 @@ test. Verifying the check's own arithmetic needed a live trace, not
 reasoning: E stays on the stack through `exec`, so the balanced
 condition is M − E = 1, not 2.
 
+**Independent (Codex) review found three more P2s, all fixed.**
+(1) The flat pass-major walk sampled /Tone once per *trip* — twice
+per cross cell, doubling side effects and splitting stateful arms.
+The walk is now cell-major (one flat loop over cells, one sample
+each) with an inner pass loop whose limit re-reads the npass stack
+snapshot per cell — safe, because a stack value cannot be
+redefined. (2) The per-sample contract errors unwound the operand
+stack but skipped `grestore`, leaving a translated CTM for a
+`stopped`-recovering caller — pinned by a test that draws after a
+caught failure and diffs against a fresh interp (verified to fail
+against the pre-fix library). Both contract exits now run counted
+pops plus `grestore`. (3) A callback returning a lone `mark` passed
+the count check and shadowed `cleartomark`, stranding the snapshots
+— the mark sentinel is gone entirely, replaced by entry-depth
+counted pops that no forged object can shadow (also pinned by a
+test, same negative-control treatment). The `cross_with_a_callback_
+samples_once_per_cell` test pins (1): 144 samples on a 12×12 box,
+not 288.
+
 ## Density-driven stippling and point-shading primitives (issue #50, 2026-08-31)
 
 A seventh sibling library, `lib/stipplekit.ps` — tag-migrated from

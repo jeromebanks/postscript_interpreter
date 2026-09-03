@@ -118,9 +118,12 @@
 %           not just documented: a proc that leaves anything else gets
 %           `halftone-tone-proc-must-leave-exactly-one-result`, and a
 %           non-numeric single result gets
-%           `halftone-tone-must-return-a-number` — both unwound through
-%           a mark, so even these exits leave the caller's stack as
-%           found. (Enforcement matters here beyond hygiene: the walk
+%           `halftone-tone-must-return-a-number` — both unwind via
+%           counted operand-stack pops plus `grestore`, so even these
+%           exits leave a `stopped`-recovering caller exactly as found
+%           (a `mark` sentinel would do until a callback forged a mark
+%           of its own and shadowed `cleartomark`). (Enforcement
+%           matters here beyond hygiene: the walk
 %           reads its dispatch state through fixed-depth `index`, so a
 %           leaked operand would shift every read and fail deep in the
 %           walk under an internal name.) A proc that fails mid-call
@@ -194,15 +197,17 @@
 % both operands (a leaking proc shows up on the operand stack, which
 % the test harness asserts empty after every call), and it must not
 % touch any `hf` name. Two tiers, mirroring hatchkit's own contract:
-% the dispatch kind, the const/proc choice, and the lattice shape
-% travel on the operand stack *under* the whole walk, read back only
-% through fixed-depth `index` — a dict redefinition mid-call cannot
-% reach them, so a /Tone proc cannot make a call exceed what /MaxCells
-% approved no matter what it redefines (the walk is one flat loop
-% whose limit is fixed before the first sample, not nested loops
-% whose inner limit would re-evaluate per row). Every other `hf` name
-% only affects geometry or tone, so corrupting one is undefined
-% rendering, not a safety-limit bypass.
+% the dispatch kind, the const/proc choice, the lattice shape, and
+% the pass count travel on the operand stack *under* the whole walk,
+% read back only through fixed-depth `index` — a dict redefinition
+% mid-call cannot reach them, so a /Tone proc cannot make a call
+% exceed what /MaxCells approved no matter what it redefines. The
+% walk is cell-major: one flat loop over cells, sampling once per
+% cell, with an inner pass loop (one trip, two for cross) whose limit
+% re-reads the npass *snapshot* per cell — safe, because a stack
+% value cannot be redefined, unlike a dict limit re-read per row.
+% Every other `hf` name only affects geometry or tone, so corrupting
+% one is undefined rendering, not a safety-limit bypass.
 %
 % Ghostscript: core Level 1/2 operators only (`arc`, `cos`, `sin`,
 % `sqrt`, `translate`, `pathbbox`, `xcheck`, `forall`/`for`) — the
@@ -248,6 +253,22 @@
 % @internal
 /hfcallable {
   dup type /arraytype eq exch xcheck and
+} def
+
+% hfcleanup -
+% Pops the operand stack back to the recorded entry depth (clamped
+% at zero — a callback that over-consumed pushes the count
+% negative, and `repeat` must never see that), then restores the one
+% graphics save this call holds. Every per-sample contract exit runs
+% this before signaling, so a `stopped`-recovering caller resumes
+% with both stacks exactly as found. Positional on purpose: a `mark`
+% sentinel would work until a callback forges a mark of its own and
+% shadows `cleartomark`, stranding the snapshots — counted pops have
+% nothing to shadow.
+% @internal
+/hfcleanup {
+  count hfdepth0 sub dup 0 lt { pop 0 } if { pop } repeat
+  grestore
 } def
 
 % opts halftone -
@@ -432,97 +453,109 @@
   % no zero/nonzero branches to keep agreeing.
   hfox hfoy translate
   1 setlinecap
-  % The cross screen's second pass reuses the same stored lattice
-  % origin and counts — only the segment direction swaps — so its
-  % crosses stay centered on pass one's cells.
-  hfscreenkind 2 eq { /hfnpass 2 def } { /hfnpass 1 def } ifelse
-  /hftotal hfnpass hfncols mul hfnrows mul def
-  % Five snapshots live on the operand stack under the whole walk,
-  % bottom to top: kind const val cols rows. `for` consumes only its
-  % own limit/proc/initial (pushed after these) and a well-behaved
-  % /Tone leaves the stack exactly as it found it, so fixed-depth
-  % `index` reads below can never observe a dict redefinition — the
-  % dispatch kind, the const/proc choice, and the lattice shape are
-  % immune to mid-call tampering by construction, not by promise.
-  % (The first version read `hfncols` as a nested loop's limit, which
-  % re-evaluates per row — after /Tone has run — so redefining it
-  % multiplied every remaining row past the approved budget. A single
-  % flat loop whose limit is fixed before the first sample closes
-  % that; redefinition now corrupts placement at worst — tier-2
-  % geometry, per the header's own tiering — never the trip count.)
-  % A mark goes under the snapshots: the per-sample contract checks
-  % below restore the caller's exact stack with `cleartomark` before
-  % signaling, so even a failing /Tone unwinds cleanly for a
-  % `stopped`-recovering caller. The success path pops all six.
-  mark
+  % The cross screen's two passes share one lattice origin and one
+  % tone sample per cell — only the segment direction swaps — so its
+  % crosses stay centered and both arms agree even for a stateful
+  % /Tone. (Sampling per pass instead would run a callback twice per
+  % cell with doubled side effects, contradicting the documented
+  % one-sample-per-cell contract the /MaxCells premise is built on.)
+  /hfcells hfncols hfnrows mul def
+  % Six snapshots live on the operand stack under the whole walk,
+  % bottom to top: kind const val cols rows npass. `for` consumes
+  % only its own limit/proc/initial (pushed after these) and a
+  % well-behaved /Tone leaves the stack exactly as it found it, so
+  % fixed-depth `index` reads below can never observe a dict
+  % redefinition — the dispatch kind, the const/proc choice, the
+  % lattice shape, and the pass count are immune to mid-call
+  % tampering by construction, not by promise. (History, newest
+  % first: the flat pass-major loop sampled /Tone once per *trip*,
+  % i.e. twice per cross cell; the nested loops before it re-read a
+  % dict limit per row, so redefining it multiplied every remaining
+  % row past the approved budget. Cell-major with a stack-read inner
+  % pass loop closes both; redefinition now corrupts placement at
+  % worst — tier-2 geometry, per the header's own tiering — never
+  % the trip count.)
+  % No mark sentinel under the snapshots: a callback can forge a mark
+  % of its own and shadow `cleartomark`, stranding the snapshots on a
+  % `stopped` caller's stack. Positional cleanup cannot be shadowed,
+  % so the entry depth is recorded instead and every contract exit
+  % pops exactly back to it — then `grestore`, so graphics state is
+  % restored too — before signaling. The success path pops all six.
+  count /hfdepth0 exch def
   hfscreenkind hftoneconst hftoneconst { hftoneval } { 0 } ifelse hfncols hfnrows
-  0 1 hftotal 1 sub {
-    /hfidx exch def
-    % Per-trip copies from the immune snapshots: everything below is
-    % derived before /Tone runs (or re-derived from snapshots after),
-    % so a hostile callback redefining the dict originals changes
-    % where this trip inks, never how many trips run.
-    1 index /hfnc exch def
-    0 index /hfnr exch def
-    /hfcellperpass hfnc hfnr mul def
-    /hfpass hfidx hfcellperpass idiv def
-    /hfrem hfidx hfcellperpass mod def
-    /hfj hfrem hfnc idiv def
-    /hfi hfrem hfnc mod def
-    hfpass 0 eq
-      { /hfpdx hfdx def /hfpdy hfdy def }
-      { /hfpdx hfnx def /hfpdy hfny def }
-    ifelse
+  hfscreenkind 2 eq { 2 } { 1 } ifelse
+  0 1 hfcells 1 sub {
+    /hfcell exch def
+    % Per-cell copies from the immune snapshots: everything below is
+    % derived before /Tone runs, so a hostile callback redefining
+    % the dict originals changes where this cell inks, never how
+    % many cells run.
+    2 index /hfnc exch def
+    1 index /hfnr exch def
+    /hfj hfcell hfnc idiv def
+    /hfi hfcell hfnc mod def
     /hfkk hfkkmin hfj hfpitch mul add def
     /hfdd hfddmin hfi hfpitch mul add def
     /hfcx hfdd hfdx mul hfkk hfnx mul add def
     /hfcy hfdd hfdy mul hfkk hfny mul add def
-    3 index
-      { 2 index }
+    4 index
+      { 3 index }
       { % The snapshots above make a stack-imbalanced /Tone actively
         % confusing rather than merely lint-visible: leaked operands
         % would shift every `index` read below, failing deep in the
         % walk under an internal name. So the contract (consume both,
         % leave exactly one number) is enforced per sample, not just
         % documented — with errors that name the contract and unwind
-        % through the mark, leaving the caller's stack as found.
+        % stack- *and* graphics-clean (counted pops plus `grestore`),
+        % so even these exits leave a `stopped`-recovering caller
+        % exactly as found.
         % E (kept on the stack through `exec`) is the pre-call
         % count minus one, so post-call M satisfies M - E = 1 iff the
         % proc left exactly one result: E itself is still counted in M.
         hfcx hfcy count 1 sub 3 1 roll
         hftonebox 0 get exec
         count 2 index sub 1 ne
-          { cleartomark halftone-tone-proc-must-leave-exactly-one-result } if
+          { hfcleanup halftone-tone-proc-must-leave-exactly-one-result } if
         exch pop
         dup hfisnum not
-          { cleartomark halftone-tone-must-return-a-number } if
+          { hfcleanup halftone-tone-must-return-a-number } if
         hfclamp01 }
     ifelse
     /hfw exch def
-    % Zero tone draws no mark: skipped, never drawn through —
-    % a zero-width stroke would render as a hairline, not as
-    % nothing, so this branch is correctness, not optimization.
-    hfw 0 gt {
-      4 index 0 eq {
-        % Area-proportional dots (see the header for why sqrt).
-        % Per-mark newpath: without it every cell's arc would
-        % accumulate into one giant path (memory, time) and a
-        % leftover caller path would fill on first contact.
-        newpath hfcx hfcy hfmaxr hfw sqrt mul 0 360 arc fill
-      } {
-        % One pitch-long rule centered on the cell along the
-        % pass direction: neighbors join into continuous lines
-        % at uniform tone, round caps hiding the seams.
-        hfmaxw hfw mul setlinewidth
-        newpath
-        hfcx hfpdx hfpitch 2 div mul sub
-        hfcy hfpdy hfpitch 2 div mul sub
-        moveto
-        hfcx hfpdx hfpitch 2 div mul add
-        hfcy hfpdy hfpitch 2 div mul add
-        lineto stroke
-      } ifelse
-    } if
+    % The inner pass limit re-reads the npass *snapshot* per cell —
+    % safe, because a stack value cannot be redefined, unlike the
+    % dict limit the pre-flat-loop version re-read per row.
+    0 1 2 index 1 sub {
+      /hfpass exch def
+      hfpass 0 eq
+        { /hfpdx hfdx def /hfpdy hfdy def }
+        { /hfpdx hfnx def /hfpdy hfny def }
+      ifelse
+      % Zero tone draws no mark: skipped, never drawn through —
+      % a zero-width stroke would render as a hairline, not as
+      % nothing, so this branch is correctness, not optimization.
+      hfw 0 gt {
+        5 index 0 eq {
+          % Area-proportional dots (see the header for why sqrt).
+          % Per-mark newpath: without it every cell's arc would
+          % accumulate into one giant path (memory, time) and a
+          % leftover caller path would fill on first contact.
+          newpath hfcx hfcy hfmaxr hfw sqrt mul 0 360 arc fill
+        } {
+          % One pitch-long rule centered on the cell along the
+          % pass direction: neighbors join into continuous lines
+          % at uniform tone, round caps hiding the seams.
+          hfmaxw hfw mul setlinewidth
+          newpath
+          hfcx hfpdx hfpitch 2 div mul sub
+          hfcy hfpdy hfpitch 2 div mul sub
+          moveto
+          hfcx hfpdx hfpitch 2 div mul add
+          hfcy hfpdy hfpitch 2 div mul add
+          lineto stroke
+        } ifelse
+      } if
+    } for
   } for
   pop pop pop pop pop pop
   grestore
