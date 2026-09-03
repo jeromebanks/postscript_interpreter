@@ -1,0 +1,83 @@
+%!PS-Adobe-3.0
+%%Title: Halftone Screens — a specimen sheet for halftonekit.ps
+%%BoundingBox: 0 0 1100 360
+%%EndComments
+
+% Specimen sheet for the reusable halftone library (issue #53,
+% lib/halftonekit.ps): one panel per screen, plus a misregistered
+% two-plate panel. Left: a dot screen driven by a left-to-right tone
+% ramp, sparse to dense. Middle-left: a line screen at 45 degrees over
+% a circular clip, flat tone. Middle-right: a cross-line screen, flat
+% tone. Right: the same dot screen printed twice — a teal plate and a
+% red-orange plate shifted 5 units over and 3 up — the controlled
+% misregistration a risograph run gets from its drums not quite
+% agreeing. Run from the repo root:
+%
+%   pscat --page 1100x360 examples/halftone.ps
+
+(lib/halftonekit.ps) run
+
+/showctr { /tky exch def /tkx exch def /tks exch def
+    tkx tks stringwidth pop 2 div sub tky moveto tks show } def
+
+1 1 1 setrgbcolor clippath fill
+
+/Palatino-Bold findfont 24 scalefont setfont
+0.1 0.1 0.12 setrgbcolor
+(Halftone Screens) 550 336 showctr
+/Palatino-Italic findfont 12 scalefont setfont
+(dot ramp, line screen, cross-line screen, one misregistered second plate -- lib/halftonekit.ps) 550 316 showctr
+
+/Palatino findfont 11 scalefont setfont
+/panel { % x y w h -
+  /ph exch def /pw exch def /py exch def /px exch def
+  gsave
+    px py translate
+    0 0 0 setrgbcolor 0.75 setlinewidth
+    newpath 0 0 moveto pw 0 lineto pw ph lineto 0 ph lineto closepath stroke
+} def
+/endpanel { grestore } def
+
+% --- left: dot screen, sparse-to-dense ramp ---------------------------------
+40 40 240 240 panel
+newpath 0 0 moveto 240 0 lineto 240 240 lineto 0 240 lineto closepath clip
+0.15 0.13 0.1 setrgbcolor
+<< /Screen /dot /Frequency 12 /Angle 45 /Tone { exch pop 240 div } >> halftone
+endpanel
+0.1 0.1 0.12 setrgbcolor
+(dot: left-to-right tone ramp) 160 26 showctr
+
+% --- middle-left: line screen over a circular clip ---------------------------
+300 40 240 240 panel
+newpath 120 120 110 0 360 arc clip
+0.2 0.1 0.08 setrgbcolor
+<< /Screen /line /Frequency 10 /Angle 45 /Tone 0.6 >> halftone
+endpanel
+0.1 0.1 0.12 setrgbcolor
+(line: one 45-degree plate) 420 26 showctr
+
+% --- middle-right: cross-line screen ------------------------------------------
+560 40 240 240 panel
+newpath 0 0 moveto 240 0 lineto 240 240 lineto 0 240 lineto closepath clip
+0.1 0.12 0.2 setrgbcolor
+<< /Screen /cross /Frequency 8 /Angle 30 /Tone 0.5 >> halftone
+endpanel
+0.1 0.1 0.12 setrgbcolor
+(cross: two passes, one call) 680 26 showctr
+
+% --- right: misregistered two-plate spread -------------------------------------
+% One clip, one tone field, two inks: the second plate is the same
+% screen shifted (5, 3), so the rosettes fringe at the edges the way
+% a real two-drum pass does. The second call reuses the surviving
+% current path for its default /BBox — no explicit box needed.
+820 40 240 240 panel
+newpath 0 0 moveto 240 0 lineto 240 240 lineto 0 240 lineto closepath clip
+0.05 0.55 0.6 setrgbcolor
+<< /Screen /dot /Frequency 11 /Angle 15 /Tone { add 480 div } /Offset [0 0] >> halftone
+0.85 0.25 0.15 setrgbcolor
+<< /Screen /dot /Frequency 11 /Angle 15 /Tone { add 480 div } /Offset [5 3] >> halftone
+endpanel
+0.1 0.1 0.12 setrgbcolor
+(two plates, second shifted 5 over 3 up) 940 26 showctr
+
+showpage
