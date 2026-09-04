@@ -191,6 +191,39 @@ fn clippath_traces_a_non_rectangular_nested_clip() {
 }
 
 #[test]
+fn clippath_traces_a_diagonal_nested_clip() {
+    // A 45°-rotated diamond nested with an axis-aligned rect exercises
+    // the boundary tracer's diagonal-touch ("checkerboard") handling —
+    // its edges cross the pixel grid at a shallow angle, unlike the
+    // straight-on rect/circle cases above. Matches Ghostscript's own
+    // 30 30 80 80 exactly.
+    assert_eq!(
+        eval(
+            "newpath 20 20 60 60 rectclip \
+             newpath 60 30 moveto 90 60 lineto 60 90 lineto 30 60 lineto closepath clip newpath \
+             clippath pathbbox"
+        ),
+        ["30.0", "30.0", "80.0", "80.0"]
+    );
+}
+
+#[test]
+fn clippath_rect_fast_path_is_fill_rule_agnostic() {
+    // as_axis_aligned_rect doesn't consult ClipNode::rule: for one
+    // non-self-intersecting closed loop, nonzero and even-odd always
+    // agree, so an eoclip rectangle still takes the exact rect fast
+    // path. Matches Ghostscript's 20 20 80 80.
+    assert_eq!(
+        eval(
+            "newpath 0 0 100 100 rectclip \
+             newpath 20 20 moveto 20 80 lineto 80 80 lineto 80 20 lineto closepath eoclip \
+             clippath pathbbox"
+        ),
+        ["20.0", "20.0", "80.0", "80.0"]
+    );
+}
+
+#[test]
 fn currentlinewidth_reports() {
     assert_eq!(eval("3 setlinewidth currentlinewidth"), ["3.0"]);
 }
