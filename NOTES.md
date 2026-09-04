@@ -3,6 +3,34 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## `lib/pagekit.ps`: give the page templates a demo on the site (issue #63, 2026-09-04)
+
+Closes issue #63, the follow-up #61 filed after that PR's review found
+issue #18's five page templates (`pgcard`/`pgletter`/`pgcertificate`/
+`pginvitation`/`pgposter`) had `examples/template_*.ps` specimens and
+doc coverage but no visibility on the published site.
+
+Added a "Page templates" section to `site/gallery.html`, right after
+Style packs — the closest existing precedent, since pagekit is also a
+sibling library layered on artkit rather than a standalone one. One
+card per template (five total), each backed by a new `render` call in
+`scripts/build_site.sh` producing `assets/renders/template_*.png` from
+the existing `examples/template_*.ps` files at their declared
+612×792 `%%BoundingBox`. Not added to `gallery/show.sh` (these are
+`examples/`, not `gallery/`, pieces) or `site/playground.html` (per
+#61's guidance and the issue body itself: pagekit needs `(lib/artkit.ps)
+run (lib/pagekit.ps) run`, so it isn't self-contained and isn't
+playground-eligible). `tests/site.rs`'s existing
+`build_site_assembles_everything` — which runs the real
+`build_site.sh` and asserts every `assets/renders/*` the built
+`gallery.html` references actually exists — is what verified the new
+cards wire up correctly, not a new test; the gap it exists to catch (a
+typo'd basename between an `<img>` tag and a `render` call) is exactly
+the failure mode this change could have introduced.
+
+`README.md` already documented pagekit fully (issue #18's own work),
+so no changes there.
+
 ## `lib/etching.ps`: honor EXIF orientation (issue #56, 2026-09-04)
 
 `et-dims`/`et-draw` now read a JPEG's APP1/TIFF Orientation tag

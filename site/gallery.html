@@ -123,6 +123,32 @@
       <div class="body"><b>toon.ps</b><span>Cel-shaded flats under fat ink, speech bubbles, action bursts, dripping title slabs — /saturday /latenight /pastelpop</span></div></div>
   </div>
 
+  <h2>Page templates</h2>
+  <p><code>lib/pagekit.ps</code> is a sibling library layered on artkit
+  the same way the style packs are
+  (<code>(lib/artkit.ps) run (lib/pagekit.ps) run</code>). Rather than
+  seeded randomness, its five templates —
+  <code>pgcard</code>/<code>pgletter</code>/<code>pgcertificate</code>/
+  <code>pginvitation</code>/<code>pgposter</code> — take a content dict
+  (<code>/Title</code>, <code>/Body</code>, <code>/Signoff</code>, and
+  so on) and make every layout decision for it: a sparse or even empty
+  dict still renders a complete, structurally sound page, and long
+  copy shrinks or flows to fit rather than overrunning the template's
+  bounds. Specimens below are <code>examples/template_*.ps</code>,
+  612×792.</p>
+  <div class="cards">
+    <div class="card"><img src="assets/renders/template_card.png" alt="A greeting card rendered by pgcard" loading="lazy">
+      <div class="body"><b>pgcard</b><span>A tinted rounded panel with a centered title, flowed message, and a signoff tucked into the corner</span></div></div>
+    <div class="card"><img src="assets/renders/template_letter.png" alt="A letter rendered by pgletter" loading="lazy">
+      <div class="body"><b>pgletter</b><span>A plain page — header rule, date, salutation, flowed body, and reserved signature space</span></div></div>
+    <div class="card"><img src="assets/renders/template_certificate.png" alt="A certificate rendered by pgcertificate" loading="lazy">
+      <div class="body"><b>pgcertificate</b><span>A double-ruled cream certificate with a shrink-to-fit awardee name and a two-column presenter/date signature line</span></div></div>
+    <div class="card"><img src="assets/renders/template_invitation.png" alt="An invitation rendered by pginvitation" loading="lazy">
+      <div class="body"><b>pginvitation</b><span>A tinted bordered panel with a large event title, a when/where/host block, and RSVP-style body copy</span></div></div>
+    <div class="card"><img src="assets/renders/template_poster.png" alt="A poster rendered by pgposter" loading="lazy">
+      <div class="body"><b>pgposter</b><span>A full-bleed headline sized to the page width, an italic tagline, a large flowed body, and a footer line</span></div></div>
+  </div>
+
   <h2>The font library</h2>
   <p>Original Type 3 display faces (<code>lib/fonts/</code>) — every
   glyph is a program, so the letterforms do things outlines can't.

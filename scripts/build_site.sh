@@ -60,5 +60,10 @@ render examples/type3_ransom.ps 612x792
 render examples/handwriting.ps 612x792
 render examples/graph_paper.ps 612x792
 render examples/dataviz_paper.ps 612x792
+render examples/template_card.ps 612x792
+render examples/template_letter.ps 612x792
+render examples/template_certificate.ps 612x792
+render examples/template_invitation.ps 612x792
+render examples/template_poster.ps 612x792
 
 echo "site assembled: $OUT ($(du -sh "$OUT" | cut -f1))"
