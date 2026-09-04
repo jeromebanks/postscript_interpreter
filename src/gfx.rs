@@ -264,6 +264,64 @@ impl PsPath {
         d.trim_end().to_string()
     }
 
+    /// If this path is a single axis-aligned rectangle subpath (any
+    /// corner order or winding), its device-space bounds. Used by
+    /// `clippath`'s rect fast path (below) to keep a chain of nested
+    /// `rectclip`-shaped clips exact and DPI-invariant instead of
+    /// falling back to pixel tracing — the dominant real-world nested-
+    /// clip shape. A rotated rect, a multi-rect `rectclip` numarray
+    /// (more than one subpath), or any curve disqualifies it, safely
+    /// falling back to the pixel trace instead of misreporting.
+    ///
+    /// Deliberately rule-agnostic (the caller never looks at
+    /// `ClipNode::rule` here): for one non-self-intersecting closed
+    /// loop, nonzero and even-odd always agree — a ray from any
+    /// interior point crosses the boundary exactly once, so the
+    /// crossing count is always odd (even-odd: inside) exactly when the
+    /// winding number is always ±1 (nonzero: inside). Verified against
+    /// gs with an `eoclip` on a single axis-aligned rectangle.
+    pub(crate) fn as_axis_aligned_rect(&self) -> Option<(f32, f32, f32, f32)> {
+        let mut pts: Vec<DevPoint> = Vec::new();
+        for seg in &self.segs {
+            match *seg {
+                Seg::Move(p) => {
+                    if !pts.is_empty() {
+                        return None;
+                    }
+                    pts.push(p);
+                }
+                Seg::Line(p) => pts.push(p),
+                Seg::Curve(..) => return None,
+                Seg::Close => {}
+            }
+        }
+        // An explicit closing lineto back to the start is equivalent to
+        // `closepath` for this purpose — drop it before counting corners.
+        if pts.len() == 5 && pts[4] == pts[0] {
+            pts.pop();
+        }
+        if pts.len() != 4 {
+            return None;
+        }
+        const EPS: f32 = 1e-3;
+        let x0 = pts.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
+        let x1 = pts.iter().map(|p| p.x).fold(f32::NEG_INFINITY, f32::max);
+        let y0 = pts.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+        let y1 = pts.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max);
+        let corners = [(x0, y0), (x0, y1), (x1, y0), (x1, y1)];
+        let mut used = [false; 4];
+        'points: for p in &pts {
+            for (idx, &(cx, cy)) in corners.iter().enumerate() {
+                if !used[idx] && (p.x - cx).abs() < EPS && (p.y - cy).abs() < EPS {
+                    used[idx] = true;
+                    continue 'points;
+                }
+            }
+            return None;
+        }
+        Some((x0, y0, x1, y1))
+    }
+
     fn to_skia(&self) -> Option<tiny_skia::Path> {
         let mut pb = PathBuilder::new();
         for seg in &self.segs {
@@ -1575,29 +1633,288 @@ impl Gfx {
         self.state.clip = None;
     }
 
-    /// `clippath`: replace the current path with the clip boundary — the
-    /// most recent clip path, or the whole page if unclipped. (The true
-    /// intersection path isn't tracked; the mask is. Documented
-    /// approximation.)
+    /// `clippath`: replace the current path with the clip boundary.
+    ///
+    /// A single clip (the overwhelmingly common case) reports the exact
+    /// original path, bit-for-bit — untouched by anything below. A
+    /// *nested* clip (issue #120: previously just the newest link,
+    /// which can badly overreport the visible region — see the issue
+    /// for a measured example against Ghostscript) computes the true
+    /// intersection: exactly and DPI-invariantly when every clip in the
+    /// chain is an axis-aligned rectangle (the dominant nested shape,
+    /// since `rectclip` produces one), otherwise by tracing the boundary
+    /// of the already-correct raster clip mask (any nonzero-coverage
+    /// pixel counts — see `mask_boundary_path`'s own doc for why). That
+    /// trace is pixel-accurate and a deliberate *superset*, not an
+    /// analytically exact intersection, for a genuinely non-rectangular
+    /// nested chain (a curved or rotated clip nested with anything else)
+    /// — a documented residual approximation, not the unbounded
+    /// "newest clip only" error this replaces.
     pub fn set_path_to_clip(&mut self) {
         match &self.state.clip {
-            Some(c) => self.state.path = c.node.path.clone(),
+            Some(c) if c.node.parent.is_none() => self.state.path = c.node.path.clone(),
+            Some(c) => {
+                let page = (self.pixmap.width() as f32, self.pixmap.height() as f32);
+                self.state.path = match Self::chain_rect_intersection(&c.node, page) {
+                    Some((x0, y0, x1, y1)) => Self::rect_path(x0, y0, x1, y1),
+                    None => Self::mask_boundary_path(&c.mask),
+                };
+            }
             None => self.state.path = self.page_rect_path(),
         }
     }
 
-    /// The whole canvas as a device-space rectangle path — the
-    /// unclipped-`clippath` fallback above, and `shfill`'s paint region
-    /// (which the current clip mask then bounds, same as `fill`).
-    fn page_rect_path(&self) -> PsPath {
-        let (w, h) = (self.pixmap.width() as f32, self.pixmap.height() as f32);
+    /// The exact intersection of every clip in the chain, and the page
+    /// rect (the implicit outermost clip), *if* every link is a plain
+    /// axis-aligned rectangle — `None` the moment one isn't, so the
+    /// caller can fall back to the mask trace instead of misreporting.
+    fn chain_rect_intersection(node: &ClipNode, page: (f32, f32)) -> Option<(f32, f32, f32, f32)> {
+        // The page is folded in as the implicit outermost clip here —
+        // matching the unclipped branch's own page-rect answer — but
+        // deliberately *not* in the single-clip passthrough above: that
+        // branch exists specifically to preserve a single clip's
+        // reported path bit-for-bit, page-extent-unaware, exactly as
+        // it always has been (not this issue's bug to fix).
+        let (mut x0, mut y0, mut x1, mut y1): (f32, f32, f32, f32) = (0.0, 0.0, page.0, page.1);
+        let mut cur = Some(node);
+        while let Some(n) = cur {
+            let (rx0, ry0, rx1, ry1) = n.path.as_axis_aligned_rect()?;
+            x0 = x0.max(rx0);
+            y0 = y0.max(ry0);
+            x1 = x1.min(rx1);
+            y1 = y1.min(ry1);
+            cur = n.parent.as_deref();
+        }
+        // Disjoint rects intersect to nothing; collapse rather than
+        // report an inverted box (mirrors `clip`'s own "empty path
+        // clips everything away" — the mask is already all-zero).
+        x1 = x1.max(x0);
+        y1 = y1.max(y0);
+        Some((x0, y0, x1, y1))
+    }
+
+    /// A device-space rectangle path — `chain_rect_intersection`'s
+    /// exact-fast-path answer, and (via `page_rect_path`) the
+    /// unclipped-`clippath` fallback and `shfill`'s paint region (which
+    /// the current clip mask then bounds, same as `fill`).
+    fn rect_path(x0: f32, y0: f32, x1: f32, y1: f32) -> PsPath {
         let mut p = PsPath::default();
-        p.move_to(DevPoint { x: 0.0, y: 0.0 });
-        p.line_to(DevPoint { x: w, y: 0.0 });
-        p.line_to(DevPoint { x: w, y: h });
-        p.line_to(DevPoint { x: 0.0, y: h });
+        p.move_to(DevPoint { x: x0, y: y0 });
+        p.line_to(DevPoint { x: x1, y: y0 });
+        p.line_to(DevPoint { x: x1, y: y1 });
+        p.line_to(DevPoint { x: x0, y: y1 });
         p.close();
         p
+    }
+
+    /// The whole canvas as a device-space rectangle path.
+    fn page_rect_path(&self) -> PsPath {
+        Self::rect_path(
+            0.0,
+            0.0,
+            self.pixmap.width() as f32,
+            self.pixmap.height() as f32,
+        )
+    }
+
+    /// Trace the boundary of a clip mask's covered region (any nonzero
+    /// alpha) into a device-space path — one subpath per boundary loop,
+    /// outer contours and holes automatically opposite-wound (so both
+    /// nonzero and even-odd fill rules reconstruct the region
+    /// correctly). This is the general fallback `clippath` uses for a
+    /// nested clip chain that isn't all axis-aligned rectangles (see
+    /// `set_path_to_clip`).
+    ///
+    /// Any-nonzero-alpha (not a 50%-coverage threshold) is a deliberate
+    /// choice: it makes the trace a *superset* of the true region,
+    /// matching `mask_bbox_path`'s contract below and, more
+    /// importantly, `clippath`'s existing single-clip and unclipped
+    /// answers (also unclamped to the true painted extent). A 50%
+    /// threshold measured ~1px *under*-reporting at a sharp vertex on a
+    /// diamond-nested-in-a-rect case — silently excluding area that
+    /// should be scatterable is worse than the reverse for `clippath
+    /// scpath`'s motivating use case (issue #48): an over-reported
+    /// candidate is still rejected by the real clip mask when painted,
+    /// just wastes a placement attempt; an under-reported one is never
+    /// tried at all.
+    ///
+    /// Two adjacent filled cells touching only at a corner (a diagonal
+    /// "checkerboard" — realistic at a clip boundary crossing near
+    /// exactly 45°) leave that shared vertex with two valid outgoing
+    /// edges, not one. Resolved by always preferring the sharpest
+    /// clockwise turn available at a vertex, which — because the two
+    /// diagonal cells' own edges already close into complete loops on
+    /// their own — deterministically keeps them as separate touching
+    /// loops instead of splicing them into one self-crossing path.
+    fn mask_boundary_path(mask: &tiny_skia::Mask) -> PsPath {
+        Self::try_mask_boundary_path(mask).unwrap_or_else(|| Self::mask_bbox_path(mask))
+    }
+
+    /// Safety-net fallback for `mask_boundary_path`: the mask's covered
+    /// pixels' bounding rectangle. Never panics, always at least as
+    /// permissive as the true region — used only if the boundary
+    /// tracer's balanced-degree invariant is ever violated (untested
+    /// mask shape, float edge case), so `clippath` degrades to a
+    /// (looser) rectangle instead of crashing on program-influenced
+    /// clip geometry.
+    fn mask_bbox_path(mask: &tiny_skia::Mask) -> PsPath {
+        let (w, h) = (mask.width() as i32, mask.height() as i32);
+        let data = mask.data();
+        let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
+        for y in 0..h {
+            for x in 0..w {
+                if data[(y * w + x) as usize] > 0 {
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x + 1);
+                    y1 = y1.max(y + 1);
+                }
+            }
+        }
+        if x0 >= x1 || y0 >= y1 {
+            return PsPath::default();
+        }
+        Self::rect_path(x0 as f32, y0 as f32, x1 as f32, y1 as f32)
+    }
+
+    fn try_mask_boundary_path(mask: &tiny_skia::Mask) -> Option<PsPath> {
+        let (w, h) = (mask.width() as i32, mask.height() as i32);
+        let data = mask.data();
+        let filled = |x: i32, y: i32| -> bool {
+            if x < 0 || y < 0 || x >= w || y >= h {
+                false
+            } else {
+                data[(y * w + x) as usize] > 0
+            }
+        };
+
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        enum Dir {
+            R,
+            D,
+            L,
+            U,
+        }
+        impl Dir {
+            fn delta(self) -> (i32, i32) {
+                match self {
+                    Dir::R => (1, 0),
+                    Dir::D => (0, 1),
+                    Dir::L => (-1, 0),
+                    Dir::U => (0, -1),
+                }
+            }
+            fn cw(self) -> Dir {
+                match self {
+                    Dir::R => Dir::D,
+                    Dir::D => Dir::L,
+                    Dir::L => Dir::U,
+                    Dir::U => Dir::R,
+                }
+            }
+        }
+
+        // One directed unit edge per filled-cell side whose neighbor is
+        // unfilled. A shared edge between two filled cells is never
+        // emitted by either side, so it never appears at all — only
+        // true boundary edges do, each exactly once with a fixed
+        // direction (interior "filled" consistently on one side).
+        let mut outgoing: std::collections::HashMap<(i32, i32), Vec<Dir>> =
+            std::collections::HashMap::new();
+        for y in 0..h {
+            for x in 0..w {
+                if !filled(x, y) {
+                    continue;
+                }
+                if !filled(x, y - 1) {
+                    outgoing.entry((x, y)).or_default().push(Dir::R);
+                }
+                if !filled(x, y + 1) {
+                    outgoing.entry((x + 1, y + 1)).or_default().push(Dir::L);
+                }
+                if !filled(x - 1, y) {
+                    outgoing.entry((x, y + 1)).or_default().push(Dir::U);
+                }
+                if !filled(x + 1, y) {
+                    outgoing.entry((x + 1, y)).or_default().push(Dir::D);
+                }
+            }
+        }
+
+        let mut starts: Vec<(i32, i32)> = outgoing.keys().copied().collect();
+        starts.sort_unstable();
+
+        let mut out = PsPath::default();
+        for start in starts {
+            loop {
+                let has_more = outgoing.get(&start).is_some_and(|v| !v.is_empty());
+                if !has_more {
+                    break;
+                }
+                let mut pts: Vec<(i32, i32)> = vec![start];
+                let mut current = start;
+                let mut d_in: Option<Dir> = None;
+                loop {
+                    // Every arrival vertex must have a matching departure
+                    // (the boundary of a raster region is a union of
+                    // closed, edge-disjoint loops) — but this is derived
+                    // from program-influenced clip geometry, so bail to
+                    // the bbox fallback rather than assume it can't fail.
+                    let dirs = outgoing.get_mut(&current)?;
+                    if dirs.is_empty() {
+                        return None;
+                    }
+                    let priority = match d_in {
+                        Some(d) => [d.cw(), d, d.cw().cw().cw(), d.cw().cw()],
+                        None => [Dir::R, Dir::D, Dir::L, Dir::U],
+                    };
+                    // `priority` enumerates all 4 `Dir` values, and
+                    // `dirs` is non-empty and drawn from the same type,
+                    // so some entry always matches — this one truly
+                    // can't fail.
+                    let chosen = priority
+                        .iter()
+                        .find_map(|want| dirs.iter().position(|d| d == want))
+                        .expect("priority covers every Dir value");
+                    let dir = dirs.remove(chosen);
+                    let (dx, dy) = dir.delta();
+                    current = (current.0 + dx, current.1 + dy);
+                    d_in = Some(dir);
+                    if current == start {
+                        break;
+                    }
+                    pts.push(current);
+                }
+                // Drop collinear interior points (straight-through
+                // pass-throughs, common along any axis-aligned run).
+                let n = pts.len();
+                let mut corners: Vec<(i32, i32)> = Vec::with_capacity(n);
+                for i in 0..n {
+                    let prev = pts[(i + n - 1) % n];
+                    let cur = pts[i];
+                    let next = pts[(i + 1) % n];
+                    let in_dir = (cur.0 - prev.0, cur.1 - prev.1);
+                    let out_dir = (next.0 - cur.0, next.1 - cur.1);
+                    if in_dir != out_dir {
+                        corners.push(cur);
+                    }
+                }
+                if let Some(&(fx, fy)) = corners.first() {
+                    out.move_to(DevPoint {
+                        x: fx as f32,
+                        y: fy as f32,
+                    });
+                    for &(px, py) in &corners[1..] {
+                        out.line_to(DevPoint {
+                            x: px as f32,
+                            y: py as f32,
+                        });
+                    }
+                    out.close();
+                }
+            }
+        }
+        Some(out)
     }
 
     /// Bounding box of the current path in user space (control points

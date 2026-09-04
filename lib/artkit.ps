@@ -834,17 +834,13 @@ end
 % matching `fill`; `region /Rule /evenodd put` switches it to the
 % even-odd rule (matching `eofill`) for that region from then on.
 % `clippath scpath` is the idiom for scattering inside the current
-% *clip* region rather than inside a drawn shape -- with one caveat
-% that belongs to `clippath` rather than to this section: this
-% interpreter's `clippath` returns the most recently established clip
-% path, not the intersection of every clip in effect (Ghostscript
-% returns the true intersection; confirmed by measuring both). So the
-% idiom captures the whole clip when one clip is in force, which is
-% the ordinary case, and only the newest of several when they have
-% been nested -- candidates would then be accepted inside the newest
-% but outside an older one, and painted invisibly. Clip once for the
-% region you mean to scatter into, or capture the shape itself with
-% `scpath` and skip `clippath` altogether.
+% *clip* region rather than inside a drawn shape. `clippath` reports
+% the true intersection of every clip in effect (issue #120), exactly
+% and independent of `--dpi` when the whole chain is plain axis-aligned
+% rectangles (e.g. nested `rectclip`s), and otherwise via a pixel-
+% accurate trace of the clip mask -- a documented sub-pixel
+% approximation for a genuinely non-rectangular nested chain, not an
+% analytically exact intersection.
 %
 % scatter's options, all optional except /Mark:
 %   /Mark {x y scale angle -> -}  the mark. A procedure (or an
