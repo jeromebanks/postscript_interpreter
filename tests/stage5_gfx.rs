@@ -164,6 +164,33 @@ fn pathbbox_and_clippath() {
 }
 
 #[test]
+fn clippath_reports_the_intersection_of_nested_clips() {
+    // Issue #120: clippath used to report only the newest of several
+    // nested clips, not their true intersection (confirmed against
+    // Ghostscript, which reports the same 30 30 60 60 as below).
+    assert_eq!(
+        eval("newpath 0 0 60 60 rectclip newpath 30 30 60 60 rectclip clippath pathbbox"),
+        ["30.0", "30.0", "60.0", "60.0"]
+    );
+}
+
+#[test]
+fn clippath_traces_a_non_rectangular_nested_clip() {
+    // A rect nested with a curved clip can't take the exact-rectangle
+    // fast path (chain_rect_intersection); the pixel-mask trace still
+    // reports the true (tighter) intersection instead of just the
+    // newest clip in the chain. Matches Ghostscript's 30 30 60 60.
+    assert_eq!(
+        eval(
+            "newpath 0 0 60 60 rectclip \
+             newpath 50 50 20 0 360 arc closepath clip newpath \
+             clippath pathbbox"
+        ),
+        ["30.0", "30.0", "60.0", "60.0"]
+    );
+}
+
+#[test]
 fn currentlinewidth_reports() {
     assert_eq!(eval("3 setlinewidth currentlinewidth"), ["3.0"]);
 }
