@@ -420,8 +420,10 @@ opens the same file through `/DCTDecode` — a general filter in this
 interpreter, so a PS program can `readstring` decoded samples directly
 without going through the `image` operator — and hatches it: parallel
 lines whose stroke width tracks local darkness, plus a perpendicular
-crosshatch pass in the deep shadows. No new Rust code; the interpreter
-already had every building block this needed. Draws with ordinary
+crosshatch pass in the deep shadows. Both honor the file's own EXIF
+Orientation tag (issue #56), so a portrait phone photo sizes and
+renders right-side up rather than sideways. No new Rust code; the
+interpreter already had every building block this needed. Draws with ordinary
 `moveto`/`lineto`/`stroke`, so it renders to `--png`/`--svg`/`--pdf`
 alike. `scripts/photo_etch.sh` wraps it end to end (photo path in, PNG/
 SVG/PDF out — no PostScript required); `examples/etching_demo.ps` is a

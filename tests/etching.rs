@@ -170,3 +170,44 @@ fn photo_orientation_is_not_flipped() {
         "the dark source rows are at the top; rendered top should be denser: top={top} bottom={bottom}"
     );
 }
+
+#[test]
+fn et_dims_honors_exif_orientation_swap() {
+    // tests/data/cornerdark_exif6.jpg: raw SOF is 80x40 (see the
+    // generator comment on the fixture itself), tagged with EXIF
+    // Orientation 6 (rotate 90 CW) — a 90/270-rotation orientation, so
+    // the *displayed* size swaps to 40x80.
+    let mut it = with_lib(10, 10);
+    assert_eq!(
+        dims(&mut it, "tests/data/cornerdark_exif6.jpg"),
+        (40, 80, 1)
+    );
+}
+
+#[test]
+fn et_draw_honors_exif_orientation_rotation() {
+    // tests/data/cornerdark_exif6.jpg: a dark block confined to the
+    // raw top-left quadrant only (not a full-width/height stripe) —
+    // deliberately asymmetric in both axes, because orientations
+    // 5/6/7/8 each rotate the raw top-left corner to a *different* one
+    // of the four display corners (verified by hand against
+    // et-orient-map's transforms: 5->top-left, 6->top-right,
+    // 7->bottom-right, 8->bottom-left). A stripe-only fixture can't
+    // tell a 5/6/7/8 mixup from a correct orientation 6 — this one
+    // can, since only orientation 6 puts the dark block in the
+    // top-right corner asserted below.
+    let mut it = with_lib(40, 80);
+    it.run_str(
+        "<< /Photo (tests/data/cornerdark_exif6.jpg) /PageWidth 40 /PageHeight 80 >> et-draw showpage",
+    )
+    .unwrap_or_else(|e| panic!("et-draw failed: {}", it.error_report(&e)));
+    let top_right = ink_coverage(&it, 30, 0, 40, 20);
+    let top_left = ink_coverage(&it, 0, 0, 20, 20);
+    let bottom_left = ink_coverage(&it, 0, 60, 20, 80);
+    let bottom_right = ink_coverage(&it, 20, 60, 40, 80);
+    assert!(
+        top_right > top_left && top_right > bottom_left && top_right > bottom_right,
+        "orientation 6 should rotate the raw top-left corner to the display top-right corner: \
+         top_right={top_right} top_left={top_left} bottom_left={bottom_left} bottom_right={bottom_right}"
+    );
+}
