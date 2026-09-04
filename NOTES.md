@@ -161,6 +161,32 @@ lose. Two more tests: a 21,000-edge path succeeds under `/Paper
 false` and still correctly rejects under `/Paper true` (proving the
 fix is "skip the unused call," not "never call `scpath` at all").
 
+**A third Codex round found two more real bugs, one of them an actual
+crash.** (1) `/Scale` was validated only for `num > 0` — an extreme
+value (`1e9`, on a 10x10 path) reached `tiny-skia`'s rasterizer with
+geometry degenerate enough to panic the interpreter *process itself*,
+not raise a catchable PostScript error (verified: `assertion failed:
+edges[curr_idx].last_y >= curr_y as i32`, `tiny-skia`'s own scanline
+code) — a real violation of AGENTS.md's code-quality bar, and an
+extreme-small value (`1e-20`) hit a raw `rangecheck` in a downstream
+`cvi` first. Bounded to `[0.001, 1000]` in `propts` — chosen by
+sweeping actual values against a live interpreter (clean through
+`1e8`, panics by `1e9`; clean at `0.01`/`0.001`, `rangecheck`s by
+`1e-20`) rather than guessed, leaving three-plus orders of magnitude
+of headroom past either bound on both sides, far past any real print
+size. (2) The same "unused region" bug round 2 fixed for `engraving`
+also applied to `woodcut`/`linocut`: with `/Paper false` and
+`/Density` low enough to round their own chip count to 0, neither
+preset's marks end up touching the region either, so the same
+unconditional `scpath` call could reject a genuinely complex path for
+a region nothing was going to use. Fixed the same way — the chip-
+count computation moved ahead of the `gsave`/`clip` block (it only
+needs `/Density`, already resolved) so a `/prneedregion` flag (chip
+count > 0, or `/Paper` true) can gate the `scpath` call. The two
+round-2 tests generalized into one parametrized-by-preset test
+covering all three, `/Density 0` standing in for engraving's
+structural "no chip marks at all."
+
 **Shared option names deliberately shadow the sibling family's own
 same-named options with different semantics — validated under
 `printkit`-owned error names before any derived value reaches

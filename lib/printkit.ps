@@ -105,8 +105,15 @@
 % surfacing one of *their* error names for a value this file, not
 % they, rejected.
 %
-%   /Scale      num > 0 (default 1). Overall size: spacing, stroke
-%               width, and chip-mark size all grow together.
+%   /Scale      num in [0.001, 1000] (default 1; validated —
+%               `printkit-scale-must-be-positive`/`printkit-scale-
+%               must-be-1000-or-less`/`printkit-scale-must-be-at-
+%               least-0.001` otherwise). Overall size: spacing, stroke
+%               width, and chip-mark size all grow together. The
+%               bound isn't decorative — an unbounded /Scale reaches
+%               the rasterizer with geometry extreme enough to crash
+%               the interpreter process itself, not raise a catchable
+%               error.
 %   /Density    num in [0,1] (default 0.5). Ink coverage — higher
 %               tightens hatch spacing and raises chip-mark count.
 %   /Roughness  num in [0,1] (default 0.5). Hand-cut irregularity —
@@ -304,6 +311,19 @@
   proopts /Scale 1 prgetdef
     { printkit-scale-must-be-a-number } /proscale prbindnum
   proscale 0 le { printkit-scale-must-be-positive } if
+  % Bounded, not just positive: /Scale multiplies directly into every
+  % derived spacing/width/chip-size number below, with no cap of its
+  % own downstream -- an extreme value (1e9, empirically) reaches
+  % tiny-skia with geometry so degenerate it panics the *interpreter
+  % process itself*, not a catchable PostScript error, and program
+  % input must never do that (AGENTS.md's code quality bar). An
+  % extreme-small value (1e-20) hits a raw `rangecheck` in a
+  % downstream `cvi` first. [1e-3, 1000] is generous on both ends for
+  % any real print size (empirically clean at least three orders of
+  % magnitude past each bound) while staying far from either failure
+  % (Codex review, PR #128, round 3).
+  proscale 1000 gt { printkit-scale-must-be-1000-or-less } if
+  proscale 0.001 lt { printkit-scale-must-be-at-least-0.001 } if
 
   proopts /Density 0.5 prgetdef
     { printkit-density-must-be-a-number } /prodensity prbindnum
@@ -396,7 +416,7 @@
 % @kind: Procedure
 % @summary: Woodcut preset — one directional hatch pass (the grain), with high wobble/dropout/trim for hand-cut breakup, plus a scatter of small jittered chip marks along the grain. Built on hatchkit's hatch and artkit's scatter; clips to the current path internally, so no caller pre-clip or region object is needed.
 % @example: newpath 20 20 moveto 180 20 lineto 180 180 lineto 20 180 lineto closepath << /Seed 5 >> woodcut
-% @param: /Scale num > 0, overall size multiplier (default 1)
+% @param: /Scale num in [0.001, 1000], overall size multiplier (default 1)
 % @param: /Density num in [0,1], ink coverage (default 0.5)
 % @param: /Roughness num in [0,1], hand-cut irregularity (default 0.5)
 % @param: /Seed n, derives one sub-seed per underlying call (default: ambient stream)
@@ -412,6 +432,13 @@
   /prangle prres /Angle get def
   /prbudget prres /Budget get def
 
+  % Resolved before any region is built, since whether one gets built
+  % at all now depends on it (see the /prneedregion note below).
+  /prwchipcount 140 prdensity mul 0.5 add cvi def
+  /prchiplen 5 prscale mul def
+  /prchipwid 1.6 prscale mul def
+  /prwjitter 18 40 prroughness mul add def
+
   pathbbox
   /prbby1 exch def /prbbx1 exch def /prbby0 exch def /prbbx0 exch def
   /prbbox [ prbbx0 prbby0 prbbx1 prbby1 ] def
@@ -419,7 +446,14 @@
   gsave
   clip
 
-  /prregion scpath def
+  % scpath enforces its own 20000-edge ceiling independent of whether
+  % anything below actually consumes the region it builds -- building
+  % one nobody uses (chip count rounded to 0 *and* /Paper false) would
+  % reject a path hatch's own clip handles fine (Codex review, PR
+  % #128, round 3, the same class of bug round 2 already fixed for
+  % engraving).
+  /prneedregion prwchipcount 0 gt prres /Paper get or def
+  prneedregion { /prregion scpath def } if
 
   prres /Paper get {
     /prpopts 4 dict def
@@ -451,11 +485,6 @@
   prhopts 1 prres prapplyseed
   prhopts hatch
 
-  /prwchipcount 140 prdensity mul 0.5 add cvi def
-  /prchiplen 5 prscale mul def
-  /prchipwid 1.6 prscale mul def
-  /prwjitter 18 40 prroughness mul add def
-
   prwchipcount 0 gt {
     /prsopts 6 dict def
     prsopts /Count prwchipcount put
@@ -476,7 +505,7 @@
 % @kind: Procedure
 % @summary: Linocut preset — one bold, low-wobble hatch pass and a sparse scatter of a few large chip marks (simplified, deliberate carving, not grain-following breakup). Built on hatchkit's hatch and artkit's scatter; clips to the current path internally.
 % @example: newpath 20 20 moveto 180 20 lineto 180 180 lineto 20 180 lineto closepath << /Seed 5 >> linocut
-% @param: /Scale num > 0, overall size multiplier (default 1)
+% @param: /Scale num in [0.001, 1000], overall size multiplier (default 1)
 % @param: /Density num in [0,1], ink coverage (default 0.5)
 % @param: /Roughness num in [0,1], hand-cut irregularity (default 0.5)
 % @param: /Seed n, derives one sub-seed per underlying call (default: ambient stream)
@@ -492,6 +521,13 @@
   /prangle prres /Angle get def
   /prbudget prres /Budget get def
 
+  % Resolved before any region is built, since whether one gets built
+  % at all now depends on it (see the /prneedregion note below).
+  /prlchipcount 18 prdensity mul 0.5 add cvi def
+  /prchiplen 11 prscale mul def
+  /prchipwid 4.5 prscale mul def
+  /prljitter 8 10 prroughness mul add def
+
   pathbbox
   /prbby1 exch def /prbbx1 exch def /prbby0 exch def /prbbx0 exch def
   /prbbox [ prbbx0 prbby0 prbbx1 prbby1 ] def
@@ -499,7 +535,14 @@
   gsave
   clip
 
-  /prregion scpath def
+  % scpath enforces its own 20000-edge ceiling independent of whether
+  % anything below actually consumes the region it builds -- building
+  % one nobody uses (chip count rounded to 0 *and* /Paper false) would
+  % reject a path hatch's own clip handles fine (Codex review, PR
+  % #128, round 3, the same class of bug round 2 already fixed for
+  % engraving).
+  /prneedregion prlchipcount 0 gt prres /Paper get or def
+  prneedregion { /prregion scpath def } if
 
   prres /Paper get {
     /prpopts 4 dict def
@@ -531,11 +574,6 @@
   prhopts 1 prres prapplyseed
   prhopts hatch
 
-  /prlchipcount 18 prdensity mul 0.5 add cvi def
-  /prchiplen 11 prscale mul def
-  /prchipwid 4.5 prscale mul def
-  /prljitter 8 10 prroughness mul add def
-
   prlchipcount 0 gt {
     /prsopts 6 dict def
     prsopts /Count prlchipcount put
@@ -556,7 +594,7 @@
 % @kind: Procedure
 % @summary: Engraving preset — one hatchkit call sweeping three angles (60 degrees apart) at fine spacing, thin width, and minimal wobble/dropout: controlled crosshatched line work, no chip marks. Built entirely on hatchkit's hatch; clips to the current path internally.
 % @example: newpath 20 20 moveto 180 20 lineto 180 180 lineto 20 180 lineto closepath << /Seed 5 >> engraving
-% @param: /Scale num > 0, overall size multiplier (default 1)
+% @param: /Scale num in [0.001, 1000], overall size multiplier (default 1)
 % @param: /Density num in [0,1], ink coverage (default 0.5)
 % @param: /Roughness num in [0,1], line irregularity (default 0.5, applied lightly)
 % @param: /Seed n, derives one sub-seed per underlying call (default: ambient stream)

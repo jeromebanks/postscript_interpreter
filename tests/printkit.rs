@@ -213,36 +213,45 @@ fn paper_true_works_for_engraving_which_has_no_chip_marks() {
 }
 
 #[test]
-fn engraving_with_paper_false_never_builds_an_unused_region() {
-    // Codex review, PR #128, round 2: an earlier draft called `scpath`
-    // unconditionally in every preset, including `engraving` with
-    // `/Paper false` (its common case, where the region is never
-    // used). `scpath` enforces its own 20000-edge ceiling regardless
-    // of whether anything downstream needs a region that large, so a
+fn no_preset_builds_an_unused_region() {
+    // Codex review, PR #128, rounds 2 and 3: an earlier draft called
+    // `scpath` unconditionally in every preset, including whenever
+    // its result goes unused -- `engraving` with `/Paper false` (it
+    // has no chip marks at all), and `woodcut`/`linocut` whenever
+    // `/Paper false` *and* `/Density` rounds their own chip count to
+    // 0. `scpath` enforces its own 20000-edge ceiling regardless of
+    // whether anything downstream needs a region that large, so a
     // caller with a genuinely complex path -- one `hatch`'s own
     // `clip` would happily draw -- got a spurious
-    // `scpath-too-many-edges` rejection from a region this preset was
-    // never going to use. `engraving` must skip `scpath` entirely
-    // when `/Paper` is false; `/Paper true` still needs the region
-    // and should still reject the same path, proving the fix isn't
-    // just "never call scpath."
+    // `scpath-too-many-edges` rejection from a region nothing was
+    // going to use. Every preset must skip `scpath` entirely when
+    // nothing needs it; `/Paper true` still needs the region and
+    // should still reject the same path for all three, proving the
+    // fix is "skip the unused call," not "never call scpath."
     let mut complex = String::from("newpath 0 0 moveto ");
     for i in 0..21_000 {
         complex.push_str(&format!("{} {} lineto ", i % 500, i as f64 * 0.001));
     }
     complex.push_str("closepath");
 
-    let mut it = with_lib(600, 600);
-    it.run_str(&format!("{complex} << /Seed 1 >> engraving"))
-        .unwrap_or_else(|e| {
-            panic!(
-                "engraving with /Paper false rejected a complex path hatch alone would handle: {}",
-                it.error_report(&e)
-            )
-        });
+    // /Density 0 keeps woodcut/linocut's own chip count at 0 (round
+    // 0.5 -> 0 for both formulas), same as engraving having none at
+    // all -- the shared "region never used" precondition.
+    for preset in ["woodcut", "linocut", "engraving"] {
+        let mut it = with_lib(600, 600);
+        it.run_str(&format!("{complex} << /Seed 1 /Density 0 >> {preset}"))
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{preset} with /Paper false rejected a complex path hatch alone would handle: {}",
+                    it.error_report(&e)
+                )
+            });
 
-    let got = printkit_err(&format!("{complex} << /Seed 1 /Paper true >> engraving"));
-    assert_eq!(got, "scpath-too-many-edges");
+        let got = printkit_err(&format!(
+            "{complex} << /Seed 1 /Density 0 /Paper true >> {preset}"
+        ));
+        assert_eq!(got, "scpath-too-many-edges", "{preset}");
+    }
 }
 
 // --- gsave/grestore isolation --------------------------------------------
@@ -413,6 +422,16 @@ fn shared_option_validation_error_table() {
         ("<< /Scale (nope) >>", "printkit-scale-must-be-a-number"),
         ("<< /Scale -1 >>", "printkit-scale-must-be-positive"),
         ("<< /Scale 0 >>", "printkit-scale-must-be-positive"),
+        ("<< /Scale 1e9 >>", "printkit-scale-must-be-1000-or-less"),
+        ("<< /Scale 1001 >>", "printkit-scale-must-be-1000-or-less"),
+        (
+            "<< /Scale 1e-20 >>",
+            "printkit-scale-must-be-at-least-0.001",
+        ),
+        (
+            "<< /Scale 0.0001 >>",
+            "printkit-scale-must-be-at-least-0.001",
+        ),
         ("<< /Density (nope) >>", "printkit-density-must-be-a-number"),
         (
             "<< /Density 1.5 >>",
