@@ -69,6 +69,26 @@ fn et_dims_rejects_truncated_jpeg() {
     std::fs::remove_file(&tmp).ok();
 }
 
+#[test]
+fn et_dims_rejects_a_corrupt_segment_length() {
+    // A marker segment's length field includes itself, so it must be
+    // >= 2; a corrupted length of 0 or 1 would otherwise send `len 2
+    // sub` negative into `et-readn`/`et-skip`'s `string`, which raises
+    // a raw rangecheck instead of a named, catchable JPEG error like
+    // every other malformed-input case in this scan.
+    let mut it = with_lib(10, 10);
+    let tmp = std::env::temp_dir().join("etching_test_bad_length.jpg");
+    std::fs::write(&tmp, [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x01]).unwrap();
+    let err = it
+        .run_str(&format!("<< /Photo ({}) >> et-dims", tmp.to_str().unwrap()))
+        .expect_err("a marker with length < 2 must not raise a raw rangecheck");
+    assert!(
+        matches!(&err, PsError::Undefined(name) if name.contains("et-jpeg-bad-marker")),
+        "expected the et-jpeg-bad-marker guard, got {err:?}"
+    );
+    std::fs::remove_file(&tmp).ok();
+}
+
 /// Count non-paper pixels in a page-space rectangle — a proxy for ink
 /// coverage that doesn't depend on exact stroke placement.
 fn ink_coverage(it: &Interp, x0: u32, y0: u32, x1: u32, y1: u32) -> f64 {
@@ -168,5 +188,46 @@ fn photo_orientation_is_not_flipped() {
     assert!(
         top > bottom,
         "the dark source rows are at the top; rendered top should be denser: top={top} bottom={bottom}"
+    );
+}
+
+#[test]
+fn et_dims_honors_exif_orientation_swap() {
+    // tests/data/cornerdark_exif6.jpg: raw SOF is 80x40 (see the
+    // generator comment on the fixture itself), tagged with EXIF
+    // Orientation 6 (rotate 90 CW) — a 90/270-rotation orientation, so
+    // the *displayed* size swaps to 40x80.
+    let mut it = with_lib(10, 10);
+    assert_eq!(
+        dims(&mut it, "tests/data/cornerdark_exif6.jpg"),
+        (40, 80, 1)
+    );
+}
+
+#[test]
+fn et_draw_honors_exif_orientation_rotation() {
+    // tests/data/cornerdark_exif6.jpg: a dark block confined to the
+    // raw top-left quadrant only (not a full-width/height stripe) —
+    // deliberately asymmetric in both axes, because orientations
+    // 5/6/7/8 each rotate the raw top-left corner to a *different* one
+    // of the four display corners (verified by hand against
+    // et-orient-map's transforms: 5->top-left, 6->top-right,
+    // 7->bottom-right, 8->bottom-left). A stripe-only fixture can't
+    // tell a 5/6/7/8 mixup from a correct orientation 6 — this one
+    // can, since only orientation 6 puts the dark block in the
+    // top-right corner asserted below.
+    let mut it = with_lib(40, 80);
+    it.run_str(
+        "<< /Photo (tests/data/cornerdark_exif6.jpg) /PageWidth 40 /PageHeight 80 >> et-draw showpage",
+    )
+    .unwrap_or_else(|e| panic!("et-draw failed: {}", it.error_report(&e)));
+    let top_right = ink_coverage(&it, 30, 0, 40, 20);
+    let top_left = ink_coverage(&it, 0, 0, 20, 20);
+    let bottom_left = ink_coverage(&it, 0, 60, 20, 80);
+    let bottom_right = ink_coverage(&it, 20, 60, 40, 80);
+    assert!(
+        top_right > top_left && top_right > bottom_left && top_right > bottom_right,
+        "orientation 6 should rotate the raw top-left corner to the display top-right corner: \
+         top_right={top_right} top_left={top_left} bottom_left={bottom_left} bottom_right={bottom_right}"
     );
 }

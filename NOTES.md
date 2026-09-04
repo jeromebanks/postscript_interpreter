@@ -3,6 +3,96 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## `lib/etching.ps`: honor EXIF orientation (issue #56, 2026-09-04)
+
+`et-dims`/`et-draw` now read a JPEG's APP1/TIFF Orientation tag
+(0x0112) via a hand-rolled IFD walk (`et-exif-orientation`,
+`et-str-u16`/`et-str-u32` for byte-order-aware reads over the APP1
+payload string) folded into `et-scan`'s existing marker walk — no
+second file pass. Orientations 5-8 (90°-rotated) swap the
+width/height `et-dims` reports and the display-space size `et-draw`
+samples against; the actual pixel remap is a single new proc,
+`et-orient-map` (display (x,y) -> raw buffer (row,col), one non-
+identity branch per orientation 2-8, identity default), called from
+`et-tone` right before it indexes `buf` — `buf` itself, and the
+row-decode loop that fills it, stay untouched, since they're keyed off
+the raw SOF dimensions regardless of orientation. `et-hatch`'s own
+sampling scale switched from raw width/height to the new
+`dispwidth`/`dispheight` pair so it walks display space, matching what
+`et-orient-map` expects as input. `et-dims` sets `dispwidth`/
+`dispheight` too (not just the width/height it returns) even though it
+never reads them itself — `EtchLayout` is a persistent dict, so
+leaving them unset after an `et-dims`-only session would surface as an
+`undefined` name to any direct call into `et-hatch`/`et-tone` (not
+hidden — both live in `EtchLayout` alongside the public API), a real
+gap `et-draw`'s own unconditional recompute papers over for the
+documented API but not for that path; caught in review, not by the
+test suite. Every EXIF read is bounds-checked
+against the payload's own length before it happens (PostScript `and`
+isn't short-circuit, so the checks are nested `if`s, not chained
+`and`s) — malformed/truncated/non-Exif APP1 data degrades to
+orientation 1 (identity) rather than a rangecheck crash, verified by
+hand against five deliberately-malformed payloads (truncated, XMP-
+flavored, bad byte-order marker, out-of-bounds IFD offset, absurd
+entry count) all rendering as if untagged.
+
+All eight orientation transforms were verified numerically, not just
+read off the derivation: a small script builds an 80x40 grayscale JPEG
+with a hand-spliced EXIF APP1 at each of the 8 orientation values,
+renders each through `et-draw`, and checks which edge of the output
+actually went dark — matched predictions for all eight. The first
+pass at this used a full-width dark stripe and caught a real gap in
+its own test design (found in review, not by the stripe itself):
+orientations 5 and 7 land the same stripe on the same edge as 6 and 8
+respectively, since a stripe is symmetric on the axis a 90°-rotation
+swaps — so a fixture built that way can't tell a 5/6 or 7/8 mixup from
+a correct implementation. The committed fixture
+(`tests/data/cornerdark_exif6.jpg`) uses a corner block instead — dark
+only in the raw top-left quadrant — which is asymmetric on *both*
+axes; orientations 5/6/7/8 each rotate that corner to a different one
+of the four display corners (5→top-left, 6→top-right, 7→bottom-right,
+8→bottom-left), so `et_draw_honors_exif_orientation_rotation` pins the
+specific orientation, not just "some rotation happened." Only
+orientation 6 is a committed regression test (that one fixture plus
+`et_dims_honors_exif_orientation_swap` for the dimension swap) — the
+other seven were confidence-building for this session, not added as
+fixtures, since the transform math is one shared proc
+(`et-orient-map`), not seven independent implementations that could
+each be wrong differently. Not done: validating the TIFF
+entry's `type`/`count` fields before trusting its value (a
+non-SHORT/non-count-1 Orientation entry, or a tag-274 collision on
+some other field, would just clamp to a garbage-but-plausible 1-8
+value or fall through to identity) — out of scope per the issue,
+which asked for the tag read, not full TIFF conformance.
+
+Independent review (Codex's cross-model pass failed to return a
+response for this PR, so this fell back to a blank-context Claude
+agent per the skill's fallback path) found three real gaps the initial
+pass missed, all fixed:
+- `et-scan`'s `len 2 sub` (used for every marker segment's payload
+  read, not just APP1) wasn't guarded against a corrupted length field
+  of 0 or 1, which would send a negative count into `string` and raise
+  a raw rangecheck instead of a named, catchable error — the one
+  malformed-input case the "verified by hand against five payloads"
+  claim in the paragraph above didn't actually cover. Pre-existing on
+  `main` (an `APP0` with a bad length crashes identically via
+  `et-skip`), not a regression this PR introduced, but the new APP1
+  path inherited it and the PR's own claim was narrower than the code.
+  Fixed with a `len 2 lt { et-jpeg-bad-marker } if` guard right after
+  the length read — closes the gap for every marker type, not just
+  APP1 — plus a regression test
+  (`et_dims_rejects_a_corrupt_segment_length`).
+- The doc comment on `et-scan` claimed orientation comes from the
+  "first" Exif APP1 segment encountered; the loop actually lets the
+  *last* one win (it reassigns `/orientation` on every APP1 match, no
+  early exit). Harmless in practice — real JPEGs carry at most one —
+  fixed by correcting the comment rather than changing the behavior.
+- `et-str-u16`/`et-str-u32` shared identical scratch-variable names
+  (`etub`/`etui`/`etus`), breaking the file's own per-proc unique-
+  prefix discipline (not a live bug — neither proc calls the other, so
+  no reentrancy — but a real style deviation). Renamed to `et16*`/
+  `et32*`.
+
 ## Halftone gallery piece (issue #126, 2026-09-03)
 
 "Out of Register" (`gallery/out_of_register.ps`, 720x900) — a

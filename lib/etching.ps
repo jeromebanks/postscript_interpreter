@@ -18,6 +18,10 @@
 %        without decoding it — cheap enough to run as a measure
 %        pre-pass (see scripts/photo_etch.sh) the way
 %        lib/handscript.ps's hs-linecount measures before hs-write.
+%        width/height are swapped from the raw SOF values when the
+%        file's EXIF Orientation tag calls for a 90° rotation (see
+%        below) — this is the *displayed* size, not necessarily the
+%        raw one.
 %
 %   << /Photo (path.jpg)
 %      /PageWidth pw /PageHeight ph   % required: output canvas, points
@@ -42,15 +46,14 @@
 % baseline's — et-dims/et-draw recognize any SOFn marker, not just
 % baseline's C0, for exactly that reason.
 %
-% Not handled: EXIF orientation (the APP1 tag many phone cameras set
-% instead of physically rotating the pixel data). et-dims/et-draw
-% always use the raw SOF width/height/samples — a portrait photo shot
-% with the phone rotated will size and render sideways or mirrored,
-% same as feeding that file's raw samples to `image` would. Tracked
-% as a follow-up rather than fixed here: real EXIF/TIFF IFD parsing
-% (not just a marker length-skip) is a meaningfully sized addition on
-% its own, and it doesn't hang or crash — it degrades a subset of
-% inputs, not all of them.
+% EXIF orientation (the APP1 tag many phone cameras set instead of
+% physically rotating the pixel data) is honored: et-dims/et-draw read
+% the file's own APP1/TIFF Orientation tag (0x0112) if present, and
+% et-dims's returned width/height (and et-draw's page-space sampling)
+% account for it — a portrait photo shot this way sizes and renders
+% right-side up rather than sideways. Malformed or absent EXIF data
+% degrades to orientation 1 (no transform) rather than erroring; only
+% the Orientation tag is read, not any other EXIF field.
 
 /EtchLayout 64 dict def
 EtchLayout begin
@@ -94,6 +97,135 @@ EtchLayout begin
     v lo ge v hi le and
   } def
 
+  % file n -> string, n bytes (best-effort — a truncated file yields a
+  % short string, same silently-tolerant behavior as et-skip; safe
+  % here because callers only use it on an APP1 payload they're about
+  % to bounds-check byte by byte anyway).
+  /et-readn { string readstring pop } def
+
+  % str idx bigend -> uint16 read from str at idx, in the given byte
+  % order. Callers must bounds-check idx/idx+1 against str's length
+  % first — no check is done here.
+  /et-str-u16 {
+    /et16b exch def /et16i exch def /et16s exch def
+    et16b {
+      et16s et16i get 8 bitshift et16s et16i 1 add get add
+    } {
+      et16s et16i 1 add get 8 bitshift et16s et16i get add
+    } ifelse
+  } def
+
+  % str idx bigend -> uint32 read from str at idx, in the given byte
+  % order. Same bounds-checking contract as et-str-u16.
+  /et-str-u32 {
+    /et32b exch def /et32i exch def /et32s exch def
+    et32b {
+      et32s et32i get 24 bitshift
+      et32s et32i 1 add get 16 bitshift add
+      et32s et32i 2 add get 8 bitshift add
+      et32s et32i 3 add get add
+    } {
+      et32s et32i 3 add get 24 bitshift
+      et32s et32i 2 add get 16 bitshift add
+      et32s et32i 1 add get 8 bitshift add
+      et32s et32i get add
+    } ifelse
+  } def
+
+  % payload currentOrient et-exif-orientation -> orient
+  % Parses an APP1 segment's payload for an embedded TIFF/EXIF
+  % Orientation tag (0x0112) and returns its value (1-8), or
+  % currentOrient unchanged if the payload isn't a well-formed Exif
+  % TIFF block, doesn't carry the tag, or is truncated. Every read is
+  % bounds-checked against the payload's own length first — malformed
+  % camera/attacker-supplied EXIF degrades to "no orientation info"
+  % rather than a rangecheck crash. Only the Orientation tag's value is
+  % read; the TIFF type/count fields aren't validated beyond that (a
+  % tag-274 collision on a non-SHORT field would just produce a
+  % garbage value, which the 1-8 clamp below then discards).
+  /et-exif-orientation {
+    /etxorient exch def
+    /etxap1 exch def
+    etxap1 length 14 ge
+    {
+      etxap1 0 4 getinterval (Exif) eq
+      etxap1 4 get 0 eq and
+      etxap1 5 get 0 eq and
+      {
+        /etxbase 6 def
+        etxap1 etxbase get 16#49 eq etxap1 etxbase 1 add get 16#49 eq and
+        {
+          /etxbig false def
+        } {
+          etxap1 etxbase get 16#4D eq etxap1 etxbase 1 add get 16#4D eq and
+          { /etxbig true def } { /etxbig null def } ifelse
+        } ifelse
+        etxbig null ne
+        {
+          etxap1 etxbase 2 add etxbig et-str-u16 /etxmagic exch def
+          etxmagic 42 eq
+          {
+            etxap1 etxbase 4 add etxbig et-str-u32 /etxifdoff exch def
+            /etxifdstart etxbase etxifdoff add def
+            etxifdstart 0 ge etxifdstart 2 add etxap1 length le and
+            {
+              etxap1 etxifdstart etxbig et-str-u16 /etxcount exch def
+              /etxentries etxifdstart 2 add def
+              0 1 etxcount 1 sub {
+                /etxi exch def
+                /etxoff etxentries etxi 12 mul add def
+                etxoff 12 add etxap1 length le
+                {
+                  etxap1 etxoff etxbig et-str-u16 /etxtag exch def
+                  etxtag 274 eq
+                  {
+                    etxap1 etxoff 8 add etxbig et-str-u16 /etxval exch def
+                    etxval 1 ge etxval 8 le and
+                    { /etxorient etxval def } if
+                  } if
+                } if
+              } for
+            } if
+          } if
+        } if
+      } if
+    } if
+    etxorient
+  } def
+
+  % dx dy -> rx ry: maps a display-space sample coordinate back to the
+  % raw decoded buffer's column/row, per the EXIF Orientation transform
+  % (identity for 1 or any unrecognized value). width/height here are
+  % always the *raw* SOF dimensions (et-draw never swaps them) — only
+  % the caller-facing dispwidth/dispheight are swapped for orientation
+  % 5-8, which is exactly what this proc undoes before indexing buf.
+  /et-orient-map {
+    /etody exch def /etodx exch def
+    orientation 2 eq {
+      width 1 sub etodx sub etody
+    } {
+    orientation 3 eq {
+      width 1 sub etodx sub height 1 sub etody sub
+    } {
+    orientation 4 eq {
+      etodx height 1 sub etody sub
+    } {
+    orientation 5 eq {
+      etody etodx
+    } {
+    orientation 6 eq {
+      etody height 1 sub etodx sub
+    } {
+    orientation 7 eq {
+      width 1 sub etody sub height 1 sub etodx sub
+    } {
+    orientation 8 eq {
+      width 1 sub etody sub etodx
+    } {
+      etodx etody
+    } ifelse } ifelse } ifelse } ifelse } ifelse } ifelse } ifelse
+  } def
+
   % file -> markercode (0xFF and any 0xFF fill bytes already consumed)
   /et-nextmarker {
     dup et-byte 16#FF ne { pop et-jpeg-bad-marker } if
@@ -105,12 +237,18 @@ EtchLayout begin
     exch pop
   } def
 
-  % file -> width height ncomp. Leaves the file open past the SOF
-  % segment (mid-headers, nowhere near entropy data); callers that
-  % want decoded samples reopen the path through DCTDecode instead of
-  % reusing this handle.
+  % file -> width height ncomp orientation. Leaves the file open past
+  % the SOF segment (mid-headers, nowhere near entropy data); callers
+  % that want decoded samples reopen the path through DCTDecode
+  % instead of reusing this handle. orientation is the EXIF
+  % Orientation tag's value (1-8) from the last well-formed Exif APP1
+  % segment encountered (real JPEGs carry at most one, so this only
+  % matters for a deliberately doctored file), or 1 (no transform) if
+  % none is present — width/height/ncomp are always the raw SOF
+  % values, unswapped.
   /et-scan {
     /f exch def
+    /orientation 1 def
     f et-byte 16#FF ne { et-jpeg-not-a-jpeg } if
     f et-byte 16#D8 ne { et-jpeg-not-a-jpeg } if
     {
@@ -122,6 +260,13 @@ EtchLayout begin
       marker 16#D0 16#D7 et-between marker 16#01 eq or not
       {
         f et-u16 /len exch def
+        % The length field includes itself, so a well-formed segment
+        % always has len >= 2; a corrupted one (len 0 or 1) would send
+        % `len 2 sub` negative into `et-readn`/`et-skip`'s `string`,
+        % which rejects a negative size with a raw rangecheck instead
+        % of the named, catchable errors this scan otherwise raises on
+        % malformed input.
+        len 2 lt { et-jpeg-bad-marker } if
         % SOFn is C0-CF minus C4 (DHT), C8 (JPG, reserved), CC (DAC) —
         % those three share the numeric range but aren't frame headers.
         marker 16#C0 16#CF et-between
@@ -133,11 +278,17 @@ EtchLayout begin
           f et-byte /ncomp exch def
           exit
         } {
-          f len 2 sub et-skip
+          marker 16#E1 eq
+          {
+            f len 2 sub et-readn orientation et-exif-orientation
+            /orientation exch def
+          } {
+            f len 2 sub et-skip
+          } ifelse
         } ifelse
       } if
     } loop
-    width height ncomp
+    width height ncomp orientation
   } def
 
   % ---------------------------------------------------------- engraving
@@ -147,17 +298,21 @@ EtchLayout begin
   % width*height*ncomp string — a single string that size overflows
   % this interpreter's 16MB string limit on an ordinary phone photo
   % (e.g. 4032x3024 RGB is ~36.6MB), where a single row never does.
+  % x/y are in *display* space (dispwidth/dispheight — post-EXIF-
+  % orientation), since that's what et-hatch samples in; et-orient-map
+  % converts to the raw buffer's row/col before indexing buf.
   % ett- prefixed scratch — leaf helper, but prefixed anyway per
   % dataviz.ps's discipline: cheap insurance against whatever calls it
   % next sharing a name by accident.
   /et-tone {
     /ettsy exch def /ettsx exch def
     ettsx 0 lt { /ettsx 0 def } if
-    ettsx width ge { /ettsx width 1 sub def } if
+    ettsx dispwidth ge { /ettsx dispwidth 1 sub def } if
     ettsy 0 lt { /ettsy 0 def } if
-    ettsy height ge { /ettsy height 1 sub def } if
-    /ettrow buf ettsy get def
-    /ettidx ettsx ncomp mul def
+    ettsy dispheight ge { /ettsy dispheight 1 sub def } if
+    ettsx ettsy et-orient-map /ettry exch def /ettrx exch def
+    /ettrow buf ettry get def
+    /ettidx ettrx ncomp mul def
     ncomp 1 eq {
       /ettlum ettrow ettidx get def
     } {
@@ -209,12 +364,14 @@ EtchLayout begin
         /ethy ethcy ethny ethk mul add ethdy etht mul add def
         /ethb 0 def
         ethx 0 ge ethx pw le and ethy 0 ge ethy ph le and and {
-          /ethsx ethx width mul pw div cvi def
+          /ethsx ethx dispwidth mul pw div cvi def
           % PostScript's y runs bottom-up; the decoded sample buffer's
           % rows run top-down (row 0 first out of the JPEG), so this
           % flips or the photo prints upside down (caught by
-          % tests/etching.rs's orientation check).
-          /ethsy ph ethy sub height mul ph div cvi def
+          % tests/etching.rs's orientation check). dispwidth/dispheight
+          % (not width/height) since et-tone samples in display space —
+          % see et-orient-map.
+          /ethsy ph ethy sub dispheight mul ph div cvi def
           ethsx ethsy et-tone /ethdk exch def
           ethdk ethmind ge {
             /ethnd ethdk ethmind sub ethdenom div def
@@ -261,7 +418,7 @@ end
   EtchLayout begin
     /Opts exch def
     /Photo getopt (r) file et-scan
-    /ncomp exch def /height exch def /width exch def
+    /orientation exch def /ncomp exch def /height exch def /width exch def
     % et-scan's `f` (opened via a plain `file`, so it holds the
     % photo's full raw bytes) is left open on purpose for callers that
     % go on to read decoded samples — et-dims isn't one of those, and
@@ -271,7 +428,23 @@ end
     % photo's raw bytes reachable indefinitely.
     f closefile
     /f null def
-    width height ncomp
+    % EXIF orientations 5-8 are 90°-rotated: what the caller sizes
+    % PageWidth/PageHeight against is the *displayed* image, so swap
+    % here rather than reporting the raw SOF width/height. Also set
+    % dispwidth/dispheight (not just the returned values) — EtchLayout
+    % is a persistent dict, so a stray direct call into et-hatch/
+    % et-tone (both live in EtchLayout, not hidden) right after an
+    % et-dims-only session would otherwise hit an undefined name
+    % instead of a clear result; et-draw always overwrites these
+    % itself before it needs them, so this is purely defensive.
+    orientation 5 ge orientation 8 le and
+    { /dispwidth height def /dispheight width def }
+    { /dispwidth width def /dispheight height def }
+    ifelse
+    orientation 5 ge orientation 8 le and
+    { height width ncomp }
+    { width height ncomp }
+    ifelse
   end
 } def
 
@@ -281,13 +454,17 @@ end
     /Opts exch def
     /Photo getopt /photopath exch def
     photopath (r) file et-scan
-    /ncomp exch def /height exch def /width exch def
+    /orientation exch def /ncomp exch def /height exch def /width exch def
     ncomp 1 eq ncomp 3 eq or not { et-unsupported-ncomp } if
     photopath (r) file /DCTDecode filter /jf exch def
     % One string per row, not one width*height*ncomp string for the
     % whole image — that single allocation overflows this
     % interpreter's 16MB string limit well within ordinary photo
     % sizes (see et-tone's comment), where a single row never does.
+    % width/height stay the raw decoded-buffer dimensions throughout
+    % this proc (never swapped) — et-orient-map needs them raw to
+    % index buf; only dispwidth/dispheight (below) carry the
+    % orientation-swapped, caller-facing sizing.
     /buf height array def
     0 1 height 1 sub {
       /etdi exch def
@@ -296,6 +473,11 @@ end
       buf etdi etdrow put
     } for
     jf closefile
+
+    orientation 5 ge orientation 8 le and
+    { /dispwidth height def /dispheight width def }
+    { /dispwidth width def /dispheight height def }
+    ifelse
 
     /pw /PageWidth getopt def
     /ph /PageHeight getopt def
