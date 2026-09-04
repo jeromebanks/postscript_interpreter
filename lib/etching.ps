@@ -107,28 +107,28 @@ EtchLayout begin
   % order. Callers must bounds-check idx/idx+1 against str's length
   % first — no check is done here.
   /et-str-u16 {
-    /etub exch def /etui exch def /etus exch def
-    etub {
-      etus etui get 8 bitshift etus etui 1 add get add
+    /et16b exch def /et16i exch def /et16s exch def
+    et16b {
+      et16s et16i get 8 bitshift et16s et16i 1 add get add
     } {
-      etus etui 1 add get 8 bitshift etus etui get add
+      et16s et16i 1 add get 8 bitshift et16s et16i get add
     } ifelse
   } def
 
   % str idx bigend -> uint32 read from str at idx, in the given byte
   % order. Same bounds-checking contract as et-str-u16.
   /et-str-u32 {
-    /etub exch def /etui exch def /etus exch def
-    etub {
-      etus etui get 24 bitshift
-      etus etui 1 add get 16 bitshift add
-      etus etui 2 add get 8 bitshift add
-      etus etui 3 add get add
+    /et32b exch def /et32i exch def /et32s exch def
+    et32b {
+      et32s et32i get 24 bitshift
+      et32s et32i 1 add get 16 bitshift add
+      et32s et32i 2 add get 8 bitshift add
+      et32s et32i 3 add get add
     } {
-      etus etui 3 add get 24 bitshift
-      etus etui 2 add get 16 bitshift add
-      etus etui 1 add get 8 bitshift add
-      etus etui get add
+      et32s et32i 3 add get 24 bitshift
+      et32s et32i 2 add get 16 bitshift add
+      et32s et32i 1 add get 8 bitshift add
+      et32s et32i get add
     } ifelse
   } def
 
@@ -241,9 +241,11 @@ EtchLayout begin
   % the SOF segment (mid-headers, nowhere near entropy data); callers
   % that want decoded samples reopen the path through DCTDecode
   % instead of reusing this handle. orientation is the EXIF
-  % Orientation tag's value (1-8) from the first well-formed Exif APP1
-  % segment encountered, or 1 (no transform) if none is present —
-  % width/height/ncomp are always the raw SOF values, unswapped.
+  % Orientation tag's value (1-8) from the last well-formed Exif APP1
+  % segment encountered (real JPEGs carry at most one, so this only
+  % matters for a deliberately doctored file), or 1 (no transform) if
+  % none is present — width/height/ncomp are always the raw SOF
+  % values, unswapped.
   /et-scan {
     /f exch def
     /orientation 1 def
@@ -258,6 +260,13 @@ EtchLayout begin
       marker 16#D0 16#D7 et-between marker 16#01 eq or not
       {
         f et-u16 /len exch def
+        % The length field includes itself, so a well-formed segment
+        % always has len >= 2; a corrupted one (len 0 or 1) would send
+        % `len 2 sub` negative into `et-readn`/`et-skip`'s `string`,
+        % which rejects a negative size with a raw rangecheck instead
+        % of the named, catchable errors this scan otherwise raises on
+        % malformed input.
+        len 2 lt { et-jpeg-bad-marker } if
         % SOFn is C0-CF minus C4 (DHT), C8 (JPG, reserved), CC (DAC) —
         % those three share the numeric range but aren't frame headers.
         marker 16#C0 16#CF et-between

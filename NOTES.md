@@ -65,6 +65,34 @@ some other field, would just clamp to a garbage-but-plausible 1-8
 value or fall through to identity) — out of scope per the issue,
 which asked for the tag read, not full TIFF conformance.
 
+Independent review (Codex's cross-model pass failed to return a
+response for this PR, so this fell back to a blank-context Claude
+agent per the skill's fallback path) found three real gaps the initial
+pass missed, all fixed:
+- `et-scan`'s `len 2 sub` (used for every marker segment's payload
+  read, not just APP1) wasn't guarded against a corrupted length field
+  of 0 or 1, which would send a negative count into `string` and raise
+  a raw rangecheck instead of a named, catchable error — the one
+  malformed-input case the "verified by hand against five payloads"
+  claim in the paragraph above didn't actually cover. Pre-existing on
+  `main` (an `APP0` with a bad length crashes identically via
+  `et-skip`), not a regression this PR introduced, but the new APP1
+  path inherited it and the PR's own claim was narrower than the code.
+  Fixed with a `len 2 lt { et-jpeg-bad-marker } if` guard right after
+  the length read — closes the gap for every marker type, not just
+  APP1 — plus a regression test
+  (`et_dims_rejects_a_corrupt_segment_length`).
+- The doc comment on `et-scan` claimed orientation comes from the
+  "first" Exif APP1 segment encountered; the loop actually lets the
+  *last* one win (it reassigns `/orientation` on every APP1 match, no
+  early exit). Harmless in practice — real JPEGs carry at most one —
+  fixed by correcting the comment rather than changing the behavior.
+- `et-str-u16`/`et-str-u32` shared identical scratch-variable names
+  (`etub`/`etui`/`etus`), breaking the file's own per-proc unique-
+  prefix discipline (not a live bug — neither proc calls the other, so
+  no reentrancy — but a real style deviation). Renamed to `et16*`/
+  `et32*`.
+
 ## Halftone gallery piece (issue #126, 2026-09-03)
 
 "Out of Register" (`gallery/out_of_register.ps`, 720x900) — a

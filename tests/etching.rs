@@ -69,6 +69,26 @@ fn et_dims_rejects_truncated_jpeg() {
     std::fs::remove_file(&tmp).ok();
 }
 
+#[test]
+fn et_dims_rejects_a_corrupt_segment_length() {
+    // A marker segment's length field includes itself, so it must be
+    // >= 2; a corrupted length of 0 or 1 would otherwise send `len 2
+    // sub` negative into `et-readn`/`et-skip`'s `string`, which raises
+    // a raw rangecheck instead of a named, catchable JPEG error like
+    // every other malformed-input case in this scan.
+    let mut it = with_lib(10, 10);
+    let tmp = std::env::temp_dir().join("etching_test_bad_length.jpg");
+    std::fs::write(&tmp, [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x01]).unwrap();
+    let err = it
+        .run_str(&format!("<< /Photo ({}) >> et-dims", tmp.to_str().unwrap()))
+        .expect_err("a marker with length < 2 must not raise a raw rangecheck");
+    assert!(
+        matches!(&err, PsError::Undefined(name) if name.contains("et-jpeg-bad-marker")),
+        "expected the et-jpeg-bad-marker guard, got {err:?}"
+    );
+    std::fs::remove_file(&tmp).ok();
+}
+
 /// Count non-paper pixels in a page-space rectangle — a proxy for ink
 /// coverage that doesn't depend on exact stroke placement.
 fn ink_coverage(it: &Interp, x0: u32, y0: u32, x1: u32, y1: u32) -> f64 {
