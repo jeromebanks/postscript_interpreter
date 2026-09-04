@@ -603,7 +603,18 @@ wrong directory reviews the wrong tree and still returns a confident
 verdict, so assert the branch before trusting the output. Refresh the
 heartbeat right before kicking it off — this is the longest-blocking
 step (minutes to tens of minutes per round) and the one most likely to
-make a still-live run look stale to a concurrent invocation:
+make a still-live run look stale to a concurrent invocation.
+
+**Run this as a normal blocking Bash call — never pass
+`run_in_background: true` on it, and never call `ScheduleWakeup` in
+the same turn that launches it.** That exact pairing has twice
+produced a review that looked like it finished when it hadn't: once a
+0-byte `/tmp/codex-review-<N>.json` behind a task notification that
+still said `completed`, once the process reported outright `killed`
+(#57, not root-caused — observed only on turns combining the two, not
+on plain foreground runs). Let the call block; if the harness
+auto-backgrounds it anyway past its own timeout, see the matching
+Pitfall below for how to check on it without `ScheduleWakeup`:
 
 ```sh
 rm -f /tmp/codex-review-<N>.json && \
@@ -818,11 +829,42 @@ there may be follow-up commits before a human merges it.
   reads around the diff (NOTES.md, HANDOFF.md, prior commits) rather
   than just pattern-matching the patch. Don't mistake a long-running
   `--wait` call for a hang. If the harness auto-backgrounds the Bash
-  call itself (it may, past its own timeout), that's fine — the review
-  job is tracked independently by `codex-companion.mjs`; poll `node
-  "$CODEX_SCRIPT" status --all --json` or `result <job-id> --json`
-  rather than re-running the review. **Refresh the heartbeat at each
-  poll**, not just once before kicking the review off — this is the
+  call itself (it may, past its own timeout), don't treat that as
+  automatically fine. #57 confirmed the failure only for explicit
+  `run_in_background: true` paired with a same-turn `ScheduleWakeup` —
+  that pairing produced one round with a 0-byte review file behind a
+  "completed" notification, and a separate round that terminated
+  outright (root cause not confirmed, only the correlation).
+  Harness-imposed backgrounding paired with a same-turn
+  `ScheduleWakeup` was never actually exercised in #57, so treat
+  avoiding that combination as precautionary, not confirmed-dangerous
+  — but avoid it anyway, since the plausible failure mechanism (a
+  background job racing a same-turn poll trigger) doesn't obviously
+  care which side initiated the backgrounding. The job is tracked
+  independently by `codex-companion.mjs`, so recovering from it
+  doesn't require re-running the review — poll `status --all --json
+  --cwd "$WORKTREE_DIR"` or `result <job-id> --json --cwd
+  "$WORKTREE_DIR"` in a *later* turn (triggered by the task's own
+  completion notification or a `Monitor`, never by a `ScheduleWakeup`
+  called in the same turn that launched it — see the `ScheduleWakeup`
+  pitfall below for why that pairing specifically is the danger, not
+  backgrounding alone). **The explicit `--cwd "$WORKTREE_DIR"` is
+  required, not optional** — jobs are stored keyed by workspace root
+  (`git rev-parse`-derived), and cwd can reset to the original
+  checkout between tool calls (see the cwd-reset pitfall below); a
+  poll that lands back in the main checkout without `--cwd` looks up
+  the *wrong* workspace's jobs, can falsely report a still-running
+  review as gone, and trigger exactly the duplicate-review scenario
+  this hazard-avoidance guidance exists to prevent. `CODEX_SCRIPT` and
+  `WORKTREE_DIR` are themselves per-call shell locals (this skill's
+  fresh-shell-per-call rule, above) — re-derive both inline in
+  whatever command actually does the polling, the same way `$LOCKDIR`
+  and `$BRANCH` are re-derived elsewhere in this file, rather than
+  assuming either is still set. If the poll comes back and the
+  job is simply gone or the file never materializes, treat it as a
+  failed round and re-run the review rather than trusting a partial
+  result. **Refresh the heartbeat at each poll**, not just once before
+  kicking the review off — this is the
   one operation in the whole flow that can genuinely run past the
   45-minute staleness threshold in a single blocking stretch, and a
   pre-refresh alone doesn't cover that. Other single blocking calls in
@@ -859,6 +901,18 @@ there may be follow-up commits before a human merges it.
   `codex-companion.mjs` review job, poll it directly (`status --all
   --json` / `result <job-id> --json`, per the pitfall above) or via
   `Monitor`/background-task notifications — not `ScheduleWakeup`.
+  **Specifically, never call `ScheduleWakeup` in the same turn that
+  launches the review with `run_in_background: true`** (#57): on two
+  separate occasions this exact pairing — never a plain foreground
+  `--wait` call — was followed by the review process either vanishing
+  (task notification said `completed`, but `/tmp/codex-review-<N>.json`
+  was a 0-byte file and `codex-companion.mjs status --all --json`
+  showed no record of the job at all) or being actively terminated
+  (task notification said `killed`). Not root-caused against the
+  harness — flagging the correlation, not a mechanism — but the fix in
+  practice is simple: don't background this call on purpose, and don't
+  pair it with a same-turn `ScheduleWakeup` if the harness backgrounds
+  it on its own.
 - **The lock's `mkdir` and its first heartbeat write must be one `&&`
   chain, never split** (step 1's **Claim the issue**) — splitting them
   reopens the exact TOCTOU race #35 exists to close: a second
