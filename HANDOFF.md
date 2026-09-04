@@ -426,6 +426,14 @@ renders eight examples in both and compares block-downsampled output).
   doesn't erase; ints are i64; `flattenpath` uses a fixed
   quarter-pixel tolerance (`setflat` not modeled — chord counts
   differ from gs, shapes agree).
+- `clippath` under a *nested* clip (issue #120, fixed): exact and
+  DPI-invariant when every clip in the chain is a plain axis-aligned
+  rectangle (`rectclip`'s shape — the common case), otherwise a pixel
+  trace of the raster clip mask (`Gfx::mask_boundary_path`) rather
+  than an analytically exact intersection — a superset by construction
+  (any nonzero-coverage pixel counts as inside), not a pixel-perfect
+  boundary. A single, non-nested clip is unaffected: it still returns
+  the exact original path, bit-for-bit.
 - `shfill` (issue #20): `FunctionType` restricted to 2 (exponential)
   and 3 (stitching) — 0 (sampled) and 4 (calculator) unsupported,
   since those would need the same `Frame::PostOp` reentrancy

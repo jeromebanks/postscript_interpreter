@@ -272,6 +272,14 @@ impl PsPath {
     /// clip shape. A rotated rect, a multi-rect `rectclip` numarray
     /// (more than one subpath), or any curve disqualifies it, safely
     /// falling back to the pixel trace instead of misreporting.
+    ///
+    /// Deliberately rule-agnostic (the caller never looks at
+    /// `ClipNode::rule` here): for one non-self-intersecting closed
+    /// loop, nonzero and even-odd always agree — a ray from any
+    /// interior point crosses the boundary exactly once, so the
+    /// crossing count is always odd (even-odd: inside) exactly when the
+    /// winding number is always ±1 (nonzero: inside). Verified against
+    /// gs with an `eoclip` on a single axis-aligned rectangle.
     pub(crate) fn as_axis_aligned_rect(&self) -> Option<(f32, f32, f32, f32)> {
         let mut pts: Vec<DevPoint> = Vec::new();
         for seg in &self.segs {
@@ -1635,8 +1643,10 @@ impl Gfx {
     /// intersection: exactly and DPI-invariantly when every clip in the
     /// chain is an axis-aligned rectangle (the dominant nested shape,
     /// since `rectclip` produces one), otherwise by tracing the boundary
-    /// of the already-correct raster clip mask. That trace is pixel-
-    /// accurate, not analytically exact, for a genuinely non-rectangular
+    /// of the already-correct raster clip mask (any nonzero-coverage
+    /// pixel counts — see `mask_boundary_path`'s own doc for why). That
+    /// trace is pixel-accurate and a deliberate *superset*, not an
+    /// analytically exact intersection, for a genuinely non-rectangular
     /// nested chain (a curved or rotated clip nested with anything else)
     /// — a documented residual approximation, not the unbounded
     /// "newest clip only" error this replaces.
@@ -1659,6 +1669,12 @@ impl Gfx {
     /// axis-aligned rectangle — `None` the moment one isn't, so the
     /// caller can fall back to the mask trace instead of misreporting.
     fn chain_rect_intersection(node: &ClipNode, page: (f32, f32)) -> Option<(f32, f32, f32, f32)> {
+        // The page is folded in as the implicit outermost clip here —
+        // matching the unclipped branch's own page-rect answer — but
+        // deliberately *not* in the single-clip passthrough above: that
+        // branch exists specifically to preserve a single clip's
+        // reported path bit-for-bit, page-extent-unaware, exactly as
+        // it always has been (not this issue's bug to fix).
         let (mut x0, mut y0, mut x1, mut y1): (f32, f32, f32, f32) = (0.0, 0.0, page.0, page.1);
         let mut cur = Some(node);
         while let Some(n) = cur {
@@ -1701,12 +1717,26 @@ impl Gfx {
         )
     }
 
-    /// Trace the boundary of a clip mask's covered region (alpha >= 128)
-    /// into a device-space path — one subpath per boundary loop, outer
-    /// contours and holes automatically opposite-wound (so both nonzero
-    /// and even-odd fill rules reconstruct the region correctly). This
-    /// is the general fallback `clippath` uses for a nested clip chain
-    /// that isn't all axis-aligned rectangles (see `set_path_to_clip`).
+    /// Trace the boundary of a clip mask's covered region (any nonzero
+    /// alpha) into a device-space path — one subpath per boundary loop,
+    /// outer contours and holes automatically opposite-wound (so both
+    /// nonzero and even-odd fill rules reconstruct the region
+    /// correctly). This is the general fallback `clippath` uses for a
+    /// nested clip chain that isn't all axis-aligned rectangles (see
+    /// `set_path_to_clip`).
+    ///
+    /// Any-nonzero-alpha (not a 50%-coverage threshold) is a deliberate
+    /// choice: it makes the trace a *superset* of the true region,
+    /// matching `mask_bbox_path`'s contract below and, more
+    /// importantly, `clippath`'s existing single-clip and unclipped
+    /// answers (also unclamped to the true painted extent). A 50%
+    /// threshold measured ~1px *under*-reporting at a sharp vertex on a
+    /// diamond-nested-in-a-rect case — silently excluding area that
+    /// should be scatterable is worse than the reverse for `clippath
+    /// scpath`'s motivating use case (issue #48): an over-reported
+    /// candidate is still rejected by the real clip mask when painted,
+    /// just wastes a placement attempt; an under-reported one is never
+    /// tried at all.
     ///
     /// Two adjacent filled cells touching only at a corner (a diagonal
     /// "checkerboard" — realistic at a clip boundary crossing near
@@ -1733,7 +1763,7 @@ impl Gfx {
         let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
         for y in 0..h {
             for x in 0..w {
-                if data[(y * w + x) as usize] >= 128 {
+                if data[(y * w + x) as usize] > 0 {
                     x0 = x0.min(x);
                     y0 = y0.min(y);
                     x1 = x1.max(x + 1);
@@ -1754,7 +1784,7 @@ impl Gfx {
             if x < 0 || y < 0 || x >= w || y >= h {
                 false
             } else {
-                data[(y * w + x) as usize] >= 128
+                data[(y * w + x) as usize] > 0
             }
         };
 
