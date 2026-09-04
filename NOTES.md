@@ -117,6 +117,28 @@ leaks in `tfdrawline`/`et-hatch` before, and this file's own
 `prchipmark` (a `/Mark` callback with a four-operand contract) and the
 gallery piece's `forall` body are exactly its beat.
 
+**Step 8's independent review (Codex, after two transient runtime
+failures despite a healthy authenticated session — a same-family
+Claude fallback launched for one of those attempts also failed, to a
+session rate limit, before Codex itself came back clean on retry)
+found one real bug: `/Seed` was never validated by `propts`.**
+`prapplyseed` derives each sub-call's own seed as `Seed + offset`
+(0/1/2 for `woodcut`/`linocut`'s three sub-calls, 0/1 for
+`engraving`'s two) — a non-numeric `/Seed` failed with a raw
+`typecheck` from `add` deep inside `prapplyseed`, not a self-
+documenting name, and a `/Seed` near `scatter`'s own documented
+`+/-2147483647` bound reproduced *inconsistently between presets*:
+`engraving` (max offset 1) accepted `2147483647` while `woodcut`/
+`linocut` (max offset 2) rejected the same value with `scatter`'s own
+error name once their own `+2` pushed it past `scatter`'s bound.
+Fixed by validating `/Seed` in `propts` itself — numeric, and
+`abs(n) <= 2147483645` (2147483647 minus the largest offset this file
+ever adds), checked uniformly for every preset regardless of that
+preset's own maximum offset, so the same seed either works or fails
+the same way everywhere. Three new tests pin it: the type/range
+errors, and that the documented boundary value (2147483645) succeeds
+for all three presets uniformly.
+
 **Shared option names deliberately shadow the sibling family's own
 same-named options with different semantics — validated under
 `printkit`-owned error names before any derived value reaches

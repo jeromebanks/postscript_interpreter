@@ -106,13 +106,22 @@
 %               chip-mark rotation jitter. `engraving` responds to it
 %               only lightly (an engraver's line is controlled by
 %               design); `woodcut` responds to it most.
-%   /Seed       n. Derives one sub-seed per underlying call
-%               (`Seed`, `Seed+1`, `Seed+2`, ...) rather than this
-%               file managing one shared `srand`/`rrand` pair itself —
-%               each of `hatch`/`scatter`/`grain` already seeds and
-%               restores its own stream per its own documented
-%               contract, so layering a second one here would just be
-%               redundant bookkeeping. Omit it to let every sub-call
+%   /Seed       n, `abs(n) <= 2147483645` (validated —
+%               `printkit-seed-must-be-a-number`/`printkit-seed-out-
+%               of-range` otherwise). Derives one sub-seed per
+%               underlying call (`Seed`, `Seed+1`, `Seed+2`, ...)
+%               rather than this file managing one shared `srand`/
+%               `rrand` pair itself — each of `hatch`/`scatter`/
+%               `grain` already seeds and restores its own stream per
+%               its own documented contract, so layering a second one
+%               here would just be redundant bookkeeping. The range
+%               leaves headroom for the largest offset this file adds
+%               (2, for `woodcut`/`linocut`'s three sub-calls) to stay
+%               inside `scatter`'s own documented `+/-2147483647`
+%               bound — checked here so a caller sees this file's own
+%               error name rather than a raw `typecheck` from the
+%               offset addition or a different file's error name from
+%               a downstream call. Omit `/Seed` to let every sub-call
 %               draw from the ambient stream instead, same "still
 %               deterministic under the caller's own `N srand`, just
 %               not independent of what drew before it" caveat those
@@ -311,6 +320,21 @@
   proopts prodef prcolordef
     /procolb exch def /procolg exch def /procolr exch def
 
+  % /Seed is optional (prores simply omits it when the caller never
+  % gave one, and prapplyseed no-ops on a missing key) but, when
+  % given, must be validated here too: `prapplyseed` derives each
+  % sub-call's own seed as `Seed + offset` (offset up to 2, for
+  % woodcut/linocut's three sub-calls), and without a check here a
+  % non-numeric `/Seed` fails with a raw `typecheck` from `add` deep
+  % inside `prapplyseed`, and a `/Seed` near `scatter`'s own
+  % documented +/-2147483647 bound fails with *its* name instead of
+  % this file's own -- inconsistently between presets, since they add
+  % different maximum offsets (Codex review, PR #128).
+  proopts /Seed known {
+    proopts /Seed get { printkit-seed-must-be-a-number } /proseed prbindnum
+    proseed abs 2147483645 gt { printkit-seed-out-of-range } if
+  } if
+
   /prores 10 dict def
   prores /Scale proscale put
   prores /Density prodensity put
@@ -321,7 +345,7 @@
   prores /ColorR procolr put
   prores /ColorG procolg put
   prores /ColorB procolb put
-  proopts /Seed known { prores /Seed proopts /Seed get put } if
+  proopts /Seed known { prores /Seed proseed put } if
   prores
 } def
 

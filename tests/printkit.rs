@@ -398,6 +398,9 @@ fn shared_option_validation_error_table() {
             "printkit-roughness-must-be-a-fraction-in-0-1",
         ),
         ("<< /Angle (nope) >>", "printkit-angle-must-be-a-number"),
+        ("<< /Seed (nope) >>", "printkit-seed-must-be-a-number"),
+        ("<< /Seed 2147483647 >>", "printkit-seed-out-of-range"),
+        ("<< /Seed -2147483647 >>", "printkit-seed-out-of-range"),
         ("<< /Budget (nope) >>", "printkit-budget-must-be-a-number"),
         ("<< /Budget 0 >>", "printkit-budget-must-be-positive"),
         ("<< /Budget -5 >>", "printkit-budget-must-be-positive"),
@@ -430,6 +433,24 @@ fn shared_option_validation_error_table() {
             let got = printkit_err(&format!("{RECT} {opts} {preset}"));
             assert_eq!(got, *expected, "{preset} {opts}");
         }
+    }
+}
+
+#[test]
+fn a_seed_at_the_documented_boundary_succeeds_uniformly_across_presets() {
+    // Codex review, PR #128: `/Seed` was previously unvalidated, so a
+    // value near scatter's own +/-2147483647 bound succeeded for
+    // `engraving` (max sub-call offset 1) but failed for
+    // `woodcut`/`linocut` (max sub-call offset 2) with *scatter's*
+    // own error name, not printkit's -- an inconsistency between
+    // presets a caller had no way to predict. `propts` now rejects
+    // anything past 2147483645 for every preset uniformly (this
+    // file's header documents the number), so the boundary itself
+    // must still work for all three.
+    for preset in ["woodcut", "linocut", "engraving"] {
+        let mut it = with_lib(150, 150);
+        it.run_str(&format!("{RECT} << /Seed 2147483645 >> {preset}"))
+            .unwrap_or_else(|e| panic!("{preset}: boundary seed failed: {}", it.error_report(&e)));
     }
 }
 
