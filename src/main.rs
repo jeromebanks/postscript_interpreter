@@ -32,6 +32,14 @@ struct Options {
     /// Self-check/lint mode (issue #17): print diagnostics for common
     /// silent-failure mistakes after a headless run.
     lint: bool,
+    /// Make `--lint`'s findings fatal instead of advisory (issue #95,
+    /// Phase A mechanism 2). Always implies `lint`, so every place
+    /// that refuses `--lint` refuses this too without naming it
+    /// separately.
+    lint_strict: bool,
+    /// Run a library's `%%SelfTest` blocks and exit (issue #95, Phase
+    /// A mechanism 1).
+    selftest: Option<String>,
     /// Reseed with each value in turn, once per sweep frame (issue
     /// #21): overrides every `srand` call transparently, so it works
     /// on found art unmodified.
@@ -56,6 +64,31 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    if let Some(path) = &options.selftest {
+        // Like --spool, this is a whole mode of its own: it builds its
+        // own interpreter per block and produces no page, so pairing it
+        // with a render request or another source would silently ignore
+        // one of the two.
+        if options.file.is_some()
+            || options.eval.is_some()
+            || options.headless
+            || options.interactive
+            || options.png.is_some()
+            || options.svg.is_some()
+            || options.pdf.is_some()
+            || options.lint
+            || options.spool.is_some()
+            || options.sweep_seed.is_some()
+            || options.sweep_param.is_some()
+            || options.contact_sheet.is_some()
+            || options.grid.is_some()
+        {
+            eprintln!("pscat: --selftest runs alone (no file argument or other mode flags)");
+            return ExitCode::FAILURE;
+        }
+        return run_selftest(std::path::Path::new(path));
+    }
 
     if options.sweep_seed.is_some() || options.sweep_param.is_some() {
         if options.sweep_seed.is_some() && options.sweep_param.is_some() {
@@ -167,6 +200,7 @@ fn main() -> ExitCode {
             run_headless(&mut interp, expr.as_bytes(), &options),
             &interp,
             &options,
+            pscat::lint::scan_declared_pages(expr.as_bytes()),
         );
     }
     if options.interactive {
@@ -239,6 +273,7 @@ fn main() -> ExitCode {
             run_headless(&mut interp, &source, &options),
             &interp,
             &options,
+            pscat::lint::scan_declared_pages(&source),
         );
     }
 
@@ -304,9 +339,38 @@ fn print_pstack(interp: &Interp) {
 /// canvas is exactly what you want when debugging a program that died.
 /// One page writes the exact path given; multi-page documents write
 /// out-001.png, out-002.png, ...
-fn finish_headless(ok: bool, interp: &Interp, options: &Options) -> ExitCode {
+/// `--selftest`: run one library's `%%SelfTest` blocks (issue #95).
+///
+/// A parse/setup failure and a failing assertion both exit non-zero,
+/// but they're reported differently: the first says the harness
+/// couldn't run, the second says the library is wrong.
+fn run_selftest(path: &std::path::Path) -> ExitCode {
+    match pscat::selftest::run_file(path) {
+        Err(msg) => {
+            eprintln!("pscat: selftest: {msg}");
+            ExitCode::FAILURE
+        }
+        Ok(report) => {
+            eprint!("{}", pscat::selftest::format_report(&report));
+            if report.ok() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
+    }
+}
+
+fn finish_headless(
+    ok: bool,
+    interp: &Interp,
+    options: &Options,
+    declared_pages: Option<usize>,
+) -> ExitCode {
+    let mut lint_failed = false;
     if options.lint {
-        report_lint(interp, options);
+        let found = report_lint(interp, options, declared_pages);
+        lint_failed = options.lint_strict && found;
     }
     if let Some(path) = &options.png {
         let gfx = interp.gfx();
@@ -377,7 +441,7 @@ fn finish_headless(ok: bool, interp: &Interp, options: &Options) -> ExitCode {
         }
         println!("pscat: wrote {path}");
     }
-    if ok {
+    if ok && !lint_failed {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
@@ -388,9 +452,10 @@ fn finish_headless(ok: bool, interp: &Interp, options: &Options) -> ExitCode {
 /// `pscat: lint:` so a caller can grep for them (or, for `pscat-mcp`,
 /// parse them back out of the child's stderr). Runs regardless of `ok`
 /// — a blank page after a crash is exactly the kind of thing lint
-/// should still surface — and doesn't affect the exit code, since a
-/// finding is advisory, not fatal.
-fn report_lint(interp: &Interp, options: &Options) {
+/// should still surface. Returns whether anything was found, which is
+/// what `--lint-strict` turns into a non-zero exit; plain `--lint`
+/// stays advisory, as it has been since issue #17.
+fn report_lint(interp: &Interp, options: &Options, declared_pages: Option<usize>) -> bool {
     // The blank-page/stack-leak checks assume the run was meant to
     // produce a page — true for any file or stdin run, whether or not
     // an output format flag was also given (`--lint file.ps` with no
@@ -408,14 +473,21 @@ fn report_lint(interp: &Interp, options: &Options) {
         || options.png.is_some()
         || options.svg.is_some()
         || options.pdf.is_some();
-    let findings = interp.lint(render_checks);
+    let findings = interp.lint(render_checks, declared_pages);
     if findings.is_empty() {
         eprintln!("pscat: lint: clean");
-        return;
+        return false;
     }
     for f in &findings {
         eprintln!("pscat: lint: [{}] {}", f.check, f.message);
     }
+    if options.lint_strict {
+        eprintln!(
+            "pscat: lint: {} finding(s) — failing because --lint-strict was given",
+            findings.len()
+        );
+    }
+    true
 }
 
 /// out.png → out-001.png (suffix before the extension).
@@ -1016,6 +1088,8 @@ fn parse_args() -> Result<Options, String> {
         halftone: false,
         interactive: false,
         lint: false,
+        lint_strict: false,
+        selftest: None,
         sweep_seed: None,
         sweep_param: None,
         contact_sheet: None,
@@ -1066,6 +1140,16 @@ fn parse_args() -> Result<Options, String> {
             "--halftone" => options.halftone = true,
             "-i" | "--interactive" => options.interactive = true,
             "--lint" => options.lint = true,
+            // Strict *is* lint, with findings promoted to fatal — set
+            // both so the mode-exclusion checks in `main` (which all
+            // test `options.lint`) apply unchanged.
+            "--lint-strict" => {
+                options.lint = true;
+                options.lint_strict = true;
+            }
+            "--selftest" => {
+                options.selftest = Some(args.next().ok_or("missing file after --selftest")?);
+            }
             "--speed" => {
                 let n = args.next().ok_or("missing value after --speed")?;
                 options.steps_per_frame = n
@@ -1166,6 +1250,8 @@ fn print_usage() {
     println!("                      --headless); a blank page, an unbalanced gsave, stuff");
     println!("                      left on the stack — printed to stderr, doesn't affect");
     println!("                      the exit code");
+    println!("      --lint-strict   as --lint, but exit non-zero if anything is found");
+    println!("      --selftest FILE run FILE's %%SelfTest blocks and exit (runs alone)");
     println!("      --fonts         list every findfont-reachable face and alias, then exit");
     println!(
         "      --capabilities  print the agent-usable art catalog (fonts, palettes, templates, procedures) as JSON, then exit"

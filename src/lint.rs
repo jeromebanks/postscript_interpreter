@@ -28,30 +28,83 @@ pub struct LintFinding {
 /// `eval`-style snippet with no `showpage`), where an empty canvas and a
 /// result sitting on the operand stack are both the normal, intended
 /// outcome rather than mistakes.
-pub fn check(interp: &Interp, render_checks: bool) -> Vec<LintFinding> {
+pub fn check(
+    interp: &Interp,
+    render_checks: bool,
+    declared_pages: Option<usize>,
+) -> Vec<LintFinding> {
     let mut findings = Vec::new();
     if render_checks {
         check_blank_pages(interp, &mut findings);
+        check_declared_pages(interp, declared_pages, &mut findings);
     }
     check_gsave_balance(interp, &mut findings);
     check_stack_leaks(interp, render_checks, &mut findings);
     findings
 }
 
-fn check_blank_pages(interp: &Interp, findings: &mut Vec<LintFinding>) {
+/// The pages `--png` would write: every emitted page, plus the live
+/// canvas whenever nothing has emitted it yet (`has_trailing_art`) or
+/// nothing was ever emitted at all — the same rule `finish_headless`
+/// uses to decide what a `--png` without a `showpage` should write.
+fn pages_with_ink_flags(interp: &Interp) -> Vec<(&Pixmap, bool)> {
     let gfx = interp.gfx();
     let mut pages: Vec<(&Pixmap, bool)> = gfx
         .pages()
         .iter()
         .zip(gfx.pages_had_ink().iter().copied())
         .collect();
-    // The live canvas counts as a trailing page whenever nothing has
-    // emitted it yet (has_trailing_art) or nothing was ever emitted at
-    // all (pages is empty) — the same rule `finish_headless` uses to
-    // decide what a `--png` without a `showpage` should write.
     if pages.is_empty() || gfx.has_trailing_art() {
         pages.push((&gfx.pixmap, gfx.has_trailing_art()));
     }
+    pages
+}
+
+/// The `%%Pages: N` a program declares about itself, if any.
+///
+/// DSC's own header comment, not a new convention — which is the
+/// point: a program that says how many pages it produces can be
+/// checked against what it actually produced, and `%%Pages: (atend)`
+/// (the legitimate "I don't know yet" form) declares nothing, so it's
+/// read as absent rather than as a malformed count.
+///
+/// This exists for issue #95's rendering drivers, where the rule is
+/// one `showpage` per independently-checked scenario: two scenarios
+/// that accidentally share a page let the second one's ink hide the
+/// first one's blank-page regression, and that mistake is one deleted
+/// `showpage` away in ordinary editing. A declared count turns it from
+/// a convention into something checkable.
+pub fn scan_declared_pages(source: &[u8]) -> Option<usize> {
+    for line in source.split(|&b| b == b'\n') {
+        let line = String::from_utf8_lossy(line);
+        let Some(value) = line.strip_prefix("%%Pages:") else {
+            // DSC header comments must start at column 0; a `%%Pages:`
+            // deeper in the file is body text, not a header.
+            continue;
+        };
+        return value.trim().parse().ok();
+    }
+    None
+}
+
+fn check_declared_pages(interp: &Interp, declared: Option<usize>, findings: &mut Vec<LintFinding>) {
+    let Some(declared) = declared else {
+        return;
+    };
+    let actual = pages_with_ink_flags(interp).len();
+    if actual != declared {
+        findings.push(LintFinding {
+            check: "page-count",
+            message: format!(
+                "the program declares `%%Pages: {declared}` but produced {actual} \
+                 — a missing or extra showpage"
+            ),
+        });
+    }
+}
+
+fn check_blank_pages(interp: &Interp, findings: &mut Vec<LintFinding>) {
+    let pages = pages_with_ink_flags(interp);
     let total = pages.len();
     for (i, (page, had_ink)) in pages.into_iter().enumerate() {
         // `had_ink` catches a page that's a lazy-erase repeat of the
@@ -202,13 +255,68 @@ mod tests {
     }
 
     fn checks(it: &Interp, render_checks: bool) -> Vec<&'static str> {
-        check(it, render_checks).iter().map(|f| f.check).collect()
+        check(it, render_checks, None)
+            .iter()
+            .map(|f| f.check)
+            .collect()
+    }
+
+    fn checks_with_pages(it: &Interp, declared: Option<usize>) -> Vec<&'static str> {
+        check(it, true, declared).iter().map(|f| f.check).collect()
     }
 
     #[test]
     fn blank_canvas_is_flagged() {
         let it = run("showpage");
         assert!(checks(&it, true).contains(&"blank-page"));
+    }
+
+    #[test]
+    fn a_matching_declared_page_count_is_not_flagged() {
+        let it = run("0 0 40 40 rectfill showpage 5 5 30 30 rectfill showpage");
+        assert!(!checks_with_pages(&it, Some(2)).contains(&"page-count"));
+    }
+
+    #[test]
+    fn a_missing_showpage_merges_two_scenarios_and_is_flagged() {
+        // The failure mode this check exists for (issue #95): a
+        // rendering driver declares one page per checked scenario, and
+        // a deleted `showpage` silently merges two of them — after
+        // which the second scenario's ink hides whether the first drew
+        // anything at all.
+        let it = run("0 0 40 40 rectfill 5 5 30 30 rectfill showpage");
+        let found = check(&it, true, Some(2));
+        let msg = found
+            .iter()
+            .find(|f| f.check == "page-count")
+            .expect("page-count finding");
+        assert!(msg.message.contains("but produced 1"), "{}", msg.message);
+    }
+
+    #[test]
+    fn an_undeclared_page_count_is_never_flagged() {
+        // Most programs carry no `%%Pages:` at all; they must not
+        // acquire a finding for it.
+        let it = run("0 0 40 40 rectfill showpage");
+        assert!(!checks_with_pages(&it, None).contains(&"page-count"));
+    }
+
+    #[test]
+    fn declared_pages_reads_a_dsc_header() {
+        assert_eq!(
+            scan_declared_pages(b"%!PS\n%%Pages: 7\n%%EndComments\n"),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn declared_pages_ignores_atend_and_indented_lines() {
+        // `(atend)` is DSC's legitimate "count comes later" form, not
+        // a malformed number; an indented `%%Pages:` isn't a header
+        // comment at all.
+        assert_eq!(scan_declared_pages(b"%%Pages: (atend)\n"), None);
+        assert_eq!(scan_declared_pages(b"  %%Pages: 3\n"), None);
+        assert_eq!(scan_declared_pages(b"%!PS\n"), None);
     }
 
     #[test]
@@ -244,7 +352,7 @@ mod tests {
     #[test]
     fn leftover_operands_are_flagged() {
         let it = run("1 2 3");
-        let found = check(&it, true);
+        let found = check(&it, true, None);
         let leak = found
             .iter()
             .find(|f| f.check == "stack-leak")
@@ -300,7 +408,7 @@ mod tests {
         // content alone can't see that the second one has no ink of
         // its own.
         let it = run("0 0 40 40 rectfill showpage showpage");
-        let findings = check(&it, true);
+        let findings = check(&it, true, None);
         let blanks: Vec<&str> = findings
             .iter()
             .filter(|f| f.check == "blank-page")
@@ -313,7 +421,7 @@ mod tests {
     #[test]
     fn a_long_leaked_operand_is_truncated() {
         let it = run("100000 string");
-        let findings = check(&it, true);
+        let findings = check(&it, true, None);
         let leak = findings
             .iter()
             .find(|f| f.check == "stack-leak")
@@ -338,7 +446,7 @@ mod tests {
         // intermediate. This should stay fast and the message small
         // regardless of the leaked string's size.
         let it = run("10000000 string");
-        let findings = check(&it, true);
+        let findings = check(&it, true, None);
         let leak = findings
             .iter()
             .find(|f| f.check == "stack-leak")
@@ -360,7 +468,7 @@ mod tests {
         // A short array of one huge string must not defeat the bound
         // by recursing into repr() for each element.
         let it = run("[10000000 string]");
-        let findings = check(&it, true);
+        let findings = check(&it, true, None);
         let leak = findings
             .iter()
             .find(|f| f.check == "stack-leak")
@@ -385,7 +493,7 @@ mod tests {
         // path missed the same unbounded-preview problem as strings.
         let src = format!("/{}", "a".repeat(1_000_000));
         let it = run(&src);
-        let findings = check(&it, true);
+        let findings = check(&it, true, None);
         let leak = findings
             .iter()
             .find(|f| f.check == "stack-leak")
