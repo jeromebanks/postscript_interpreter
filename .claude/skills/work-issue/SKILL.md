@@ -855,36 +855,12 @@ there may be follow-up commits before a human merges it.
   poll that lands back in the main checkout without `--cwd` looks up
   the *wrong* workspace's jobs, can falsely report a still-running
   review as gone, and trigger exactly the duplicate-review scenario
-  this hazard-avoidance guidance exists to prevent. **`CODEX_SCRIPT`
-  and `WORKTREE_DIR` are themselves shell locals from the turn that
-  launched the review — per this skill's fresh-shell-per-call rule
-  (above), they will not survive into the later turn that does the
-  polling**, so re-derive both inline in the polling command rather
-  than assuming they're still set. Reconstructing `WORKTREE_DIR` from
-  `git rev-parse --show-toplevel` is itself cwd-dependent and wrong if
-  the later turn happens to start inside the worktree rather than the
-  main checkout (it would then compute a path relative to the
-  worktree, not the main repo); derive it the same cwd-invariant way
-  the lock directory is derived (`--path-format=absolute
-  --git-common-dir` resolves to the *main* repo's shared `.git` dir
-  regardless of which worktree cwd is in — verified empirically):
-
-  ```sh
-  CODEX_SCRIPT=$(find "$HOME/.claude/plugins" -path "*/codex/scripts/codex-companion.mjs" 2>/dev/null | head -1)
-  MAIN_TOPLEVEL="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
-  WORKTREE_DIR="$(dirname "$MAIN_TOPLEVEL")/$(basename "$MAIN_TOPLEVEL")-issue-<N>"
-  node "$CODEX_SCRIPT" status --all --json --cwd "$WORKTREE_DIR"
-  ```
-
-  This still assumes the worktree follows step 3's standard
-  `<repo>-issue-<N>` naming — if step 3 instead reused a
-  pre-existing worktree at a nonstandard path (its own note on this),
-  that reconstruction won't match; resolving the true path in that
-  case means finding the worktree whose branch matches the issue
-  (`git worktree list --porcelain`, matched on the `branch` line)
-  rather than the reconstruction above — a residual gap, not fixed
-  here, since it's a rarer case than the cwd one this fix closes.
-  If the poll (correctly scoped to the worktree) comes back and the
+  this hazard-avoidance guidance exists to prevent. `CODEX_SCRIPT` and
+  `WORKTREE_DIR` are themselves per-call shell locals (this skill's
+  fresh-shell-per-call rule, above) — re-derive both inline in
+  whatever command actually does the polling, the same way `$LOCKDIR`
+  and `$BRANCH` are re-derived elsewhere in this file, rather than
+  assuming either is still set. If the poll comes back and the
   job is simply gone or the file never materializes, treat it as a
   failed round and re-run the review rather than trusting a partial
   result. **Refresh the heartbeat at each poll**, not just once before
