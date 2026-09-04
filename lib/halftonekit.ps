@@ -24,9 +24,8 @@
 % relies entirely on the graphics state's real clip to cut it to
 % shape, so it screens concave and self-intersecting paths exactly as
 % well as convex ones, with no point-in-polygon code anywhere in this
-% file. This also sidesteps `clippath`'s known limitation (issue #120:
-% it reports only the newest of several nested clips, not their true
-% intersection) — `halftone` never calls `clippath` at all.
+% file. `halftone` never calls `clippath` at all — it doesn't need to
+% reason about the clip region as a path, only paint through it.
 %
 % Deliberately NOT built on artkit.ps's `scatter`, though stipplekit.ps
 % is a thin layer over exactly that: `scatter` is a random,

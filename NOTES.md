@@ -3,6 +3,58 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## `clippath` reports the true intersection of nested clips (issue #120, 2026-09-04)
+
+`Gfx::set_path_to_clip` (`src/gfx.rs`) used to clone the *newest*
+`ClipNode`'s original path — correct for a single clip, wrong for a
+nested one, where it silently reported a region up to several times
+larger than what was actually visible (measured against Ghostscript in
+the issue: `100 100 400 400` where gs says `100 100 200 200`).
+
+Fix keeps the already-correct raster clip mask as the source of truth
+and only changes what `clippath` derives from it, in three tiers: a
+single clip (the overwhelmingly common case) still returns the exact
+original path, bit-for-bit — untouched, so no existing program's
+`clippath` output changed. A nested chain that's entirely axis-aligned
+rectangles (the dominant nested shape, since `rectclip` produces one)
+gets an exact, DPI-invariant analytic intersection
+(`chain_rect_intersection` — max of mins, min of maxes, walking the
+`ClipNode` chain, page rect folded in as the implicit outermost clip).
+Anything else nested falls back to `mask_boundary_path`: a boundary
+trace of the mask's thresholded (alpha >= 128) pixel grid — one
+directed unit edge per filled-cell side whose neighbor is unfilled,
+chained into closed loops. Two cells touching only diagonally (a
+"checkerboard", realistic near a 45° clip boundary) leave their shared
+vertex with two valid outgoing edges; resolved by always taking the
+sharpest available clockwise turn, which keeps the two diagonal cells'
+already-complete individual loops separate instead of splicing them
+into one self-crossing path (verified by hand-deriving the edge set
+for a 3x3 diagonal-touch case before trusting the rule in code).
+
+Deliberately not a general polygon-polygon boolean (Weiler-
+Atherton/Vatti-style): `NOTES.md`'s existing halftonekit/hatchkit
+entries already lean on "trust the real raster clip, don't reimplement
+polygon math" for the same reason those libraries avoid `clippath`
+entirely, and hand-rolled polygon clipping is a well-known source of
+floating-point robustness bugs for a fix this bounded. The residual
+cost: a genuinely non-rectangular nested chain gets a pixel-accurate
+answer, not an analytically exact one (confirmed off by up to ~1
+device pixel against gs on a diamond-nested-in-a-rect case) — an
+explicitly documented approximation now, not the previously-undocumented
+and unboundedly-wrong "newest clip only" behavior it replaces. The
+`try_mask_boundary_path`/`mask_bbox_path` split exists so a violated
+assumption (an untested mask shape tripping the boundary tracer's
+balanced-degree invariant) degrades to a safe bounding-box superset
+instead of a panic — this is derived from program-influenced clip
+geometry, so per `AGENTS.md`'s code quality bar it doesn't get an
+`.expect()`.
+
+`lib/artkit.ps`'s `clippath scpath` caveat and the `lib/halftonekit.ps`/
+`lib/hatchkit.ps` comments that cited this issue as their reason to
+avoid `clippath` are updated; the design choice to lean on the real
+clip stands on its own regardless, so those libraries still don't call
+`clippath`.
+
 ## `lib/etching.ps`: honor EXIF orientation (issue #56, 2026-09-04)
 
 `et-dims`/`et-draw` now read a JPEG's APP1/TIFF Orientation tag

@@ -26,9 +26,8 @@
 % never reimplements point-in-polygon or edge-crossing tests, so it
 % clips to concave and self-intersecting paths exactly as well as
 % convex ones — whatever the interpreter's own `clip` already handles.
-% This also sidesteps `clippath`'s known limitation (issue #120: it
-% reports only the newest of several nested clips, not their true
-% intersection) — `hatch` never calls `clippath` at all.
+% `hatch` never calls `clippath` at all — it doesn't need to reason
+% about the clip region as a path, only paint through it.
 %
 % Options, all optional except that a region must be establishable
 % one of two ways:
