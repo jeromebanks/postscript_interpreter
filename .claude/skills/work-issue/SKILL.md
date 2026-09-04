@@ -830,15 +830,19 @@ there may be follow-up commits before a human merges it.
   than just pattern-matching the patch. Don't mistake a long-running
   `--wait` call for a hang. If the harness auto-backgrounds the Bash
   call itself (it may, past its own timeout), don't treat that as
-  automatically fine — backgrounding of any kind, whether explicitly
-  requested (as in #57, where it was `run_in_background: true`) or
-  harness-imposed, paired with a same-turn `ScheduleWakeup` is the
-  condition under which #57 saw one round produce a 0-byte review file
-  behind a "completed" notification, and a separate round terminated
-  outright (root cause not confirmed, only the correlation). The job
-  is tracked independently
-  by `codex-companion.mjs`, so recovering from it doesn't require
-  re-running the review — poll `node "$CODEX_SCRIPT" status --all
+  automatically fine. #57 confirmed the failure only for explicit
+  `run_in_background: true` paired with a same-turn `ScheduleWakeup` —
+  that pairing produced one round with a 0-byte review file behind a
+  "completed" notification, and a separate round that terminated
+  outright (root cause not confirmed, only the correlation).
+  Harness-imposed backgrounding paired with a same-turn
+  `ScheduleWakeup` was never actually exercised in #57, so treat
+  avoiding that combination as precautionary, not confirmed-dangerous
+  — but avoid it anyway, since the plausible failure mechanism (a
+  background job racing a same-turn poll trigger) doesn't obviously
+  care which side initiated the backgrounding. The job is tracked
+  independently by `codex-companion.mjs`, so recovering from it
+  doesn't require re-running the review — poll `node "$CODEX_SCRIPT" status --all
   --json` or `result <job-id> --json` in a *later* turn (triggered by
   the task's own completion notification or a `Monitor`, never by a
   `ScheduleWakeup` called in the same turn that launched it — see the
