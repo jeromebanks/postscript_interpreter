@@ -842,14 +842,23 @@ there may be follow-up commits before a human merges it.
   background job racing a same-turn poll trigger) doesn't obviously
   care which side initiated the backgrounding. The job is tracked
   independently by `codex-companion.mjs`, so recovering from it
-  doesn't require re-running the review — poll `node "$CODEX_SCRIPT" status --all
-  --json` or `result <job-id> --json` in a *later* turn (triggered by
+  doesn't require re-running the review — poll `node "$CODEX_SCRIPT"
+  status --all --json --cwd "$WORKTREE_DIR"` or `result <job-id>
+  --json --cwd "$WORKTREE_DIR"` in a *later* turn (triggered by
   the task's own completion notification or a `Monitor`, never by a
   `ScheduleWakeup` called in the same turn that launched it — see the
   `ScheduleWakeup` pitfall below for why that pairing specifically is
-  the danger, not backgrounding alone). If the poll comes back and the
-  job is simply gone or the file never materializes, treat it as a
-  failed round and re-run the review rather than trusting a partial
+  the danger, not backgrounding alone). **The explicit `--cwd
+  "$WORKTREE_DIR"` is required, not optional** — jobs are stored keyed
+  by workspace root (`git rev-parse`-derived), and cwd can reset to
+  the original checkout between tool calls (see the cwd-reset pitfall
+  below); a poll that lands back in the main checkout without `--cwd`
+  looks up the *wrong* workspace's jobs, can falsely report a
+  still-running review as gone, and trigger exactly the
+  duplicate-review scenario this hazard-avoidance guidance exists to
+  prevent. If the poll (correctly scoped to the worktree) comes back
+  and the job is simply gone or the file never materializes, treat it
+  as a failed round and re-run the review rather than trusting a partial
   result. **Refresh the heartbeat at each poll**, not just once before
   kicking the review off — this is the
   one operation in the whole flow that can genuinely run past the
