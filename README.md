@@ -627,6 +627,38 @@ plus a sixth demonstrating that exact-edge clip.
 0 0 200 200 screct << /Density 0.4 /Scale [0.4 1.4] /Seed 3 >> grain
 ```
 
+A tenth sibling, `lib/printkit.ps` (issue #52), composes `hatch`,
+`scatter`, and (optionally) `grain` into three printmaking presets --
+`woodcut`, `linocut`, `engraving` -- over a shared options dict
+(`/Scale`, `/Density`, `/Roughness`, `/Seed`, `/Color`, `/Budget`,
+`/Paper`, `/Angle`). Unlike its `region opts NAME` siblings, each
+preset takes the *current path* directly and manages its own `clip`
+internally -- no pre-clip, no `screct`/`scpath` region object, needed
+from the caller -- since rebuilding an exact `clip`-able path back out
+of a stored region's flattened edge soup would be real machinery for
+no benefit over the path the caller already has. `woodcut` is one
+directional hatch pass (the grain) at high wobble/dropout/trim plus a
+scatter of small jittered chip marks; `linocut` is one bold, low-wobble
+pass plus a sparse scatter of a few large, more deliberate marks;
+`engraving` is a single `hatch` call sweeping three angles 60 degrees
+apart at fine spacing and minimal wobble -- no chip marks. `/Paper
+true` layers a subtle `surfacekit` `grain` pass under the ink, inside
+the same clip. `examples/printkit.ps` is a four-panel specimen sheet
+(one per preset, plus a `/Paper true` panel); the gallery piece
+*Nightfall, Three Cuts* uses all three in one scene, each silhouette
+inked solid first and then cut a second time with a lighter `/Color`
+for the moonlit-highlight look real relief printing gets from gouging
+ink away.
+
+```postscript
+(lib/artkit.ps) run
+(lib/hatchkit.ps) run
+(lib/surfacekit.ps) run
+(lib/printkit.ps) run
+newpath 40 40 moveto 260 40 lineto 260 260 lineto 40 260 lineto closepath
+<< /Seed 5 >> woodcut
+```
+
 ## The website
 
 **[jeromebanks.github.io/postscript_interpreter](https://jeromebanks.github.io/postscript_interpreter/)**

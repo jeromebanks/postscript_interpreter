@@ -1,0 +1,652 @@
+%!PS-Adobe-3.0
+%%Title: printkit.ps — woodcut, linocut, and engraving mark presets
+%%Creator: pscat — issue #52
+%%EndComments
+% @requires: (lib/artkit.ps) run (lib/hatchkit.ps) run (lib/surfacekit.ps) run
+
+% A tenth sibling library: three printmaking presets — `woodcut`,
+% `linocut`, `engraving` — composed entirely from `lib/hatchkit.ps`'s
+% `hatch` (issue #49), `lib/artkit.ps`'s `scatter` (issue #48), and,
+% optionally, `lib/surfacekit.ps`'s `grain` (issue #51). This file
+% draws no geometry of its own beyond a small filled-quad "chip" mark;
+% every stroke and speck a caller actually sees comes from one of
+% those three, differently parameterized.
+%
+%   <path> opts woodcut    -   directional gouges + grain breakup
+%   <path> opts linocut    -   bolder carved regions, simplified marks
+%   <path> opts engraving  -   fine parallel/cross-hatched line work
+%
+% **API note — this file departs from surfacekit/stipplekit/
+% halftonekit's `region opts NAME` convention on purpose.** Those
+% presets are pure `scatter` wrappers, which only ever needs a
+% `screct`/`scpath` region for its own approximate `scin` containment
+% test. A printmaking preset also needs `hatch`, which needs a real
+% graphics-state *clip* for an exact boundary — and a stored region's
+% `/Edges` is a flattened line-segment soup with no subpath boundaries
+% recorded, so rebuilding an exact `clip`-able path back out of it
+% would mean re-deriving subpath breaks by coordinate-equality
+% matching between adjacent edges: real machinery, for no benefit over
+% just clipping to the path the caller already has current. So instead
+% every preset here takes the *current path* directly, the same way
+% `hatch` itself does, and manages its own `clip` internally — no
+% region-building step, no pre-`clip` call, required of the caller at
+% all:
+%
+%   newpath 40 40 moveto 260 40 lineto 260 260 lineto 40 260 lineto
+%     closepath
+%   << /Seed 7 >> woodcut
+%
+% The one discoverability risk this creates: `region opts woodcut` —
+% the sibling-habit call, passing a `screct`/`scpath` result instead
+% of a path — type-checks fine (a region is a dict, `woodcut`'s own
+% opts argument is also a dict) but leaves the region dict sitting
+% unconsumed as this operator's *first* argument, which becomes a
+% stray value on the operand stack once `woodcut` pops just its own
+% `opts`. `--lint`'s operand-leak check (and every test in this file's
+% own suite asserting an empty operand stack after each call) is the
+% backstop; this header and every `@example` below use the path form
+% so the sibling-shaped call is never the one shown.
+%
+% **Sequencing, all three presets:** `pathbbox` is read from the
+% caller's real path *before* anything else runs, and handed to every
+% `hatch` call as an explicit `/BBox` — never left to `hatch`'s own
+% `pathbbox` default, because `scpath` (below) flattens the current
+% path for the rest of this call wherever it runs, and a `hatch` call
+% after that would read the flattened shape's own bbox instead of the
+% caller's original (usually the same box, but not guaranteed for a
+% curved path). Then, inside one `gsave`/`grestore`: `clip` against
+% the caller's real path first (exact against true curves, not a
+% flattened approximation), *then* — only where a preset's own marks
+% actually need a `scatter`-shaped region (`woodcut`/`linocut`'s chip
+% marks, always; any preset's optional `/Paper` pass) — `scpath`
+% captures one from that same (now-clipped) path. `engraving` with
+% `/Paper false`, its common case, never calls `scpath` at all: an
+% earlier draft called it unconditionally, on the reasoning that the
+% flattening is entirely local to this call anyway (see below) and
+% uniform behavior beats a special case — but `scpath` enforces its
+% own 20000-edge ceiling (`scpath-too-many-edges`) independent of
+% whether the caller's own `hatch`/`clip` needs one that large, so a
+% caller passing a genuinely complex path — one `hatch` and `clip`
+% would handle without complaint — got a spurious rejection from a
+% region this preset was never going to use (Codex review, PR #128,
+% round 2). Skipping the call where nothing needs the region is
+% strictly safer, not merely equivalent. **Whether or not `scpath`
+% runs, its flattening (when it does run) is entirely local to this
+% call, never a caller-visible cost:** `path` is part of this
+% interpreter's saved graphics state, so the closing `grestore`
+% restores the caller's path exactly as it was at entry — real curves
+% included, `scpath`'s in-call flattening undone along with the
+% `clip` — the same reason a caller-supplied `/Mark` override inside a
+% `scatter` call can't leak state past its own `gsave` either. Every
+% preset then reads `/Color`/`/Budget`/etc. from the shared options
+% dict this file's header documents and *nothing else* — an
+% unrecognized key (`/Spacing`, `/Count`, `/Width`, a sibling's own
+% option name) is silently ignored, not forwarded, since each
+% `hatch`/`scatter`/`grain` call below builds its own options dict
+% from scratch rather than layering onto the caller's. One side effect
+% worth knowing, not
+% a bug: because chip marks and the optional paper pass are scattered
+% *inside* the same `clip` this file already established from the
+% exact path, their paint is exactly bounded by it too — better than
+% `scin`'s own approximate overhang, which is all a bare `scatter`/
+% `grain` call gets on its own.
+%
+% Shared options, all optional, identical across all three presets —
+% and, deliberately, **not** the same vocabulary `scatter`/`grain`
+% use for same-named keys, even though this file calls both under the
+% hood: `/Scale` here is a single positive number (a size multiplier),
+% not `scatter`'s `[lo hi]` range; `/Density` here is a 0..1 ink-
+% coverage fraction, not `grain`'s marks-per-square-unit; `/Angle`
+% here is a dominant-direction *offset*, not `hatch`'s literal sweep
+% angle. A caller reaching for a sibling-shaped value out of habit
+% (`/Scale [0.4 1.4]`, say) is rejected under this file's own error
+% names below — validated before any derived number ever reaches
+% `hatch`/`scatter`/`grain` — rather than silently misbehaving or
+% surfacing one of *their* error names for a value this file, not
+% they, rejected.
+%
+%   /Scale      num in [0.001, 1000] (default 1; validated —
+%               `printkit-scale-must-be-positive`/`printkit-scale-
+%               must-be-1000-or-less`/`printkit-scale-must-be-at-
+%               least-0.001` otherwise). Overall size: spacing, stroke
+%               width, and chip-mark size all grow together. The
+%               bound isn't decorative — an unbounded /Scale reaches
+%               the rasterizer with geometry extreme enough to crash
+%               the interpreter process itself, not raise a catchable
+%               error.
+%   /Density    num in [0,1] (default 0.5). Ink coverage — higher
+%               tightens hatch spacing and raises chip-mark count.
+%   /Roughness  num in [0,1] (default 0.5). Hand-cut irregularity —
+%               higher raises hatch `/Wobble`/`/Dropout`/`/Trim` and
+%               chip-mark rotation jitter. `engraving` responds to it
+%               only lightly (an engraver's line is controlled by
+%               design); `woodcut` responds to it most.
+%   /Seed       n, `abs(n) <= 2147483645` (validated —
+%               `printkit-seed-must-be-a-number`/`printkit-seed-out-
+%               of-range` otherwise). Derives one sub-seed per
+%               underlying call (`Seed`, `Seed+1`, `Seed+2`, ...)
+%               rather than this file managing one shared `srand`/
+%               `rrand` pair itself — each of `hatch`/`scatter`/
+%               `grain` already seeds and restores its own stream per
+%               its own documented contract, so layering a second one
+%               here would just be redundant bookkeeping. The range
+%               leaves headroom for the largest offset this file adds
+%               (2, for `woodcut`/`linocut`'s three sub-calls) to stay
+%               inside `scatter`'s own documented `+/-2147483647`
+%               bound — checked here so a caller sees this file's own
+%               error name rather than a raw `typecheck` from the
+%               offset addition or a different file's error name from
+%               a downstream call. Omit `/Seed` to let every sub-call
+%               draw from the ambient stream instead, same "still
+%               deterministic under the caller's own `N srand`, just
+%               not independent of what drew before it" caveat those
+%               files already state.
+%   /Color      [r g b], each in [0,1] (default a preset-specific
+%               near-black). Flat ink color — every mark this preset
+%               draws (hatch strokes and chip marks alike) uses it
+%               unmodulated; unlike `surfacekit`'s presets, nothing
+%               here shades per-mark, since a print's ink is flat.
+%   /Budget     num > 0, <= 200000 (default 20000 — `hatch`'s and
+%               `scatter`'s own default, so this file never *lowers*
+%               either primitive's own ceiling unless a caller asks
+%               it to). Forwarded as `hatch`'s `/MaxLines` to every
+%               hatch call this preset makes (for `engraving`, one
+%               combined multi-angle call — `/MaxLines` there already
+%               bounds the *summed* candidate count across all three
+%               angles, hatchkit's own documented contract, not
+%               `/Budget` per angle) and as `scatter`'s `/Budget` to
+%               the chip-mark pass and the optional paper pass. At
+%               most three such sub-calls ever run (one hatch pass,
+%               one chip scatter, one paper `grain`), each
+%               independently capped at `/Budget` — so total work is
+%               bounded by a small constant multiple of `/Budget`,
+%               never unbounded, regardless of region size or option
+%               values.
+%   /Paper      bool (default false). When true, an extra
+%               `surfacekit` `grain` pass (issue #51) runs first,
+%               under the ink, at low `/Strength` — closing the
+%               "interplay with surfacekit" this file was left to
+%               decide (NOTES.md's halftonekit entry). Like every
+%               `surfacekit` preset, `grain` lerps toward paper-white,
+%               not toward transparent (no portable PostScript alpha
+%               operator — the same Ghostscript-portability constraint
+%               `surfacekit`'s own header documents), so `/Paper true`
+%               assumes a light page underneath.
+%   /Angle      num, degrees (default 0). `woodcut`/`linocut`'s single
+%               dominant grain direction; `engraving`'s three fixed
+%               angles (60 degrees apart) are offset by this value
+%               together, not independently settable — a caller
+%               wanting different engraving angles calls `hatch`
+%               directly instead.
+%
+% **Reproducibility**, same scope every other `rand`-driven procedure
+% in this codebase states: a given path, options, and `/Seed` draw the
+% same picture in *this* interpreter every time. Ghostscript uses a
+% different generator, so the same seeded call there renders an
+% equally deterministic, equally reproducible, but different
+% arrangement — "runs unchanged in pscat and Ghostscript" means runs
+% without error and stays visually in-genre, not pixel-identical
+% between them; the `ghostscript_accepts_*` test in this file's own
+% suite is what actually stands behind that claim, exactly as
+% `hatchkit.ps`'s own header already frames it.
+%
+% Scratch prefix: every internal name starts with `pr` (`printkit`) —
+% not `pk` (already `paintkit.ps`'s), not `p*` alone (too short to be
+% collision-safe against this codebase's many single-letter-prefixed
+% files). Grepped clean against every `lib/*.ps`/`lib/styles/*.ps`
+% file's own `/pr...` names (not just top-level `def`s — halftonekit's
+% own header notes that a top-level-only grep is exactly what missed
+% a real collision there): the only hits are `graph.ps`'s public
+% `/proc`/`/project3`, unrelated public names in a file `printkit.ps`
+% never loads alongside in a namespace-sensitive way, not `pr`-
+% prefixed scratch state.
+
+% --- shared validation -------------------------------------------------
+
+% @internal
+/prisnum { type dup /integertype eq exch /realtype eq or } def
+
+% dict key default prgetdef -> value
+% printkit's own copy of the wrap-the-default-in-an-array trick every
+% sibling in this codebase repeats under its own scratch prefix (see
+% hatchkit's `hkgetdef`/surfacekit's `sfgetdef` for the same reasoning
+% stated once each).
+% @internal
+/prgetdef {
+  /prgdd exch 1 array astore def
+  /prgdk exch def
+  /prgdt exch def
+  prgdt prgdk known { prgdt prgdk get } { prgdd 0 get } ifelse
+} def
+
+% val errproc name prbindnum -
+% printkit's own copy of surfacekit's `sfbindnum`: validates `val` is
+% a number (else runs `errproc`, a manifest `{ self-documenting-name }`
+% literal at every call site), then binds it to `name`. `val` stays
+% inside a private 1-element array until the check passes, so a
+% caller-supplied procedure standing in for a numeric option can never
+% auto-execute on a bare reference before its type is checked.
+% @internal
+/prbindnum {
+  /prbnname exch def
+  /prbnerr exch def
+  1 array astore /prbnbox exch def
+  prbnbox 0 get prisnum not { prbnerr exec } if
+  prbnname prbnbox 0 get def
+} def
+
+% opts default3arr prcolordef -> r g b
+% printkit's own copy of surfacekit's `sfcolordef`: resolves and
+% validates `/Color` (or `default3arr`), a 3-element array of numbers
+% each in [0,1], entirely inside private 1-element-array boxes until
+% every check passes — the same auto-exec hazard `sfcolordef`'s own
+% comment documents, since `type /arraytype eq` alone does not rule
+% out a procedure (a procedure *is* an executable array).
+% @internal
+/prcolordef {
+  /prcddef exch def
+  /prcdopts exch def
+  prcdopts /Color prcddef prgetdef 1 array astore /prcdbox exch def
+  prcdbox 0 get type /arraytype ne { printkit-color-must-be-an-rgb-array } if
+  prcdbox 0 get length 3 ne { printkit-color-must-be-an-rgb-array } if
+  prcdbox 0 get 0 get prisnum prcdbox 0 get 1 get prisnum and
+    prcdbox 0 get 2 get prisnum and not
+    { printkit-color-must-be-an-rgb-array } if
+  prcdbox 0 get 0 get dup 0 lt exch 1 gt or
+  prcdbox 0 get 1 get dup 0 lt exch 1 gt or or
+  prcdbox 0 get 2 get dup 0 lt exch 1 gt or or
+    { printkit-color-components-must-be-0-to-1 } if
+  prcdbox 0 get 0 get prcdbox 0 get 1 get prcdbox 0 get 2 get
+} def
+
+% opts default prboolget -> bool
+% @internal
+/prboolget {
+  /prbgdef exch def
+  /prbgopts exch def
+  prbgopts /Paper prbgdef prgetdef 1 array astore /prbgbox exch def
+  prbgbox 0 get type /booleantype ne { printkit-paper-must-be-a-boolean } if
+  prbgbox 0 get
+} def
+
+% dict offset resolved prapplyseed -
+% If `resolved` (a `propts` result) carries `/Seed`, puts
+% `(Seed + offset)` into `dict` at `/Seed` — the per-sub-call seed
+% derivation this file's header describes. A no-op otherwise, so the
+% sub-call draws from the ambient stream exactly as it would with no
+% `/Seed` key at all.
+% @internal
+/prapplyseed {
+  /prasres exch def
+  /prasoff exch def
+  /prasdict exch def
+  prasres /Seed known {
+    prasdict /Seed prasres /Seed get prasoff add put
+  } if
+} def
+
+% defaultcolor3arr opts errproc propts -> resolved
+% Validates and resolves every shared option this file's header
+% documents into a fresh dict: `/Scale` `/Density` `/Roughness`
+% `/Angle` `/Budget` `/Paper` `/ColorR` `/ColorG` `/ColorB`, plus
+% `/Seed` when the caller supplied one. `errproc` (a manifest `{...}`
+% literal at every call site, same self-documenting-error convention
+% `sfregiondef`/`sfbindnum` use) is each preset's own
+% `<preset>-opts-must-be-a-dict` name — matching the sibling
+% convention of a per-operator name for that one check — while every
+% other error below is `printkit`-owned, shared across all three
+% presets since the options themselves are one shared vocabulary.
+% Every check here runs before any derived value reaches
+% `hatch`/`scatter`/`grain` — see this file's header for why that
+% matters given the deliberate vocabulary overlap with those files'
+% own same-named options.
+% @internal
+/propts {
+  /proerr exch def
+  /prodef exch def
+  1 array astore /probox exch def
+  probox 0 get type /dicttype ne { proerr exec } if
+  /proopts probox 0 get def
+
+  proopts /Scale 1 prgetdef
+    { printkit-scale-must-be-a-number } /proscale prbindnum
+  proscale 0 le { printkit-scale-must-be-positive } if
+  % Bounded, not just positive: /Scale multiplies directly into every
+  % derived spacing/width/chip-size number below, with no cap of its
+  % own downstream -- an extreme value (1e9, empirically) reaches
+  % tiny-skia with geometry so degenerate it panics the *interpreter
+  % process itself*, not a catchable PostScript error, and program
+  % input must never do that (AGENTS.md's code quality bar). An
+  % extreme-small value (1e-20) hits a raw `rangecheck` in a
+  % downstream `cvi` first. [1e-3, 1000] is generous on both ends for
+  % any real print size (empirically clean at least three orders of
+  % magnitude past each bound) while staying far from either failure
+  % (Codex review, PR #128, round 3).
+  proscale 1000 gt { printkit-scale-must-be-1000-or-less } if
+  proscale 0.001 lt { printkit-scale-must-be-at-least-0.001 } if
+
+  proopts /Density 0.5 prgetdef
+    { printkit-density-must-be-a-number } /prodensity prbindnum
+  prodensity 0 lt prodensity 1 gt or
+    { printkit-density-must-be-a-fraction-in-0-1 } if
+
+  proopts /Roughness 0.5 prgetdef
+    { printkit-roughness-must-be-a-number } /proroughness prbindnum
+  proroughness 0 lt proroughness 1 gt or
+    { printkit-roughness-must-be-a-fraction-in-0-1 } if
+
+  proopts /Angle 0 prgetdef
+    { printkit-angle-must-be-a-number } /proangle prbindnum
+
+  proopts /Budget 20000 prgetdef
+    { printkit-budget-must-be-a-number } /probudget prbindnum
+  probudget 0 le { printkit-budget-must-be-positive } if
+  probudget 200000 gt { printkit-budget-must-be-200000-or-fewer } if
+
+  proopts false prboolget /propaper exch def
+
+  proopts prodef prcolordef
+    /procolb exch def /procolg exch def /procolr exch def
+
+  % /Seed is optional (prores simply omits it when the caller never
+  % gave one, and prapplyseed no-ops on a missing key) but, when
+  % given, must be validated here too: `prapplyseed` derives each
+  % sub-call's own seed as `Seed + offset` (offset up to 2, for
+  % woodcut/linocut's three sub-calls), and without a check here a
+  % non-numeric `/Seed` fails with a raw `typecheck` from `add` deep
+  % inside `prapplyseed`, and a `/Seed` near `scatter`'s own
+  % documented +/-2147483647 bound fails with *its* name instead of
+  % this file's own -- inconsistently between presets, since they add
+  % different maximum offsets (Codex review, PR #128).
+  proopts /Seed known {
+    proopts /Seed get { printkit-seed-must-be-a-number } /proseed prbindnum
+    proseed abs 2147483645 gt { printkit-seed-out-of-range } if
+  } if
+
+  /prores 10 dict def
+  prores /Scale proscale put
+  prores /Density prodensity put
+  prores /Roughness proroughness put
+  prores /Angle proangle put
+  prores /Budget probudget put
+  prores /Paper propaper put
+  prores /ColorR procolr put
+  prores /ColorG procolg put
+  prores /ColorB procolb put
+  proopts /Seed known { prores /Seed proseed put } if
+  prores
+} def
+
+% --- chip mark (woodcut/linocut carved-texture marks) ------------------
+
+% x y scale angle prchipmark -
+% A short filled quad, centered at (x,y), rotated by `angle`, sized
+% from the current `/prchiplen`/`/prchipwid` (each preset sets these
+% right before its own `scatter` call — sequential, never nested, so
+% no collision between `woodcut`'s and `linocut`'s own values). Draws
+% in whatever color is already current; unlike `surfacekit`'s default
+% marks, this file sets ink color once per preset call rather than
+% per-mark, since print ink is flat, not shaded. Consumes all four
+% operands per `scatter`'s own `/Mark` contract and touches no `sc-`/
+% `sq-`/`si-` name.
+% @internal
+/prchipmark {
+  /prcmang exch def
+  /prcmscale exch def
+  /prcmy exch def
+  /prcmx exch def
+  /prcmlen prchiplen prcmscale mul def
+  /prcmwid prchipwid prcmscale mul def
+  gsave
+    prcmx prcmy translate
+    prcmang rotate
+    newpath
+    prcmlen -2 div prcmwid -2 div moveto
+    prcmlen 2 div prcmwid -2 div lineto
+    prcmlen 2 div prcmwid 2 div lineto
+    prcmlen -2 div prcmwid 2 div lineto
+    closepath
+    fill
+  grestore
+} def
+
+% --- woodcut -------------------------------------------------------
+
+% <path> opts woodcut -
+% @kind: Procedure
+% @summary: Woodcut preset — one directional hatch pass (the grain), with high wobble/dropout/trim for hand-cut breakup, plus a scatter of small jittered chip marks along the grain. Built on hatchkit's hatch and artkit's scatter; clips to the current path internally, so no caller pre-clip or region object is needed.
+% @example: newpath 20 20 moveto 180 20 lineto 180 180 lineto 20 180 lineto closepath << /Seed 5 >> woodcut
+% @param: /Scale num in [0.001, 1000], overall size multiplier (default 1)
+% @param: /Density num in [0,1], ink coverage (default 0.5)
+% @param: /Roughness num in [0,1], hand-cut irregularity (default 0.5)
+% @param: /Seed n, derives one sub-seed per underlying call (default: ambient stream)
+% @param: /Color [r g b] ink color (default a warm near-black)
+% @param: /Budget num, per-sub-call safety cap forwarded to hatch/scatter (default 20000)
+% @param: /Paper bool, lay a subtle surfacekit grain pass under the ink (default false)
+% @param: /Angle num, degrees, dominant grain direction (default 0)
+/woodcut {
+  [ 0.09 0.07 0.05 ] { woodcut-opts-must-be-a-dict } propts /prres exch def
+  /prscale prres /Scale get def
+  /prdensity prres /Density get def
+  /prroughness prres /Roughness get def
+  /prangle prres /Angle get def
+  /prbudget prres /Budget get def
+
+  % Resolved before any region is built, since whether one gets built
+  % at all now depends on it (see the /prneedregion note below).
+  /prwchipcount 140 prdensity mul 0.5 add cvi def
+  /prchiplen 5 prscale mul def
+  /prchipwid 1.6 prscale mul def
+  /prwjitter 18 40 prroughness mul add def
+
+  pathbbox
+  /prbby1 exch def /prbbx1 exch def /prbby0 exch def /prbbx0 exch def
+  /prbbox [ prbbx0 prbby0 prbbx1 prbby1 ] def
+
+  gsave
+  clip
+
+  % scpath enforces its own 20000-edge ceiling independent of whether
+  % anything below actually consumes the region it builds -- building
+  % one nobody uses (chip count rounded to 0 *and* /Paper false) would
+  % reject a path hatch's own clip handles fine (Codex review, PR
+  % #128, round 3, the same class of bug round 2 already fixed for
+  % engraving).
+  /prneedregion prwchipcount 0 gt prres /Paper get or def
+  prneedregion { /prregion scpath def } if
+
+  prres /Paper get {
+    /prpopts 4 dict def
+    prpopts /Density 0.02 put
+    prpopts /Strength 0.18 put
+    prpopts /Budget prbudget put
+    prpopts 0 prres prapplyseed
+    prregion prpopts grain
+  } if
+
+  prres /ColorR get prres /ColorG get prres /ColorB get setrgbcolor
+
+  /prwspacing 16 0.3 prdensity 1.4 mul add div prscale mul def
+  /prwwidthlo 1.6 prscale mul def
+  /prwwidthhi 3.2 prroughness 1.5 mul add prscale mul def
+  /prwwobble 3.0 prroughness mul prscale mul def
+  /prwdropout 0.32 prroughness mul def
+  /prwtrimhi 0.4 prroughness mul def
+
+  /prhopts 8 dict def
+  prhopts /BBox prbbox put
+  prhopts /Angle prangle put
+  prhopts /Spacing prwspacing put
+  prhopts /Width [ prwwidthlo prwwidthhi ] put
+  prhopts /Wobble prwwobble put
+  prhopts /Dropout prwdropout put
+  prhopts /Trim [ 0 prwtrimhi ] put
+  prhopts /MaxLines prbudget put
+  prhopts 1 prres prapplyseed
+  prhopts hatch
+
+  prwchipcount 0 gt {
+    /prsopts 6 dict def
+    prsopts /Count prwchipcount put
+    prsopts /Scale [ 0.7 1.4 ] put
+    prsopts /Rotate [ prangle prwjitter sub prangle prwjitter add ] put
+    prsopts /Mark /prchipmark load put
+    prsopts /Budget prbudget put
+    prsopts 2 prres prapplyseed
+    prregion prsopts scatter
+  } if
+
+  grestore
+} def
+
+% --- linocut -------------------------------------------------------
+
+% <path> opts linocut -
+% @kind: Procedure
+% @summary: Linocut preset — one bold, low-wobble hatch pass and a sparse scatter of a few large chip marks (simplified, deliberate carving, not grain-following breakup). Built on hatchkit's hatch and artkit's scatter; clips to the current path internally.
+% @example: newpath 20 20 moveto 180 20 lineto 180 180 lineto 20 180 lineto closepath << /Seed 5 >> linocut
+% @param: /Scale num in [0.001, 1000], overall size multiplier (default 1)
+% @param: /Density num in [0,1], ink coverage (default 0.5)
+% @param: /Roughness num in [0,1], hand-cut irregularity (default 0.5)
+% @param: /Seed n, derives one sub-seed per underlying call (default: ambient stream)
+% @param: /Color [r g b] ink color (default a flat near-black)
+% @param: /Budget num, per-sub-call safety cap forwarded to hatch/scatter (default 20000)
+% @param: /Paper bool, lay a subtle surfacekit grain pass under the ink (default false)
+% @param: /Angle num, degrees, dominant carve direction (default 0)
+/linocut {
+  [ 0.04 0.04 0.04 ] { linocut-opts-must-be-a-dict } propts /prres exch def
+  /prscale prres /Scale get def
+  /prdensity prres /Density get def
+  /prroughness prres /Roughness get def
+  /prangle prres /Angle get def
+  /prbudget prres /Budget get def
+
+  % Resolved before any region is built, since whether one gets built
+  % at all now depends on it (see the /prneedregion note below).
+  /prlchipcount 18 prdensity mul 0.5 add cvi def
+  /prchiplen 11 prscale mul def
+  /prchipwid 4.5 prscale mul def
+  /prljitter 8 10 prroughness mul add def
+
+  pathbbox
+  /prbby1 exch def /prbbx1 exch def /prbby0 exch def /prbbx0 exch def
+  /prbbox [ prbbx0 prbby0 prbbx1 prbby1 ] def
+
+  gsave
+  clip
+
+  % scpath enforces its own 20000-edge ceiling independent of whether
+  % anything below actually consumes the region it builds -- building
+  % one nobody uses (chip count rounded to 0 *and* /Paper false) would
+  % reject a path hatch's own clip handles fine (Codex review, PR
+  % #128, round 3, the same class of bug round 2 already fixed for
+  % engraving).
+  /prneedregion prlchipcount 0 gt prres /Paper get or def
+  prneedregion { /prregion scpath def } if
+
+  prres /Paper get {
+    /prpopts 4 dict def
+    prpopts /Density 0.02 put
+    prpopts /Strength 0.18 put
+    prpopts /Budget prbudget put
+    prpopts 0 prres prapplyseed
+    prregion prpopts grain
+  } if
+
+  prres /ColorR get prres /ColorG get prres /ColorB get setrgbcolor
+
+  /prlspacing 26 0.3 prdensity 1.4 mul add div prscale mul def
+  /prlwidthlo 2.6 prscale mul def
+  /prlwidthhi 4.6 prroughness 0.8 mul add prscale mul def
+  /prlwobble 0.8 prroughness mul prscale mul def
+  /prldropout 0.10 prroughness mul def
+  /prltrimhi 0.15 prroughness mul def
+
+  /prhopts 8 dict def
+  prhopts /BBox prbbox put
+  prhopts /Angle prangle put
+  prhopts /Spacing prlspacing put
+  prhopts /Width [ prlwidthlo prlwidthhi ] put
+  prhopts /Wobble prlwobble put
+  prhopts /Dropout prldropout put
+  prhopts /Trim [ 0 prltrimhi ] put
+  prhopts /MaxLines prbudget put
+  prhopts 1 prres prapplyseed
+  prhopts hatch
+
+  prlchipcount 0 gt {
+    /prsopts 6 dict def
+    prsopts /Count prlchipcount put
+    prsopts /Scale [ 0.85 1.25 ] put
+    prsopts /Rotate [ prangle prljitter sub prangle prljitter add ] put
+    prsopts /Mark /prchipmark load put
+    prsopts /Budget prbudget put
+    prsopts 2 prres prapplyseed
+    prregion prsopts scatter
+  } if
+
+  grestore
+} def
+
+% --- engraving -------------------------------------------------------
+
+% <path> opts engraving -
+% @kind: Procedure
+% @summary: Engraving preset — one hatchkit call sweeping three angles (60 degrees apart) at fine spacing, thin width, and minimal wobble/dropout: controlled crosshatched line work, no chip marks. Built entirely on hatchkit's hatch; clips to the current path internally.
+% @example: newpath 20 20 moveto 180 20 lineto 180 180 lineto 20 180 lineto closepath << /Seed 5 >> engraving
+% @param: /Scale num in [0.001, 1000], overall size multiplier (default 1)
+% @param: /Density num in [0,1], ink coverage (default 0.5)
+% @param: /Roughness num in [0,1], line irregularity (default 0.5, applied lightly)
+% @param: /Seed n, derives one sub-seed per underlying call (default: ambient stream)
+% @param: /Color [r g b] ink color (default a cool near-black)
+% @param: /Budget num, safety cap on the combined three-angle line count (default 20000)
+% @param: /Paper bool, lay a subtle surfacekit grain pass under the ink (default false)
+% @param: /Angle num, degrees, offset applied to all three fixed angles (default 0)
+/engraving {
+  [ 0.05 0.05 0.09 ] { engraving-opts-must-be-a-dict } propts /prres exch def
+  /prscale prres /Scale get def
+  /prdensity prres /Density get def
+  /prroughness prres /Roughness get def
+  /prangle prres /Angle get def
+  /prbudget prres /Budget get def
+
+  pathbbox
+  /prbby1 exch def /prbbx1 exch def /prbby0 exch def /prbbx0 exch def
+  /prbbox [ prbbx0 prbby0 prbbx1 prbby1 ] def
+
+  gsave
+  clip
+
+  prres /Paper get {
+    /prregion scpath def
+    /prpopts 4 dict def
+    prpopts /Density 0.02 put
+    prpopts /Strength 0.18 put
+    prpopts /Budget prbudget put
+    prpopts 0 prres prapplyseed
+    prregion prpopts grain
+  } if
+
+  prres /ColorR get prres /ColorG get prres /ColorB get setrgbcolor
+
+  /prespacing 4.5 0.3 prdensity 1.4 mul add div prscale mul def
+  /prewidthlo 0.5 prscale mul def
+  /prewidthhi 1.0 prscale mul def
+  /prewobble 0.25 prroughness mul prscale mul def
+  /predropout 0.05 prroughness mul def
+  /pretrimhi 0.05 prroughness mul def
+
+  /prhopts 8 dict def
+  prhopts /BBox prbbox put
+  prhopts /Angles [ prangle prangle 60 add prangle 120 add ] put
+  prhopts /Spacing prespacing put
+  prhopts /Width [ prewidthlo prewidthhi ] put
+  prhopts /Wobble prewobble put
+  prhopts /Dropout predropout put
+  prhopts /Trim [ 0 pretrimhi ] put
+  prhopts /MaxLines prbudget put
+  prhopts 1 prres prapplyseed
+  prhopts hatch
+
+  grestore
+} def

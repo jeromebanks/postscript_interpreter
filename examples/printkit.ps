@@ -1,0 +1,77 @@
+%!PS-Adobe-3.0
+%%Title: Three Cuts — a specimen sheet for printkit.ps
+%%BoundingBox: 0 0 1000 360
+%%EndComments
+
+% Specimen sheet for the printmaking preset library (issue #52,
+% lib/printkit.ps): one panel per preset, plus a fourth demonstrating
+% the optional /Paper texture pass (issue #51's surfacekit, composed
+% in underneath the ink). Every panel calls its preset directly on a
+% plain rectangular path -- no pre-clip, no region object, printkit
+% manages its own clip internally. Run from the repo root:
+%
+%   pscat --page 1000x360 examples/printkit.ps
+
+(lib/artkit.ps) run
+(lib/hatchkit.ps) run
+(lib/surfacekit.ps) run
+(lib/printkit.ps) run
+
+/showctr { /tky exch def /tkx exch def /tks exch def
+    tkx tks stringwidth pop 2 div sub tky moveto tks show } def
+
+1 1 1 setrgbcolor clippath fill
+
+/Palatino-Bold findfont 24 scalefont setfont
+0.1 0.1 0.12 setrgbcolor
+(Three Cuts) 500 336 showctr
+/Palatino-Italic findfont 12 scalefont setfont
+(woodcut, linocut, engraving, and the optional paper pass -- lib/printkit.ps) 500 316 showctr
+
+/Palatino findfont 11 scalefont setfont
+/panel { % x y w h -
+  /ph exch def /pw exch def /py exch def /px exch def
+  gsave
+    px py translate
+    0 0 0 setrgbcolor 0.75 setlinewidth
+    newpath 0 0 moveto pw 0 lineto pw ph lineto 0 ph lineto closepath stroke
+} def
+/endpanel { grestore } def
+
+% --- woodcut: directional gouges + grain breakup ----------------------
+40 40 200 200 panel
+newpath 0 0 moveto 200 0 lineto 200 200 lineto 0 200 lineto closepath
+<< /Seed 5 >> woodcut
+endpanel
+0.1 0.1 0.12 setrgbcolor
+(woodcut: grain + breakup) 140 26 showctr
+
+% --- linocut: bolder carved regions, simplified marks ------------------
+280 40 200 200 panel
+newpath 0 0 moveto 200 0 lineto 200 200 lineto 0 200 lineto closepath
+<< /Seed 5 >> linocut
+endpanel
+0.1 0.1 0.12 setrgbcolor
+(linocut: bold + simplified) 380 26 showctr
+
+% --- engraving: fine parallel/cross-hatched line work -------------------
+520 40 200 200 panel
+newpath 0 0 moveto 200 0 lineto 200 200 lineto 0 200 lineto closepath
+<< /Seed 5 >> engraving
+endpanel
+0.1 0.1 0.12 setrgbcolor
+(engraving: fine crosshatch) 620 26 showctr
+
+% --- /Paper true: a subtle surfacekit grain pass under the ink ----------
+% Same call as the linocut panel, just /Paper true -- the paper grain
+% sits *under* the ink (drawn first, inside the same clip), the
+% interplay with surfacekit this file's own header assigns to #52.
+760 40 200 200 panel
+newpath 0 0 moveto 200 0 lineto 200 200 lineto 0 200 lineto closepath
+<< /Seed 5 /Paper true >> linocut
+endpanel
+0.1 0.1 0.12 setrgbcolor
+(linocut + /Paper true) 860 26 showctr
+
+showpage
+%%EOF

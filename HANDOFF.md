@@ -315,6 +315,28 @@ uses "scratch" as a term of art for private working state throughout
 every sibling library's own docs, and five review rounds' worth of
 auto-execution and unguarded-numeric-conversion hazards a caller-
 supplied value could trigger before its type was checked).
+Also done: issue #52, woodcut/linocut/engraving mark presets — a
+tenth sibling, `lib/printkit.ps`, composing `hatchkit.ps`'s `hatch`,
+`artkit.ps`'s `scatter`, and (optionally, `/Paper true`)
+`surfacekit.ps`'s `grain` into three presets over one shared options
+dict (`/Scale`/`/Density`/`/Roughness`/`/Seed`/`/Color`/`/Budget`/
+`/Paper`/`/Angle`). Deliberately breaks from its siblings' `region opts
+NAME` convention — each preset takes the *current path* directly (like
+`hatch` itself) and manages its own `clip` internally, since
+reconstructing an exact `clip`-able path back out of a stored region's
+flattened edge soup would be real machinery for no benefit over the
+path the caller already has. `examples/printkit.ps` is a four-panel
+specimen sheet; the gallery piece *Nightfall, Three Cuts*
+(`gallery/nightfall_triptych.ps`) uses all three presets in one
+moonlit scene, a deliberate departure from the "primitive gets a
+specimen, not a gallery card" precedent its own siblings set, since
+issue #52 explicitly asked for a gallery composition (NOTES.md's
+entry has the full story, including three design-review findings
+`advisor` caught before any code existed — never trust `hatch`'s own
+`pathbbox` default across a call that changes the current path first,
+clip the true path before flattening one via `scpath`, and a
+`/Budget` default that matches `hatch`'s/`scatter`'s own rather than
+silently lowering either's ceiling).
 Written for whichever model
 picks the project up next — read this after `CLAUDE.md` and before
 touching code. `ROADMAP.md` has the task list with model routing;

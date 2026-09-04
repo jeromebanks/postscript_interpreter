@@ -30,6 +30,253 @@ loads); actual pages deploy (local build verified only). Also noted:
 `compositors_proof`, `fugitive_pigments`) — pre-existing, out of
 scope.
 
+## Woodcut, linocut, and engraving mark presets (issue #52, 2026-09-03)
+
+A tenth sibling library, `lib/printkit.ps` — tag-migrated from birth
+like every recent sibling here, composing `hatchkit.ps`'s `hatch`
+(issue #49), `artkit.ps`'s `scatter` (issue #48), and, optionally,
+`surfacekit.ps`'s `grain` (issue #51) into three printmaking presets:
+`woodcut` (directional gouges, grain-following breakup), `linocut`
+(bolder carved regions, simplified marks), `engraving` (fine parallel/
+cross-hatched line work), over one shared options dict (`/Scale`,
+`/Density`, `/Roughness`, `/Seed`, `/Color`, `/Budget`, `/Paper`,
+`/Angle`).
+
+**API deliberately breaks from the `region opts NAME` convention its
+own siblings (surfacekit/stipplekit/halftonekit) established.** A
+`scatter`-based preset only ever needs a `screct`/`scpath` region for
+`scin`'s own approximate containment test; a printmaking preset also
+needs `hatch`, which needs a real graphics-state `clip` for an *exact*
+boundary — and a stored region's `/Edges` is a flattened line-segment
+soup with no subpath boundaries recorded, so rebuilding a `clip`-able
+path back out of it would mean re-deriving subpath breaks by
+coordinate-equality matching between adjacent edges, for no benefit
+over the path the caller already has. Every preset here instead takes
+the *current path* directly (the same convention `hatch` itself uses)
+and manages its own `clip` internally: `<path> opts woodcut -`, no
+pre-`clip`, no region object, required of the caller at all. `advisor`
+flagged this design call explicitly (before any code existed) as the
+right one — "the `/Edges`-reconstruction alternative is exactly the
+machinery hatchkit and surfacekit both declined to build."
+
+**Sequencing inside each preset, settled by the same `advisor` plan
+review**, closing three real correctness gaps before any code existed:
+(1) `pathbbox` is read from the caller's real, un-flattened path
+*before* anything else runs and handed to every `hatch` call as an
+explicit `/BBox` — never left to `hatch`'s own `pathbbox`-of-current-
+path default, since a later `/Paper true` grain pass or a chip-mark
+scatter pass leaves the current path in a different (flattened, or
+briefly gone) state than what the caller built, and the default would
+then read the wrong shape or raise `nocurrentpoint` outright. (2) The
+real, un-flattened path is `clip`-ped first, *then* `scpath` builds a
+region from it — clipping the true curves first is more precise than
+clipping a flattened polygon. (3) `/Budget` defaults to 20000 —
+matching `hatch`'s and `scatter`'s own defaults exactly, so `printkit`
+never *lowers* either primitive's own safety ceiling for a caller who
+never asked for a smaller one; an early draft defaulted to 4000; the
+advisor call caught that this would reject unremarkable art `hatch`
+alone would happily draw.
+
+**A second `advisor` pass, over the finished implementation, caught
+five more.** (1) The `ghostscript_accepts_*` test's early-return-if-
+`gs`-missing path is indistinguishable from a genuine pass in
+`cargo test`'s own summary — worth flagging explicitly rather than
+just trusting the green checkmark: `gs` is installed here (verified
+`gs --version`), and both `examples/printkit.ps` and
+`gallery/nightfall_triptych.ps` were run through it directly as an
+extra check beyond the automated test. (2) The gallery piece had
+redefined `/setcolor`, a real Level 2 operator `tests/color.rs`
+exercises elsewhere in this codebase — renamed to `/setink` before it
+became a landmine for some future library proc reaching for the real
+one. (3) `woodcut`/`linocut` called `scpath` unconditionally but
+`engraving` only inside `/Paper true` — an asymmetry, caught by
+`advisor`, that looked like a real caller-visible inconsistency
+(curves surviving with `/Paper false`, flattened with `/Paper true`).
+Made unconditional across all three for uniformity — and building the
+regression test for it surfaced that the concern, while worth fixing
+for consistency, was never actually caller-visible either way: `path`
+lives on this interpreter's own saved graphics state, so the preset's
+closing `grestore` restores the caller's path exactly as it was at
+entry, real curves included, regardless of what `scpath` did to it
+internally. An earlier draft of this file's own header claimed the
+caller's path comes back flattened; the regression test this finding
+produced is what caught that claim was wrong, not just untested — the
+header now describes the corrected (and simpler) contract. (4) A test
+asserting `/Budget` forwarding had drifted into asserting something
+false along the way: a comment claimed a smuggled-in `/Spacing 40`
+narrowed `hatch`'s own candidate count, but `printkit` never reads
+`/Spacing` at all — every options dict handed to `hatch`/`scatter`/
+`grain` is built fresh from this file's own eight documented keys,
+never layered onto the caller's, so an unrecognized key is silently
+ignored, not forwarded. Fixed the test and stated the ignore-unknown-
+keys behavior explicitly in the header, since the deliberate
+vocabulary-shadowing note nearby made it an easy thing to assume
+otherwise. (5) `--lint` was run over both new `.ps` files (clean) —
+recorded here since HANDOFF.md notes `--lint` catching real operand
+leaks in `tfdrawline`/`et-hatch` before, and this file's own
+`prchipmark` (a `/Mark` callback with a four-operand contract) and the
+gallery piece's `forall` body are exactly its beat.
+
+**Step 8's independent review (Codex, after two transient runtime
+failures despite a healthy authenticated session — a same-family
+Claude fallback launched for one of those attempts also failed, to a
+session rate limit, before Codex itself came back clean on retry)
+found one real bug: `/Seed` was never validated by `propts`.**
+`prapplyseed` derives each sub-call's own seed as `Seed + offset`
+(0/1/2 for `woodcut`/`linocut`'s three sub-calls, 0/1 for
+`engraving`'s two) — a non-numeric `/Seed` failed with a raw
+`typecheck` from `add` deep inside `prapplyseed`, not a self-
+documenting name, and a `/Seed` near `scatter`'s own documented
+`+/-2147483647` bound reproduced *inconsistently between presets*:
+`engraving` (max offset 1) accepted `2147483647` while `woodcut`/
+`linocut` (max offset 2) rejected the same value with `scatter`'s own
+error name once their own `+2` pushed it past `scatter`'s bound.
+Fixed by validating `/Seed` in `propts` itself — numeric, and
+`abs(n) <= 2147483645` (2147483647 minus the largest offset this file
+ever adds), checked uniformly for every preset regardless of that
+preset's own maximum offset, so the same seed either works or fails
+the same way everywhere. Three new tests pin it: the type/range
+errors, and that the documented boundary value (2147483645) succeeds
+for all three presets uniformly.
+
+**A second Codex round, on the pushed `/Seed` fix, caught a real
+regression the first round's own fix (making `scpath` unconditional
+for "uniformity") had introduced.** `engraving` with `/Paper false`
+(its common case) never uses the `scatter`-shaped region `scpath`
+builds — but `scpath` enforces its own 20000-edge ceiling regardless
+of whether anything downstream needs a region that large, so a caller
+with a genuinely complex path (a real one built for the regression
+test: 21,000 segments), one `hatch`'s own `clip` would happily draw,
+got a spurious `scpath-too-many-edges` rejection from a region this
+preset was never going to use. Fixed by reverting `engraving` to
+calling `scpath` only inside its own `/Paper` branch (`woodcut`/
+`linocut` still call it unconditionally — their chip marks always
+need the region) — justified now in a way it wasn't when the first
+round's "uniformity" framing was written: the flattening consistency
+concern that motivated calling it unconditionally in the first place
+was never actually caller-visible either way (see the round-1 finding
+above), so there was nothing real to gain from paying `scpath`'s own
+budget on a call that never uses its result, only a real regression to
+lose. Two more tests: a 21,000-edge path succeeds under `/Paper
+false` and still correctly rejects under `/Paper true` (proving the
+fix is "skip the unused call," not "never call `scpath` at all").
+
+**A third Codex round found two more real bugs, one of them an actual
+crash.** (1) `/Scale` was validated only for `num > 0` — an extreme
+value (`1e9`, on a 10x10 path) reached `tiny-skia`'s rasterizer with
+geometry degenerate enough to panic the interpreter *process itself*,
+not raise a catchable PostScript error (verified: `assertion failed:
+edges[curr_idx].last_y >= curr_y as i32`, `tiny-skia`'s own scanline
+code) — a real violation of AGENTS.md's code-quality bar, and an
+extreme-small value (`1e-20`) hit a raw `rangecheck` in a downstream
+`cvi` first. Bounded to `[0.001, 1000]` in `propts` — chosen by
+sweeping actual values against a live interpreter (clean through
+`1e8`, panics by `1e9`; clean at `0.01`/`0.001`, `rangecheck`s by
+`1e-20`) rather than guessed, leaving three-plus orders of magnitude
+of headroom past either bound on both sides, far past any real print
+size. (2) The same "unused region" bug round 2 fixed for `engraving`
+also applied to `woodcut`/`linocut`: with `/Paper false` and
+`/Density` low enough to round their own chip count to 0, neither
+preset's marks end up touching the region either, so the same
+unconditional `scpath` call could reject a genuinely complex path for
+a region nothing was going to use. Fixed the same way — the chip-
+count computation moved ahead of the `gsave`/`clip` block (it only
+needs `/Density`, already resolved) so a `/prneedregion` flag (chip
+count > 0, or `/Paper` true) can gate the `scpath` call. The two
+round-2 tests generalized into one parametrized-by-preset test
+covering all three, `/Density 0` standing in for engraving's
+structural "no chip marks at all."
+
+**Shared option names deliberately shadow the sibling family's own
+same-named options with different semantics — validated under
+`printkit`-owned error names before any derived value reaches
+`hatch`/`scatter`/`grain`.** `/Scale` here is one positive number (a
+size multiplier), not `scatter`'s `[lo hi]` range; `/Density` here is
+a 0..1 ink-coverage fraction, not `grain`'s marks-per-square-unit;
+`/Angle` here is a dominant-direction offset, not `hatch`'s literal
+sweep angle. A caller reaching for a sibling-shaped value out of habit
+(`/Scale [0.4 1.4]`, say) hits `printkit-scale-must-be-a-number`
+rather than silently misbehaving or surfacing a *different* file's
+error name for a value this file rejected. `propts`, one shared
+validator (mirroring `surfacekit.ps`'s own `sfgetdef`/`sfbindnum`/
+`sfcolordef`, `pr`-prefixed here — grepped clean against every
+`lib/*.ps`/`lib/styles/*.ps` file's own `/pr...` names, not just
+top-level `def`s, the halftonekit lesson about what a narrower grep
+misses), resolves and validates every shared option in one pass; only
+the `<preset>-opts-must-be-a-dict` check stays per-preset (an
+`errproc` parameter into `propts`), matching the sibling convention of
+a per-operator name for that one check specifically.
+
+**Preset differentiation**, each with its own base constants over the
+shared knobs: `woodcut` is one directional `hatch` pass (the grain)
+at the highest wobble/dropout/trim of the three, plus a scatter of
+small chip marks jittered widely around the grain angle — texture and
+breakup. `linocut` is one bold, low-wobble `hatch` pass (widest
+stroke width, least irregularity — deliberate, not hand-wobbly cuts)
+plus a *sparse* scatter of a *few, large* chip marks — "simplified."
+`engraving` is a single `hatch` call sweeping three angles 60 degrees
+apart (not three separate calls — `hatch`'s own `/MaxLines` already
+bounds the summed candidate count across every angle in one `/Angles`
+array, so one call gives a true total `/Budget` bound and one seed
+instead of three) at the finest spacing and thinnest width, near-zero
+wobble/dropout — no chip marks at all.
+
+**`/Paper true` composes `surfacekit.ps`'s `grain` under the ink,
+inside the same clip** — the "interplay with surfacekit stays #52's
+problem" item this repo's halftonekit entry explicitly deferred here.
+Drawn first (before any ink), at low `/Strength` (0.18) and a fixed,
+subtle `/Density`. Because it's scattered inside the same `clip` this
+file already established from the caller's exact path, its paint is
+exactly bounded too — better than `scin`'s own approximate overhang, a
+bare standalone `grain` call would only get.
+
+**Seed derivation, not a second seed-management layer.** `/Seed`
+derives one sub-seed per underlying call (`Seed`, `Seed+1`, `Seed+2`,
+...) via a small `prapplyseed` helper, rather than this file managing
+one shared `srand`/`rrand` pair itself — `hatch`/`scatter`/`grain`
+each already seed and restore their own stream per their own
+documented contract, so layering a second one here would be redundant
+bookkeeping with its own chance to disagree.
+
+**Deliverables:** `examples/printkit.ps`, a four-panel specimen sheet
+(one per preset, plus a `/Paper true` panel); the gallery piece
+*Nightfall, Three Cuts* (`gallery/nightfall_triptych.ps`) — a moonlit
+ridge over water using all three presets in one scene, each silhouette
+inked solid first and then cut a second time with a *lighter* `/Color`
+instead of the usual dark ink, since printkit's presets only ever add
+ink and never subtract: the trick reads as a moonlit highlight cut
+through the block, the actual look real relief printmaking gets from
+gouging a line's worth of wood or lino away and leaving it uninked. It
+departs from `printkit.ps`'s siblings' own "a primitive gets a
+specimen, not a gallery card" precedent — issue #52 explicitly asked
+for a gallery composition, so `gallery/README.md` states this is a
+deliberate one-off, not drift, for the next sibling-file author to
+read correctly.
+
+**19 tests** (`tests/printkit.rs`): loads-draws-nothing; each preset
+draws from a bare path with no pre-clip; containment on a concave path
+(the same chevron shape hatchkit's own test uses); per-preset seeded
+reproducibility; a distinguishability test asserting all three
+presets' pixel output differs pairwise *and* that engraving's
+three-angle crosshatch out-covers the two single-pass presets (a
+concrete, formula-pinning claim, not just "the bytes differ");
+`/Paper true` adds ink and stays clipped, for both a chip-mark preset
+and `engraving` (which never calls `scpath` on its own); `gsave`/
+`grestore` restores color, linewidth, and leaves the caller's own path
+current (`pathbbox` still reports it); `/Budget` omitted never lowers
+`hatch`'s own ceiling, an explicit small one rejects via `hatch`'s own
+name, and a small one also trips `scatter`'s own name for chip marks
+— proving `/Budget` really forwards to both subsystems, not just one;
+the full shared-option validation error table, run against all three
+presets; the sibling-shaped-`/Scale`-value regression from the design
+review above; a procedure standing in for `/Color` cannot auto-execute
+(the array-boxing discipline hatchkit/surfacekit both learned from
+Codex review, applied here from the start); the specimen sheet's
+four panels each render ink (inset-measured, clear of each panel's own
+border stroke — the halftonekit/stipplekit false-positive lesson);
+every `% @example:` tag runs clean; the standard `ghostscript_accepts_*`
+test.
+
 ## Paper, canvas, and print-surface textures (issue #51, 2026-09-03)
 
 A ninth sibling library, `lib/surfacekit.ps` — tag-migrated from
