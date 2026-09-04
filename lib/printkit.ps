@@ -47,36 +47,44 @@
 % backstop; this header and every `@example` below use the path form
 % so the sibling-shaped call is never the one shown.
 %
-% **Sequencing, all three presets, identical:** `pathbbox` is read
-% from the caller's real path *before* anything else runs, and handed
-% to every `hatch` call as an explicit `/BBox` — never left to
-% `hatch`'s own `pathbbox` default, because `scpath` (next) flattens
-% the current path for the rest of this call, and a `hatch` call after
-% that would read the flattened shape's own bbox instead of the
+% **Sequencing, all three presets:** `pathbbox` is read from the
+% caller's real path *before* anything else runs, and handed to every
+% `hatch` call as an explicit `/BBox` — never left to `hatch`'s own
+% `pathbbox` default, because `scpath` (below) flattens the current
+% path for the rest of this call wherever it runs, and a `hatch` call
+% after that would read the flattened shape's own bbox instead of the
 % caller's original (usually the same box, but not guaranteed for a
 % curved path). Then, inside one `gsave`/`grestore`: `clip` against
 % the caller's real path first (exact against true curves, not a
-% flattened approximation), *then* `scpath` unconditionally captures a
-% `scatter`-shaped region from that same (now-clipped) path — every
-% preset calls it, even `engraving` with `/Paper false`, purely for
-% uniformity (see below), not because every preset's own marks need
-% the region. **The flattening is entirely local to this call,
-% though, in every case, not a caller-visible cost at all:** `path` is
-% part of this interpreter's saved graphics state, so the closing
-% `grestore` restores the caller's path exactly as it was at entry —
-% real curves included, `scpath`'s in-call flattening undone along
-% with the `clip` — the same reason a caller-supplied `/Mark` override
-% inside a `scatter` call can't leak state past its own `gsave`
-% either. Calling `scpath` unconditionally, even where a preset's own
-% marks never end up using the region, keeps every preset's behavior
-% uniform rather than making `engraving` a special case that happens
-% to skip a call with no caller-visible effect anyway. Every preset
-% then reads `/Color`/`/Budget`/etc. from the shared options dict this
-% file's header documents and *nothing else* — an unrecognized key
-% (`/Spacing`, `/Count`, `/Width`, a sibling's own option name) is
-% silently ignored, not forwarded, since each `hatch`/`scatter`/
-% `grain` call below builds its own options dict from scratch rather
-% than layering onto the caller's. One side effect worth knowing, not
+% flattened approximation), *then* — only where a preset's own marks
+% actually need a `scatter`-shaped region (`woodcut`/`linocut`'s chip
+% marks, always; any preset's optional `/Paper` pass) — `scpath`
+% captures one from that same (now-clipped) path. `engraving` with
+% `/Paper false`, its common case, never calls `scpath` at all: an
+% earlier draft called it unconditionally, on the reasoning that the
+% flattening is entirely local to this call anyway (see below) and
+% uniform behavior beats a special case — but `scpath` enforces its
+% own 20000-edge ceiling (`scpath-too-many-edges`) independent of
+% whether the caller's own `hatch`/`clip` needs one that large, so a
+% caller passing a genuinely complex path — one `hatch` and `clip`
+% would handle without complaint — got a spurious rejection from a
+% region this preset was never going to use (Codex review, PR #128,
+% round 2). Skipping the call where nothing needs the region is
+% strictly safer, not merely equivalent. **Whether or not `scpath`
+% runs, its flattening (when it does run) is entirely local to this
+% call, never a caller-visible cost:** `path` is part of this
+% interpreter's saved graphics state, so the closing `grestore`
+% restores the caller's path exactly as it was at entry — real curves
+% included, `scpath`'s in-call flattening undone along with the
+% `clip` — the same reason a caller-supplied `/Mark` override inside a
+% `scatter` call can't leak state past its own `gsave` either. Every
+% preset then reads `/Color`/`/Budget`/etc. from the shared options
+% dict this file's header documents and *nothing else* — an
+% unrecognized key (`/Spacing`, `/Count`, `/Width`, a sibling's own
+% option name) is silently ignored, not forwarded, since each
+% `hatch`/`scatter`/`grain` call below builds its own options dict
+% from scratch rather than layering onto the caller's. One side effect
+% worth knowing, not
 % a bug: because chip marks and the optional paper pass are scattered
 % *inside* the same `clip` this file already established from the
 % exact path, their paint is exactly bounded by it too — better than
@@ -571,9 +579,8 @@
   gsave
   clip
 
-  /prregion scpath def
-
   prres /Paper get {
+    /prregion scpath def
     /prpopts 4 dict def
     prpopts /Density 0.02 put
     prpopts /Strength 0.18 put

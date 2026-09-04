@@ -139,6 +139,28 @@ the same way everywhere. Three new tests pin it: the type/range
 errors, and that the documented boundary value (2147483645) succeeds
 for all three presets uniformly.
 
+**A second Codex round, on the pushed `/Seed` fix, caught a real
+regression the first round's own fix (making `scpath` unconditional
+for "uniformity") had introduced.** `engraving` with `/Paper false`
+(its common case) never uses the `scatter`-shaped region `scpath`
+builds — but `scpath` enforces its own 20000-edge ceiling regardless
+of whether anything downstream needs a region that large, so a caller
+with a genuinely complex path (a real one built for the regression
+test: 21,000 segments), one `hatch`'s own `clip` would happily draw,
+got a spurious `scpath-too-many-edges` rejection from a region this
+preset was never going to use. Fixed by reverting `engraving` to
+calling `scpath` only inside its own `/Paper` branch (`woodcut`/
+`linocut` still call it unconditionally — their chip marks always
+need the region) — justified now in a way it wasn't when the first
+round's "uniformity" framing was written: the flattening consistency
+concern that motivated calling it unconditionally in the first place
+was never actually caller-visible either way (see the round-1 finding
+above), so there was nothing real to gain from paying `scpath`'s own
+budget on a call that never uses its result, only a real regression to
+lose. Two more tests: a 21,000-edge path succeeds under `/Paper
+false` and still correctly rejects under `/Paper true` (proving the
+fix is "skip the unused call," not "never call `scpath` at all").
+
 **Shared option names deliberately shadow the sibling family's own
 same-named options with different semantics — validated under
 `printkit`-owned error names before any derived value reaches

@@ -212,6 +212,39 @@ fn paper_true_works_for_engraving_which_has_no_chip_marks() {
     assert!(ink_count(&it) > 0);
 }
 
+#[test]
+fn engraving_with_paper_false_never_builds_an_unused_region() {
+    // Codex review, PR #128, round 2: an earlier draft called `scpath`
+    // unconditionally in every preset, including `engraving` with
+    // `/Paper false` (its common case, where the region is never
+    // used). `scpath` enforces its own 20000-edge ceiling regardless
+    // of whether anything downstream needs a region that large, so a
+    // caller with a genuinely complex path -- one `hatch`'s own
+    // `clip` would happily draw -- got a spurious
+    // `scpath-too-many-edges` rejection from a region this preset was
+    // never going to use. `engraving` must skip `scpath` entirely
+    // when `/Paper` is false; `/Paper true` still needs the region
+    // and should still reject the same path, proving the fix isn't
+    // just "never call scpath."
+    let mut complex = String::from("newpath 0 0 moveto ");
+    for i in 0..21_000 {
+        complex.push_str(&format!("{} {} lineto ", i % 500, i as f64 * 0.001));
+    }
+    complex.push_str("closepath");
+
+    let mut it = with_lib(600, 600);
+    it.run_str(&format!("{complex} << /Seed 1 >> engraving"))
+        .unwrap_or_else(|e| {
+            panic!(
+                "engraving with /Paper false rejected a complex path hatch alone would handle: {}",
+                it.error_report(&e)
+            )
+        });
+
+    let got = printkit_err(&format!("{complex} << /Seed 1 /Paper true >> engraving"));
+    assert_eq!(got, "scpath-too-many-edges");
+}
+
 // --- gsave/grestore isolation --------------------------------------------
 
 #[test]
