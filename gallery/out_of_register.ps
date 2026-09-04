@@ -1,0 +1,145 @@
+%!PS-Adobe-3.0
+%%Title: Out of Register
+%%BoundingBox: 0 0 720 900
+%%Creator: Muse Code, after the risograph printers
+%%EndComments
+
+% Out of Register — a three-plate sunset misregistered on purpose.
+% Every tonal mark on this page is a halftone cell, not a hand-placed
+% dot: the screening *is* the picture, which is the point the piece
+% exists to make about lib/halftonekit.ps (issue #53).
+%
+%   teal plate    dot screen, 15 degrees, offset [4 2]: a sky gradient
+%                 and a water gradient, one /Tone field in page space
+%   orange plate  dot screen, 75 degrees, offset [-3 3]: a linear-cone
+%                 sun halo plus a warm horizon band, maxed together
+%   key plate     LINE screen, 45 degrees, offset [2 -2]: two tent
+%                 ridges shaded by height fraction (continuous rules
+%                 at uniform tone read as structure — the reviewer's
+%                 A2, taken)
+%   solids        parchment ground first, then a flat orange sun core
+%                 under the halo, a deliberately shifted key ring
+%                 around it, two teal water rules, key registration
+%                 crosshairs, plate color bars, letterpress title
+%
+% Misregistration comes purely from per-call /Offset (+/Angle): every
+% /Tone field is defined once in page space and stays registered to
+% the page while the lattice shifts (the plate-moves-not-image
+% contract — no offset compensation inside any /Tone proc). One
+% `<path> clip` up front, explicit inflated /Boxes per plate, opaque
+% overprint in paint order, light plates first and key last.
+%
+% Run from the repo root:
+%   pscat --page 720x900 gallery/out_of_register.ps
+
+(lib/halftonekit.ps) run
+
+% v oorclamp01 -> v clamped into [0,1]: plain arithmetic, total.
+/oorclamp01 {
+  dup 0 lt { pop 0 } if
+  dup 1 gt { pop 1 } if
+} def
+
+% x y P C S W OORridge -> w: a tent ridge peaking at height P over
+% center C with slope S, shaded in a band of width W below the line
+% (tone 1 at the ridgeline, 0 at the band foot) — ridge shadows, not
+% full-ink lowlands.
+/OORridge {
+  /OORw exch def /OORs exch def /OORc exch def /OORp exch def
+  /OORy exch def /OORx exch def
+  OORx OORc sub dup mul sqrt OORs mul OORp exch sub
+  /OORr exch def
+  % Above the ridgeline there is no mountain: the 1-(R-y)/W shape
+  % exceeds 1 up there and would clamp to full ink, so gate on side.
+  OORy OORr le
+    { 1 OORr OORy sub OORw div sub oorclamp01 }
+    { 0 }
+  ifelse
+} def
+
+% Ground: flat parchment, full bleed, before any clip.
+/OORparchment [ 0.957 0.906 0.796 ] def
+OORparchment aload pop setrgbcolor
+newpath 0 0 moveto 720 0 lineto 720 900 lineto 0 900 lineto closepath fill
+
+% One clip for all three plates: the full page, kept alive across
+% calls (no newpath between them, so nothing needs rebuilding).
+gsave
+newpath 0 0 moveto 720 0 lineto 720 900 lineto 0 900 lineto closepath clip
+
+% --- teal plate: sky above 470, water below, one branching field ---
+0.16 0.54 0.58 setrgbcolor
+<< /BBox [-8 -8 728 908] /Screen /dot /Frequency 10 /Angle 15 /Offset [4 2]
+   /Tone {
+     % x y -> w. Sky: deepest at the horizon (0.50), paling to
+     % 0.04 at the zenith. Water: ramps down with depth, plus a
+     % sun streak under x=360.
+     dup 470 gt
+       { 470 sub 430 div 1 exch sub 0.46 mul 0.04 add
+         oorclamp01 exch pop }
+       { 470 exch sub 410 div 0.05 max 0.7 min
+         exch dup 360 sub dup mul sqrt 40 div 1 exch sub 0 max
+         0.5 mul exch pop add 0.8 min }
+     ifelse
+   } >> halftone
+
+% --- orange plate: sun halo (linear cone) maxed with a horizon band ---
+0.92 0.32 0.12 setrgbcolor
+<< /BBox [-8 -8 728 908] /Screen /dot /Frequency 10 /Angle 75 /Offset [-3 3]
+   /Tone {
+     % x y -> w. Halo falls linearly from the sun center (360,560);
+     % the band warms a 60-unit strip around y=500.
+     2 copy exch 360 sub dup mul exch 560 sub dup mul add sqrt
+     170 div 1 exch sub 0 max
+     3 -1 roll pop exch
+     500 sub dup mul sqrt 60 div 1 exch sub 0 max 0.6 mul
+     max oorclamp01
+   } >> halftone
+
+% --- key plate: two tent ridges shaded by height fraction, lines ---
+0.16 0.13 0.16 setrgbcolor
+<< /BBox [-8 -8 728 908] /Screen /line /Frequency 10 /Angle 45 /Offset [2 -2]
+   /Tone {
+     % x y -> w. Two shaded ridge bands, maxed; the first call
+     % leaves [x y w1] and 3 1 roll rotates it to [w1 x y] for the
+     % second, so both operands are consumed exactly.
+     2 copy 600 260 0.5 150 OORridge
+     3 1 roll
+     540 480 0.45 120 OORridge
+     max
+   } >> halftone
+grestore
+
+% --- solids, key ink: sun core, shifted ring, water rules, furniture ---
+0.92 0.32 0.12 setrgbcolor
+newpath 360 560 95 0 360 arc fill
+0.16 0.13 0.16 setrgbcolor
+newpath 363 558 110 0 360 arc 2 setlinewidth stroke
+0.16 0.54 0.58 setrgbcolor
+newpath 120 440 moveto 600 440 lineto 3 setlinewidth stroke
+newpath 180 420 moveto 540 420 lineto 2 setlinewidth stroke
+0.16 0.13 0.16 setrgbcolor
+% Registration crosshairs, four corners.
+/OORmark {
+  /OORy exch def /OORx exch def
+  newpath OORx OORy 10 0 360 arc 1.5 setlinewidth stroke
+  newpath OORx 16 sub OORy moveto OORx 16 add OORy lineto stroke
+  newpath OORx OORy 16 sub moveto OORx OORy 16 add lineto stroke
+} def
+40 860 OORmark  680 860 OORmark  40 60 OORmark  680 60 OORmark
+% Plate color bars, bottom margin.
+0.16 0.54 0.58 setrgbcolor newpath 40 24 moveto 64 24 lineto 64 48 lineto 40 48 lineto closepath fill
+0.92 0.32 0.12 setrgbcolor newpath 72 24 moveto 96 24 lineto 96 48 lineto 72 48 lineto closepath fill
+0.16 0.13 0.16 setrgbcolor newpath 104 24 moveto 128 24 lineto 128 48 lineto 104 48 lineto closepath fill
+% Letterpress title.
+/OORshowctr {
+  /OORe exch def /OORx exch def
+  /OORs exch def
+  OORs stringwidth pop 2 div OORx exch sub OORe moveto OORs show
+} def
+/Bangers findfont 44 scalefont setfont
+(OUT OF REGISTER) 360 92 OORshowctr
+/Palatino-Italic findfont 15 scalefont setfont
+0.16 0.13 0.16 setrgbcolor
+(three plates, none of them where they should be) 360 66 OORshowctr
+showpage

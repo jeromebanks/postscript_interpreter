@@ -3,6 +3,33 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Halftone gallery piece (issue #126, 2026-09-03)
+
+"Out of Register" (`gallery/out_of_register.ps`, 720x900) — a
+three-plate risograph sunset misregistered on purpose, and the first
+piece whose screening *is* halftonekit (issue #53): a teal dot plate
+(sky/water gradients, 15°, offset [4 2]), an orange dot plate
+(linear-cone sun halo plus horizon band, 75°, offset [-3 3]), and a
+dark line plate (two tent ridges shaded by height fraction, 45°,
+offset [2 -2]), with flat sun core, deliberately shifted ring,
+registration crosshairs, plate color bars, and letterpress title in
+solid key ink. Plan review passed provisional GO with six pins, all
+adopted (page-space tone fields, one clip + explicit inflated boxes,
+Frequency 10, total procs, opaque light-first paint order, all five
+gallery surfaces). Rendering caught two real bugs reasoning missed: a
+teal branch leaving `x` on the stack (contract error, fail-fast) and
+the ridge field clamping to full ink *above* the ridgeline (black
+sky) — the band is now gated on side. All five surfaces wired:
+show.sh triple-array, README row, 2x still, hand-written
+`site/gallery.html` card verified through a local `build_site.sh`
+run. Ghostscript renders the same composition (only its Bangers
+fallback differs — accepted display-font variance, same as older
+pieces). Deferred: playground picker (needs self-containment, no lib
+loads); actual pages deploy (local build verified only). Also noted:
+`site/gallery.html` already lags the gallery (no cards for
+`compositors_proof`, `fugitive_pigments`) — pre-existing, out of
+scope.
+
 ## Woodcut, linocut, and engraving mark presets (issue #52, 2026-09-03)
 
 A tenth sibling library, `lib/printkit.ps` — tag-migrated from birth
