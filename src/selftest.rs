@@ -302,6 +302,51 @@ userdict /pscat_st_nfail 0 put
 /// non-UTF-8 string data, and running a lossy conversion of a block
 /// body would silently replace those bytes with U+FFFD and execute
 /// something the author didn't write.
+/// Per-line: does this line begin already inside an unterminated
+/// `(...)` string carried over from an earlier one?
+///
+/// A `%` only starts a comment *outside* a string, so a multiline
+/// PostScript string whose continuation line happens to read
+/// `%%SelfTest:` or `% @requires:` is string content, not metadata.
+/// Without this, such a line would be parsed as a real block — a
+/// phantom passing test — or reject a perfectly valid library (Codex
+/// review, round 1).
+///
+/// Deliberately the same rule `build.rs::lines_starting_in_string`
+/// uses, because the two scanners have to agree about which lines are
+/// metadata: `build.rs` already filters self-test regions this way, so
+/// a `src/selftest.rs` that didn't would disagree with it about the
+/// same file. (Neither tracks ASCII85 `<~...~>` strings — a real gap in
+/// both, tracked as issue #104, not introduced here.)
+fn lines_starting_in_string(lines: &[&[u8]]) -> Vec<bool> {
+    let mut out = Vec::with_capacity(lines.len());
+    let mut depth: i32 = 0;
+    for line in lines {
+        out.push(depth > 0);
+        let mut chars = line.iter().copied();
+        while let Some(c) = chars.next() {
+            if depth > 0 {
+                match c {
+                    b'\\' => {
+                        chars.next();
+                    }
+                    b'(' => depth += 1,
+                    b')' => depth -= 1,
+                    _ => {}
+                }
+                continue;
+            }
+            if c == b'%' {
+                break;
+            }
+            if c == b'(' {
+                depth += 1;
+            }
+        }
+    }
+    out
+}
+
 fn lines(source: &[u8]) -> Vec<&[u8]> {
     if source.is_empty() {
         return Vec::new();
@@ -329,9 +374,14 @@ fn lines(source: &[u8]) -> Vec<&[u8]> {
 pub fn parse_blocks(source: &[u8]) -> Result<Vec<SelfTestBlock>, String> {
     let mut blocks: Vec<SelfTestBlock> = Vec::new();
     let all = lines(source);
+    let in_string = lines_starting_in_string(&all);
     let mut i = 0;
     while i < all.len() {
         let line = all[i];
+        if in_string[i] {
+            i += 1;
+            continue;
+        }
         if !line.starts_with(BEGIN.as_bytes()) {
             if line.starts_with(END.as_bytes()) {
                 return Err(format!(
@@ -430,7 +480,15 @@ pub fn parse_blocks(source: &[u8]) -> Result<Vec<SelfTestBlock>, String> {
 /// resulting failures on the library.
 pub fn parse_requires(source: &[u8]) -> Result<Vec<String>, String> {
     let mut found: Option<&str> = None;
-    for (i, line) in lines(source).into_iter().enumerate() {
+    let all = lines(source);
+    let in_string = lines_starting_in_string(&all);
+    for (i, line) in all.iter().enumerate() {
+        // Content of a multiline string is not a comment, however
+        // `% @requires:`-shaped it looks — the same filter the capability
+        // scanner in build.rs applies.
+        if in_string[i] {
+            continue;
+        }
         // A tag line is plain ASCII by construction; anything else on
         // that line isn't one, so a non-UTF-8 line is skipped rather
         // than failing the whole file.
@@ -581,7 +639,7 @@ fn run_block(
         Err(e) => Some(interp.error_report(&e)),
     };
     let (failure_count, failures) = collect_failures(&interp);
-    Ok(BlockResult {
+    let result = BlockResult {
         name: block.name.clone(),
         line: block.line,
         failures,
@@ -591,7 +649,18 @@ fn run_block(
         // systemdict + userdict are the permanent baseline (see
         // `Interp::pop_dict`), same rule `lint`'s dict-leak check uses.
         dict_depth: interp.dict_stack_len().saturating_sub(2),
-    })
+    };
+    // One `Interp` per block, each holding a fully loaded copy of the
+    // library under test. Dropping it isn't enough: systemdict and
+    // userdict reference each other, so the whole graph — several
+    // hundred KB of library dictionaries per block — would stay alive
+    // until the process exits, growing with the block count (Codex
+    // review, round 1). This is the same reason `--sweep` and `--spool`
+    // call it. Every field the caller needs is already extracted above,
+    // and taking `self` makes "nothing runs on it again" a compile-time
+    // guarantee.
+    interp.break_permanent_dict_cycle();
+    Ok(result)
 }
 
 /// Read the prelude's failure log back out of the interpreter.
@@ -833,6 +902,44 @@ mod tests {
             2,
             "PRELUDE must allocate and bound at exactly MAX_FAILURES ({cap})"
         );
+    }
+
+    #[test]
+    fn a_marker_inside_a_multiline_string_is_not_a_block() {
+        // Regression test (Codex review, PR #136): `%` starts a comment
+        // only *outside* a string, so a multiline string whose
+        // continuation line reads `%%SelfTest:` is string content.
+        // Parsing it as a block would invent a phantom passing test, or
+        // reject a perfectly valid library. build.rs already applies
+        // this rule; the two scanners have to agree.
+        let src = b"/banner (line one\n%%SelfTest: not-a-real-block\n% 1 2 add\n%%EndSelfTest\nline five) def\n";
+        assert!(parse_blocks(src).expect("parses").is_empty());
+    }
+
+    #[test]
+    fn a_requires_tag_inside_a_multiline_string_is_not_a_tag() {
+        // Same rule, same reason (Codex review, PR #136): loading a
+        // prerequisite named by string content would either pull in an
+        // unintended file or fail over one that doesn't exist.
+        let src = b"/banner (line one\n% @requires: (lib/nonexistent.ps) run\nline three) def\n";
+        assert!(parse_requires(src).expect("parses").is_empty());
+    }
+
+    #[test]
+    fn a_marker_after_a_closed_string_is_still_a_block() {
+        // The filter must not swallow real blocks: string state has to
+        // actually close.
+        let src = b"/banner (one line) def\n%%SelfTest: real\n% 1 2 add\n%%EndSelfTest\n";
+        assert_eq!(parse_blocks(src).expect("parses").len(), 1);
+    }
+
+    #[test]
+    fn an_escaped_paren_does_not_leave_the_scanner_inside_a_string() {
+        // `\\(` is a literal paren, not a nesting one — getting this
+        // wrong would make every later line look like string content
+        // and silently hide every block in the file.
+        let src = b"/banner (a \\( paren) def\n%%SelfTest: real\n% 1 2 add\n%%EndSelfTest\n";
+        assert_eq!(parse_blocks(src).expect("parses").len(), 1);
     }
 
     #[test]

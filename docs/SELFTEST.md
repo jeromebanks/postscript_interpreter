@@ -70,7 +70,13 @@ pins that property.
 - Every malformation is a hard error, never a skipped block: an
   unclosed block, a bare code line inside one, a duplicate name, an
   empty body. A self-test that silently doesn't run reads as coverage
-  that isn't there, which is worse than none.
+  that isn't there, which is worse than none. For the same reason a
+  malformed `%%Pages:` (`%%Pages: nine`) is a *finding* rather than
+  "no declaration" — a typo must not quietly switch the check off.
+- A `%` only starts a comment outside a string, so a line inside a
+  multiline `(...)` string is never read as a marker or a tag, however
+  `%%SelfTest:`-shaped it looks. Same rule `build.rs` applies, because
+  the two scanners have to agree about which lines are metadata.
 - Each block runs in its own fresh interpreter, so one block can't
   affect another. Within a block, `mustguard`/`mustfail`/`mustpass`
   restore the operand and dictionary stacks after a caught error — the

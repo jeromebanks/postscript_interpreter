@@ -371,11 +371,11 @@ fn finish_headless(
     ok: bool,
     interp: &Interp,
     options: &Options,
-    declared_pages: Option<usize>,
+    declared_pages: pscat::lint::DeclaredPages,
 ) -> ExitCode {
     let mut lint_failed = false;
     if options.lint {
-        let found = report_lint(interp, options, declared_pages);
+        let found = report_lint(interp, options, &declared_pages);
         lint_failed = options.lint_strict && found;
     }
     if let Some(path) = &options.png {
@@ -461,7 +461,11 @@ fn finish_headless(
 /// should still surface. Returns whether anything was found, which is
 /// what `--lint-strict` turns into a non-zero exit; plain `--lint`
 /// stays advisory, as it has been since issue #17.
-fn report_lint(interp: &Interp, options: &Options, declared_pages: Option<usize>) -> bool {
+fn report_lint(
+    interp: &Interp,
+    options: &Options,
+    declared_pages: &pscat::lint::DeclaredPages,
+) -> bool {
     // The blank-page/stack-leak checks assume the run was meant to
     // produce a page — true for any file or stdin run, whether or not
     // an output format flag was also given (`--lint file.ps` with no
@@ -479,7 +483,7 @@ fn report_lint(interp: &Interp, options: &Options, declared_pages: Option<usize>
         || options.png.is_some()
         || options.svg.is_some()
         || options.pdf.is_some();
-    let findings = interp.lint(render_checks, declared_pages);
+    let findings = interp.lint_with_pages(render_checks, declared_pages);
     if findings.is_empty() {
         eprintln!("pscat: lint: clean");
         return false;

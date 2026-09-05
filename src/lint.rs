@@ -28,10 +28,21 @@ pub struct LintFinding {
 /// `eval`-style snippet with no `showpage`), where an empty canvas and a
 /// result sitting on the operand stack are both the normal, intended
 /// outcome rather than mistakes.
-pub fn check(
+pub fn check(interp: &Interp, render_checks: bool) -> Vec<LintFinding> {
+    check_with_pages(interp, render_checks, &DeclaredPages::None)
+}
+
+/// [`check`] plus the program's own `%%Pages:` declaration (issue #95),
+/// which [`scan_declared_pages`] reads from the source.
+///
+/// A separate entry point rather than an extra argument on `check`:
+/// both are public API, and a signature change would break any caller
+/// outside this crate for a parameter almost all of them would pass
+/// `None` to (Codex review, round 1).
+pub fn check_with_pages(
     interp: &Interp,
     render_checks: bool,
-    declared_pages: Option<usize>,
+    declared_pages: &DeclaredPages,
 ) -> Vec<LintFinding> {
     let mut findings = Vec::new();
     if render_checks {
@@ -60,13 +71,26 @@ fn pages_with_ink_flags(interp: &Interp) -> Vec<(&Pixmap, bool)> {
     pages
 }
 
-/// The `%%Pages: N` a program declares about itself, if any.
+/// What a program's DSC header says about its own page count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeclaredPages {
+    /// No `%%Pages:` header, or the explicit `(atend)` form — DSC's
+    /// legitimate "the count comes later", which declares nothing.
+    None,
+    Count(usize),
+    /// A `%%Pages:` whose value is neither a number nor `(atend)`.
+    /// Kept as a distinct case rather than folded into `None`: a
+    /// typo'd count that reads as "no declaration" would silently
+    /// disable the very check it was written to enable (Codex review,
+    /// round 1) — precisely the failure mode issue #95 exists to close.
+    Malformed(String),
+}
+
+/// The page count a program declares about itself.
 ///
 /// DSC's own header comment, not a new convention — which is the
 /// point: a program that says how many pages it produces can be
-/// checked against what it actually produced, and `%%Pages: (atend)`
-/// (the legitimate "I don't know yet" form) declares nothing, so it's
-/// read as absent rather than as a malformed count.
+/// checked against what it actually produced.
 ///
 /// This exists for issue #95's rendering drivers, where the rule is
 /// one `showpage` per independently-checked scenario: two scenarios
@@ -74,22 +98,54 @@ fn pages_with_ink_flags(interp: &Interp) -> Vec<(&Pixmap, bool)> {
 /// first one's blank-page regression, and that mistake is one deleted
 /// `showpage` away in ordinary editing. A declared count turns it from
 /// a convention into something checkable.
-pub fn scan_declared_pages(source: &[u8]) -> Option<usize> {
-    for line in source.split(|&b| b == b'\n') {
-        let line = String::from_utf8_lossy(line);
-        let Some(value) = line.strip_prefix("%%Pages:") else {
-            // DSC header comments must start at column 0; a `%%Pages:`
-            // deeper in the file is body text, not a header.
+///
+/// Scanning stops at `%%EndComments` or the first non-comment line,
+/// mirroring `pdf::scan_document_info` — column zero alone doesn't make
+/// a line a header, and a document that embeds another one further
+/// down would otherwise adopt the *embedded* count and compare it
+/// against the outer document's output (Codex review, round 1).
+pub fn scan_declared_pages(source: &[u8]) -> DeclaredPages {
+    for raw_line in source.split(|&b| b == b'\n') {
+        let line = String::from_utf8_lossy(raw_line);
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() {
             continue;
-        };
-        return value.trim().parse().ok();
+        }
+        if let Some(value) = line.strip_prefix("%%Pages:") {
+            let value = value.trim();
+            if value == "(atend)" {
+                return DeclaredPages::None;
+            }
+            return match value.parse() {
+                Ok(n) => DeclaredPages::Count(n),
+                Err(_) => DeclaredPages::Malformed(value.to_string()),
+            };
+        }
+        if line.starts_with("%%EndComments") || !line.starts_with('%') {
+            break;
+        }
     }
-    None
+    DeclaredPages::None
 }
 
-fn check_declared_pages(interp: &Interp, declared: Option<usize>, findings: &mut Vec<LintFinding>) {
-    let Some(declared) = declared else {
-        return;
+fn check_declared_pages(
+    interp: &Interp,
+    declared: &DeclaredPages,
+    findings: &mut Vec<LintFinding>,
+) {
+    let declared = match declared {
+        DeclaredPages::None => return,
+        DeclaredPages::Malformed(value) => {
+            findings.push(LintFinding {
+                check: "page-count",
+                message: format!(
+                    "`%%Pages: {value}` is neither a count nor `(atend)`, so the \
+                     declared-page check can't run"
+                ),
+            });
+            return;
+        }
+        DeclaredPages::Count(n) => *n,
     };
     let actual = pages_with_ink_flags(interp).len();
     if actual != declared {
@@ -255,14 +311,14 @@ mod tests {
     }
 
     fn checks(it: &Interp, render_checks: bool) -> Vec<&'static str> {
-        check(it, render_checks, None)
+        check(it, render_checks).iter().map(|f| f.check).collect()
+    }
+
+    fn checks_with_pages(it: &Interp, declared: &DeclaredPages) -> Vec<&'static str> {
+        check_with_pages(it, true, declared)
             .iter()
             .map(|f| f.check)
             .collect()
-    }
-
-    fn checks_with_pages(it: &Interp, declared: Option<usize>) -> Vec<&'static str> {
-        check(it, true, declared).iter().map(|f| f.check).collect()
     }
 
     #[test]
@@ -274,7 +330,7 @@ mod tests {
     #[test]
     fn a_matching_declared_page_count_is_not_flagged() {
         let it = run("0 0 40 40 rectfill showpage 5 5 30 30 rectfill showpage");
-        assert!(!checks_with_pages(&it, Some(2)).contains(&"page-count"));
+        assert!(!checks_with_pages(&it, &DeclaredPages::Count(2)).contains(&"page-count"));
     }
 
     #[test]
@@ -285,7 +341,7 @@ mod tests {
         // which the second scenario's ink hides whether the first drew
         // anything at all.
         let it = run("0 0 40 40 rectfill 5 5 30 30 rectfill showpage");
-        let found = check(&it, true, Some(2));
+        let found = check_with_pages(&it, true, &DeclaredPages::Count(2));
         let msg = found
             .iter()
             .find(|f| f.check == "page-count")
@@ -298,25 +354,61 @@ mod tests {
         // Most programs carry no `%%Pages:` at all; they must not
         // acquire a finding for it.
         let it = run("0 0 40 40 rectfill showpage");
-        assert!(!checks_with_pages(&it, None).contains(&"page-count"));
+        assert!(!checks_with_pages(&it, &DeclaredPages::None).contains(&"page-count"));
     }
 
     #[test]
     fn declared_pages_reads_a_dsc_header() {
         assert_eq!(
             scan_declared_pages(b"%!PS\n%%Pages: 7\n%%EndComments\n"),
-            Some(7)
+            DeclaredPages::Count(7)
         );
     }
 
     #[test]
-    fn declared_pages_ignores_atend_and_indented_lines() {
-        // `(atend)` is DSC's legitimate "count comes later" form, not
-        // a malformed number; an indented `%%Pages:` isn't a header
-        // comment at all.
-        assert_eq!(scan_declared_pages(b"%%Pages: (atend)\n"), None);
-        assert_eq!(scan_declared_pages(b"  %%Pages: 3\n"), None);
-        assert_eq!(scan_declared_pages(b"%!PS\n"), None);
+    fn declared_pages_treats_atend_as_no_declaration() {
+        // DSC's legitimate "the count comes later" form.
+        assert_eq!(
+            scan_declared_pages(b"%%Pages: (atend)\n"),
+            DeclaredPages::None
+        );
+        assert_eq!(scan_declared_pages(b"%!PS\n"), DeclaredPages::None);
+    }
+
+    #[test]
+    fn a_malformed_page_count_is_reported_not_ignored() {
+        // Regression test (Codex review, PR #136): treating a typo'd
+        // count as "no declaration" would silently disable the very
+        // check it was written to enable.
+        assert_eq!(
+            scan_declared_pages(b"%%Pages: nine\n"),
+            DeclaredPages::Malformed("nine".to_string())
+        );
+        let it = run("0 0 40 40 rectfill showpage");
+        let found = check_with_pages(&it, true, &scan_declared_pages(b"%%Pages: nine\n"));
+        let msg = found
+            .iter()
+            .find(|f| f.check == "page-count")
+            .expect("page-count finding");
+        assert!(msg.message.contains("neither a count"), "{}", msg.message);
+    }
+
+    #[test]
+    fn declared_pages_stops_at_the_end_of_the_dsc_header() {
+        // Regression test (Codex review, PR #136): column zero alone
+        // doesn't make a line a header. A document that embeds another
+        // one further down would otherwise adopt the *embedded* count
+        // and compare it against the outer document's output.
+        assert_eq!(
+            scan_declared_pages(b"%!PS\n%%EndComments\n%%Pages: 12\n"),
+            DeclaredPages::None
+        );
+        assert_eq!(
+            scan_declared_pages(b"%!PS\n0 0 moveto\n%%Pages: 12\n"),
+            DeclaredPages::None
+        );
+        // ...and an indented one isn't a header comment either.
+        assert_eq!(scan_declared_pages(b"  %%Pages: 3\n"), DeclaredPages::None);
     }
 
     #[test]
@@ -352,7 +444,7 @@ mod tests {
     #[test]
     fn leftover_operands_are_flagged() {
         let it = run("1 2 3");
-        let found = check(&it, true, None);
+        let found = check(&it, true);
         let leak = found
             .iter()
             .find(|f| f.check == "stack-leak")
@@ -408,7 +500,7 @@ mod tests {
         // content alone can't see that the second one has no ink of
         // its own.
         let it = run("0 0 40 40 rectfill showpage showpage");
-        let findings = check(&it, true, None);
+        let findings = check(&it, true);
         let blanks: Vec<&str> = findings
             .iter()
             .filter(|f| f.check == "blank-page")
@@ -421,7 +513,7 @@ mod tests {
     #[test]
     fn a_long_leaked_operand_is_truncated() {
         let it = run("100000 string");
-        let findings = check(&it, true, None);
+        let findings = check(&it, true);
         let leak = findings
             .iter()
             .find(|f| f.check == "stack-leak")
@@ -446,7 +538,7 @@ mod tests {
         // intermediate. This should stay fast and the message small
         // regardless of the leaked string's size.
         let it = run("10000000 string");
-        let findings = check(&it, true, None);
+        let findings = check(&it, true);
         let leak = findings
             .iter()
             .find(|f| f.check == "stack-leak")
@@ -468,7 +560,7 @@ mod tests {
         // A short array of one huge string must not defeat the bound
         // by recursing into repr() for each element.
         let it = run("[10000000 string]");
-        let findings = check(&it, true, None);
+        let findings = check(&it, true);
         let leak = findings
             .iter()
             .find(|f| f.check == "stack-leak")
@@ -493,7 +585,7 @@ mod tests {
         // path missed the same unbounded-preview problem as strings.
         let src = format!("/{}", "a".repeat(1_000_000));
         let it = run(&src);
-        let findings = check(&it, true, None);
+        let findings = check(&it, true);
         let leak = findings
             .iter()
             .find(|f| f.check == "stack-leak")

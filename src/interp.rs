@@ -1154,15 +1154,22 @@ impl Interp {
 
     /// Self-check/lint mode (issue #17): heuristic checks for common
     /// silent-failure mistakes — see `crate::lint` for what's checked
-    /// and why `render_checks` exists. `declared_pages` is the
-    /// program's own `%%Pages:` count when it has one (issue #95) —
-    /// `crate::lint::scan_declared_pages` reads it from the source.
-    pub fn lint(
+    /// and why `render_checks` exists.
+    pub fn lint(&self, render_checks: bool) -> Vec<crate::lint::LintFinding> {
+        crate::lint::check(self, render_checks)
+    }
+
+    /// [`lint`](Self::lint) plus the program's own `%%Pages:`
+    /// declaration (issue #95), which
+    /// `crate::lint::scan_declared_pages` reads from the source. A
+    /// separate method rather than an extra argument, so `lint`'s
+    /// existing public signature keeps working.
+    pub fn lint_with_pages(
         &self,
         render_checks: bool,
-        declared_pages: Option<usize>,
+        declared_pages: &crate::lint::DeclaredPages,
     ) -> Vec<crate::lint::LintFinding> {
-        crate::lint::check(self, render_checks, declared_pages)
+        crate::lint::check_with_pages(self, render_checks, declared_pages)
     }
 
     pub fn quit_requested(&self) -> bool {

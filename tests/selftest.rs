@@ -589,6 +589,27 @@ fn a_deleted_showpage_fails_instead_of_silently_merging_two_scenarios() {
 }
 
 #[test]
+fn the_original_public_lint_entry_points_still_compile_and_work() {
+    // Regression test (Codex review, PR #136): `Interp::lint` and
+    // `lint::check` were public before issue #95, so adding the
+    // `%%Pages:` argument to them would break any caller outside this
+    // crate. The page-aware form is a second entry point, not a
+    // replacement — this test exists to fail at *compile* time if that
+    // ever gets collapsed back into one.
+    let mut it = pscat::Interp::with_page(50, 50).expect("page");
+    let _ = it.run_str("showpage");
+
+    let via_method = it.lint(true);
+    let via_function = pscat::lint::check(&it, true);
+    assert_eq!(via_method.len(), via_function.len());
+    assert!(via_method.iter().any(|f| f.check == "blank-page"));
+
+    // ...and the page-aware form agrees with it when nothing is declared.
+    let with_pages = it.lint_with_pages(true, &pscat::lint::DeclaredPages::None);
+    assert_eq!(with_pages.len(), via_method.len());
+}
+
+#[test]
 fn plain_lint_stays_advisory() {
     // Issue #17's contract is unchanged: findings are advisory unless
     // `--lint-strict` is given. A blank page must still exit 0 under
