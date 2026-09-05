@@ -4428,3 +4428,103 @@ fn fan_the_nested_bound_engages_only_where_it_is_needed() {
          effective {peff} vs requested {preq}"
     );
 }
+
+/// Codex review of PR #139, round 5 [P1]: a degenerate subpath becomes
+/// one pkribbon call per bristle, each resampling a ray, so counting it
+/// as a single stop let a path batching many bare movetos run millions
+/// of nested samples while the budget counter saw a few thousand. Each
+/// degenerate stop is now charged its real relative cost.
+#[test]
+fn fan_batched_pressed_dabs_are_charged_against_the_budget() {
+    // 100 degenerate subpaths at 60 bristles: ~24s of nested work before
+    // the fix, and the counter saw only 6000 of a 150000 ceiling.
+    let mut movetos = String::from("newpath");
+    for i in 0..100 {
+        movetos.push_str(&format!(" {} {} moveto closepath", 10 + i, 50 + (i % 7)));
+    }
+    let mut it = fresh(200, 200);
+    let start = std::time::Instant::now();
+    let res = it.run_str(&format!(
+        "0 0 0 setrgbcolor 3 srand {movetos} \
+         << /Width 40 /Bristles 60 /Load 1 /Dropout 0 >> pkfan"
+    ));
+    let elapsed = start.elapsed();
+    let e = res.expect_err("batched dabs at 60 bristles must exceed the budget");
+    assert!(
+        it.error_report(&e)
+            .contains("pkfan-deposit-count-exceeds-safety-limit"),
+        "expected the deposit budget guard, got {}",
+        it.error_report(&e)
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "the guard must reject before doing the work: took {elapsed:?}"
+    );
+    assert_eq!(
+        ink_count(&it),
+        0,
+        "a rejected budget must leave the canvas clean"
+    );
+}
+
+/// ...but a realistic foliage cluster -- the workload the pressed dab
+/// exists for -- must still be comfortably inside the budget. A safety
+/// limit that rejects the tool's own primary use case is a bug, so this
+/// pins the headroom rather than only the rejection.
+#[test]
+fn fan_a_realistic_foliage_cluster_stays_within_the_budget() {
+    let mut dabs = String::from("newpath");
+    for i in 0..12 {
+        dabs.push_str(&format!(
+            " {} {} moveto closepath",
+            30 + i * 12,
+            60 + (i % 3) * 20
+        ));
+    }
+    let mut it = fresh(240, 200);
+    it.run_str(&format!(
+        "0 0 0 setrgbcolor 3 srand {dabs} \
+         << /Width 44 /Bristles 13 /Ragged 0.5 >> pkfan"
+    ))
+    .unwrap_or_else(|e| {
+        panic!(
+            "a 12-dab foliage cluster should be allowed: {}",
+            it.error_report(&e)
+        )
+    });
+    assert!(ink_count(&it) > 500, "the cluster should paint");
+}
+
+/// Codex review of PR #139, round 5 [P2]: the header claimed the
+/// pressed fan radiates "isotropically", but the rays span roughly
+/// 20..160 degrees. The *code* is right -- a fan brush pressed to the
+/// page leaves a fan, and shrubs open upward -- so the documentation was
+/// corrected to match. This pins the actual contract so the two can't
+/// drift apart again.
+#[test]
+fn fan_a_pressed_dab_opens_upward_rather_than_all_round() {
+    let mut it = fresh(200, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 3 srand newpath 100 100 moveto \
+         << /Width 80 /Bristles 24 /Load 1 /Dropout 0 /Ragged 0 >> pkfan",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let inked_rows = |lo: u32, hi: u32| {
+        (lo..hi)
+            .map(|y| {
+                (0..200)
+                    .filter(|&x| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+                    .count()
+            })
+            .sum::<usize>()
+    };
+    // PostScript y=100 is pixel row 100; the fan opens toward +y, i.e.
+    // toward *lower* pixel rows.
+    let above = inked_rows(0, 99);
+    let below = inked_rows(101, 200);
+    assert!(above > 200, "the fan should open upward, got {above}");
+    assert!(
+        below * 4 < above,
+        "a pressed fan is a fan, not a full circle: above {above} below {below}"
+    );
+}

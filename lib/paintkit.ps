@@ -2217,11 +2217,22 @@
 % discontinuous at the seam, since t jumps from 1 back to 0 there.
 %
 % A degenerate single-point subpath is a *pressed* fan: the bristles
-% radiate isotropically about the point instead of following a
-% direction that does not exist. Without that special case the dab
-% collapses -- at t=0 every bristle sits at `ferrule` times its offset,
-% and at a high /Splay that is nearly the centerline, so all of them
-% land on top of each other.
+% radiate about the point instead of following a direction that does
+% not exist. Without that special case the dab collapses -- at t=0 every
+% bristle sits at `ferrule` times its offset, and at a high /Splay that
+% is nearly the centerline, so all of them land on top of each other.
+%
+% They radiate through a 140-degree arc opening toward +y, *not* through
+% a full circle: a fan brush pressed to the page leaves a fan, which is
+% the whole point of the tool, and a shrub or a grass clump opens
+% upward. (An earlier draft of this comment said "isotropically",
+% copying pkoil's language for its own degenerate case -- that was
+% wrong about this preset, and Codex review caught the doc contradicting
+% the code rather than the other way round.) To aim a pressed fan
+% somewhere else, rotate the space around it:
+%
+%   gsave  x y translate  -30 rotate  newpath 0 0 moveto
+%   << /Width 40 >> pkfan  grestore
 %
 % Determinism: the caller's own `N srand`, same doctrine as its
 % siblings. Note this preset deliberately makes *no* fixed-draw-count
@@ -2237,6 +2248,26 @@
 % Scratch prefix pf- (pkfan/pfrun/pfopen), distinct from pk-/pn-/pb-/
 % pz-/po-/pt-/pw-/pv- because pkfan calls pkribbon once per dash and
 % pkribbon's body redefines every pk*-prefixed name.
+
+% How many times a pressed ray may be resampled by pkribbon. A ray is a
+% straight segment, so this only has to be enough to carry /Flick's
+% taper smoothly.
+% @internal
+/pfraysamples 16 def
+
+% What one degenerate stop is charged against the safety budget. It is
+% deliberately larger than pfraysamples: a degenerate stop costs a whole
+% *nested pkribbon call* per bristle -- option parsing, its own two
+% walkpath passes, its own allocation -- on top of the samples, and that
+% call overhead is what dominates. Calibrated by measurement rather than
+% by counting samples: 100 degenerate subpaths at 60 bristles is 6000
+% rays and takes ~1.3s in release (~24s in the debug build tests run
+% under), which is not something an unattended render should do
+% silently, so the ceiling has to reject it -- 100*60*32 exceeds 150000.
+% A realistic foliage cluster of a dozen dabs at 13 bristles charges
+% under 5000 and is nowhere near it.
+% @internal
+/pfraycharge 32 def
 
 % rate pfroll -> bool
 % Its own copy rather than a call to pkdry's or pkoil's, per this
@@ -2324,7 +2355,7 @@
     % times while passing the guard. The ray is a fixed length, so
     % bounding its pitch from below bounds the work outright (Codex
     % review).
-    /pfrp pfPitch dup pfdl 40 div lt { pop pfdl 40 div } if def
+    /pfrp pfPitch dup pfdl pfraysamples div lt { pop pfdl pfraysamples div } if def
     pfrp 0 le { /pfrp pfPitch def } if
     newpath
     pfdx pfdy moveto
@@ -2334,7 +2365,7 @@
 } def
 
 % @kind: Procedure
-% @summary: A fan brush: a bundle of bristles that leaves a flattened ferrule and splays apart as the stroke travels, for foliage, evergreen branches, grasses and soft feathering. Distinct from pkdry, whose bristles stay parallel -- /Splay is the whole difference. Many thin bristles at high Load give a soft feathered mark; fewer at low Load give separated bristle marks. A single-point subpath is a pressed fan radiating about the point. Deterministic under the caller's own srand; bounded by Bristles * stops.
+% @summary: A fan brush: a bundle of bristles that leaves a flattened ferrule and splays apart as the stroke travels, for foliage, evergreen branches, grasses and soft feathering. Distinct from pkdry, whose bristles stay parallel -- /Splay is the whole difference. Many thin bristles at high Load give a soft feathered mark; fewer at low Load give separated bristle marks. A single-point subpath is a pressed fan, its bristles radiating through a 140-degree arc opening toward +y; rotate the space around it to aim it elsewhere. Deterministic under the caller's own srand; bounded by Bristles * stops.
 % @example: newpath 40 120 moveto 100 150 160 160 210 145 curveto << /Width 60 /Splay 0.6 >> pkfan
 % @param: /Width Fan width at full spread; must be > 0 (default 30)
 % @param: /Bristles Bristle count; must be a whole number, hard safety cap 1..60 (default 24)
@@ -2393,11 +2424,27 @@
     % Counting pass with the budget checked inside the walk, so a
     % pathological path is rejected before any allocation (pkdry's
     % placement argument).
+    % A degenerate subpath costs far more than one stop: it becomes one
+    % pkribbon call per bristle, each resampling a fixed-length ray up to
+    % pfraysamples times. Counting it as a single stop let a path batching
+    % many bare movetos run ~6 million nested samples while the counter
+    % saw a few thousand -- 100 such subpaths at 60 bristles took ~24s
+    % (Codex review). Charging it at its real relative cost is what makes
+    % the advertised ceiling mean what it says.
+    % pfcount is the *weighted* cost used for the budget; pfstops is the
+    % actual number of stops, which is what the record array is sized
+    % by. Conflating the two sized the array by the inflated cost and
+    % then read past the filled entries.
     /pfcount 0 def
-    pfPitch { pop pop pop pop pop pop /pfcount pfcount 1 add def
+    /pfstops 0 def
+    pfPitch { /pfcae exch def pop pop pop pop pop
+              /pfstops pfstops 1 add def
+              /pfcount pfcount
+                  pfcae 3 and 3 eq { pfraycharge } { 1 } ifelse
+              add def
               pfBristles pfcount mul 150000 gt
                   { pkfan-deposit-count-exceeds-safety-limit } if } walkpath
-    /pfn pfcount def
+    /pfn pfstops def
     /pfraw pfn array def
     /pfci 0 def
     pfPitch { 6 array astore pfraw pfci 3 -1 roll put /pfci pfci 1 add def } walkpath
