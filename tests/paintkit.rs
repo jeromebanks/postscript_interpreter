@@ -4383,23 +4383,48 @@ fn fan_a_huge_width_at_full_splay_cannot_inflate_the_nested_resampling() {
 }
 
 /// ...and the floor must not engage on ordinary strokes. An analytic
-/// worst-case bound would have coarsened every fan by ~3x; a
-/// measured-length one leaves the normal case at exactly /Pitch, so the
-/// mark is unchanged.
+/// worst-case bound would have coarsened every fan by roughly 3x; a
+/// measured-length one leaves the normal case at exactly /Pitch.
+///
+/// Asserted on the effective pitch itself rather than on pixels (Codex
+/// review of PR #139, round 4: the first version of this test compared
+/// one render against an identical one, so it only retested fixed-seed
+/// determinism and would have passed even if the floor coarsened
+/// everything). `pfrun` leaves the pitch it actually handed pkribbon in
+/// `pfrp`, and `pfPitch` is what the caller asked for, so the two can be
+/// read back and compared directly.
 #[test]
-fn fan_the_nested_bound_does_not_coarsen_an_ordinary_stroke() {
-    // A fan whose run length is about stops*Pitch: the floor works out
-    // to Pitch/8 and never binds, so this must be pixel-identical to
-    // the same call made with an explicitly generous pitch floor -- i.e.
-    // the rendering is driven by /Pitch, not by the bound.
-    let a = pixels(&fan("/Width 60 /Jitter 0 /Splay 0.6 /Pitch 1.5"));
-    let b = pixels(&fan("/Width 60 /Jitter 0 /Splay 0.6 /Pitch 1.5"));
-    assert_eq!(a, b, "the ordinary path must be stable");
-    // A visibly finer pitch must still change the render -- proving
-    // /Pitch is doing the work and has not been clamped away.
-    let coarse = pixels(&fan("/Width 60 /Jitter 0 /Splay 0.6 /Pitch 6"));
-    assert_ne!(
-        a, coarse,
-        "/Pitch must still drive resampling on an ordinary stroke"
+fn fan_the_nested_bound_engages_only_where_it_is_needed() {
+    let effective_vs_requested = |opts: &str| {
+        let mut it = fresh(400, 200);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 31 srand {FAN_PATH} << {opts} >> pkfan pfrp pfPitch"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        let st = it.operand_stack();
+        let requested: f64 = st[st.len() - 1].repr().parse().expect("pfPitch");
+        let effective: f64 = st[st.len() - 2].repr().parse().expect("pfrp");
+        (effective, requested)
+    };
+
+    // An ordinary fan: run length is about stops*Pitch, so the floor
+    // works out to Pitch/8 and must not bind at all.
+    let (eff, req) = effective_vs_requested("/Width 60 /Jitter 0 /Splay 0.6 /Pitch 1.5");
+    assert!(
+        (eff - req).abs() < 1e-9,
+        "the bound must not coarsen an ordinary stroke: \
+         effective {eff} vs requested {req}"
+    );
+
+    // A pathological one: the floor is exactly what stops pkribbon
+    // resampling a wildly displaced centerline at the original pitch.
+    let (peff, preq) = effective_vs_requested(
+        "/Width 1000000 /Bristles 2 /BristleWidth 1 /Spread 1 /Splay 1 \
+         /Pitch 1 /Load 1 /Dropout 0 /Ragged 0 /Jitter 0",
+    );
+    assert!(
+        peff > preq * 10.0,
+        "the bound must engage on a hugely displaced centerline: \
+         effective {peff} vs requested {preq}"
     );
 }
