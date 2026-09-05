@@ -50,6 +50,24 @@ not once per (lane, stop): a caller's pressure proc may legitimately
 consume randomness (`{ frnd }` is a valid profile), and a per-lane call
 count would couple lane texture to the pressure profile.
 
+Two things had to be written *against* the obvious donor code to make
+that claim true, both found by a review pass and then confirmed
+empirically rather than reasoned about. `ptroll` is deliberately not a
+copy of `poroll`: `poroll` short-circuits its clamps and draws no
+`frnd` at all at rate ≤ 0 or ≥ 1, which is harmless for `pkoil` (it
+promises nothing about consumption) but at `/Coverage 1` would drop two
+draws per (lane, stop) — so nudging Coverage from 0.98 to 1.0 would
+re-roll every lane's jitter and kill pattern, exactly the coupling the
+guarantee forbids. And the edge-buildup pass runs unconditionally, with
+only its *fill* skipped at `/EdgeBuildup 0`; making the whole pass
+conditional left the caller's stream in a different place depending on
+whether ridges were asked for, which would move any seeded art placed
+after the call. `trowel_consumes_a_fixed_number_of_random_draws` pins
+both from the outside, by placing a mark from the caller's own stream
+after `pktrowel` returns and asserting it doesn't move across seven
+different control settings — it caught the second bug after the first
+was fixed.
+
 **Tradeoffs.** Lanes carry an 18% baseline *overlap* rather than
 tiling exactly: two polygons sharing an exact edge leave an
 anti-aliased hairline seam, so an exactly-tiling blade rendered as a

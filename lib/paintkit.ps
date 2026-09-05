@@ -1819,11 +1819,12 @@
 % Determinism: no library seed, fully reproducible under the caller's
 % own `N srand`, same doctrine as pkribbon/pkdry/pkspray/pkoil. The
 % random draws are structurally fixed at three per (lane, stop) plus
-% one per lane, taken whether or not they end up being used -- a lane
-% killed by /Scrape still walks its stops and still draws. That is what
-% lets one control be turned without silently re-rolling every other
-% control's texture, and it is why /Scrape's lane-kill test compares
-% against `Scrape*0.35` rather than being skipped at Scrape 0.
+% four per lane, taken whether or not they end up being used -- a lane
+% killed by /Scrape still walks its stops and still draws, and `ptroll`
+% draws before it clamps rather than after. That is what lets one
+% control be turned without silently re-rolling every other control's
+% texture, and it is why /Scrape's lane-kill test compares against
+% `Scrape*0.35` rather than being skipped at Scrape 0.
 %
 % Multiple subpaths each get their own independent contact chain (reset
 % at every subpath start). A degenerate single-point subpath is a
@@ -1843,9 +1844,22 @@
 % deliberately distinct from pk-/pn-/pb-/pz-/po-/pw-/pv-, per this
 % file's header.
 %
+% rate ptroll -> bool
+% Deliberately *not* a copy of poroll, which is otherwise the same
+% predicate: poroll short-circuits its clamps and draws no `frnd` at
+% all at rate <= 0 or rate >= 1. That is harmless for pkoil, which
+% makes no promise about how much randomness it consumes, but it would
+% quietly break this file's only fixed-stream guarantee -- at
+% /Coverage 1 both the seed draw and the on->off check clamp out, so
+% nudging Coverage from 0.98 to 1.0 would consume two fewer draws per
+% (lane, stop) and re-roll every lane's jitter and kill pattern, the
+% exact coupling the guarantee exists to prevent. Draw first, clamp
+% second: the cost is one wasted `frnd` at the extremes, and the
+% benefit is that the draw count depends on (Lanes, stops) alone.
 % @internal
 /ptroll {
-    dup 1 ge { pop true } { dup 0 le { pop false } { frnd exch lt } ifelse } ifelse
+    frnd exch
+    dup 1 ge { pop pop true } { dup 0 le { pop pop false } { lt } ifelse } ifelse
 } def
 
 % i u e ptpt  ->  x y
@@ -1887,6 +1901,16 @@
     /ptk 0 def
 } def
 
+% - ptgemit -   (ptemit, but only when there is a ridge to draw)
+% The ridge pass runs, and draws its randomness, even at /EdgeBuildup 0
+% -- only the fill is skipped. Making the whole pass conditional
+% instead would leave the caller's random stream in a different place
+% depending on whether edge buildup was asked for, which is the same
+% coupling `ptroll` draws-before-it-clamps to avoid: a second pktrowel
+% call, or any seeded art placed after this one, would silently move.
+% @internal
+/ptgemit { ptEdgeBuildup 0 gt { ptemit } { /ptk 0 def } ifelse } def
+
 % na nb ptridge -   (a continuous strip between two normalized blade
 % offsets, one per subpath -- the edge buildup, which never breaks)
 % @internal
@@ -1905,10 +1929,10 @@
             ptua ptk ptrga ptgh mul ptJitter 0.5 mul pkjit add put
             ptub ptk ptrgb ptgh mul ptJitter 0.5 mul pkjit add put
             /ptk ptk 1 add def
-        } { ptemit } ifelse
-        ptgrec 5 get 2 and 2 eq { ptemit } if
+        } { ptgemit } ifelse
+        ptgrec 5 get 2 and 2 eq { ptgemit } if
     } for
-    ptemit
+    ptgemit
 } def
 
 % @kind: Procedure
@@ -2023,6 +2047,17 @@
             /ptshrink 1.18 ptScrape 0.85 mul sub def
             /ptna ptnc ptna ptnc sub ptshrink mul add def
             /ptnb ptnc ptnb ptnc sub ptshrink mul add def
+            % Interior boundaries keep the overlap; the outermost ones
+            % are clamped back onto the blade. Without this the overlap
+            % pushes lane 1 and lane Lanes past +-1 by 0.18/Lanes of the
+            % half-extent -- negligible at 14 lanes but 18% at /Lanes 1,
+            % which would make /Width stop bounding the footprint and
+            % leave the EdgeBuildup ridges at +-1 sitting inside the
+            % mass instead of at its edge.
+            ptna -1 lt { /ptna -1 def } if
+            ptna 1 gt { /ptna 1 def } if
+            ptnb -1 lt { /ptnb -1 def } if
+            ptnb 1 gt { /ptnb 1 def } if
             % All four draws are unconditional: a lane killed at Scrape
             % 0.5 must consume exactly what a live lane at Scrape 0
             % does, or turning /Scrape re-rolls every other lane's
@@ -2081,12 +2116,15 @@
             ptemit
         } for
         % Edge buildup last, so the ridges sit on top of the masses.
+        % The pass itself is unconditional (ptgemit decides whether to
+        % fill) so that /EdgeBuildup 0 consumes the same randomness as
+        % any other value -- see ptgemit's own note.
+        /ptrwn ptEdgeBuildup 0.28 mul def
         ptEdgeBuildup 0 gt {
-            /ptrwn ptEdgeBuildup 0.28 mul def
             ptbasecolor 1 ptEdgeBuildup 0.5 mul sub shade setrgbcolor
-            1 ptrwn sub 1 ptridge
-            -1 ptrwn 1 sub ptridge
         } if
+        1 ptrwn sub 1 ptridge
+        -1 ptrwn 1 sub ptridge
         ptbasecolor aload pop setrgbcolor
         grestore
     } if

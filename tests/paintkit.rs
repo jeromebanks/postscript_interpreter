@@ -3637,18 +3637,123 @@ fn trowel_restores_the_callers_current_color_before_returning() {
 /// masses rather than one continuous one.
 #[test]
 fn trowel_and_oil_produce_structurally_different_marks() {
-    let mut oil = fresh(400, 200);
-    oil.run_str(&format!(
-        "0.6 0.6 0.6 setrgbcolor 11 srand {TROWEL_PATH} << /Width 60 >> pkoil"
-    ))
-    .unwrap_or_else(|e| panic!("{}", oil.error_report(&e)));
+    let other = |preset: &str| {
+        let mut it = fresh(400, 200);
+        it.run_str(&format!(
+            "0.6 0.6 0.6 setrgbcolor 11 srand {TROWEL_PATH} << /Width 60 >> {preset}"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        (150..250).map(|x| column_runs(&it, x, 200)).sum::<usize>()
+    };
     let trowel_mark = trowel("/Width 60");
-    let oil_bands: usize = (150..250).map(|x| column_runs(&oil, x, 200)).sum();
     let trowel_bands: usize = (150..250).map(|x| column_runs(&trowel_mark, x, 200)).sum();
+    for preset in ["pkoil", "pkribbon"] {
+        let bands = other(preset);
+        assert!(
+            trowel_bands > bands * 2,
+            "the trowel must read as separate masses next to {preset}'s solid band: \
+             {preset} {bands} trowel {trowel_bands}"
+        );
+    }
+}
+
+/// The header promises the number of random draws depends on (Lanes,
+/// stops) alone, so that turning one control cannot silently re-roll
+/// another's texture. `ptroll` is deliberately not a copy of `poroll`
+/// for exactly this reason: `poroll` short-circuits its clamps and
+/// draws nothing at rate <= 0 or >= 1, which at /Coverage 1 would drop
+/// two draws per (lane, stop) relative to /Coverage 0.98.
+///
+/// Asserted from the *outside*, on the only thing that can observe it:
+/// a mark placed from the caller's own stream after pktrowel returns
+/// moves if and only if the number of draws consumed changed.
+#[test]
+fn trowel_consumes_a_fixed_number_of_random_draws() {
+    let downstream_mark = |opts: &str| {
+        let mut it = fresh(400, 240);
+        it.run_str(&format!(
+            "0.6 0.6 0.6 setrgbcolor 11 srand {TROWEL_PATH} << /Width 60 {opts} >> pktrowel \
+             0 0 0 setrgbcolor newpath 20 frnd 340 mul add 20 moveto 0 12 rlineto \
+             6 setlinewidth stroke"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        // Only the marker band, well clear of the stroke itself. The
+        // mark sits at PostScript y 20..32, i.e. pixel rows near the
+        // *bottom* of the pixmap.
+        (0..400)
+            .find(|&x| {
+                (205..225).any(|y| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+            })
+            .expect("marker drawn")
+    };
+    let baseline = downstream_mark("/Coverage 0.98");
+    for opts in [
+        "/Coverage 1", // rate >= 1 on the seed draw, 0 on the on->off check
+        "/Coverage 0", // rate 0 on the seed draw and on the off->on check
+        "/Scrape 0",   // the lane-kill draw must happen anyway
+        "/Scrape 0.9",
+        "/Viscosity 0", // drives the per-step rate past 1
+        "/EdgeBuildup 0",
+        "/Jitter 4",
+    ] {
+        let got = downstream_mark(&format!("/Coverage 0.98 {opts}"));
+        assert_eq!(
+            got, baseline,
+            "{opts} changed how much of the caller's random stream pktrowel consumed"
+        );
+    }
+}
+
+/// Every other preset in this file pins closed-subpath behavior.
+/// `pktrowel` does not treat a closed subpath specially the way
+/// `pkribbon` does (concentric loops, no caps): it walks it as an open
+/// path that happens to return to where it began, so the per-lane
+/// entry/exit trim leaves a **visible seam at the start point** rather
+/// than joining. That is a real property of the mark, not an accident,
+/// so it is asserted here rather than described in a comment -- a
+/// future change that made the loop close would be a behavior change
+/// worth noticing.
+#[test]
+fn trowel_closed_subpath_walks_the_loop_and_seams_at_its_start() {
+    let mut it = fresh(240, 240);
+    // `arc` from 0 degrees starts at the rightmost point, (190, 120).
+    it.run_str(
+        "0 0 0 setrgbcolor 4 srand newpath 120 120 70 0 360 arc closepath \
+         << /Width 22 /Coverage 1 /Scrape 0 /EdgeBuildup 0 >> pktrowel",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
     assert!(
-        trowel_bands > oil_bands * 2,
-        "the trowel must read as separate masses next to pkoil's solid band: \
-         oil {oil_bands} trowel {trowel_bands}"
+        ink_count(&it) > 1500,
+        "a closed loop should paint most of the way round, got {}",
+        ink_count(&it)
+    );
+    let inked = |x: u32, y: u32| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0);
+    let on_ring = |cx: u32, cy: u32| (0..14).any(|d| inked(cx, cy.saturating_sub(7) + d));
+    // Top, bottom and left of the ring are painted (pixel y is flipped
+    // from PostScript y, but the ring is symmetric about both axes).
+    for (x, y) in [(120u32, 50u32), (120, 190), (50, 120)] {
+        assert!(on_ring(x, y), "no ink near ({x}, {y}) -- the walk broke");
+    }
+    // The start point carries the seam.
+    let seam_gap = (185..196).any(|x| (114..127).all(|y| !inked(x, y)));
+    assert!(
+        seam_gap,
+        "expected the documented trim seam at the loop's start point"
+    );
+}
+
+/// The file's convention (`nib_validates_opts_even_on_an_empty_path`):
+/// malformed options are rejected before the path is walked, so a bad
+/// dict fails the same way whether or not there is anything to paint.
+#[test]
+fn trowel_validates_opts_even_on_an_empty_path() {
+    let mut it = fresh(100, 100);
+    let e = it.run_str("newpath << /Lanes 99 >> pktrowel").unwrap_err();
+    assert!(
+        it.error_report(&e)
+            .contains("pktrowel-lanes-must-be-1-to-40"),
+        "an empty path must still validate its options, got {}",
+        it.error_report(&e)
     );
 }
 
