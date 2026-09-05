@@ -55,6 +55,27 @@ reason as `pkfan`'s: the edge jitter is drawn per deposited point, so
 consumption depends on how much is laid down. An early draft of the
 header claimed otherwise and a test caught it.
 
+**Review found a parameter that did nothing.** `/Jitter` was parsed,
+validated and advertised in `pscat --capabilities`, and read nowhere in
+the body — verified by identical PNG checksums at 0, 8 and 60. It
+shipped because its only test asserted that it *rejected a procedure*:
+validation coverage is not effect coverage. `/Edge` already applies
+`pkjit` to every striation boundary, which is exactly what `/Jitter`
+claimed to do, so the duplicate was deleted rather than a second knob
+added. The structural guard against the class is
+`broad_every_documented_parameter_changes_the_render`, which walks the
+advertised list and fails on any parameter that does not move a pixel,
+plus a companion asserting the catalog advertises exactly that list.
+
+Two more from the same review: a degenerate subpath drew *nothing*,
+while every other wide preset here leaves a mark — a flat brush set down
+and lifted now stamps its own footprint, honouring the charge like any
+other stop. And the prefix ended up `pm-`: `pe-` turned out to be used
+in ten files including `pagekit.ps`. Nothing collided by exact name, but
+that is one `peWidth`-vs-`peW` away from the `pkflat` incident, so the
+scan now covers every `/name` under `lib/`, not just line-start
+definitions in `paintkit.ps`.
+
 ## `lib/paintkit.ps`: `pkfan`, the fan brush (issue #114, 2026-09-04)
 
 Third child of epic #112. Adds `pkfan`, with `/Width` `/Bristles`

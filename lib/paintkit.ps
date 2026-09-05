@@ -2524,7 +2524,7 @@
 %   pkribbon   a band of variable width, but a *geometric* one -- no
 %              tool character at all
 %   pknib      width driven by the angle between the path and a fixed
-%              nib angle: a calligraphic pen, which swells and narrows
+%              nib angle: a calligraphic pmn, which swells and narrows
 %              as a curve turns
 %   pktrowel   a rigid blade: hard scraped edges, lengthwise streaks,
 %              no base pass, paint pushed into ridges
@@ -2564,7 +2564,7 @@
 % /Angle follows **pktrowel's** reading, not pknib's: it rotates the
 % brush relative to the direction of travel, so it stays constant along
 % a curve. pknib's /Angle is a fixed angle in world space, which is what
-% makes a pen stroke swell and narrow as it turns -- correct for a pen,
+% makes a pmn stroke swell and narrow as it turns -- correct for a pmn,
 % wrong here, and adopting it would make this preset pknib with
 % striations bolted on. Footprint thickness goes as cos(Angle), so the
 % range is capped at +-80 for the same reason pktrowel's is.
@@ -2577,7 +2577,7 @@
 % The charge is per *subpath*, not per call: walkpath's `t` restarts at
 % each subpath, so three parallel strokes in one call are three brush
 % loads, each fading independently. That is what an artist blocking in a
-% sky actually does, and `flat_each_subpath_gets_its_own_charge` pins it
+% sky actually does, and `broad_each_subpath_gets_its_own_charge` pins it
 % rather than leaving it to be discovered.
 %
 % Determinism: the caller's own `N srand`. Each striation's affinity and
@@ -2594,23 +2594,65 @@
 % against 120000 inside the counting walk, pktrowel's bound and
 % placement.
 %
-% Scratch prefix pl- (pkbroad/peemit/pept), distinct from every other
-% prefix this file reserves.
+% /Jitter is deliberately absent. An earlier version parsed, validated
+% and advertised it, and never read it -- a catalogued no-op that
+% shipped because its only test asserted it rejected a *procedure*.
+% /Edge already applies pkjit to every striation boundary, which is
+% exactly what /Jitter claimed to do, so the fix was to delete the
+% duplicate rather than add a second knob for one effect.
+% `broad_every_documented_parameter_changes_the_render` now walks the
+% advertised list and fails on any parameter that does not move a pixel.
+%
+% Scratch prefix pm-, chosen after scanning *every* file under lib/ for
+% any /name usage rather than just this one. pl- looked free in
+% paintkit.ps and is used by graph.ps, scifi.ps and steampunk.ps; the
+% next candidate, pe-, is used in ten files including pagekit.ps (peW,
+% peX, peTitle...). Nothing collided by exact name there, but "no exact
+% collision today" is one peWidth-vs-peW away from the pkflat incident,
+% so pm- -- which has no /name usage anywhere under lib/ -- is the one
+% to keep.
 
-% i u pept -> x y   (brush-space to device space at stop i)
+% i u pmpt -> x y   (brush-space to device space at stop i)
 % @internal
-/pept {
-    /pepu exch def
-    peraw exch get
-    dup 0 get /pepx exch def
-    dup 1 get /pepy exch def
-    2 get /pepa exch def
-    /pepb pepa 90 add peAngle add def
-    pepx pepb cos pepu mul add
-    pepy pepb sin pepu mul add
+/pmpt {
+    /pmpu exch def
+    pmraw exch get
+    dup 0 get /pmpx exch def
+    dup 1 get /pmpy exch def
+    2 get /pmpa exch def
+    /pmpb pmpa 90 add pmAngle add def
+    pmpx pmpb cos pmpu mul add
+    pmpy pmpb sin pmpu mul add
 } def
 
-% start end na nb ranout peemit -   (one striation run, as a filled strip)
+% i na nb pmstamp -   (the brush's footprint, pressed at a single stop)
+%
+% A degenerate subpath -- a bare `moveto`, or a `moveto closepath` --
+% gives walkpath exactly one stop, and a strip needs two stops to have
+% any area, so pkbroad drew nothing at all there while pkribbon,
+% pktrowel and pkfan all leave a mark (review of PR #140). A flat brush
+% set down and lifted stamps its own footprint, so that is what this is:
+% the full band width, half a pitch either side of the point, square
+% ended like the brush itself.
+% @internal
+/pmstamp {
+    /pmsnb exch def /pmsna exch def /pmsi exch def
+    /pmslen pmPitch 0.5 mul def
+    % walkpath reports angle 0 at a degenerate stop, so the footprint's
+    % long axis lands along +x; /Angle still rotates the band, since pmpt
+    % applies it.
+    /pmsdx pmslen def /pmsdy 0 def
+    pmsi pmsna pmhalf mul pmpt /pmsay exch def /pmsax exch def
+    pmsi pmsnb pmhalf mul pmpt /pmsby exch def /pmsbx exch def
+    newpath
+    pmsax pmsdx sub pmsay pmsdy sub moveto
+    pmsax pmsdx add pmsay pmsdy add lineto
+    pmsbx pmsdx add pmsby pmsdy add lineto
+    pmsbx pmsdx sub pmsby pmsdy sub lineto
+    closepath fill
+} def
+
+% start end na nb ranout pmemit -   (one striation run, as a filled strip)
 %
 % `ranout` says whether this run ended because the charge fell below the
 % striation's affinity, as opposed to simply reaching the end of the
@@ -2620,31 +2662,31 @@
 % distinction the depletion fade came out as a staircase of hard
 % vertical cutoffs -- seen in the first render, not predicted.
 % @internal
-/peemit {
-    /peran exch def
-    /penbv exch def /penav exch def /peend exch def /pestart exch def
-    peend pestart gt {
-        /pespan peend pestart sub def
+/pmemit {
+    /pmran exch def
+    /pmnbv exch def /pmnav exch def /pmend exch def /pmstart exch def
+    pmend pmstart gt {
+        /pmspan pmend pmstart sub def
         newpath
-        pestart 1 peend {
-            /pei exch def
-            pei penav pehalf mul petap mul peEdge peedge mul pkjit add pept
-            pei pestart eq { moveto } { lineto } ifelse
+        pmstart 1 pmend {
+            /pmei exch def
+            pmei pmnav pmhalf mul pmtap mul pmEdge pmedge mul pkjit add pmpt
+            pmei pmstart eq { moveto } { lineto } ifelse
         } for
-        peend -1 pestart {
-            /pei exch def
-            pei penbv pehalf mul petap mul peEdge peedge mul pkjit add pept lineto
+        pmend -1 pmstart {
+            /pmei exch def
+            pmei pmnbv pmhalf mul pmtap mul pmEdge pmedge mul pkjit add pmpt lineto
         } for
         closepath fill
     } if
 } def
 
-% -> multiplier   (reads pei/pestart/pespan/peran; the run-end taper)
-% Written as its own proc so peemit's two point loops can't drift apart.
+% -> multiplier   (reads pmi/pmstart/pmspan/pmran; the run-end taper)
+% Written as its own proc so pmemit's two point loops can't drift apart.
 % @internal
-/petap {
-    peran pespan 0 gt and {
-        pei pestart sub pespan div
+/pmtap {
+    pmran pmspan 0 gt and {
+        pmei pmstart sub pmspan div
         dup 0.78 gt
             { 0.78 sub 0.22 div 0.85 mul 1 exch sub }
             { pop 1 }
@@ -2653,7 +2695,7 @@
 } def
 
 % @kind: Procedure
-% @summary: A broad flat brush for block-ins, sky and water bands, reflections and broad masses. What separates it from pktrowel's blade and pknib's pen is that a brush runs out of paint: the band is divided into striations that drop out one by one as the charge falls along the stroke, so the mark fades from solid to broken along its own direction. Crisp parallel edges and square ends by default. Deterministic under the caller's own srand; bounded by Grain * stops.
+% @summary: A broad flat brush for block-ins, sky and water bands, reflections and broad masses. What separates it from pktrowel's blade and pknib's pmn is that a brush runs out of paint: the band is divided into striations that drop out one by one as the charge falls along the stroke, so the mark fades from solid to broken along its own direction. Crisp parallel edges and square ends by default. Deterministic under the caller's own srand; bounded by Grain * stops.
 % @example: newpath 40 120 moveto 300 130 lineto << /Width 46 /Charge 0.95 /Depletion 0.6 >> pkbroad
 % @param: /Width Band width; must be > 0 (default 40)
 % @param: /Angle Brush rotation in degrees relative to the direction of travel, -80..80; constant along a curve, unlike pknib's fixed world angle (default 0)
@@ -2661,91 +2703,96 @@
 % @param: /Depletion 0..1 how fast the charge runs out along each subpath; 0 is an even fully loaded block-in (default 0.5)
 % @param: /Grain Striations across the band; must be a whole number, hard safety cap 1..40 (default 14)
 % @param: /Edge 0..1 roughness of the band's long edges; 0 is a crisp flat-brush edge (default 0.15)
-% @param: /Jitter Seeded lateral displacement of the striation boundaries (default 0)
 % @param: /Pitch walkpath sampling pitch for the shared centerline pass; must be > 0 (default Width*0.3, capped at 4)
 % @param: /ColorJitter 0..1 per-striation color variation around the caller's current color (default 0.05)
 /pkbroad {
-    /peopts exch def
-    /peWidth peopts /Width 40 pkgetdef def
-    /peWidth load xcheck { pkbroad-width-must-not-be-a-procedure } if
-    peWidth 0 le { pkbroad-width-must-be-positive } if
-    /peAngle peopts /Angle 0 pkgetdef def
-    /peAngle load xcheck { pkbroad-angle-must-not-be-a-procedure } if
-    peAngle -80 lt peAngle 80 gt or { pkbroad-angle-must-be-minus80-to-80 } if
-    /peCharge peopts /Charge 0.95 pkgetdef def
-    /peCharge load xcheck { pkbroad-charge-must-not-be-a-procedure } if
-    peCharge 0 lt peCharge 1 gt or { pkbroad-charge-must-be-0-to-1 } if
-    /peDepletion peopts /Depletion 0.5 pkgetdef def
-    /peDepletion load xcheck { pkbroad-depletion-must-not-be-a-procedure } if
-    peDepletion 0 lt peDepletion 1 gt or { pkbroad-depletion-must-be-0-to-1 } if
-    /peGrain peopts /Grain 14 pkgetdef def
-    /peGrain load xcheck { pkbroad-grain-must-not-be-a-procedure } if
-    peGrain 1 lt peGrain 40 gt or peGrain truncate peGrain ne or
+    /pmopts exch def
+    /pmWidth pmopts /Width 40 pkgetdef def
+    /pmWidth load xcheck { pkbroad-width-must-not-be-a-procedure } if
+    pmWidth 0 le { pkbroad-width-must-be-positive } if
+    /pmAngle pmopts /Angle 0 pkgetdef def
+    /pmAngle load xcheck { pkbroad-angle-must-not-be-a-procedure } if
+    pmAngle -80 lt pmAngle 80 gt or { pkbroad-angle-must-be-minus80-to-80 } if
+    /pmCharge pmopts /Charge 0.95 pkgetdef def
+    /pmCharge load xcheck { pkbroad-charge-must-not-be-a-procedure } if
+    pmCharge 0 lt pmCharge 1 gt or { pkbroad-charge-must-be-0-to-1 } if
+    /pmDepletion pmopts /Depletion 0.5 pkgetdef def
+    /pmDepletion load xcheck { pkbroad-depletion-must-not-be-a-procedure } if
+    pmDepletion 0 lt pmDepletion 1 gt or { pkbroad-depletion-must-be-0-to-1 } if
+    /pmGrain pmopts /Grain 14 pkgetdef def
+    /pmGrain load xcheck { pkbroad-grain-must-not-be-a-procedure } if
+    pmGrain 1 lt pmGrain 40 gt or pmGrain truncate pmGrain ne or
         { pkbroad-grain-must-be-1-to-40 } if
-    /peGrain peGrain cvi def
-    /peEdge peopts /Edge 0.15 pkgetdef def
-    /peEdge load xcheck { pkbroad-edge-must-not-be-a-procedure } if
-    peEdge 0 lt peEdge 1 gt or { pkbroad-edge-must-be-0-to-1 } if
-    /peJitter peopts /Jitter 0 pkgetdef def
-    /peJitter load xcheck { pkbroad-jitter-must-not-be-a-procedure } if
-    /pePitch peopts /Pitch peWidth 0.3 mul dup 4 gt { pop 4 } if pkgetdef def
-    /pePitch load xcheck { pkbroad-pitch-must-not-be-a-procedure } if
-    pePitch 0 le { pkbroad-pitch-must-be-positive } if
-    /peColorJitter peopts /ColorJitter 0.05 pkgetdef def
-    /peColorJitter load xcheck { pkbroad-colorjitter-must-not-be-a-procedure } if
-    peColorJitter 0 lt peColorJitter 1 gt or { pkbroad-colorjitter-must-be-0-to-1 } if
-    /pecount 0 def
-    pePitch { pop pop pop pop pop pop /pecount pecount 1 add def
-              peGrain pecount mul 120000 gt
+    /pmGrain pmGrain cvi def
+    /pmEdge pmopts /Edge 0.15 pkgetdef def
+    /pmEdge load xcheck { pkbroad-edge-must-not-be-a-procedure } if
+    pmEdge 0 lt pmEdge 1 gt or { pkbroad-edge-must-be-0-to-1 } if
+    /pmPitch pmopts /Pitch pmWidth 0.3 mul dup 4 gt { pop 4 } if pkgetdef def
+    /pmPitch load xcheck { pkbroad-pitch-must-not-be-a-procedure } if
+    pmPitch 0 le { pkbroad-pitch-must-be-positive } if
+    /pmColorJitter pmopts /ColorJitter 0.05 pkgetdef def
+    /pmColorJitter load xcheck { pkbroad-colorjitter-must-not-be-a-procedure } if
+    pmColorJitter 0 lt pmColorJitter 1 gt or { pkbroad-colorjitter-must-be-0-to-1 } if
+    /pmcount 0 def
+    pmPitch { pop pop pop pop pop pop /pmcount pmcount 1 add def
+              pmGrain pmcount mul 120000 gt
                   { pkbroad-deposit-count-exceeds-safety-limit } if } walkpath
-    /pen pecount def
-    /peraw pen array def
-    /peci 0 def
-    pePitch { 6 array astore peraw peci 3 -1 roll put /peci peci 1 add def } walkpath
-    pen 0 gt {
+    /pmn pmcount def
+    /pmraw pmn array def
+    /pmci 0 def
+    pmPitch { 6 array astore pmraw pmci 3 -1 roll put /pmci pmci 1 add def } walkpath
+    pmn 0 gt {
         gsave
-        /pebase [ currentrgbcolor ] def
-        /pehalf peWidth 0.5 mul def
-        /peedge peWidth 0.06 mul def
-        1 1 peGrain {
-            /peg exch def
+        /pmbase [ currentrgbcolor ] def
+        /pmhalf pmWidth 0.5 mul def
+        /pmedge pmWidth 0.06 mul def
+        1 1 pmGrain {
+            /pmg exch def
             % Both draws are unconditional, so /Charge and /Depletion
             % re-shape one mark rather than re-rolling a different one.
-            /peaff frnd def
-            /pecj peColorJitter pkjit def
-            pebase 1 pecj add shade setrgbcolor
+            /pmaff frnd def
+            /pmcj pmColorJitter pkjit def
+            pmbase 1 pmcj add shade setrgbcolor
             % The striations abut, so they need the same overlap
             % pktrowel's lanes do, or every boundary leaves an
             % anti-aliased hairline (see that preset's own note).
-            /pena peg 1 sub peGrain div 2 mul 1 sub def
-            /penb peg peGrain div 2 mul 1 sub def
-            /penc pena penb add 0.5 mul def
-            /pena penc pena penc sub 1.15 mul add def
-            /penb penc penb penc sub 1.15 mul add def
-            pena -1 lt { /pena -1 def } if
-            penb 1 gt { /penb 1 def } if
-            /perun false def
-            /pestart 0 def
-            0 1 pen 1 sub {
-                /pei exch def
-                /perec peraw pei get def
-                /peae perec 5 get def
-                peae 1 and 1 eq {
-                    perun { pestart pei 1 sub pena penb false peemit /perun false def } if
+            /pmna pmg 1 sub pmGrain div 2 mul 1 sub def
+            /pmnb pmg pmGrain div 2 mul 1 sub def
+            /pmnc pmna pmnb add 0.5 mul def
+            /pmna pmnc pmna pmnc sub 1.15 mul add def
+            /pmnb pmnc pmnb pmnc sub 1.15 mul add def
+            pmna -1 lt { /pmna -1 def } if
+            pmnb 1 gt { /pmnb 1 def } if
+            /pmrun false def
+            /pmstart 0 def
+            0 1 pmn 1 sub {
+                /pmi exch def
+                /pmrec pmraw pmi get def
+                /pmae pmrec 5 get def
+                pmae 1 and 1 eq {
+                    pmrun { pmstart pmi 1 sub pmna pmnb false pmemit /pmrun false def } if
                 } if
-                /pech peCharge 1 peDepletion perec 3 get mul sub mul def
-                pech peaff gt {
-                    perun not { /pestart pei def /perun true def } if
+                /pmch pmCharge 1 pmDepletion pmrec 3 get mul sub mul def
+                pmch pmaff gt {
+                    pmrun not { /pmstart pmi def /pmrun true def } if
                 } {
-                    perun { pestart pei 1 sub pena penb true peemit /perun false def } if
+                    pmrun { pmstart pmi 1 sub pmna pmnb true pmemit /pmrun false def } if
                 } ifelse
-                peae 2 and 2 eq {
-                    perun { pestart pei pena penb false peemit /perun false def } if
-                } if
+                pmae 3 and 3 eq {
+                    % A degenerate subpath: press the footprint rather
+                    % than trying to draw a zero-area strip through one
+                    % stop. It honors the charge like any other stop.
+                    pmch pmaff gt { pmi pmna pmnb pmstamp } if
+                    /pmrun false def
+                } {
+                    pmae 2 and 2 eq {
+                        pmrun { pmstart pmi pmna pmnb false pmemit /pmrun false def } if
+                    } if
+                } ifelse
             } for
-            perun { pestart pen 1 sub pena penb false peemit /perun false def } if
+            pmrun { pmstart pmn 1 sub pmna pmnb false pmemit /pmrun false def } if
         } for
-        pebase aload pop setrgbcolor
+        pmbase aload pop setrgbcolor
         grestore
     } if
 } def

@@ -4755,7 +4755,6 @@ fn broad_validation_and_safety() {
         ("/Edge 3", "pkbroad-edge-must-be-0-to-1"),
         ("/Pitch 0", "pkbroad-pitch-must-be-positive"),
         ("/ColorJitter 9", "pkbroad-colorjitter-must-be-0-to-1"),
-        ("/Jitter { 1 }", "pkbroad-jitter-must-not-be-a-procedure"),
     ] {
         let report = err(&format!("{p} << {opts} >> pkbroad"));
         assert!(
@@ -4817,4 +4816,123 @@ fn ghostscript_accepts_paintkit_broad() {
         status.success(),
         "gs rejected examples/paintkit_broad_demo.ps"
     );
+}
+
+/// Review of PR #140 found `/Jitter` parsed, validated, and advertised
+/// in `pscat --capabilities` while being read nowhere in the body -- a
+/// complete no-op that shipped because the only test touching it
+/// asserted that it *rejected a procedure*. Validation coverage is not
+/// effect coverage.
+///
+/// This is the structural guard against that whole class: every
+/// parameter the catalog advertises must measurably change the render.
+/// It is deliberately a loop over the documented list rather than one
+/// test per parameter, so adding a parameter without an effect fails
+/// here without anyone remembering to write a new test.
+#[test]
+fn broad_every_documented_parameter_changes_the_render() {
+    let baseline = pixels(&broad("/Width 44"));
+    for (param, value) in [
+        ("Width", "70"),
+        ("Angle", "60"),
+        ("Charge", "0.3"),
+        ("Depletion", "1"),
+        ("Grain", "3"),
+        ("Edge", "0.9"),
+        ("Pitch", "8"),
+        ("ColorJitter", "0.9"),
+    ] {
+        let varied = pixels(&broad(&format!("/Width 44 /{param} {value}")));
+        assert_ne!(
+            varied, baseline,
+            "/{param} {value} produced an identical render -- it is a no-op"
+        );
+    }
+}
+
+/// ...and the catalog must not advertise anything beyond that list, so
+/// a future parameter cannot slip in undocumented-and-untested either.
+#[test]
+fn broad_advertises_exactly_the_parameters_it_implements() {
+    let src = std::fs::read_to_string("lib/paintkit.ps").expect("read paintkit");
+    let start = src
+        .find("% @example: newpath 40 120 moveto 300 130 lineto")
+        .expect("pkbroad tags");
+    let end = src[start..].find("\n/pkbroad ").expect("pkbroad def") + start;
+    let mut advertised: Vec<String> = src[start..end]
+        .lines()
+        .filter_map(|l| l.strip_prefix("% @param: /"))
+        .map(|l| l.split_whitespace().next().unwrap_or("").to_string())
+        .collect();
+    advertised.sort();
+    let mut expected = vec![
+        "Angle",
+        "Charge",
+        "ColorJitter",
+        "Depletion",
+        "Edge",
+        "Grain",
+        "Pitch",
+        "Width",
+    ];
+    expected.sort();
+    assert_eq!(
+        advertised, expected,
+        "pkbroad's advertised parameters drifted from the tested set"
+    );
+}
+
+/// /Grain is the mechanism the header calls the whole tool -- the band
+/// is divided into striations -- yet nothing checked it did anything.
+/// Counted as separate ink bands down a column crossing the stroke.
+#[test]
+fn broad_grain_sets_the_striation_count() {
+    let bands = |grain: u32| {
+        let it = broad(&format!(
+            "/Width 60 /Grain {grain} /Charge 0.6 /Depletion 0 /Edge 0"
+        ));
+        (120..280).map(|x| column_runs(&it, x, 200)).sum::<usize>()
+    };
+    let coarse = bands(3);
+    let fine = bands(30);
+    assert!(
+        fine > coarse,
+        "more striations should read as more separate bands: coarse {coarse} fine {fine}"
+    );
+}
+
+/// A degenerate subpath used to draw nothing at all, while every other
+/// wide preset here leaves a mark. A flat brush set down and lifted
+/// stamps its own footprint.
+#[test]
+fn broad_degenerate_subpath_presses_a_footprint() {
+    let mut it = fresh(200, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 29 srand newpath 100 100 moveto \
+         << /Width 60 /Charge 1 /Depletion 0 >> pkbroad",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 200,
+        "a pressed flat brush should stamp its footprint, got {}",
+        ink_count(&it)
+    );
+    // The footprint spans the band's width, not a hairline.
+    assert!(
+        column_height(&it, 100, 200) > 40,
+        "the stamp should be the full band width"
+    );
+}
+
+/// ...and it honors the charge, like every other stop: an unloaded
+/// brush pressed to the page leaves nothing.
+#[test]
+fn broad_a_pressed_footprint_honors_the_charge() {
+    let mut it = fresh(200, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 29 srand newpath 100 100 moveto \
+         << /Width 60 /Charge 0 >> pkbroad",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(ink_count(&it), 0, "an unloaded brush stamps nothing");
 }
