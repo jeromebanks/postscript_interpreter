@@ -4501,3 +4501,59 @@ fn wet_accepts_a_whole_valued_real_layer_count() {
         assert!(ink_count(&it) > 100, "/Layers {layers} should paint");
     }
 }
+
+/// Codex review of PR #138, round 3: carrying pkwet's loop state on the
+/// operand stack fixed recursion but exposed that state *beneath* the
+/// wrapped procedure, so a stack-balanced procedure that inspects
+/// `count` behaved differently under pkwet than called directly -- and
+/// one containing `clear` broke the loop outright. Both contradict the
+/// /Soft 0 promise as badly as the corruption did. The state now lives
+/// in a frame indexed by nesting depth, so nothing of pkwet's is on the
+/// operand stack while caller code runs.
+#[test]
+fn wet_shows_the_wrapped_procedure_an_untouched_operand_stack() {
+    // A procedure that only draws when the stack is empty: it must
+    // behave the same wrapped as unwrapped.
+    let ink_for = |wrapped: bool| {
+        let body = "{ count 0 eq \
+                     { newpath 60 100 moveto 240 100 lineto << /Width 20 >> pkribbon } if }";
+        let src = if wrapped {
+            format!("0 0 0 setrgbcolor 5 srand {body} << /Soft 0 >> pkwet")
+        } else {
+            format!("0 0 0 setrgbcolor 5 srand {body} exec")
+        };
+        let mut it = fresh(300, 200);
+        it.run_str(&src)
+            .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        ink_count(&it)
+    };
+    let plain = ink_for(false);
+    assert!(
+        plain > 100,
+        "the probe procedure should draw when called directly"
+    );
+    assert_eq!(
+        ink_for(true),
+        plain,
+        "a stack-inspecting procedure must see the same stack under pkwet"
+    );
+}
+
+/// Nesting is capped rather than growing the frame array without bound.
+#[test]
+fn wet_rejects_nesting_past_its_frame_depth() {
+    // Nine deep: one past the cap.
+    let mut src = String::from("newpath 60 100 moveto 240 100 lineto << /Width 12 >> pkribbon");
+    for _ in 0..9 {
+        src = format!("{{ {src} }} << /Layers 1 >> pkwet");
+    }
+    let mut it = fresh(300, 200);
+    let e = it
+        .run_str(&format!("0 0 0 setrgbcolor 5 srand {src}"))
+        .unwrap_err();
+    assert!(
+        it.error_report(&e).contains("pkwet-nesting-too-deep"),
+        "expected the nesting cap, got {}",
+        it.error_report(&e)
+    );
+}

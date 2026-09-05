@@ -2278,6 +2278,48 @@
 % Scratch prefix pq- (pkwet), distinct from pk-/pn-/pb-/pz-/po-/pt-/
 % pw-/pv- per this file's header. It has to be: the wrapped proc almost
 % always calls a preset that redefines its own prefix.
+%
+% Where this preset's per-call state lives took three tries, because
+% pkwet is the only thing here that re-enters caller code *in a loop*
+% and both obvious answers are wrong:
+%
+%   plain names       a wrapped proc that itself calls pkwet overwrites
+%                     the outer call's plan mid-loop, and the outer call
+%                     then resumes against the inner one's -- running 1
+%                     of its 4 passes, measured.
+%   the operand stack recursion-safe, but the state sits *underneath*
+%                     the callee, so a stack-balanced proc containing
+%                     `count 0 eq { ... } if` behaves differently under
+%                     pkwet than called directly, and one containing
+%                     `clear` breaks the loop outright. That contradicts
+%                     the /Soft 0 promise just as badly.
+%
+% Both found by review. What works is a frame indexed by nesting depth:
+% `pqframes pqdepth get` holds this invocation's plan and procedure, an
+% inner call takes depth+1 and restores the counter on the way out, and
+% nothing of ours is on the operand stack or the dict stack while the
+% caller's procedure runs. Reads happen immediately before the call and
+% again on the next iteration, never across it.
+%
+% Depth is capped (pkwet-nesting-too-deep past 8) rather than growing a
+% frame array without bound. Note the counter is restored on the normal
+% path only: an error raised inside a wrapped procedure aborts the
+% render anyway, and unwinding it properly would need `stopped`, which
+% would also swallow the caller's own errors.
+
+% Per-invocation state for pkwet, indexed by nesting depth. See the
+% header for why neither plain names nor the operand stack will do.
+%
+% Written value-first with an explicit exch, like pwhasalpha below and
+% for the same reason: build.rs's tag scanner models the depth-0 stack
+% with a two-slot window and does not know array's arity, so the more
+% obvious '/pqframes 9 array def' reads as a def whose key is three
+% slots back and fails the build. It stays on one line so the tag block
+% is still directly above the def.
+% @internal
+9 array /pqframes exch def
+% @internal
+/pqdepth 0 def
 
 % @kind: Procedure
 % @summary: Runs a mark-drawing procedure several times, each pass displaced further and mixed further toward a declared backdrop color, so the mark's core stays solid while its edge grades away into the layer beneath. The wet-on-wet softener for skies, clouds, mist and distant forms; works with every stroke preset in this file. Pair it with a broken or particulate brush (pkspray, pkdry, pktrowel at low Coverage) -- a solid brush keeps its own hard silhouette and only gains a halo. Uses no alpha, so unlike pkwash it needs no Ghostscript fallback.
@@ -2322,6 +2364,10 @@
             { pkwet-under-components-must-be-numbers } if
         dup 0 lt exch 1 gt or { pkwet-under-components-must-be-0-to-1 } if
     } for
+    /pqdepth pqdepth 1 add def
+    pqdepth 8 gt { pkwet-nesting-too-deep } if
+    pqframes pqdepth 2 array put
+    pqframes pqdepth get 1 /pqproc load put
     /pqbase [ currentrgbcolor ] def
     % Plan every pass before running any of them, so that none of pkwet's
     % own randomness is interleaved with the wrapped proc's -- otherwise
@@ -2385,18 +2431,18 @@
     % This does require the wrapped procedure to leave the operand stack
     % as it found it, which every preset in this file already does and
     % walkpath already demands of its own callers.
-    pqplan /pqproc load
+    pqframes pqdepth get 0 pqplan put
     pqLayers 1 sub -1 0 {
-        2 index exch get
+        pqframes pqdepth get 0 get exch get
         gsave
             dup length 2 gt
                 { aload pop setrgbcolor translate }
                 { aload pop translate }
             ifelse
-            dup exec
+            pqframes pqdepth get 1 get exec
         grestore
     } for
-    pop pop
+    /pqdepth pqdepth 1 sub def
     % No trailing setrgbcolor: every pass ran inside its own
     % gsave/grestore, so the caller's color is already restored -- and
     % restoring it *by hand* would force the graphics state into
