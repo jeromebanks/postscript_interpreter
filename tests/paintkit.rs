@@ -4235,3 +4235,76 @@ fn ghostscript_accepts_paintkit_fan() {
         "gs rejected examples/paintkit_fan_demo.ps"
     );
 }
+
+/// Codex review of PR #139: `/Load` was ignored for a pressed dab --
+/// `pfdab` emitted every bristle without consulting the contact state,
+/// so `<< /Load 0 >>` still painted a full fan. A dry brush pressed to
+/// the page leaves nothing.
+#[test]
+fn fan_pressed_dab_honors_load() {
+    let dab = |load: f64| {
+        let mut it = fresh(200, 200);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 3 srand newpath 100 100 moveto \
+             << /Width 70 /Bristles 20 /Load {load} /Dropout 0 >> pkfan"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        ink_count(&it)
+    };
+    assert_eq!(
+        dab(0.0),
+        0,
+        "an unloaded brush pressed to the page marks nothing"
+    );
+    assert!(dab(1.0) > 300, "a loaded brush pressed to the page marks");
+}
+
+/// Codex review of PR #139: the pressed-fan branch keyed off the
+/// *whole path* being one stop, so a path mixing an ordinary subpath
+/// with a bare `moveto` took the generic branch for the latter. walkpath
+/// reports angle 0 at a degenerate stop, so those bristles came out
+/// along one straight line instead of radiating.
+#[test]
+fn fan_a_degenerate_subpath_radiates_even_beside_a_normal_one() {
+    let mut it = fresh(400, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 3 srand \
+         newpath 40 40 moveto 200 40 lineto \
+         300 120 moveto \
+         << /Width 70 /Bristles 20 /Splay 1 /Load 1 /Dropout 0 >> pkfan",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    // The dab lives around x=300. A radiating fan spans many columns
+    // there; bristles collapsed onto one line span almost none.
+    let inked_cols = (255..350).filter(|&x| band_span(&it, x, 200) > 0).count();
+    assert!(
+        inked_cols > 40,
+        "the trailing bare moveto should radiate, not collapse to a line: \
+         {inked_cols} inked columns"
+    );
+}
+
+/// Codex review of PR #139: a degenerate subpath contributes exactly one
+/// stop to the outer safety walk however fine `/Pitch` is, so the ray's
+/// own resampling was the one nested cost that budget did not bound --
+/// `/Pitch 0.001` sampled a fixed-length ray millions of times while
+/// passing the guard. The ray's pitch is now floored relative to its own
+/// length. Asserted as a wall-clock bound, since the failure mode is a
+/// hang rather than a wrong pixel.
+#[test]
+fn fan_a_pressed_dab_cannot_be_made_unboundedly_expensive() {
+    let start = std::time::Instant::now();
+    let mut it = fresh(200, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 3 srand newpath 100 100 moveto \
+         << /Width 70 /Bristles 60 /Pitch 0.001 /Ragged 0 >> pkfan",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let elapsed = start.elapsed();
+    assert!(ink_count(&it) > 300, "the dab should still paint");
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "a fine /Pitch must not make a fixed-length ray unboundedly \
+         expensive: took {elapsed:?}"
+    );
+}

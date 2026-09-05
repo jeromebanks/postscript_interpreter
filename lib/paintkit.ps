@@ -2277,26 +2277,35 @@
        /EndTaper pflast { pfFlick } { 0 } ifelse >> pkribbon
 } def
 
-% - pfdab -   (the pressed-fan mark for a degenerate single-point stop)
+% i pfray -   (the current bristle's ray of a *pressed* fan, at the
+% degenerate stop `i`)
+%
+% Emitted per bristle from inside the bristle loop rather than as a
+% whole-path special case, so that a path mixing ordinary subpaths with
+% bare `moveto`s gets a radiating dab for each of the latter. Checking
+% only whether the *entire* path was one stop missed exactly that
+% combination, and walkpath reports angle 0 for a degenerate stop, so
+% the generic branch laid those bristles out along one straight line
+% instead (Codex review).
 % @internal
-/pfdab {
-    pfraw 0 get dup 0 get /pfdx exch def 1 get /pfdy exch def
-    /pfdlen pfhalf 1.15 mul def
-    1 1 pfBristles {
-        /pfdb exch def
-        /pfdu pfdb 0.5 sub pfBristles div 2 mul 1 sub def
-        /pfda pfdu 70 mul 90 add def
-        /pfdw pfrwbase pfWidthJitter pfrwbase mul pkjit add def
-        pfdw pfrwbase 0.05 mul lt { /pfdw pfrwbase 0.05 mul def } if
-        /pfdl pfdlen 1 pfRagged frnd mul sub mul def
-        pfbasecolor 1 pfColorJitter pkjit add shade setrgbcolor
-        newpath
-        pfdx pfdy moveto
-        pfdx pfda cos pfdl mul add  pfdy pfda sin pfdl mul add  lineto
-        << /Width pfdw /Pitch pfPitch /StartCap /pointed /EndCap /pointed
-           /EndTaper pfFlick >> pkribbon
-    } for
-    pfbasecolor aload pop setrgbcolor
+/pfray {
+    pfraw exch get dup 0 get /pfdx exch def 1 get /pfdy exch def
+    /pfda pfub 70 mul 90 add def
+    /pfdl pfhalf 1.15 mul 1 pfRagged frnd mul sub mul def
+    % The outer safety budget counts source-path stops, and a degenerate
+    % subpath contributes exactly one however fine /Pitch is -- so the
+    % ray's own resampling is the one place nested cost is *not* bounded
+    % by that budget, and `/Pitch 0.001` would sample a ray millions of
+    % times while passing the guard. The ray is a fixed length, so
+    % bounding its pitch from below bounds the work outright (Codex
+    % review).
+    /pfrp pfPitch dup pfdl 40 div lt { pop pfdl 40 div } if def
+    pfrp 0 le { /pfrp pfPitch def } if
+    newpath
+    pfdx pfdy moveto
+    pfdx pfda cos pfdl mul add  pfdy pfda sin pfdl mul add  lineto
+    << /Width pfrw /Pitch pfrp /StartCap /pointed /EndCap /pointed
+       /EndTaper pfFlick >> pkribbon
 } def
 
 % @kind: Procedure
@@ -2372,12 +2381,7 @@
         /pfbasecolor [ currentrgbcolor ] def
         /pfferrule 1 pfSplay 0.75 mul sub def
         /pfhalf pfWidth 0.5 mul pfSpread mul def
-        % A lone degenerate stop (a bare moveto) is a pressed fan, not a
-        % stroke -- see the header.
-        pfn 1 eq pfraw 0 get 5 get 3 and 3 eq and {
-            pfdab
-        } {
-            1 1 pfBristles {
+        1 1 pfBristles {
                 /pfb exch def
                 /pfub pfb 0.5 sub pfBristles div 2 mul 1 sub def
                 /pfrw pfrwbase pfWidthJitter pfrwbase mul pkjit add def
@@ -2406,25 +2410,32 @@
                             pfLoad pfstep mul pfroll { /pfstate true def } if
                         } ifelse
                     } ifelse
-                    pfstate pfin and {
-                        pfrunning not { /pfstart pfi def /pfrunning true def } if
+                    pfae 3 and 3 eq {
+                        % A degenerate subpath (a bare moveto): a pressed
+                        % fan radiating about the point. It honors the
+                        % contact state like any other stop, so /Load 0
+                        % leaves no dab rather than a full one.
+                        pfstate pfin and { pfi pfray } if
                     } {
-                        pfrunning {
-                            % The flick belongs to the run that actually
-                            % reaches this bristle's own end, not to
-                            % every dash along the way.
-                            pfstart pfi 1 sub pfin not pfstate and pfrun
-                            /pfrunning false def
+                        pfstate pfin and {
+                            pfrunning not { /pfstart pfi def /pfrunning true def } if
+                        } {
+                            pfrunning {
+                                % The flick belongs to the run that
+                                % actually reaches this bristle's end,
+                                % not to every dash along the way.
+                                pfstart pfi 1 sub pfin not pfstate and pfrun
+                                /pfrunning false def
+                            } if
+                        } ifelse
+                        pfae 2 and 2 eq {
+                            pfrunning { pfstart pfi true pfrun /pfrunning false def } if
                         } if
                     } ifelse
-                    pfae 2 and 2 eq {
-                        pfrunning { pfstart pfi true pfrun /pfrunning false def } if
-                    } if
                 } for
                 pfrunning { pfstart pfn 1 sub true pfrun /pfrunning false def } if
-            } for
-            pfbasecolor aload pop setrgbcolor
-        } ifelse
+        } for
+        pfbasecolor aload pop setrgbcolor
         grestore
     } if
 } def
