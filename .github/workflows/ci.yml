@@ -72,6 +72,16 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo build
+
+      # The PS-native verification pass (issue #95): every library's
+      # %%SelfTest blocks, then strict lint over every rendering
+      # driver. Its own step rather than folded into `cargo test` so a
+      # PS-only failure reads as one on the run page — tests/selftest.rs
+      # runs the same checks under `cargo test` below regardless, since
+      # that's what the required status check actually gates on.
+      - name: PS-native self-checks
+        run: ./scripts/selftest.sh
+
       - name: Run tests
         id: test
         continue-on-error: true

@@ -3,6 +3,97 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## PS-native self-checks: `%%SelfTest` + strict `--lint` (issue #95, 2026-09-04)
+
+Phase A of `docs/PS_LIBRARY_COUPLING.md`'s "Touchpoint 2": a change to
+`lib/*.ps` can now be checked without writing Rust, without `gs`, and
+without a golden image. `docs/SELFTEST.md` is the reference;
+`./scripts/selftest.sh` is the entry point, and CI runs it as its own
+step.
+
+**Two mechanisms, deliberately separate.** `%%SelfTest` doc-comment
+blocks run by `pscat --selftest` cover the validation-guard class; a
+new `--lint-strict` covers the renders-blank class by making today's
+advisory findings fatal, run against per-library rendering drivers in
+`selftest/drivers/`. Neither gets there alone — the decision record is
+explicit that a later summary drifting into "mechanism 1 covers it"
+was itself a review finding.
+
+**The design decision that mattered most: every failure assertion names
+the error it expects.** The obvious form, `{ ... } stopped not { fail }
+if`, is unsound as a regression test — a typo in the test body raises
+too, so the assertion goes green forever while testing nothing, which
+is precisely the silent drift the mechanism exists to prevent. So there
+is no "any error will do" assertion in the vocabulary at all.
+`mustguard` instead matches `$error`'s `/errorname` *and* `/command`,
+which fits how these libraries actually reject bad input (invoking a
+self-documenting undefined name like
+`pkribbon-width-must-not-be-a-procedure`). A typo raises `undefined`
+under a *different* name and fails.
+
+**Blocks are comment text, so a library stays inert on a normal `run`.**
+That meant making the convention coexist with `build.rs`'s `% @tag:`
+grammar (issue #94): PostScript may legitimately start a line with
+`@`, which the tag scanner would reject as an unknown tag and fail the
+build over something the capability catalog has no stake in. Self-test
+regions are now invisible to every scan in `build.rs` — including the
+`is_migrated` detection, so the two scans can't disagree about which
+files are migrated — and an *unterminated* block is a build error
+rather than a region silently swallowing every tag after it.
+
+**One `showpage` per checked scenario is enforced, not just documented.**
+The rule exists because `--lint`'s blank-page check is per-page: two
+scenarios sharing a page let the second's ink hide the first's blank
+regression. As author discipline that's one deleted `showpage` away
+from failing silently, so drivers declare DSC's own `%%Pages: N` and a
+new `page-count` lint check compares it against reality. Reusing a real
+DSC header rather than inventing a marker means found art gets the same
+check for free; `%%Pages: (atend)` is read as "declares nothing".
+
+**The coverage claims are proved, not asserted.** `tests/selftest.rs`
+reintroduces each defect the Touchpoint 2 table says Phase A covers and
+asserts the mechanism goes red. Each mutation proof checks three states
+rather than two — the unmutated library passes, the unguarded call
+behaves exactly as the defect did and never raises the guard's own
+name, and only then is "`--selftest` now fails" evidence about *this*
+guard. Measuring that middle state instead of assuming it turned up a
+real correction: four of the five guards close a genuinely silent
+defect, but `pkribbon`'s `/Pressure` guard does not — without it the
+call raises a `typecheck` on `def` from deep inside the implementation,
+naming nothing useful. That *is* the defect PR #76's round 2 described
+("leaks extra operands into every downstream computation instead of
+raising a clean error"), and the test now states which shape each row
+is, so a change in that behavior fails rather than passing unnoticed.
+
+**The gs-check inventory found real drift.** `docs/GS_CHECK_INVENTORY.md`
+documents all 25 `ghostscript_accepts_*` drivers and each one's actual
+assertion. The decision record records 16 — a 56% undercount. Reading
+all 25 in full also turned up three things a uniform `gs_check.sh`
+couldn't handle: two are not exit-code-only (and in two different
+shapes — `ghostscript_accepts_artkit` parses three values with three
+comparison kinds, `tests/type1.rs` does an approximate float compare in
+a completely different invocation shape), three are loops rather than
+single invocations, and ten run a committed `examples/*.ps` directly.
+That is the argument for extraction being its own issue rather than a
+footnote to this one, which is how #95's acceptance criterion is
+worded ("inventoried ... before any extraction").
+
+**Explicitly left uncovered, and why** — recorded in `docs/SELFTEST.md`
+rather than quietly dropped: row 14 (packed-array `/Pressure`) is
+unreachable by *any* `pscat`-run block, since `pscat` doesn't implement
+`setpacking` at all, so the six `true setpacking` gs-checks stay
+load-bearing; row 17 (`pathforall`) is an interpreter defect, Rust/gs
+-parity only; row 8 (a demo missing `showpage`) still has no safe
+automated fix, because `examples/sweep_demo.ps` and
+`examples/walkpath_demo.ps` legitimately rely on the live final canvas
+and aren't distinguishable from a genuine omission by output alone.
+
+**Deferred:** Phase B (the pixel-sample operator for the
+geometry/measurement class) and the `ghostscript_accepts_*` extraction
+itself, both filed as follow-ups. Only `paintkit` and `artkit` carry
+blocks and drivers so far; adding a library is a file drop, since both
+the script and the tests discover rather than enumerate.
+
 ## `lib/pagekit.ps`: give the page templates a demo on the site (issue #63, 2026-09-04)
 
 Closes issue #63, the follow-up #61 filed after that PR's review found

@@ -548,3 +548,53 @@ fn oversized_contact_sheet_fails_before_any_frame_renders() {
         "no frame should have started rendering: {stdout}"
     );
 }
+
+// --- issue #95: --selftest and --lint-strict --------------------------
+
+#[test]
+fn selftest_runs_alone() {
+    // Same contract as --spool: it builds its own interpreter per block
+    // and produces no page, so pairing it with a render request would
+    // silently ignore one of the two.
+    for extra in [
+        vec!["--selftest", "lib/paintkit.ps", "--png", "out.png"],
+        vec!["--selftest", "lib/paintkit.ps", "-e", "showpage"],
+        vec!["--selftest", "lib/paintkit.ps", "--lint"],
+        vec!["--selftest", "lib/paintkit.ps", "examples/postcard.ps"],
+    ] {
+        let (ok, _, err) = run(&extra, "");
+        assert!(!ok, "expected a refusal for {extra:?}");
+        assert!(err.contains("--selftest runs alone"), "{err}");
+    }
+}
+
+#[test]
+fn selftest_reports_a_missing_file_without_panicking() {
+    let (ok, _, err) = run(&["--selftest", "no/such/file.ps"], "");
+    assert!(!ok);
+    assert!(err.contains("cannot read"), "{err}");
+}
+
+#[test]
+fn selftest_names_each_block_it_ran() {
+    let (ok, _, err) = run(&["--selftest", "lib/paintkit.ps"], "");
+    assert!(ok, "{err}");
+    assert!(err.contains("pkribbon-rejects-a-non-callable-pressure"), "{err}");
+    assert!(err.contains("block(s) passed"), "{err}");
+}
+
+#[test]
+fn lint_strict_implies_lint_and_its_mode_exclusions() {
+    // --lint-strict sets `lint` too, so every place that refuses
+    // --lint refuses this without naming it separately.
+    let (ok, _, err) = run(&["--lint-strict", "--spool", "jobs"], "");
+    assert!(!ok);
+    assert!(err.contains("--spool runs alone"), "{err}");
+}
+
+#[test]
+fn usage_lists_the_new_flags() {
+    let (_, out, _) = run(&["--help"], "");
+    assert!(out.contains("--lint-strict"), "{out}");
+    assert!(out.contains("--selftest"), "{out}");
+}
