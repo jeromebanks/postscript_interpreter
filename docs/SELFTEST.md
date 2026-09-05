@@ -77,16 +77,24 @@ pins that property.
   multiline `(...)` string is never read as a marker or a tag, however
   `%%SelfTest:`-shaped it looks. Same rule `build.rs` applies, because
   the two scanners have to agree about which lines are metadata.
+- **A block that runs no assertions fails.** Being free of failures
+  isn't enough — deleting an assertion line and leaving its `{ ... }`
+  proc literal behind is an ordinary careless edit, and without this it
+  turned a real guard's coverage off while still reporting green. Same
+  reason a file handed to `--selftest` that yields no blocks at all is
+  a failure rather than a vacuous pass.
+- A block must also leave the operand, dictionary and graphics stacks
+  as it found them; all three are checked from Rust after the block.
 - Each block runs in its own fresh interpreter, so one block can't
   affect another. Within a block, `mustguard`/`mustfail`/`mustpass`
-  restore the operand and dictionary stacks after a caught error — the
-  depths they restore to ride on the operand stack (`mark`/
-  `cleartomark`, plus a captured `countdictstack`), never in named
-  variables, so a proc that opens a dictionary shadowing a harness name
-  can't turn the cleanup into a silent no-op. The runner additionally
-  checks the graphics and dictionary stacks from Rust after each block,
-  so anything that survives cleanup is reported rather than carried
-  forward.
+  restore the operand and dictionary stacks after a caught error. The
+  depths they restore to are written and read through `userdict` by
+  name — not via the dict stack (a proc that opens a dictionary
+  defining those names would shadow them and silently no-op the
+  cleanup) and not on the operand stack under a `mark` (a proc that
+  pushes a mark of its own would make `cleartomark` stop at the wrong
+  one). Both shapes were tried and both broke; `userdict` has neither
+  weakness.
 - Placement matters in a tag-migrated file: put the block *above* the
   `% @kind:`/`% @summary:` tag block, never between it and the
   definition it documents — those tags must stay directly above their

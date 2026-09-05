@@ -113,10 +113,22 @@ pub fn scan_declared_pages(source: &[u8]) -> DeclaredPages {
         }
         if let Some(value) = line.strip_prefix("%%Pages:") {
             let value = value.trim();
-            if value == "(atend)" {
+            if value.is_empty() {
+                return DeclaredPages::Malformed(String::new());
+            }
+            // Only the first token is the count. Older DSC allows a
+            // page-order operand after it (`%%Pages: 3 1`), and a lint
+            // heuristic must not hard-fail on a form real files use —
+            // under `--lint-strict` that would abort a run over a
+            // header the check was never meant to judge, and under
+            // plain `--lint` it would put a spurious finding in front
+            // of every `pscat-mcp` caller (blank-context review, PR
+            // #136).
+            let first = value.split_whitespace().next().unwrap_or(value);
+            if first == "(atend)" {
                 return DeclaredPages::None;
             }
-            return match value.parse() {
+            return match first.parse() {
                 Ok(n) => DeclaredPages::Count(n),
                 Err(_) => DeclaredPages::Malformed(value.to_string()),
             };
@@ -362,6 +374,21 @@ mod tests {
         assert_eq!(
             scan_declared_pages(b"%!PS\n%%Pages: 7\n%%EndComments\n"),
             DeclaredPages::Count(7)
+        );
+    }
+
+    #[test]
+    fn declared_pages_tolerates_a_trailing_page_order_operand() {
+        // Regression test (blank-context review, PR #136): `%%Pages: 3 1`
+        // is a real DSC form, and reporting it as malformed would fail
+        // a strict-lint run over a header the check never judges.
+        assert_eq!(
+            scan_declared_pages(b"%%Pages: 3 1\n"),
+            DeclaredPages::Count(3)
+        );
+        assert_eq!(
+            scan_declared_pages(b"%%Pages: 3\n"),
+            DeclaredPages::Count(3)
         );
     }
 

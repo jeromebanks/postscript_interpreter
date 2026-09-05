@@ -423,6 +423,7 @@ fn a_later_assertion_still_works_after_an_earlier_one_caught_an_error() {
          %   { 1 2 3 undefinedname } /undefinedname (first) mustguard\n\
          %   { goodguard } /my-guard-fired (second) mustguard\n\
          %   count 2 eq (the block's own operands survived) mustbe\n\
+         %   pop pop\n\
          %%EndSelfTest\n",
     )
     .expect("write");
@@ -455,6 +456,107 @@ fn a_block_that_wraps_itself_in_a_dictionary_still_reports_its_failures() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "the failure was lost:\n{stderr}");
     assert!(stderr.contains("this must be reported"), "{stderr}");
+}
+
+#[test]
+fn a_block_that_asserts_nothing_is_a_failure_not_a_pass() {
+    // The most serious defect this mechanism could have: a block that
+    // reports ok while testing nothing. `ok()` used to be purely
+    // negative — nothing failed, nothing leaked — which an empty block
+    // satisfies trivially. Deleting an assertion line and leaving its
+    // `{ ... }` proc literal behind is an ordinary careless edit, and
+    // it silently turned a real guard's coverage off (blank-context
+    // review, PR #136).
+    let dir = Scratch::new("no-assertions");
+    let file = dir.path().join("empty.ps");
+    std::fs::write(
+        &file,
+        "%%SelfTest: asserts-nothing\n%   1 2 add\n%%EndSelfTest\n",
+    )
+    .expect("write");
+    let out = selftest(&file);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains("ran no assertions"), "{stderr}");
+}
+
+#[test]
+fn deleting_an_assertion_from_a_real_library_block_fails_loudly() {
+    // The concrete form of the above, against the real library: drop
+    // the two lines that make the assertion, leave the proc literal.
+    let mutated = MutatedLib::new(
+        "orphaned-proc",
+        "lib/paintkit.ps",
+        concat!(
+            "%   /pkribbon-startcap-must-be-round-flat-or-pointed\n",
+            "%   (/square as a start cap) mustguard\n"
+        ),
+    );
+    let out = selftest(mutated.path());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("pkribbon-rejects-undocumented-cap-values"),
+        "the failure must name the block whose coverage was removed:\n{stderr}"
+    );
+}
+
+#[test]
+fn a_file_with_no_blocks_is_a_failure_not_a_vacuous_pass() {
+    // Deleting a library's last block would otherwise drop its
+    // coverage to zero with nothing reporting it.
+    let dir = Scratch::new("no-blocks");
+    let file = dir.path().join("plain.ps");
+    std::fs::write(&file, "% just a library\n/x { } def\n").expect("write");
+    let out = selftest(&file);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains("nothing was checked"), "{stderr}");
+}
+
+#[test]
+fn a_block_that_leaks_an_operand_fails() {
+    let dir = Scratch::new("operand-leak");
+    let file = dir.path().join("leak.ps");
+    std::fs::write(
+        &file,
+        "%%SelfTest: leaks\n%   true (fine) mustbe\n%   42\n%%EndSelfTest\n",
+    )
+    .expect("write");
+    let out = selftest(&file);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains("operand(s) left on the stack"), "{stderr}");
+}
+
+#[test]
+fn a_proc_that_pushes_its_own_mark_does_not_confuse_the_cleanup() {
+    // An earlier shape carried the saved depths on the operand stack
+    // under a `mark`, so a proc pushing a mark of its own made
+    // `cleartomark` stop at the wrong one — after which the cleanup
+    // read the proc's leftovers as if they were the saved depth
+    // (blank-context review, PR #136: one variant silently leaked, the
+    // other raised `dictstackunderflow` popping dictionaries it never
+    // opened). The depths live in userdict now, with no operand-stack
+    // position to disturb.
+    let dir = Scratch::new("extra-mark");
+    let file = dir.path().join("mark.ps");
+    std::fs::write(
+        &file,
+        "%%SelfTest: a-proc-with-its-own-mark\n\
+         %   { 99 mark 1 2 undefinedname } /undefinedname (probe) mustguard\n\
+         %   count 0 eq (the cleanup still drained the stack) mustbe\n\
+         %   { 1 mark 2 3 undefinedname } /undefinedname (again) mustguard\n\
+         %   countdictstack 2 eq (and never touched the dict stack) mustbe\n\
+         %%EndSelfTest\n",
+    )
+    .expect("write");
+    let out = selftest(&file);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]

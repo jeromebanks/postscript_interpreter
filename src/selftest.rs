@@ -119,14 +119,28 @@ pub struct BlockResult {
     /// Unmatched `begin`s left open by the block — `systemdict` and
     /// `userdict` are the permanent baseline, so anything past 2.
     pub dict_depth: usize,
+    /// Operands the block left on the stack.
+    pub operand_depth: usize,
+    /// How many assertions actually ran. Zero means the block tested
+    /// nothing, which is a failure, not a pass.
+    pub assertions: usize,
 }
 
 impl BlockResult {
+    /// Note the *positive* condition: a block has to have run at least
+    /// one assertion. Without it, `ok` was a set of purely negative
+    /// checks — nothing failed, nothing leaked — which a block that
+    /// asserts nothing at all satisfies trivially. Deleting an
+    /// assertion line and leaving its `{ ... }` proc literal behind
+    /// (an ordinary careless edit) turned a real guard's coverage off
+    /// and still reported green (blank-context review, PR #136).
     pub fn ok(&self) -> bool {
         self.failure_count == 0
             && self.error.is_none()
             && self.gsave_depth == 0
             && self.dict_depth == 0
+            && self.operand_depth == 0
+            && self.assertions > 0
     }
 }
 
@@ -138,8 +152,14 @@ pub struct Report {
 }
 
 impl Report {
+    /// A file explicitly handed to `--selftest` that yields no blocks
+    /// is a failure, not a vacuous pass: deleting a library's last
+    /// block would otherwise drop its coverage to zero with nothing
+    /// reporting it, which is the same silent-drift failure the
+    /// parser's hard errors exist to prevent (blank-context review,
+    /// PR #136).
     pub fn ok(&self) -> bool {
-        self.blocks.iter().all(BlockResult::ok)
+        !self.blocks.is_empty() && self.blocks.iter().all(BlockResult::ok)
     }
 }
 
@@ -153,6 +173,12 @@ pub const PRELUDE: &str = r"
 % --- pscat --selftest prelude (injected; not part of any library) ---
 userdict /pscat_st_fails 128 array put
 userdict /pscat_st_nfail 0 put
+% How many assertions actually ran. A block that asserts nothing must
+% not report ok -- that is the passes-without-testing-anything class
+% this whole mechanism exists to catch, and it was reachable by simply
+% deleting an assertion line and leaving its `{ ... }` proc behind
+% (blank-context review, PR #136).
+userdict /pscat_st_nassert 0 put
 
 % (label) (why) errorname command  ->  -
 %
@@ -186,33 +212,50 @@ userdict /pscat_st_nfail 0 put
     $error /command /--none-- put
 } def
 
-% Arm an assertion: capture the dict-stack depth and drop a mark, so
-% whatever the proc leaves behind can be undone.
-%   {proc}  ->  D mark {proc}
+% Arm an assertion: record where the stacks stood, with the proc under
+% test still on top (hence `count 1 sub`: `stopped` is about to consume
+% it), and count the assertion as having run.
 %
-% Both live on the *operand stack*, never in named variables, and that
-% is the whole point: the proc under test may open a dictionary of its
-% own that shadows any name the harness would look up, which turns the
-% cleanup below into a silent no-op. Verified before this shape was
-% chosen -- a proc doing `1 dict begin /pscat_st_ddepth 99 def` left
-% its dictionary open and its debris in place, with nothing reporting
-% it. The mark does the same job for the operand stack, where the
-% junk's depth isn't knowable in advance.
+% Both depths are written and read through `userdict` by name, never
+% through the dict stack and never on the operand stack. Two earlier
+% shapes were wrong in opposite directions, both verified rather than
+% argued:
+%
+%   - A plain `def` + bare lookup let the proc under test shadow them
+%     (`1 dict begin /pscat_st_ddepth 99 def`), turning the cleanup
+%     below into a silent no-op -- it left the dictionary open and the
+%     debris in place with nothing reporting it.
+%   - Carrying them on the operand stack under a `mark` fixed that, but
+%     broke when the proc pushed a mark of *its own*: `cleartomark`
+%     then cleared to the proc's mark instead, and the cleanup went on
+%     to read whatever the proc had left as if it were the saved depth
+%     (blank-context review, PR #136 -- one variant silently leaked,
+%     the other raised `dictstackunderflow` while popping dictionaries
+%     it never opened).
+%
+% Naming `userdict` explicitly sidesteps both: no dict-stack lookup to
+% shadow, and no operand-stack position to disturb.
 /pscat_st_arm {
-    countdictstack exch
-    mark exch
+    % `count` has to run before anything else is pushed, or it counts
+    % `userdict` and the key too -- which silently overstates the
+    % baseline and leaves the proc's debris in place. Caught by the
+    % operand-depth check added alongside this, which is the point of
+    % having it.
+    count 1 sub
+    userdict exch /pscat_st_depth exch put
+    countdictstack
+    userdict exch /pscat_st_ddepth exch put
+    userdict /pscat_st_nassert
+        userdict /pscat_st_nassert get 1 add
+    put
 } def
 
-% Undo whatever a caught error left behind.
-%   D mark junk...  ->  -
-%
-% A proc that swallows our mark (its own unbalanced `cleartomark`, say)
-% makes this raise rather than clean up, which fails the block loudly
-% -- the acceptable end of the tradeoff, unlike the silent version.
+% Undo whatever a caught error left behind. Dictionaries first: `end`
+% doesn't touch the operand stack, whereas popping operands first would
+% be undone by nothing.
 /pscat_st_reset {
-    cleartomark
-    { countdictstack 1 index le { exit } if end } loop
-    pop
+    { countdictstack userdict /pscat_st_ddepth get le { exit } if end } loop
+    { count userdict /pscat_st_depth get le { exit } if pop } loop
 } def
 
 % {proc} /guardname (label) mustguard  ->  -
@@ -284,6 +327,9 @@ userdict /pscat_st_nfail 0 put
 % a bitwise complement in PostScript, so a mistyped operand would
 % otherwise quietly test something else entirely.
 /mustbe {
+    userdict /pscat_st_nassert
+        userdict /pscat_st_nassert get 1 add
+    put
     exch dup type /booleantype ne {
         pop (was given a non-boolean, so it tests nothing)
         /--none-- /--none-- pscat_st_note
@@ -345,6 +391,45 @@ fn lines_starting_in_string(lines: &[&[u8]]) -> Vec<bool> {
         }
     }
     out
+}
+
+/// Per-line: is this line inside a `%%SelfTest:`...`%%EndSelfTest`
+/// region (markers included)?
+///
+/// A block body is PostScript the harness owns, not file-level
+/// metadata — so a body line reading `% @requires: ...` is part of the
+/// test, not a prerequisite declaration. `build.rs::selftest_lines`
+/// masks its own scans exactly this way, and the doc comment on
+/// [`lines_starting_in_string`] claims the two scanners agree about
+/// which lines are metadata; without this they didn't (blank-context
+/// review, PR #136).
+///
+/// Unterminated regions are left unmasked here rather than treated as
+/// running to end of file: `parse_blocks` reports that as an error with
+/// a line number, which is the better message.
+fn selftest_regions(lines: &[&[u8]], in_string: &[bool]) -> Vec<bool> {
+    let mut mask = vec![false; lines.len()];
+    let mut open: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate() {
+        if in_string[i] {
+            continue;
+        }
+        if open.is_some() {
+            mask[i] = true;
+            if line.starts_with(END.as_bytes()) {
+                open = None;
+            }
+        } else if line.starts_with(BEGIN.as_bytes()) {
+            mask[i] = true;
+            open = Some(i);
+        }
+    }
+    if let Some(start) = open {
+        for m in mask.iter_mut().skip(start) {
+            *m = false;
+        }
+    }
+    mask
 }
 
 fn lines(source: &[u8]) -> Vec<&[u8]> {
@@ -482,11 +567,14 @@ pub fn parse_requires(source: &[u8]) -> Result<Vec<String>, String> {
     let mut found: Option<&str> = None;
     let all = lines(source);
     let in_string = lines_starting_in_string(&all);
+    let in_selftest = selftest_regions(&all, &in_string);
     for (i, line) in all.iter().enumerate() {
         // Content of a multiline string is not a comment, however
-        // `% @requires:`-shaped it looks — the same filter the capability
-        // scanner in build.rs applies.
-        if in_string[i] {
+        // `% @requires:`-shaped it looks; and a self-test block's body
+        // is the harness's PostScript, not file-level metadata. Both
+        // filters mirror the capability scanner in build.rs, which has
+        // to agree with this one about which lines are metadata.
+        if in_string[i] || in_selftest[i] {
             continue;
         }
         // A tag line is plain ASCII by construction; anything else on
@@ -612,26 +700,35 @@ fn run_block(
     // A failure in the prelude or in the library itself isn't a
     // statement about this block, so it aborts the whole run rather
     // than being reported as one block's failure.
+    // Every early return has to break the cycle too, not just the
+    // success path — an `Interp` dropped intact keeps its whole loaded
+    // library graph alive until the process exits (blank-context
+    // review, PR #136). `setup_failure` takes `interp` by value so
+    // forgetting is a compile error rather than a quiet leak.
+    let setup_failure = |interp: Interp, msg: String| -> String {
+        interp.break_permanent_dict_cycle();
+        msg
+    };
     if let Err(e) = interp.run_str(PRELUDE) {
-        return Err(format!(
-            "selftest prelude failed: {}",
-            interp.error_report(&e)
-        ));
+        let msg = format!("selftest prelude failed: {}", interp.error_report(&e));
+        return Err(setup_failure(interp, msg));
     }
     for (name, body) in prerequisites {
         if let Err(e) = interp.run_source(body) {
-            return Err(format!(
+            let msg = format!(
                 "prerequisite {name} failed to load: {}",
                 interp.error_report(&e)
-            ));
+            );
+            return Err(setup_failure(interp, msg));
         }
     }
     if let Err(e) = interp.run_source(under_test) {
-        return Err(format!(
+        let msg = format!(
             "{} failed to load: {}",
             path.display(),
             interp.error_report(&e)
-        ));
+        );
+        return Err(setup_failure(interp, msg));
     }
 
     let error = match interp.run_source(&block.body) {
@@ -649,6 +746,8 @@ fn run_block(
         // systemdict + userdict are the permanent baseline (see
         // `Interp::pop_dict`), same rule `lint`'s dict-leak check uses.
         dict_depth: interp.dict_stack_len().saturating_sub(2),
+        operand_depth: interp.operand_stack().len(),
+        assertions: assertion_count(&interp),
     };
     // One `Interp` per block, each holding a fully loaded copy of the
     // library under test. Dropping it isn't enough: systemdict and
@@ -669,6 +768,15 @@ fn run_block(
 /// something of the wrong shape reports as a synthetic failure rather
 /// than as a pass — the alternative (treating an unreadable log as an
 /// empty one) would turn a corrupted run green.
+fn assertion_count(interp: &Interp) -> usize {
+    match interp.load("pscat_st_nassert").map(|o| o.value) {
+        Some(Value::Integer(n)) if n >= 0 => n as usize,
+        // Unreadable means the block clobbered it; treat that as
+        // "nothing ran" so it fails rather than passing.
+        _ => 0,
+    }
+}
+
 fn collect_failures(interp: &Interp) -> (usize, Vec<Failure>) {
     let unreadable = |why: &str| {
         (
@@ -724,7 +832,7 @@ pub fn format_report(report: &Report) -> String {
     if report.blocks.is_empty() {
         let _ = writeln!(
             out,
-            "pscat: selftest: {}: no %%SelfTest blocks",
+            "pscat: selftest: {}: no %%SelfTest blocks \u{2014} nothing was checked",
             report.path
         );
         return out;
@@ -768,6 +876,19 @@ pub fn format_report(report: &Report) -> String {
                 out,
                 "         {} dictionary(ies) still open at the end of the block",
                 block.dict_depth
+            );
+        }
+        if block.operand_depth > 0 {
+            let _ = writeln!(
+                out,
+                "         {} operand(s) left on the stack by the block",
+                block.operand_depth
+            );
+        }
+        if block.assertions == 0 {
+            let _ = writeln!(
+                out,
+                "         the block ran no assertions at all, so it tests nothing"
             );
         }
     }
@@ -957,6 +1078,23 @@ mod tests {
             parse_requires(b"% ordinary comment\n")
                 .expect("parses")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_requires_tag_inside_a_self_test_body_is_not_a_prerequisite() {
+        // Regression test (blank-context review, PR #136): a block body
+        // is the harness's PostScript, not file-level metadata.
+        // `build.rs` already masks self-test regions from its own tag
+        // scan, and these two have to agree about the same file.
+        let src = b"% @requires: (lib/artkit.ps) run\n\
+                    %%SelfTest: a\n\
+                    % @requires: (lib/nope.ps) run\n\
+                    % 1 2 add\n\
+                    %%EndSelfTest\n";
+        assert_eq!(
+            parse_requires(src).expect("parses"),
+            vec!["lib/artkit.ps".to_string()]
         );
     }
 
