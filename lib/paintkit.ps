@@ -1612,9 +1612,9 @@
         } ifelse
         poradi porstart gt {
             porstate {
-                poDropout porsp poWidth div mul pfroll { /porstate false def } if
+                poDropout porsp poWidth div mul poroll { /porstate false def } if
             } {
-                poLoad porsp poWidth div mul pfroll { /porstate true def } if
+                poLoad porsp poWidth div mul poroll { /porstate true def } if
             } ifelse
         } if
         porstate {
@@ -2273,7 +2273,14 @@
         pfry pfra 90 add sin pfrd mul add
         pfri pfrstart eq { moveto } { lineto } ifelse
     } for
-    << /Width pfrw /Pitch pfPitch /StartCap /pointed /EndCap /pointed
+    % pfrunpitch, not pfPitch: /Jitter displaces each centerline sample
+    % *before* pkribbon resamples it, so consecutive samples can end up
+    % O(Jitter) apart while the outer Bristles*stops guard still counts
+    % only the original stops. Resampling that inflated path at the
+    % original pitch is nested work the budget does not bound -- a
+    % two-stop path at /Jitter 10000 /Pitch 1 took seconds (Codex
+    % review). See the floor's own note below.
+    << /Width pfrw /Pitch pfrunpitch /StartCap /pointed /EndCap /pointed
        /EndTaper pflast { pfFlick } { 0 } ifelse >> pkribbon
 } def
 
@@ -2381,6 +2388,15 @@
         /pfbasecolor [ currentrgbcolor ] def
         /pfferrule 1 pfSplay 0.75 mul sub def
         /pfhalf pfWidth 0.5 mul pfSpread mul def
+        % Two consecutive centerline samples are at most one /Pitch
+        % apart along the path plus 2*/Jitter across it, so a run's true
+        % length is bounded by stops * (Pitch + 2|Jitter|). Flooring the
+        % nested resampling pitch at an eighth of that caps pkribbon's
+        % samples per stop at 8 however large /Jitter gets, while leaving
+        % the pitch exactly /Pitch for the ordinary case where /Jitter is
+        % small (at /Jitter 0 the floor is Pitch/8, which never binds).
+        /pfrunpitch pfPitch pfJitter abs 2 mul add 8 div def
+        pfrunpitch pfPitch lt { /pfrunpitch pfPitch def } if
         1 1 pfBristles {
                 /pfb exch def
                 /pfub pfb 0.5 sub pfBristles div 2 mul 1 sub def

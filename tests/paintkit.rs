@@ -4308,3 +4308,50 @@ fn fan_a_pressed_dab_cannot_be_made_unboundedly_expensive() {
          expensive: took {elapsed:?}"
     );
 }
+
+/// Codex review of PR #139, round 2: `/Jitter` displaces each
+/// centerline sample *before* pkribbon resamples it, so consecutive
+/// samples can end up O(Jitter) apart while the outer `Bristles*stops`
+/// guard still counts only the original stops. Resampling that inflated
+/// path at the original pitch was nested work the budget did not bound.
+/// Same class as the pressed-ray case, and asserted the same way --
+/// wall clock, because the failure mode is a hang.
+#[test]
+fn fan_a_huge_jitter_cannot_inflate_the_nested_resampling() {
+    let start = std::time::Instant::now();
+    let mut it = fresh(200, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 3 srand newpath 100 100 moveto 101 100 lineto \
+         << /Width 20 /Bristles 1 /Pitch 1 /Jitter 10000 >> pkfan",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "a large /Jitter must not multiply the nested resampling without \
+         bound: took {elapsed:?}"
+    );
+}
+
+/// Codex review of PR #139, round 2: adding pkfan's `pfroll` initially
+/// rewrote pkoil's own transition calls to use it -- a file-wide rename
+/// that reached past the new preset. pkoil must stay entirely inside its
+/// declared `po-` namespace, or redefining one preset's helper silently
+/// changes another's marks.
+#[test]
+fn each_preset_keeps_its_own_roll_helper() {
+    let src = std::fs::read_to_string("lib/paintkit.ps").expect("read paintkit");
+    // Locate pkoil's section by its dash emitter and check the whole
+    // body of it refers only to poroll.
+    let start = src.find("/porad {").expect("porad present");
+    let end = src[start..].find("\n/pkoil ").expect("pkoil follows porad") + start;
+    let porad = &src[start..end];
+    assert!(
+        porad.contains("poroll"),
+        "pkoil's dash emitter should use poroll"
+    );
+    assert!(
+        !porad.contains("pfroll") && !porad.contains("ptroll"),
+        "pkoil's dash emitter must not reach into another preset's namespace"
+    );
+}
