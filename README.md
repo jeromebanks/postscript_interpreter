@@ -586,8 +586,8 @@ beneath:
 ```
 
 Being a wrapper rather than a `/Wet` key bolted onto each preset means
-one implementation serves all six stroke families and anything added
-later. `/Soft` is the only knob that matters — it supplies `/Layers`
+one implementation serves every stroke family in the file, and anything
+added later. `/Soft` is the only knob that matters — it supplies `/Layers`
 and `/Spread` — and at `/Soft 0` it is byte-identical to calling the
 procedure directly, random stream included.
 

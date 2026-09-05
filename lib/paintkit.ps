@@ -2653,15 +2653,34 @@
 % before it signals, so the rejection itself cannot poison later calls.
 %
 % What is *not* handled is an error raised inside a wrapped procedure
-% and then caught with `stopped`: the unwind skips every enclosing
-% pkwet's own decrement, so the counter stays high and later top-level
-% calls can hit the cap spuriously. The obvious fix -- running the
-% procedure inside `stopped` and re-raising -- was built and rejected:
-% pscat's top-level `stop` with no enclosing `stopped` ends execution
-% *silently*, which turned a hard error into no error at all, and that
-% is strictly worse than a stale counter. A caller that deliberately
-% catches errors and keeps rendering can reset it with `/pqdepth 0 def`
-% between marks. Recorded rather than papered over (Codex review).
+% and then caught by the caller with `stopped`. The unwind skips this
+% procedure's remaining work, and *two* things leak, not one (a first
+% version of this note claimed only the first, and was wrong):
+%
+%   * `pqdepth` stays elevated, because the decrement never runs. This
+%     half is bounded and self-announcing: after eight such leaks the
+%     next call raises `pkwet-nesting-too-deep` rather than corrupting
+%     anything silently, and a caller that deliberately catches errors
+%     and keeps rendering can reset it with `/pqdepth 0 def`.
+%   * One graphics-state frame per abandoned pass leaks, because the
+%     matching `grestore` never runs either. That is the real residual:
+%     the caller resumes one gsave deep, in a translated state, and for
+%     a soft pass in DeviceRGB with this preset's mixed color. No reset
+%     a caller can write repairs that, since the frame count is not
+%     observable from PostScript.
+%
+% The textbook fix -- run the procedure inside `stopped`, restore both,
+% re-raise with `stop` -- was built and rejected, and the reason is an
+% interpreter gap rather than anything about this preset: pscat's
+% top-level `stop` with no enclosing `stopped` ends execution
+% *silently* (exit 0, no message), where Ghostscript reports
+% `Error: /undefined in nosuchname` from `$error` and this repo's own
+% `record_error` already populates `$error /errorname`. Re-raising
+% would therefore turn a hard error into no error at all for every
+% caller that does *not* catch -- strictly worse than the leak. Filed
+% as issue #142; once `stop` reaching the top level reports like
+% Ghostscript's, the idiom above becomes available and this section
+% should adopt it. Recorded rather than papered over (Codex review).
 
 % Per-invocation state for pkwet, indexed by nesting depth. See the
 % header for why neither plain names nor the operand stack will do.

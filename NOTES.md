@@ -12,10 +12,13 @@ Second child of epic #112. Adds `pkwet`, with `/Soft` `/Under`
 this file that draws no mark of its own: it takes the caller's
 mark-drawing *procedure* and re-runs it, outermost pass first, each one
 displaced further off the path and mixed further toward `/Under`. The
-alternative — a `/Wet` key added to each of the six stroke presets — is
-six copies of one idea with six chances to drift, and would still miss
-the next preset written. As a wrapper it serves all six today for one
-implementation.
+alternative — a `/Wet` key added to every stroke preset — is one idea
+copied once per preset, with one chance to drift per copy, and would
+still miss the next preset written. As a wrapper, one implementation
+serves every stroke family in the file. Deliberately stated without a
+count: this epic adds a preset per child issue, so any number written
+here is stale by the next merge (Codex review of PR #138 caught exactly
+that, one merge later).
 
 **Pickup is declared, not sampled.** Genuinely picking color up off the
 canvas means reading back pixels, and PostScript has no operator for it
@@ -88,13 +91,26 @@ behaviour the ordinary tests exercised without noticing:
   restores the counter on the way out, and nothing of `pkwet`'s is on
   the operand or dict stack while caller code runs. Depth is capped at
   8, and the guard rolls the counter back before signalling so its own
-  rejection cannot poison later calls. An error raised *inside* a
-  wrapped procedure and then caught still leaves enclosing invocations'
-  depth unreleased: running the procedure under `stopped` and re-raising
-  was built and rejected, because pscat's top-level `stop` with no
-  enclosing `stopped` ends execution silently, turning a hard error into
-  none at all. Recorded in the header with a `/pqdepth 0 def` reset for
-  callers that catch and continue.
+  rejection cannot poison later calls.
+- An error raised *inside* a wrapped procedure and then caught by the
+  caller leaks two things, not one — the second round of review here
+  said only the first, and was wrong. The depth counter stays elevated,
+  which is bounded and self-announcing (eight leaks and the next call
+  raises `pkwet-nesting-too-deep`) and which a caller can reset with
+  `/pqdepth 0 def`. But one *graphics-state frame* per abandoned pass
+  leaks too, since the matching `grestore` never runs, and no reset a
+  caller can write repairs that. Running the procedure under `stopped`
+  and re-raising is the textbook fix and was built and rejected: pscat's
+  top-level `stop` with no enclosing `stopped` ends execution silently
+  (exit 0, no message) where Ghostscript reports the pending error from
+  `$error`, so re-raising turns a hard error into none at all for every
+  caller that does *not* catch. That is an interpreter conformance gap
+  rather than anything about this preset — `record_error` already fills
+  in `$error /errorname` — so it is filed as **#142** with the repro,
+  and `pkwet` adopts the idiom once it lands. The lesson worth keeping
+  is the shape of the mistake: a residual was documented with a
+  suggested workaround before checking that the workaround covered
+  everything that leaks.
 - Whether a displacement draw happened was keyed off the resulting
   *magnitude* rather than the pass's position, so `/Spread 0` with
   several layers skipped every draw while any positive spread took one
