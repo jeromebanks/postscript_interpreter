@@ -1878,24 +1878,44 @@
 } def
 
 % - ptemit -   (fills the ptk accumulated stops as one strip, resets ptk)
-% The two extra vertices at each end carry the /Drag smear; when Drag
-% is 0 and the run spans more than one stop they coincide with the
-% run's own endpoints, which `fill` absorbs without complaint.
+% Each end gets two extra vertices, carrying half a pitch of contact
+% plus the /Drag smear.
+%
+% The half-pitch is not cosmetic. A stop is a *sample* of a continuous
+% contact interval, so a run of k in-contact stops represents k pitches
+% of contact -- but a strip drawn from the first stop to the last spans
+% only (k-1) of them. Every run would then lose one pitch of length,
+% which costs a chattery stroke far more than a chunky one and makes
+% realized coverage fall as /Viscosity does: measured at /Lanes 1,
+% /Coverage 0.75 came out at 0.61 for viscous paint but 0.47 for
+% chattery, when both should be 0.75. Extending each end by half a
+% pitch makes a run paint the k pitches it stands for, whatever k is,
+% which is what actually decouples /Coverage from /Viscosity. (It also
+% subsumes the old special case for single-stop runs, which needed the
+% same extension for the different reason that a forward-and-back strip
+% through one point has zero area.)
+%
+% The /Drag component is computed from *each end's own* stop, not the
+% run's first. Deriving both from one end looks equivalent and isn't:
+% under a varying /Pressure the two ends can be wildly different widths,
+% and `/Pressure { pktaper }` starts at nearly zero, so a fully loaded
+% exit end would barely smear at all however high /Drag was set (Codex
+% review).
 % @internal
 /ptemit {
     ptk 0 gt {
-        /ptext ptDrag ptraw ptri 0 get get 6 get mul def
-        ptk 1 eq { /ptext ptext ptPitch 0.5 mul add def } if
         /ptlast ptk 1 sub def
+        /ptext0 ptDrag ptraw ptri 0 get get 6 get mul ptPitch 0.5 mul add def
+        /ptext1 ptDrag ptraw ptri ptlast get get 6 get mul ptPitch 0.5 mul add def
         newpath
-        ptri 0 get ptua 0 get ptext neg ptpt moveto
+        ptri 0 get ptua 0 get ptext0 neg ptpt moveto
         0 1 ptlast { /ptei exch def
             ptri ptei get ptua ptei get 0 ptpt lineto } for
-        ptri ptlast get ptua ptlast get ptext ptpt lineto
-        ptri ptlast get ptub ptlast get ptext ptpt lineto
+        ptri ptlast get ptua ptlast get ptext1 ptpt lineto
+        ptri ptlast get ptub ptlast get ptext1 ptpt lineto
         ptlast -1 0 { /ptei exch def
             ptri ptei get ptub ptei get 0 ptpt lineto } for
-        ptri 0 get ptub 0 get ptext neg ptpt lineto
+        ptri 0 get ptub 0 get ptext0 neg ptpt lineto
         closepath fill
     } if
     /ptk 0 def
@@ -2021,6 +2041,20 @@
         % Transition rate per one Width of travel: 0.5 at full
         % viscosity (long masses) up to 6.0 at zero (fine chatter).
         /ptrate 0.5 5.5 1 ptViscosity sub mul add def
+        % The two transition probabilities are Coverage*step and
+        % (1-Coverage)*step, and ptroll clamps each to 1 independently.
+        % Once step is large enough for the bigger of the two to clamp,
+        % their *ratio* changes and Coverage stops being the chain's
+        % steady state -- at Width 10 / Viscosity 0 / Coverage 0.8 the
+        % realized coverage is 0.70, so turning /Viscosity would also
+        % move ink coverage, exactly the coupling these controls are
+        % separated to avoid (Codex review). Capping the step at
+        % 1/max(Coverage, 1-Coverage) keeps the larger probability at
+        % most 1 without clamping, so the ratio -- and therefore the
+        % steady state -- is preserved at every viscosity.
+        /ptcbig ptCoverage def
+        1 ptCoverage sub ptcbig gt { /ptcbig 1 ptCoverage sub def } if
+        /ptstepmax 1 ptcbig div def
         % Maximum entry/exit trim per lane, as a fraction of each
         % subpath's own progress. Intrinsic to the tool rather than a
         % parameter: a blade with machined ends is not a blade, and
@@ -2086,6 +2120,7 @@
                     ptae 2 and 2 eq { /ptstate true def } if
                 } {
                     /ptstep ptrec 4 get ptWidth div ptrate mul def
+                    ptstep ptstepmax gt { /ptstep ptstepmax def } if
                     ptstate {
                         1 ptCoverage sub ptstep mul ptroll { /ptstate false def } if
                     } {

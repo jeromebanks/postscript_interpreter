@@ -68,6 +68,32 @@ after `pktrowel` returns and asserting it doesn't move across seven
 different control settings — it caught the second bug after the first
 was fixed.
 
+**Codex review found the `/Coverage`-vs-`/Viscosity` separation was
+not actually holding**, and chasing it turned up two independent
+causes, only one of which the review had identified. The transition
+probabilities `Coverage*step` and `(1-Coverage)*step` are each clamped
+to 1 independently, so once `step` is large enough for the bigger one
+to clamp, their *ratio* changes and Coverage stops being the steady
+state — capping `step` at `1/max(Coverage, 1-Coverage)` preserves it.
+Underneath that sat a bigger, purely geometric one: a run of *k*
+in-contact stops was drawn as a strip from the first stop to the last,
+spanning only *k−1* of the *k* pitches it stands for. Every run lost a
+pitch, which costs a chattery stroke far more than a chunky one, so
+realized coverage fell as viscosity did. Each end now extends by half a
+pitch, which also subsumes the old single-stop special case. Measured
+at `/Lanes 1` and `/Coverage 0.75`: 0.434 / 0.609 before either fix,
+0.625 / 0.750 with the half-pitch fix alone, 0.716 / 0.750 with both.
+Reverting *either* fails the regression test, checked by mutation. More
+lanes hide the problem entirely — the 18% inter-lane overlap means the
+union of 14 chains saturates — which is why the test drops to one lane
+rather than measuring the default mark.
+
+The same review also caught `ptemit` deriving one `/Drag` extent from
+the run's first stop and reusing it at both ends: under a varying
+`/Pressure` the ends are different widths, so `{ pktaper }` (starting
+near zero) made Drag do essentially nothing at the fully loaded exit —
+335px vs 336px of reach between `/Drag 0` and `/Drag 1`.
+
 **Tradeoffs.** Lanes carry an 18% baseline *overlap* rather than
 tiling exactly: two polygons sharing an exact edge leave an
 anti-aliased hairline seam, so an exactly-tiling blade rendered as a

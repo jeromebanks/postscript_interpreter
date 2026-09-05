@@ -3707,14 +3707,16 @@ fn trowel_consumes_a_fixed_number_of_random_draws() {
 /// Every other preset in this file pins closed-subpath behavior.
 /// `pktrowel` does not treat a closed subpath specially the way
 /// `pkribbon` does (concentric loops, no caps): it walks it as an open
-/// path that happens to return to where it began, so the per-lane
-/// entry/exit trim leaves a **visible seam at the start point** rather
-/// than joining. That is a real property of the mark, not an accident,
-/// so it is asserted here rather than described in a comment -- a
-/// future change that made the loop close would be a behavior change
-/// worth noticing.
+/// path that happens to return to where it began. The per-lane trim
+/// therefore leaves the join at the start point *ragged* rather than
+/// seamless -- each lane starts and stops at its own point around
+/// there. That is deliberate and worth knowing, but it isn't asserted:
+/// how visible it is depends on the seed and the lane count, since a
+/// gap only appears where every lane's trim happens to coincide.
+/// What is pinned is what a caller can rely on -- the loop is walked
+/// all the way round, and its interior stays clear.
 #[test]
-fn trowel_closed_subpath_walks_the_loop_and_seams_at_its_start() {
+fn trowel_closed_subpath_walks_the_whole_loop() {
     let mut it = fresh(240, 240);
     // `arc` from 0 degrees starts at the rightmost point, (190, 120).
     it.run_str(
@@ -3724,22 +3726,22 @@ fn trowel_closed_subpath_walks_the_loop_and_seams_at_its_start() {
     .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
     assert!(
         ink_count(&it) > 1500,
-        "a closed loop should paint most of the way round, got {}",
+        "a closed loop should paint all the way round, got {}",
         ink_count(&it)
     );
     let inked = |x: u32, y: u32| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0);
     let on_ring = |cx: u32, cy: u32| (0..14).any(|d| inked(cx, cy.saturating_sub(7) + d));
-    // Top, bottom and left of the ring are painted (pixel y is flipped
-    // from PostScript y, but the ring is symmetric about both axes).
-    for (x, y) in [(120u32, 50u32), (120, 190), (50, 120)] {
+    // All four sides, the start point included (pixel y is flipped from
+    // PostScript y, but the ring is symmetric about both axes).
+    for (x, y) in [(120u32, 50u32), (120, 190), (50, 120), (190, 120)] {
         assert!(on_ring(x, y), "no ink near ({x}, {y}) -- the walk broke");
     }
-    // The start point carries the seam.
-    let seam_gap = (185..196).any(|x| (114..127).all(|y| !inked(x, y)));
-    assert!(
-        seam_gap,
-        "expected the documented trim seam at the loop's start point"
-    );
+    // A ring, not a disc: the middle is untouched.
+    let centre_ink = (100..140)
+        .flat_map(|x| (100..140).map(move |y| (x, y)))
+        .filter(|&(x, y)| inked(x, y))
+        .count();
+    assert_eq!(centre_ink, 0, "the loop's interior should stay clear");
 }
 
 /// The file's convention (`nib_validates_opts_even_on_an_empty_path`):
@@ -3841,5 +3843,100 @@ fn ghostscript_accepts_paintkit_trowel() {
     assert!(
         status.success(),
         "gs rejected examples/paintkit_trowel_demo.ps"
+    );
+}
+
+/// Codex review of PR #137: `ptemit` derived one drag extent from the
+/// run's *first* stop and reused it at both ends. Under a varying
+/// /Pressure the two ends are different widths, so `{ pktaper }` --
+/// which starts at nearly zero and ends fully loaded -- made /Drag do
+/// almost nothing at the exit end however high it was set.
+#[test]
+fn trowel_drag_smears_both_ends_under_a_varying_pressure() {
+    let reach = |drag: f64| {
+        let mut it = fresh(400, 200);
+        it.run_str(&format!(
+            "0.6 0.6 0.6 setrgbcolor 11 srand {TROWEL_PATH} \
+             << /Width 60 /Pressure {{ pktaper }} /Drag {drag} /Coverage 1 /Scrape 0 >> pktrowel"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        // The *loaded* end of a taper is the far end of the stroke.
+        (0..400)
+            .rev()
+            .find(|&x| {
+                (0..200).any(|y| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+            })
+            .expect("stroke drawn")
+    };
+    let dry = reach(0.0);
+    let smeared = reach(1.0);
+    assert!(
+        smeared > dry + 15,
+        "the loaded end of a tapered stroke must smear too: dry {dry} smeared {smeared}"
+    );
+}
+
+/// Codex review of PR #137 found /Viscosity moving ink coverage, which
+/// is precisely what separating these two controls is for. Chasing it
+/// turned up *two* independent causes, and both had to be fixed:
+///
+/// 1. The chain's transition probabilities are `Coverage*step` and
+///    `(1-Coverage)*step`, each clamped to 1 independently. Once `step`
+///    is large enough for the bigger one to clamp, their ratio changes
+///    and /Coverage stops being the steady state. `ptstepmax` caps the
+///    step so the ratio survives.
+/// 2. A run of k in-contact stops was drawn as a strip from the first
+///    to the last, spanning only (k-1) pitches of the k it stands for.
+///    Every run lost a pitch, which costs a chattery stroke far more
+///    than a chunky one. `ptemit` now extends each end by half a pitch.
+///
+/// Measured at /Lanes 1 (with more lanes the 18% inter-lane overlap
+/// masks it -- the union of 14 chains saturates), /Coverage 0.75:
+///
+/// | build                  | Viscosity 0 | Viscosity 0.95 |
+/// |------------------------|-------------|----------------|
+/// | before either fix      | 0.434       | 0.609          |
+/// | half-pitch fix only    | 0.625       | 0.750          |
+/// | both fixes             | 0.716       | 0.750          |
+///
+/// so the 8% bound below fails on either fix alone, not just on both
+/// reverted.
+#[test]
+fn trowel_viscosity_does_not_drag_coverage_along_with_it() {
+    // Fraction of the path that is inked, along the stroke's centre
+    // line. Sampled inside the path's own span so the half-pitch
+    // contact extension past each endpoint isn't counted.
+    let realized = |visc: f64| {
+        let mut it = fresh(400, 120);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 11 srand newpath 40 60 moveto 360 60 lineto \
+             << /Width 30 /Pitch 15 /Lanes 1 /Coverage 0.75 /Viscosity {visc} \
+                /Scrape 0 /EdgeBuildup 0 /Jitter 0 /Drag 0 >> pktrowel"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        let inked = (45..355)
+            .filter(|&x| {
+                it.gfx()
+                    .pixmap
+                    .pixel(x, 60)
+                    .is_some_and(|p| luma(p) < 180.0)
+            })
+            .count();
+        inked as f64 / 310.0
+    };
+    let chattery = realized(0.0);
+    let chunky = realized(0.95);
+    for (name, got) in [("chattery", chattery), ("chunky", chunky)] {
+        assert!(
+            (got - 0.75).abs() < 0.10,
+            "{name} paint realized {got:.3} coverage against the 0.75 asked for"
+        );
+    }
+    let drift = (chattery - chunky).abs() / chunky;
+    assert!(
+        drift < 0.08,
+        "Viscosity must not move coverage: chattery {chattery:.3} chunky {chunky:.3} \
+         (drift {:.1}%)",
+        drift * 100.0
     );
 }
