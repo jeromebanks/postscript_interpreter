@@ -1,0 +1,127 @@
+%!PS-Adobe-3.0
+%%Title: Paintkit — trowel / palette-knife strokes (issue #111)
+%%BoundingBox: 0 0 620 760
+%%EndComments
+
+% Specimen for paintkit's pktrowel (lib/paintkit.ps): a rigid flat blade
+% dragging viscous paint. Unlike every other preset in the file this one
+% is not built on pkribbon — a bristle brush offsets a band around the
+% path normal, but a palette knife holds its own angle independently of
+% where it is going, so the deposit is swept along the blade direction.
+%
+% Row 1 is the loaded stroke and the dry/scraped one it turns into.
+% Row 2 rakes the blade. Row 3 separates the four "less paint" controls
+% (Load widens, Coverage fills, Viscosity chatters, Scrape streaks).
+% Row 4 is the underlayer test — overlapping strokes over a laid-in
+% ground, which is what the missing base pass is for. Row 5 sets the
+% same path in pkoil for contrast, plus pressed dabs.
+
+%   pscat --page 620x760 examples/paintkit_trowel_demo.ps --png trowel.png
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+
+19 srand
+
+1 1 1 setrgbcolor clippath fill
+
+/dmlabel {
+    /dmllabel exch def /dmly exch def /dmlx exch def
+    gsave
+        0.55 0.55 0.55 setrgbcolor
+        /Helvetica findfont 10 scalefont setfont
+        dmlx dmly moveto dmllabel show
+    grestore
+} def
+
+% --- row 1: a loaded blade, and the same blade run dry ------------------
+/ember pal 1 get aload pop setrgbcolor
+20 730 (loaded blade -- a full mass of paint) dmlabel
+newpath 20 700 moveto 290 706 lineto
+<< /Width 46 /Angle 12 >> pktrowel
+
+330 730 (run dry -- scraped, broken, thin) dmlabel
+newpath 330 700 moveto 600 706 lineto
+<< /Width 46 /Angle 12 /Load 0.3 /Coverage 0.45 /Scrape 0.55 /Viscosity 0.15 >> pktrowel
+
+% --- row 2: blade angle -------------------------------------------------
+/stone pal 3 get aload pop setrgbcolor
+20 650 (square across travel -- Angle 0) dmlabel
+newpath 20 620 moveto 190 624 lineto
+<< /Width 44 /Angle 0 >> pktrowel
+
+210 650 (raked -- Angle 40) dmlabel
+newpath 210 620 moveto 380 624 lineto
+<< /Width 44 /Angle 40 >> pktrowel
+
+400 650 (nearly parallel -- Angle 72) dmlabel
+newpath 400 620 moveto 570 624 lineto
+<< /Width 44 /Angle 72 >> pktrowel
+
+% --- row 3: the four "less paint" controls, one axis each ---------------
+/tide pal 2 get aload pop setrgbcolor
+20 570 (Load -- deposit width) dmlabel
+newpath 20 545 moveto 150 545 lineto
+<< /Width 40 /Load 0.12 /Coverage 1 /Scrape 0 >> pktrowel
+newpath 20 500 moveto 150 500 lineto
+<< /Width 40 /Load 1 /Coverage 1 /Scrape 0 >> pktrowel
+
+170 570 (Coverage -- fill within it) dmlabel
+newpath 170 545 moveto 300 545 lineto
+<< /Width 40 /Coverage 0.3 /Scrape 0 >> pktrowel
+newpath 170 500 moveto 300 500 lineto
+<< /Width 40 /Coverage 0.98 /Scrape 0 >> pktrowel
+
+320 570 (Viscosity -- run length) dmlabel
+newpath 320 545 moveto 450 545 lineto
+<< /Width 40 /Coverage 0.6 /Viscosity 0.02 /Scrape 0 >> pktrowel
+newpath 320 500 moveto 450 500 lineto
+<< /Width 40 /Coverage 0.6 /Viscosity 0.98 /Scrape 0 >> pktrowel
+
+470 570 (Scrape -- lengthwise streaks) dmlabel
+newpath 470 545 moveto 600 545 lineto
+<< /Width 40 /Coverage 1 /Scrape 0 >> pktrowel
+newpath 470 500 moveto 600 500 lineto
+<< /Width 40 /Coverage 1 /Scrape 0.85 >> pktrowel
+
+% --- row 4: overlapping strokes revealing the underlayer ----------------
+% pktrowel lays no solid base pass, so everything beneath keeps showing
+% through however many strokes are put on top of it.
+20 460 (overlapping strokes -- the underlayer keeps reading through) dmlabel
+
+0.93 0.80 0.42 setrgbcolor
+newpath 20 380 moveto 600 380 lineto
+<< /Width 130 /Coverage 1 /Scrape 0.1 /EdgeBuildup 0 /Load 1 >> pktrowel
+
+0.16 0.30 0.50 setrgbcolor
+newpath 30 420 moveto 200 438 420 392 600 424 curveto
+<< /Width 58 /Angle 22 /Coverage 0.78 /Scrape 0.3 /Drag 0.6 >> pktrowel
+
+0.72 0.26 0.16 setrgbcolor
+newpath 30 350 moveto 220 330 400 372 600 338 curveto
+<< /Width 52 /Angle -18 /Coverage 0.8 /Viscosity 0.88 >> pktrowel
+
+0.25 0.42 0.28 setrgbcolor
+newpath 40 300 moveto 600 320 lineto
+<< /Width 40 /Angle 8 /Coverage 0.6 /Scrape 0.45 /Jitter 1.5 >> pktrowel
+
+% --- row 5: pressed dabs, and the pkoil contrast ------------------------
+0.35 0.20 0.42 setrgbcolor
+20 250 (pressed dabs -- a blade set down, not dragged) dmlabel
+newpath 60 210 moveto  << /Width 54 /Angle 0 /Drag 0.2 >> pktrowel
+newpath 150 210 moveto << /Width 54 /Angle 35 /Drag 0.2 >> pktrowel
+newpath 240 210 moveto << /Width 54 /Angle 65 /Drag 0.9 >> pktrowel
+
+20 168 (the same path at the same width in three tools) dmlabel
+0.30 0.34 0.40 setrgbcolor
+20 148 (pktrowel -- broken masses, no base pass) dmlabel
+newpath 20 128 moveto 600 134 lineto
+<< /Width 34 >> pktrowel
+20 96 (pkoil -- solid base ribbon plus bristle ridges) dmlabel
+newpath 20 76 moveto 600 82 lineto
+<< /Width 34 >> pkoil
+20 44 (pkribbon -- one continuous band) dmlabel
+newpath 20 24 moveto 600 30 lineto
+<< /Width 34 >> pkribbon
+
+showpage

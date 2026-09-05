@@ -3,6 +3,122 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## `lib/paintkit.ps`: `pktrowel`, trowel / palette-knife strokes (issue #111, 2026-09-04)
+
+First child of epic #112 (wet-on-wet landscape capabilities). Adds
+`pktrowel`: a rigid flat blade dragging viscous paint, with `/Width`
+`/Pitch` `/Lanes` `/Load` `/Pressure` `/Angle` `/Drag` `/Viscosity`
+`/Coverage` `/Scrape` `/EdgeBuildup` `/Jitter` `/ColorJitter`.
+Scratch prefix `pt-`.
+
+**The structural decision:** this is the only preset in the file not
+built on `pkribbon`, and the reason is geometric rather than stylistic.
+Every other preset offsets a band around the path *normal* — what a
+tuft of bristles does. A palette knife holds its own angle
+independently of its direction of travel, so the deposit is swept along
+the *blade* direction; `pkribbon` cannot express that, and a preset
+that merely widened it would be the "just a wide brush" outcome the
+issue explicitly rules out. As a side effect `pktrowel` calls nothing
+that redefines `pk*` scratch names, so the clobbering hazard documented
+in the file header for `pkdry`/`pkspray`/`pkoil` doesn't arise here.
+
+**No solid base pass**, deliberately: `pkoil` lays a full-width ribbon
+and puts ridges on top of it, whereas the trowel deposits broken masses
+straight onto whatever is underneath. That absence is what makes the
+underlayer read through, and it's the concrete visual difference
+between the two tools —
+`trowel_and_oil_produce_structurally_different_marks` asserts it by
+counting separate masses down a column rather than trusting the
+specimen, since "visibly different mark" is an acceptance criterion and
+a specimen page can't fail.
+
+**Four "less paint" controls on four different axes**, so a regression
+in one can't hide behind another: `/Load` is deposit *width*,
+`/Coverage` is the contact chain's steady state (holes *within* that
+width), `/Viscosity` is its *rate* (chatter vs chunk), and `/Scrape` is
+static lengthwise thinning plus whole-lane kills. Each is tested on its
+own measurement — band thickness, ink total, run count along the
+stroke, and streak count across it, respectively.
+
+**Randomness is structurally fixed** at three draws per (lane, stop)
+plus four per lane, taken whether used or not — a lane killed by
+`/Scrape` still walks its stops and still draws. Without that, turning
+one control silently re-rolls every other control's texture and the
+monotonicity tests above measure two things at once. For the same
+reason `/Pressure` is resolved once per stop into the collected record,
+not once per (lane, stop): a caller's pressure proc may legitimately
+consume randomness (`{ frnd }` is a valid profile), and a per-lane call
+count would couple lane texture to the pressure profile.
+
+Two things had to be written *against* the obvious donor code to make
+that claim true, both found by a review pass and then confirmed
+empirically rather than reasoned about. `ptroll` is deliberately not a
+copy of `poroll`: `poroll` short-circuits its clamps and draws no
+`frnd` at all at rate ≤ 0 or ≥ 1, which is harmless for `pkoil` (it
+promises nothing about consumption) but at `/Coverage 1` would drop two
+draws per (lane, stop) — so nudging Coverage from 0.98 to 1.0 would
+re-roll every lane's jitter and kill pattern, exactly the coupling the
+guarantee forbids. And the edge-buildup pass runs unconditionally, with
+only its *fill* skipped at `/EdgeBuildup 0`; making the whole pass
+conditional left the caller's stream in a different place depending on
+whether ridges were asked for, which would move any seeded art placed
+after the call. `trowel_consumes_a_fixed_number_of_random_draws` pins
+both from the outside, by placing a mark from the caller's own stream
+after `pktrowel` returns and asserting it doesn't move across seven
+different control settings — it caught the second bug after the first
+was fixed.
+
+**Codex review found the `/Coverage`-vs-`/Viscosity` separation was
+not actually holding**, and chasing it turned up two independent
+causes, only one of which the review had identified. The transition
+probabilities `Coverage*step` and `(1-Coverage)*step` are each clamped
+to 1 independently, so once `step` is large enough for the bigger one
+to clamp, their *ratio* changes and Coverage stops being the steady
+state — capping `step` at `1/max(Coverage, 1-Coverage)` preserves it.
+Underneath that sat a bigger, purely geometric one: a run of *k*
+in-contact stops was drawn as a strip from the first stop to the last,
+spanning only *k−1* of the *k* pitches it stands for. Every run lost a
+pitch, which costs a chattery stroke far more than a chunky one, so
+realized coverage fell as viscosity did. Each end now extends by half a
+pitch, which also subsumes the old single-stop special case. Measured
+at `/Lanes 1` and `/Coverage 0.75`: 0.434 / 0.609 before either fix,
+0.625 / 0.750 with the half-pitch fix alone, 0.716 / 0.750 with both.
+Reverting *either* fails the regression test, checked by mutation. More
+lanes hide the problem entirely — the 18% inter-lane overlap means the
+union of 14 chains saturates — which is why the test drops to one lane
+rather than measuring the default mark.
+
+The same review also caught `ptemit` deriving one `/Drag` extent from
+the run's first stop and reusing it at both ends: under a varying
+`/Pressure` the ends are different widths, so `{ pktaper }` (starting
+near zero) made Drag do essentially nothing at the fully loaded exit —
+335px vs 336px of reach between `/Drag 0` and `/Drag 1`.
+
+**Tradeoffs.** Lanes carry an 18% baseline *overlap* rather than
+tiling exactly: two polygons sharing an exact edge leave an
+anti-aliased hairline seam, so an exactly-tiling blade rendered as a
+striped rectangle at `/Scrape 0` — found by looking at the render, not
+by a test. A small per-lane entry/exit trim (6% of progress, intrinsic,
+not a parameter) keeps the mark's ends from being machined straight.
+`/Angle` is guarded to ±80°: footprint thickness goes as its cosine, so
+an unguarded 90 would be a silent no-op. Single-stop contact runs — the
+common case at low `/Viscosity`, and the whole of a pressed dab — get a
+minimum along-travel extent, or a forward-and-back strip through one
+point would be a zero-area polygon and low viscosity would render blank
+instead of chattery.
+
+**Bounded** by `Lanes * stops` against 120000, checked inside the
+counting walk (`pkoil`'s placement, so a pathological path is rejected
+before any allocation); `/Lanes` hard-capped 1..40. No new unbounded
+traversal (#110).
+
+**Deferred:** no wet/blend interaction (#113), no paint depletion along
+the stroke, no thickness or pigment model — the issue rules all three
+out of scope. `psart` gained a short "Paint media" orientation section
+naming every preset and when to pick which, since it previously had no
+paintkit coverage at all; the fuller tour and parameter-doc audit
+remains #99's.
+
 ## `lib/pagekit.ps`: give the page templates a demo on the site (issue #63, 2026-09-04)
 
 Closes issue #63, the follow-up #61 filed after that PR's review found
