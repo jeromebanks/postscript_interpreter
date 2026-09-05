@@ -4528,3 +4528,829 @@ fn fan_a_pressed_dab_opens_upward_rather_than_all_round() {
         "a pressed fan is a fan, not a full circle: above {above} below {below}"
     );
 }
+
+// --- pkwet: wet interaction for soft layered paint (issue #113) ------
+//
+// pkwet is the one entry point in this file that draws no mark of its
+// own -- it re-runs the caller's mark-drawing procedure, each pass
+// displaced further and mixed further toward a declared backdrop. The
+// tests below pin the three things that makes load-bearing: that
+// /Soft 0 is *exactly* a plain call (so the wrapper is free when it's
+// switched off), that softening actually produces the intermediate
+// tones a graded edge is made of, and that it touches no alpha (which
+// is what spares it pkwash's Ghostscript fallback).
+
+/// Pixels that are neither the mark's own color nor the backdrop --
+/// i.e. the graded edge itself. With a black mark on white and
+/// /Under white, that's everything in between.
+fn midtone_count(it: &Interp) -> usize {
+    it.gfx()
+        .pixmap
+        .pixels()
+        .iter()
+        .filter(|&&p| {
+            let l = luma(p);
+            l > 60.0 && l < 200.0
+        })
+        .count()
+}
+
+const WET_MARK: &str = "newpath 60 100 moveto 340 100 lineto << /Width 30 /Bristles 24 >> pkdry";
+
+fn wet(opts: &str) -> Interp {
+    let mut it = fresh(400, 200);
+    it.run_str(&format!(
+        "0 0 0 setrgbcolor 11 srand {{ {WET_MARK} }} << {opts} >> pkwet"
+    ))
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    it
+}
+
+/// The contract that makes the wrapper free when it's switched off: at
+/// /Soft 0 pkwet draws one undisplaced pass in the caller's exact color
+/// *and takes no random draws of its own*, so the result is
+/// byte-identical to calling the procedure directly. The displacement
+/// draw is deliberately made only when there is a displacement to make
+/// -- take it unconditionally and this test fails on the shifted
+/// random stream alone.
+#[test]
+fn wet_soft_zero_is_identical_to_calling_the_proc() {
+    let wrapped = pixels(&wet("/Soft 0"));
+    let mut plain = fresh(400, 200);
+    plain
+        .run_str(&format!("0 0 0 setrgbcolor 11 srand {WET_MARK}"))
+        .unwrap_or_else(|e| panic!("{}", plain.error_report(&e)));
+    assert_eq!(
+        wrapped,
+        pixels(&plain),
+        "/Soft 0 must be byte-identical to calling the proc directly"
+    );
+}
+
+/// The acceptance criterion: "visibly softer interaction than an
+/// ordinary opaque paintkit mark". A hard mark on a plain backdrop has
+/// midtones only where its own edge is anti-aliased; a softened one is
+/// mostly midtone, because that *is* the graded edge.
+#[test]
+fn wet_softens_the_mark_against_its_backdrop() {
+    let hard = midtone_count(&wet("/Soft 0"));
+    let soft = midtone_count(&wet("/Soft 0.9"));
+    assert!(
+        soft > hard * 3,
+        "a wet mark must grade into its backdrop: hard {hard} soft {soft}"
+    );
+}
+
+/// /Soft is the single knob: more of it means more grading.
+#[test]
+fn wet_soft_is_monotonic() {
+    let a = midtone_count(&wet("/Soft 0.2"));
+    let b = midtone_count(&wet("/Soft 0.6"));
+    let c = midtone_count(&wet("/Soft 1"));
+    assert!(
+        a < b && b < c,
+        "grading should increase with /Soft: {a} {b} {c}"
+    );
+}
+
+/// /Pickup is how far the outermost pass mixes toward /Under. At 0 every
+/// pass keeps the caller's own color, so displacing them just makes a
+/// bigger solid mark rather than a graded one.
+#[test]
+fn wet_pickup_controls_how_far_the_edge_dissolves() {
+    let none = midtone_count(&wet("/Soft 0.9 /Pickup 0"));
+    let full = midtone_count(&wet("/Soft 0.9 /Pickup 0.95"));
+    assert!(
+        full > none * 2,
+        "Pickup must drive the dissolve: none {none} full {full}"
+    );
+}
+
+/// /Under is a *declared* backdrop -- pkwet cannot read the canvas
+/// (that needs a pixel-sample operator, issue #134), so this asserts the
+/// declaration is honored: with a strongly colored /Under the outer
+/// passes must actually carry that hue.
+#[test]
+fn wet_outer_passes_carry_the_declared_under_color() {
+    let mut it = fresh(400, 200);
+    it.run_str(&format!(
+        "0 0 0 setrgbcolor 11 srand {{ {WET_MARK} }} \
+         << /Soft 1 /Pickup 0.9 /Under [1 0 0] >> pkwet"
+    ))
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let reddish = it
+        .gfx()
+        .pixmap
+        .pixels()
+        .iter()
+        .filter(|&&p| p.red() as i32 - p.green() as i32 > 60 && p.red() > 90)
+        .count();
+    assert!(
+        reddish > 300,
+        "the outer passes should carry /Under's hue, got {reddish} reddish pixels"
+    );
+}
+
+/// /Spread is how far the outermost pass is displaced, so it widens the
+/// area the mark affects.
+#[test]
+fn wet_spread_widens_the_affected_area() {
+    let ink = |spread: f64| {
+        let it = wet(&format!("/Soft 0.9 /Spread {spread} /Pickup 0.4"));
+        ink_count(&it)
+    };
+    let tight = ink(2.0);
+    let wide = ink(30.0);
+    assert!(
+        wide > tight * 5 / 4,
+        "Spread must widen the mark's reach: tight {tight} wide {wide}"
+    );
+}
+
+#[test]
+fn wet_is_deterministic_under_a_seed() {
+    let run = || pixels(&wet("/Soft 0.8"));
+    assert_eq!(run(), run(), "pkwet must be deterministic under a seed");
+}
+
+/// pkwet's whole portability story is that it uses no alpha, so unlike
+/// pkwash it needs no Ghostscript fallback. Assert that directly rather
+/// than trusting the comment: an alpha left set would also leak into
+/// everything the caller drew afterwards.
+#[test]
+fn wet_never_touches_alpha() {
+    let alpha_after = |prelude: &str| {
+        let mut it = fresh(400, 200);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 11 srand {prelude} \
+             {{ {WET_MARK} }} << /Soft 1 >> pkwet currentalpha"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        it.operand_stack()
+            .last()
+            .expect("currentalpha left a value")
+            .repr()
+    };
+    // Default: pkwet neither sets an alpha nor leaves one behind.
+    assert_eq!(alpha_after(""), "1.0", "pkwet must leave alpha alone");
+    // And an alpha the caller set survives it: pkwet has no alpha
+    // handling of its own to clobber it with. (0.5 round-trips exactly
+    // through the f32 the graphics state stores.)
+    assert_eq!(
+        alpha_after("0.5 setalpha"),
+        "0.5",
+        "pkwet must not clobber an alpha the caller set"
+    );
+}
+
+#[test]
+fn wet_restores_the_callers_color() {
+    let mut it = fresh(200, 200);
+    it.run_str(
+        "0.2 0.4 0.8 setrgbcolor 9 srand \
+         { newpath 40 100 moveto 160 100 lineto << /Width 20 >> pkribbon } \
+         << /Soft 1 /Under [1 0 0] >> pkwet",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let (r, g, b) = it.gfx().rgb();
+    assert!(
+        (r - 0.2).abs() < 1e-6 && (g - 0.4).abs() < 1e-6 && (b - 0.8).abs() < 1e-6,
+        "pkwet must leave the caller's color alone, got {r} {g} {b}"
+    );
+}
+
+/// The reason pkwet is a wrapper rather than a /Wet key on each preset:
+/// one implementation has to serve every stroke family, including any
+/// added later.
+#[test]
+fn wet_works_with_every_stroke_family() {
+    for mark in [
+        "<< /Width 24 >> pkribbon",
+        "<< /Width 24 /Angle 30 >> pknib",
+        "<< /Width 24 /Bristles 20 >> pkdry",
+        "<< /Nozzle 12 /Density 30 >> pkspray",
+        "<< /Width 24 /Ridges 8 >> pkoil",
+        "<< /Width 24 >> pktrowel",
+        "<< /Width 24 /Bristles 14 >> pkfan",
+    ] {
+        let mut it = fresh(300, 160);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 5 srand \
+             {{ newpath 50 80 moveto 250 80 lineto {mark} }} \
+             << /Soft 0.8 /Under [0.9 0.9 0.9] >> pkwet"
+        ))
+        .unwrap_or_else(|e| panic!("{mark} under pkwet: {}", it.error_report(&e)));
+        assert!(ink_count(&it) > 100, "{mark} under pkwet painted nothing");
+    }
+}
+
+/// A single-layer call has no outermost/core distinction to grade, and
+/// the obvious `pqi / (Layers-1)` divides by zero there -- an
+/// `undefinedresult` this found the first time it was rendered.
+#[test]
+fn wet_a_single_layer_does_not_divide_by_zero() {
+    let mut it = fresh(300, 160);
+    it.run_str(
+        "0 0 0 setrgbcolor 5 srand \
+         { newpath 50 80 moveto 250 80 lineto << /Width 24 >> pkribbon } \
+         << /Layers 1 /Spread 20 >> pkwet",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 100,
+        "a one-layer wet call should still paint"
+    );
+}
+
+#[test]
+fn wet_validation_guards() {
+    fn err(src: &str) -> String {
+        let mut it = fresh(120, 120);
+        let e = it.run_str(src).unwrap_err();
+        it.error_report(&e).to_string()
+    }
+    let m = "{ newpath 10 10 moveto 100 10 lineto << /Width 10 >> pkribbon }";
+    for (opts, want) in [
+        ("/Soft 1.5", "pkwet-soft-must-be-0-to-1"),
+        ("/Soft -0.1", "pkwet-soft-must-be-0-to-1"),
+        ("/Layers 0", "pkwet-layers-must-be-1-to-6"),
+        ("/Layers 7", "pkwet-layers-must-be-1-to-6"),
+        ("/Layers 2.5", "pkwet-layers-must-be-1-to-6"),
+        ("/Spread -1", "pkwet-spread-must-not-be-negative"),
+        ("/Pickup 2", "pkwet-pickup-must-be-0-to-1"),
+        ("/Under 4", "pkwet-under-must-be-a-3-element-array"),
+        ("/Under [0 0]", "pkwet-under-must-be-a-3-element-array"),
+        ("/Under [0 0 0 0]", "pkwet-under-must-be-a-3-element-array"),
+        ("/Under [(a) 0 0]", "pkwet-under-components-must-be-numbers"),
+        ("/Under [2 0 0]", "pkwet-under-components-must-be-0-to-1"),
+        ("/Soft { 1 }", "pkwet-soft-must-not-be-a-procedure"),
+    ] {
+        let report = err(&format!("{m} << {opts} >> pkwet"));
+        assert!(
+            report.contains(want),
+            "expected {want} for {opts}, got {report}"
+        );
+    }
+    // The first operand really must be a procedure, not just anything.
+    assert!(
+        err("42 << /Soft 0.5 >> pkwet").contains("pkwet-first-operand-must-be-a-procedure"),
+        "a non-procedure first operand must be rejected"
+    );
+}
+
+#[test]
+fn ghostscript_accepts_paintkit_wet() {
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let status = std::process::Command::new("gs")
+        .args([
+            "-dNOSAFER",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g620x560",
+            "-r72",
+            "-o/dev/null",
+            "examples/paintkit_wet_demo.ps",
+        ])
+        .status()
+        .expect("run gs");
+    assert!(
+        status.success(),
+        "gs rejected examples/paintkit_wet_demo.ps"
+    );
+}
+
+/// pkwet must leave the operand stack exactly as it found it. Its
+/// /Under validation checks each component's type and then its range,
+/// and the two checks have to consume between them exactly the value
+/// `get` produced -- a shape that is correct here but easy to break,
+/// and whose failure mode is a mystery `typecheck` several calls later
+/// rather than anything pointing back at pkwet.
+#[test]
+fn wet_leaves_the_operand_stack_balanced() {
+    for opts in [
+        "/Soft 0.8",                      // default /Under, the pkgetdef path
+        "/Soft 0.8 /Under [0.1 0.2 0.3]", // reals
+        "/Soft 0.8 /Under [0 1 0]",       // integers, the integertype branch
+        "/Soft 0",                        // the single-pass short path
+    ] {
+        let mut it = fresh(200, 200);
+        it.run_str(&format!(
+            "1 1 1 setrgbcolor \
+             {{ newpath 20 100 moveto 180 100 lineto << /Width 12 >> pkribbon }} \
+             << {opts} >> pkwet"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        assert_eq!(
+            it.operand_stack().len(),
+            0,
+            "{opts} left operands behind: {:?}",
+            it.operand_stack()
+                .iter()
+                .map(|o| o.repr())
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+/// The contract an artist actually needs: turning one knob must not
+/// re-roll the others' texture. /Layers legitimately changes how many
+/// times the proc runs, so it changes consumption -- but /Pickup,
+/// /Under and /Spread must not, and neither must a /Soft that resolves
+/// to the same /Layers. Same downstream-marker technique as
+/// `trowel_consumes_a_fixed_number_of_random_draws`.
+#[test]
+fn wet_consumes_a_fixed_number_of_draws_at_a_fixed_layer_count() {
+    let downstream_mark = |opts: &str| {
+        let mut it = fresh(400, 240);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 11 srand \
+             {{ newpath 60 140 moveto 340 140 lineto << /Width 24 >> pkribbon }} \
+             << /Layers 4 {opts} >> pkwet \
+             0 0 0 setrgbcolor newpath 20 frnd 340 mul add 20 moveto 0 12 rlineto \
+             6 setlinewidth stroke"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        (0..400)
+            .find(|&x| {
+                (205..225).any(|y| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+            })
+            .expect("marker drawn")
+    };
+    let baseline = downstream_mark("/Spread 10");
+    for opts in [
+        "/Spread 10 /Pickup 0",
+        "/Spread 10 /Pickup 1",
+        "/Spread 10 /Under [0.2 0.4 0.9]",
+        "/Spread 40",
+        "/Spread 10 /Soft 0.9",
+    ] {
+        assert_eq!(
+            downstream_mark(opts),
+            baseline,
+            "{opts} changed how much of the caller's random stream pkwet consumed"
+        );
+    }
+}
+
+/// pkwet re-enters the caller's procedure in a loop, which no other
+/// preset here does -- so a wrapped proc that defines its own names
+/// must not disturb the passes still to come. (The `pq-` prefix
+/// reservation is what makes this hold; this pins the realistic case,
+/// a proc keeping its own state across passes.)
+#[test]
+fn wet_survives_a_proc_that_defines_its_own_names() {
+    let mut it = fresh(300, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 5 srand /passes 0 def \
+         { /passes passes 1 add def \
+           /myw 20 def \
+           newpath 50 100 moveto 250 100 lineto << /Width myw >> pkribbon } \
+         << /Layers 5 /Spread 12 /Under [0.9 0.9 0.9] >> pkwet \
+         passes",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(
+        it.operand_stack().last().expect("passes").repr(),
+        "5",
+        "every planned pass should have run the caller's proc"
+    );
+}
+
+/// pkwet's own displacement must not depend on how much randomness the
+/// wrapped brush consumes -- otherwise swapping the brush inside the
+/// braces would move the halo as well as change the mark. The whole
+/// pass plan is therefore drawn before any caller code runs.
+#[test]
+fn wet_geometry_does_not_depend_on_the_procs_own_random_appetite() {
+    let plan_marker = |extra_draws: &str| {
+        let mut it = fresh(300, 200);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 5 srand \
+             {{ {extra_draws} newpath 50 100 moveto 250 100 lineto \
+                << /Width 20 >> pkribbon }} \
+             << /Layers 5 /Spread 14 /Pickup 0 >> pkwet"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        pixels(&it)
+    };
+    // /Pickup 0 keeps every pass the same color, so the only thing the
+    // pixels can differ by is where the passes landed.
+    assert_eq!(
+        plan_marker(""),
+        plan_marker("frnd pop frnd pop frnd pop"),
+        "the pass plan must be fixed before the wrapped proc runs"
+    );
+}
+
+/// Codex review of PR #138: pkwet ended by restoring the caller's color
+/// with `setrgbcolor`, which forces the graphics state into DeviceRGB
+/// and silently loses the caller's color space. Every pass already runs
+/// inside its own gsave/grestore, so the restore was redundant as well
+/// as harmful.
+#[test]
+fn wet_leaves_the_callers_color_space_alone() {
+    let space_after = |prelude: &str| {
+        let mut it = fresh(300, 200);
+        it.run_str(&format!(
+            "{prelude} 5 srand \
+             {{ newpath 60 100 moveto 240 100 lineto << /Width 20 >> pkribbon }} \
+             << /Soft 0.8 /Under [0.9 0.9 0.9] >> pkwet \
+             currentcolorspace"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        it.operand_stack().last().expect("currentcolorspace").repr()
+    };
+    assert_eq!(
+        space_after("0.35 setgray"),
+        "[/DeviceGray]",
+        "a DeviceGray caller must still be in DeviceGray after pkwet"
+    );
+    assert_eq!(
+        space_after("0.1 0.2 0.3 0.05 setcmykcolor"),
+        "[/DeviceCMYK]",
+        "a DeviceCMYK caller must still be in DeviceCMYK after pkwet"
+    );
+}
+
+/// Codex review of PR #138: pkwet is the only preset here that
+/// re-enters caller code in a loop, so a wrapped procedure that itself
+/// calls pkwet overwrote the outer call's `pqplan` and `pqproc`, and the
+/// outer loop resumed against the inner one's plan. Prefix reservation
+/// can't help, because the clashing name belongs to pkwet itself -- the
+/// loop now carries its state on the operand stack instead.
+#[test]
+fn wet_can_be_nested_inside_its_own_wrapped_procedure() {
+    let mut it = fresh(300, 220);
+    it.run_str(
+        "0 0 0 setrgbcolor 5 srand /inner 0 def /outer 0 def \
+         { /outer outer 1 add def \
+           { /inner inner 1 add def \
+             newpath 60 110 moveto 240 110 lineto << /Width 16 >> pkribbon } \
+           << /Layers 3 /Spread 6 /Under [0.9 0.9 0.9] >> pkwet } \
+         << /Layers 4 /Spread 14 /Under [0.9 0.9 0.9] >> pkwet \
+         outer inner",
+    )
+    .unwrap_or_else(|e| {
+        panic!(
+            "nested pkwet must not corrupt itself: {}",
+            it.error_report(&e)
+        )
+    });
+    let st = it.operand_stack();
+    let inner: i64 = st[st.len() - 1].repr().parse().expect("inner");
+    let outer: i64 = st[st.len() - 2].repr().parse().expect("outer");
+    assert_eq!(outer, 4, "the outer pkwet must run all 4 of its passes");
+    assert_eq!(inner, 12, "each outer pass must run all 3 inner passes");
+    assert!(ink_count(&it) > 500, "the nested mark should paint");
+}
+
+/// Codex review of PR #138: whether a displacement draw happens was
+/// keyed off the *magnitude* rather than the pass's position, so
+/// `/Spread 0` with several layers skipped every draw while any
+/// positive spread took one per non-core pass -- meaning turning
+/// /Spread alone re-rolled everything drawn afterwards, which is exactly
+/// what this preset's contract forbids. /Spread 0 is now on the same
+/// stream as any other spread.
+#[test]
+fn wet_zero_spread_stays_on_the_same_random_stream() {
+    let downstream_mark = |opts: &str| {
+        let mut it = fresh(400, 240);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 11 srand \
+             {{ newpath 60 140 moveto 340 140 lineto << /Width 24 >> pkribbon }} \
+             << /Layers 4 {opts} >> pkwet \
+             0 0 0 setrgbcolor newpath 20 frnd 340 mul add 20 moveto 0 12 rlineto \
+             6 setlinewidth stroke"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        (0..400)
+            .find(|&x| {
+                (205..225).any(|y| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+            })
+            .expect("marker drawn")
+    };
+    assert_eq!(
+        downstream_mark("/Spread 0"),
+        downstream_mark("/Spread 18"),
+        "/Spread must not change how much of the caller's stream pkwet consumes"
+    );
+}
+
+/// Codex review of PR #138, round 2: even after dropping the trailing
+/// `setrgbcolor`, every pass set an RGB color -- including the core
+/// pass, whose pickup mix is the identity. So the wrapped procedure ran
+/// in DeviceRGB whatever space the caller chose, and `/Soft 0` was not
+/// the plain call it claims to be: a DeviceGray procedure using
+/// `setcolor` works when called directly and raised `typecheck` under
+/// pkwet. The core pass now carries no color at all.
+#[test]
+fn wet_runs_the_core_pass_in_the_callers_color_space() {
+    // `setcolor` takes one operand in DeviceGray and three in DeviceRGB,
+    // so a gray procedure using it is a direct probe of which space the
+    // wrapped code actually ran in.
+    let mut it = fresh(300, 200);
+    it.run_str(
+        "0.35 setgray 5 srand \
+         { 0.2 setcolor newpath 60 100 moveto 240 100 lineto \
+           << /Width 20 >> pkribbon } \
+         << /Soft 0 >> pkwet",
+    )
+    .unwrap_or_else(|e| {
+        panic!(
+            "a DeviceGray procedure must run in DeviceGray under /Soft 0: {}",
+            it.error_report(&e)
+        )
+    });
+    assert!(ink_count(&it) > 100, "the gray-space mark should paint");
+}
+
+/// Codex review of PR #138, round 2: `/Layers 3.0` clears the
+/// whole-number check but is still a real, and `real array` raises
+/// typecheck in both pscat and Ghostscript. A value that passed the
+/// documented contract must not fail later on its representation.
+#[test]
+fn wet_accepts_a_whole_valued_real_layer_count() {
+    for layers in ["3", "3.0"] {
+        let mut it = fresh(300, 200);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 5 srand \
+             {{ newpath 60 100 moveto 240 100 lineto << /Width 20 >> pkribbon }} \
+             << /Layers {layers} /Spread 8 /Under [0.9 0.9 0.9] >> pkwet"
+        ))
+        .unwrap_or_else(|e| panic!("/Layers {layers} should work: {}", it.error_report(&e)));
+        assert!(ink_count(&it) > 100, "/Layers {layers} should paint");
+    }
+}
+
+/// Codex review of PR #138, round 3: carrying pkwet's loop state on the
+/// operand stack fixed recursion but exposed that state *beneath* the
+/// wrapped procedure, so a stack-balanced procedure that inspects
+/// `count` behaved differently under pkwet than called directly -- and
+/// one containing `clear` broke the loop outright. Both contradict the
+/// /Soft 0 promise as badly as the corruption did. The state now lives
+/// in a frame indexed by nesting depth, so nothing of pkwet's is on the
+/// operand stack while caller code runs.
+#[test]
+fn wet_shows_the_wrapped_procedure_an_untouched_operand_stack() {
+    // A procedure that only draws when the stack is empty: it must
+    // behave the same wrapped as unwrapped.
+    let ink_for = |wrapped: bool| {
+        let body = "{ count 0 eq \
+                     { newpath 60 100 moveto 240 100 lineto << /Width 20 >> pkribbon } if }";
+        let src = if wrapped {
+            format!("0 0 0 setrgbcolor 5 srand {body} << /Soft 0 >> pkwet")
+        } else {
+            format!("0 0 0 setrgbcolor 5 srand {body} exec")
+        };
+        let mut it = fresh(300, 200);
+        it.run_str(&src)
+            .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        ink_count(&it)
+    };
+    let plain = ink_for(false);
+    assert!(
+        plain > 100,
+        "the probe procedure should draw when called directly"
+    );
+    assert_eq!(
+        ink_for(true),
+        plain,
+        "a stack-inspecting procedure must see the same stack under pkwet"
+    );
+}
+
+/// Nesting is capped rather than growing the frame array without bound.
+#[test]
+fn wet_rejects_nesting_past_its_frame_depth() {
+    // Nine deep: one past the cap.
+    let mut src = String::from("newpath 60 100 moveto 240 100 lineto << /Width 12 >> pkribbon");
+    for _ in 0..9 {
+        src = format!("{{ {src} }} << /Layers 1 >> pkwet");
+    }
+    let mut it = fresh(300, 200);
+    let e = it
+        .run_str(&format!("0 0 0 setrgbcolor 5 srand {src}"))
+        .unwrap_err();
+    assert!(
+        it.error_report(&e).contains("pkwet-nesting-too-deep"),
+        "expected the nesting cap, got {}",
+        it.error_report(&e)
+    );
+}
+
+/// Codex review of PR #138, round 4: the nesting guard incremented the
+/// depth and *then* signalled, so a caller catching the error with
+/// `stopped` was left with the counter stuck above the limit. The guard
+/// now rolls back before it signals.
+///
+/// Note the narrower scope: this covers the guard's *own* rejection,
+/// which is the case fully in pkwet's control. An error raised inside a
+/// wrapped procedure and caught still leaves enclosing invocations'
+/// depth unreleased -- see the header for why running the procedure
+/// under `stopped` and re-raising is not available here (pscat's
+/// top-level `stop` ends execution silently, turning a hard error into
+/// no error).
+#[test]
+fn wet_nesting_guard_rolls_back_the_depth_it_claimed() {
+    let mut it = fresh(300, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 5 srand \
+         { { newpath 60 100 moveto 240 100 lineto << /Width 12 >> pkribbon } \
+           << /Layers 1 >> pkwet } \
+         << /Layers 1 >> pkwet \
+         pqdepth",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(
+        it.operand_stack().last().expect("pqdepth").repr(),
+        "0",
+        "a completed nest must leave the depth counter where it found it"
+    );
+}
+
+/// Codex review of PR #138: the wrapped procedure must build its own
+/// path. A PostScript path is in device space once constructed, so a
+/// path built before the call cannot be moved by the per-pass
+/// `translate`, every pass walks identical geometry, and the mark comes
+/// out unsoftened -- silently. Documented as a precondition rather than
+/// worked around with a `pathforall` replay; this pins the difference so
+/// the documentation cannot quietly stop being true.
+#[test]
+fn wet_softens_only_when_the_procedure_builds_its_own_path() {
+    let ink = |src: &str| {
+        let mut it = fresh(200, 120);
+        it.run_str(src)
+            .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        ink_count(&it)
+    };
+    let opts = "<< /Soft 0.9 /Under [1 1 1] >>";
+    let mark = "newpath 20 60 moveto 180 60 lineto";
+    let inside = ink(&format!(
+        "0 0 0 setrgbcolor 5 srand \
+         {{ {mark} << /Width 12 >> pkribbon }} {opts} pkwet"
+    ));
+    let outside = ink(&format!(
+        "0 0 0 setrgbcolor 5 srand {mark} \
+         {{ << /Width 12 >> pkribbon }} {opts} pkwet"
+    ));
+    assert!(
+        inside > outside * 2,
+        "building the path inside the procedure is what lets the passes \
+         spread: inside {inside}, outside {outside}"
+    );
+}
+
+/// Codex review of PR #138: an error caught by the caller used to leave
+/// `pqdepth` naming the *inner* frame, so an outer invocation's next
+/// pass read that frame and executed the inner call's procedure --
+/// turning an error the caller had already handled into an uncaught
+/// one, and never completing the outer call.
+#[test]
+fn wet_a_caught_nested_error_leaves_the_outer_call_intact() {
+    let mut it = fresh(300, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 5 srand /seen 0 def \
+         { { { nosuchname } << /Layers 2 >> pkwet } stopped { /seen seen 1 add def } if \
+           newpath 60 100 moveto 240 100 lineto << /Width 12 >> pkribbon } \
+         << /Layers 2 >> pkwet \
+         seen pqdepth",
+    )
+    .unwrap_or_else(|e| panic!("the outer call must survive: {}", it.error_report(&e)));
+    let stack: Vec<String> = it
+        .operand_stack()
+        .iter()
+        .map(|o| o.repr().to_string())
+        .collect();
+    assert_eq!(
+        stack,
+        vec!["2".to_string(), "0".to_string()],
+        "both outer passes should run and catch their own inner error, \
+         and the depth must come back to 0"
+    );
+    assert!(ink_count(&it) > 100, "the outer call should still paint");
+}
+
+/// ...and the graphics state comes back untouched, which is the other
+/// half of the same unwind. Before this, each abandoned pass leaked one
+/// gsave frame, so the caller resumed translated and in pkwet's mixed
+/// color rather than its own.
+#[test]
+fn wet_a_caught_error_restores_the_graphics_state() {
+    let mut it = fresh(200, 120);
+    it.run_str(
+        "0.2 0.4 0.8 setrgbcolor 5 srand \
+         matrix currentmatrix \
+         { { nosuchname } << /Soft 0.8 /Layers 3 >> pkwet } stopped pop \
+         matrix currentmatrix",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let stack: Vec<String> = it
+        .operand_stack()
+        .iter()
+        .map(|o| o.repr().to_string())
+        .collect();
+    assert_eq!(
+        stack[0], stack[1],
+        "a caught error must leave the CTM where it found it, got {stack:?}"
+    );
+    let (r, g, b) = it.gfx().rgb();
+    assert!(
+        (r - 0.2).abs() < 1e-6 && (g - 0.4).abs() < 1e-6 && (b - 0.8).abs() < 1e-6,
+        "a caught error must leave the caller's color alone, got {r} {g} {b}"
+    );
+}
+
+/// `pkwet` runs each pass under `stopped`, which makes it a boundary
+/// for `exit` as well: per the PLRM, `exit` looks for the innermost
+/// enclosing loop and a `stopped` context reached first is an error. So
+/// a wrapped procedure cannot `exit` a loop the caller owns through
+/// pkwet -- it gets a loud `invalidexit`.
+///
+/// Two rejected alternatives, both worse. Swallowing the exit silently
+/// (the original behavior) let a caller's `loop` run forever. Telling
+/// exits from errors apart by reading `$error /errorname` inferred a
+/// control operation from a name that can be stale: a procedure doing
+/// its own cleanup, `{ { exit } stopped { stop } if }`, re-raises a
+/// `stop` while errorname still reads `/invalidexit`, and the heuristic
+/// turned that deliberate `stop` into an exit of the caller's loop --
+/// reporting `false` to their `stopped` (Codex review, round 4).
+#[test]
+fn wet_blocks_a_callers_exit_loudly_rather_than_swallowing_it() {
+    let mut it = fresh(120, 60);
+    let e = it
+        .run_str(
+            "0 0 0 setrgbcolor 5 srand /n 0 def \
+             0 1 4 { pop \
+               { newpath 10 10 moveto 100 10 lineto << /Width 5 >> pkribbon exit } \
+               << /Soft 0.8 >> pkwet \
+               /n n 1 add def } for",
+        )
+        .unwrap_err();
+    assert!(
+        it.error_report(&e).contains("invalidexit"),
+        "an exit across pkwet's stopped boundary must raise invalidexit, got {}",
+        it.error_report(&e)
+    );
+}
+
+/// ...and the case that heuristic got wrong: a procedure that catches
+/// its own `exit` and re-raises with `stop` must reach the caller's
+/// `stopped` as a stop, not be mistaken for a loop exit.
+#[test]
+fn wet_forwards_a_procedures_own_stop_as_a_stop() {
+    let mut it = fresh(200, 120);
+    it.run_str(
+        "0 0 0 setrgbcolor 5 srand \
+         { { { exit } stopped { stop } if \
+             newpath 20 60 moveto 180 60 lineto << /Width 8 >> pkribbon } \
+           << /Soft 0.5 >> pkwet } stopped",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(
+        it.operand_stack().last().expect("stopped result").repr(),
+        "true",
+        "the caller's stopped must see the procedure's deliberate stop"
+    );
+}
+
+/// A procedure with its *own* loop keeps its exit -- pkwet's boundary
+/// only blocks an exit that would have to cross it.
+#[test]
+fn wet_re_propagates_an_exit_without_inventing_or_hiding_one() {
+    let mut it = fresh(120, 60);
+    it.run_str(
+        "0 0 0 setrgbcolor 5 srand \
+         { 0 1 9 { pop exit } for \
+           newpath 10 10 moveto 100 10 lineto << /Width 5 >> pkribbon } \
+         << /Soft 0.8 >> pkwet (reached) ",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(
+        it.operand_stack().last().expect("marker").repr(),
+        "(reached)",
+        "an exit belonging to the procedure's own loop must not escape"
+    );
+
+    let mut it = fresh(120, 60);
+    let e = it
+        .run_str(
+            "0 0 0 setrgbcolor 5 srand \
+             { newpath 10 10 moveto 100 10 lineto << /Width 5 >> pkribbon exit } \
+             << /Soft 0.5 >> pkwet",
+        )
+        .unwrap_err();
+    assert!(
+        it.error_report(&e).contains("invalidexit"),
+        "an exit with no enclosing loop must still raise invalidexit, got {}",
+        it.error_report(&e)
+    );
+}

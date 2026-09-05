@@ -3,6 +3,178 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## `lib/paintkit.ps`: `pkwet`, wet interaction for soft layered paint (issue #113, 2026-09-04)
+
+Second child of epic #112. Adds `pkwet`, with `/Soft` `/Under`
+`/Pickup` `/Layers` `/Spread`. Scratch prefix `pq-`.
+
+**It is a wrapper, not a brush.** `pkwet` is the only entry point in
+this file that draws no mark of its own: it takes the caller's
+mark-drawing *procedure* and re-runs it, outermost pass first, each one
+displaced further off the path and mixed further toward `/Under`. The
+alternative — a `/Wet` key added to every stroke preset — is one idea
+copied once per preset, with one chance to drift per copy, and would
+still miss the next preset written. As a wrapper, one implementation
+serves every stroke family in the file. Deliberately stated without a
+count: this epic adds a preset per child issue, so any number written
+here is stale by the next merge (Codex review of PR #138 caught exactly
+that, one merge later).
+
+**Pickup is declared, not sampled.** Genuinely picking color up off the
+canvas means reading back pixels, and PostScript has no operator for it
+— that is exactly the gap tracked as #134. So `/Under` asks the artist
+what is underneath rather than guessing, which costs nothing for the
+skies, mists and distant planes this is for, where the backdrop is a
+known near-flat tone.
+
+**No alpha, and that was the decision the work turned on.** The obvious
+implementation is a translucent pass. It was built and rendered before
+being rejected, on two measured grounds. Alpha applies to *every* fill
+the wrapped proc makes, and half these presets are built from
+deliberately overlapping fills — `pkoil` lays a base ribbon plus a
+dozen ridges, and `pktrowel`'s lanes overlap by 18% precisely so their
+shared edges leave no anti-aliased seam. Under one translucent pass
+each of those internal overlaps composites against itself: `pkoil`'s
+ridges blotch against their own base and `pktrowel`'s seam-closing
+overlap returns as a dark stripe at every lane boundary — the exact
+striped-rectangle artifact #111 had just removed, arriving from the
+other direction. Stacking offset translucent passes compounds it into
+ghosting. The second ground is portability: an alpha-based `pkwet`
+would need `pkwash`'s degraded flattening fallback under Ghostscript,
+whereas grading opaque passes needs nothing gs lacks, so `pkwet` has no
+reduced-fidelity path at all.
+
+**The artistic finding, which the renders produced and no test would
+have:** `pkwet` must be paired with a *broken or particulate* brush.
+`pkspray` alone is a thin scatter of hard specks; the identical call
+wrapped in `pkwet` is a soft cloud mass — that pairing is what the
+acceptance criterion's "visibly softer" means here. A solid brush
+(`pkribbon`, `pkoil`) keeps its own hard silhouette and merely gains a
+halo, because translating opaque copies of a hard shape cannot dissolve
+that shape's own edge. The specimen shows all four cases side by side
+rather than hiding the limitation. Relatedly, revealing a *textured*
+underlayer turns out not to need translucency at all: a low-`/Coverage`
+`pktrowel` or `pkdry` mark is full of gaps, so mist laid on with one
+lets a treeline read through it.
+
+**Tradeoffs.** Displacement directions are spaced by the golden angle
+plus a seeded wobble, so few passes still distribute around the mark
+instead of piling onto one side and reading as a drop shadow. `/Layers`
+is capped 1..6, which is the only bound `pkwet` adds — total work is up
+to 6× the wrapped proc's own cost including its deposit budget, the
+same shape of nested-cost gap `pkdry` documents (#79). `/Soft 0` takes
+no random draw of its own (the displacement draw happens only when
+there is a displacement to make), which is what makes it byte-identical
+to a plain call — pinned by
+`wet_soft_zero_is_identical_to_calling_the_proc`. A single-layer call
+has no outermost/core distinction and the obvious `i/(Layers-1)`
+divides by zero there; found by rendering, guarded, and pinned.
+
+**Codex review found three defects in the wrapper itself**, all in
+behaviour the ordinary tests exercised without noticing:
+
+- The trailing `setrgbcolor` that "restored" the caller's colour forced
+  the graphics state into DeviceRGB, losing the colour space of a caller
+  painting in DeviceGray or DeviceCMYK. Every pass already runs inside
+  its own `gsave`/`grestore`, so the restore was redundant as well as
+  harmful, and is simply gone.
+- `pkwet` is the only preset here that re-enters caller code *in a loop*,
+  and where its per-call state lives took three attempts. Plain names
+  meant a wrapped procedure that itself called `pkwet` overwrote the
+  outer call's plan mid-loop — running 1 of its 4 passes instead of 4,
+  verified by reverting. Moving the state onto the *operand stack* fixed
+  that but put it underneath the callee, so a stack-balanced procedure
+  containing `count 0 eq { ... } if` behaved differently under `pkwet`
+  than called directly, and one containing `clear` broke the loop —
+  contradicting the `/Soft 0` promise just as badly. What works is a
+  frame indexed by nesting depth: an inner call takes depth+1 and
+  restores the counter on the way out, and nothing of `pkwet`'s is on
+  the operand or dict stack while caller code runs. Depth is capped at
+  8, and the guard rolls the counter back before signalling so its own
+  rejection cannot poison later calls.
+- **Three separate review findings turned out to be one missing
+  unwind-protect, and the honest fix was to stop documenting it and go
+  remove the cause.** An error raised inside a wrapped procedure and
+  caught by the caller leaked a graphics-state frame per abandoned pass
+  *and* left `pqdepth` elevated — and the second of those was much
+  worse than a leak: with `pqdepth` naming the inner frame, an outer
+  invocation's next pass read that frame and executed the **inner**
+  call's procedure, so an error the caller had already caught came back
+  uncaught. Two rounds of this were documented as a residual, the first
+  time with a `/pqdepth 0 def` workaround that did not cover the gsave
+  half at all. Each pass now runs under `stopped` and restores its own
+  gsave and its own single depth increment before re-raising, so every
+  level unwinds exactly what it claimed.
+
+  That idiom needed **#142**, fixed in this branch: pscat's top-level
+  `stop` ended execution silently where Ghostscript reports the pending
+  error from `$error`, so re-raising would have turned a hard error
+  into none at all for every caller that did not catch. `record_error`
+  already populated `$error`, so the fix is to consult `/newerror` in
+  `stop` and return the caught error instead of `Ok(())`. Verified
+  against Ghostscript on all three of its cases, including the quirk
+  that a control-flow `stop` after an earlier *handled* error reports
+  that stale error. The lesson worth keeping is the shape of the
+  mistake — a residual documented twice, with a workaround that was
+  never checked against everything that leaked, when the cause was one
+  small interpreter gap the repo had already hit elsewhere (artkit's
+  scatter `/Seed` restore documents the same blocker, and can adopt the
+  idiom now).
+
+  Two follow-ups on the interpreter side, both from review of that
+  change. `$error` — not a Rust-side cache — has to decide *which*
+  error a top-level `stop` reports, because `$error` is a VM dict a
+  `restore` rolls back: after
+  `{ first } stopped pop /s save def { second } stopped pop s restore`,
+  `$error` correctly names `first` while a cache still holds `second`,
+  and matching the two on the error's *name* is not enough since both
+  are `undefined`. The error is therefore rebuilt from `$error` for
+  everything `$error` can express, with the cache supplying only
+  `syntaxerror`'s detail, which it has nowhere to keep. And `last_name`
+  is restored from `$error /command` before reporting: by the time
+  `stop` runs, the caller's cleanup and the `stop` itself have
+  overwritten it, so `OffendingCommand` named `stop` rather than the
+  `div` that actually failed.
+- **`exit` took three attempts, and the one that shipped is the one
+  that adds no mechanism.** The pass loop is a `for`, so while the
+  wrapped procedure runs it is the nearest enclosing loop — an `exit`
+  meant for a loop the *caller* owns was swallowed, and a caller's
+  `loop` would never have terminated. Measured: a direct call ends the
+  caller's `for` on its first iteration, the same procedure through
+  `pkwet` let all five run.
+
+  The second attempt kept an in-flight flag per frame and re-ran the
+  exit after the loop. The third, once each pass ran under `stopped`,
+  told exits from errors apart by reading `$error /errorname` for
+  `/invalidexit`. Review killed that one: it inferred a *control
+  operation* from a name that can be stale, so a procedure doing its
+  own cleanup — `{ { exit } stopped { stop } if }` — re-raised a `stop`
+  while errorname still read `/invalidexit`, and the heuristic turned
+  that deliberate stop into an exit of the caller's loop, reporting
+  `false` to their `stopped`.
+
+  What ships is the PLRM's own rule with nothing added: `exit` looks
+  for the innermost enclosing loop, and a `stopped` context reached
+  first is an error. So a wrapped procedure simply cannot `exit` a
+  caller-owned loop through `pkwet`, and gets a loud `invalidexit` if
+  it tries. A procedure exiting its *own* loop is unaffected. That is a
+  real restriction, but it is documented and noisy, where the original
+  behavior was silent — and the two clever alternatives each shipped a
+  bug that review had to find.
+- Whether a displacement draw happened was keyed off the resulting
+  *magnitude* rather than the pass's position, so `/Spread 0` with
+  several layers skipped every draw while any positive spread took one
+  per non-core pass. Turning `/Spread` alone therefore re-rolled the
+  wrapped brush and everything after it — precisely the contract this
+  preset documents and tests. The core pass is undisplaced by
+  definition, so keying off that instead keeps `/Soft 0` free while
+  putting every spread on one stream.
+
+**Deferred:** no `/Alpha` opt-in, on the evidence above — `pkwash`
+already exists where genuine translucency is wanted. `pkwash` itself is
+deliberately not wrappable, since it resets alpha and blend mode by
+design and so will not honor a surrounding context.
+
 ## `lib/paintkit.ps`: `pkfan`, the fan brush (issue #114, 2026-09-04)
 
 Third child of epic #112. Adds `pkfan`, with `/Width` `/Bristles`

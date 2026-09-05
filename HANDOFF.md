@@ -628,6 +628,21 @@ renders eight examples in both and compares block-downsampled output).
   supposedly gapless blade rendered as a striped rectangle. Anything
   that tiles fills to make one surface needs deliberate overlap, and
   no unit test will tell you: this was found by looking at the PNG.
+- **Don't reach for `setalpha` to make paintkit marks interact with
+  what's beneath them.** Alpha applies to *every* fill the mark makes,
+  and several presets are built from deliberately overlapping fills
+  (`pkoil`'s ridges over its own base; `pktrowel`'s 18% lane overlap,
+  directly above). Under a translucent pass those internal overlaps
+  composite against *themselves* and return as blotches and a dark
+  stripe at every lane boundary — the striped-rectangle artifact again,
+  from the other direction. `pkwet` (issue #113) grades *opaque* passes
+  toward a caller-declared backdrop instead, which also spares it
+  `pkwash`'s Ghostscript fallback. Both were built and rendered before
+  choosing; NOTES.md's #113 entry has the comparison.
+- **Reading color back off the canvas is not possible in PostScript
+  here.** There is no pixel-sample operator (issue #134 is the deferred
+  work), so anything that wants to know what is underneath must be
+  *told* — `pkwet`'s `/Under` is the pattern to copy, not a stopgap.
 - **A "collect stops, then draw runs" brush must not call the caller's
   `/Pressure` proc inside its per-lane/per-bristle loop.** A caller's
   proc is arbitrary code and may consume randomness (`{ frnd }` is a

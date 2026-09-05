@@ -141,6 +141,26 @@ Which tool to pick:
 - **`pkwash`** / **`pkpaper`** — watercolor and its ground. The only
   presets needing pscat's `setalpha`; under plain `gs` they fall back
   to flattening against white and overlaps stop mixing.
+- **`pkwet`** — not a brush: a *softener* that wraps any of the above.
+  It re-runs your mark-drawing proc several times, each pass nudged
+  further off the path and mixed further toward `/Under`, the color you
+  declare is already on the canvas there — so the mark settles into the
+  layer beneath instead of sitting on it. This is the wet-on-wet
+  vocabulary: skies, clouds, mist, distant planes.
+
+  ```postscript
+  { newpath 40 400 moveto 200 430 380 390 560 420 curveto
+    << /Nozzle 22 /Density 70 >> pkspray }
+  << /Soft 0.8 /Under [0.62 0.72 0.86] >> pkwet
+  ```
+
+  `/Soft` is the only knob you need, and `/Soft 0` is exactly a plain
+  call. **Pair it with a broken or particulate brush** — `pkspray`,
+  `pkdry`, or `pktrowel` at low `/Coverage`. A solid brush (`pkribbon`,
+  `pkoil`) keeps its own hard silhouette and just gains a halo. Want a
+  textured underlayer to read through mist? Use a low-`/Coverage` mark
+  — the gaps do it, no transparency needed. Uses no alpha, so unlike
+  `pkwash` it behaves the same under plain `gs`.
 
 (A fuller paintkit tour, and an audit of the parameter docs, is issue
 #99 — this section is the short orientation, not that sweep.)

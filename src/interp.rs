@@ -184,6 +184,16 @@ pub struct Interp {
     /// The most recently executed name (interned id — resolving to
     /// text only happens at error time), for `OffendingCommand`.
     last_name: Option<u32>,
+    /// The error most recently caught by a `stopped`, kept so that a
+    /// `stop` which reaches the top level can report it the way
+    /// Ghostscript's outermost job wrapper does (issue #142).
+    ///
+    /// A payload cache, not the authority on which error is pending:
+    /// `$error` is that, since it is a VM dict a `restore` rolls back
+    /// while this field is not. This supplies only what `$error` has
+    /// nowhere to keep — `syntaxerror`'s detail — and only when the two
+    /// still agree on the error's name.
+    caught_error: Option<PsError>,
     /// The line most recently scanned directly from the main program
     /// source (issue #17) — `None` when no line is known, or the most
     /// recent scanning happened in a `run`-loaded file, eexec stream, or
@@ -276,6 +286,7 @@ impl Interp {
             save_stack: Vec::new(),
             quit_requested: false,
             last_name: None,
+            caught_error: None,
             last_line: None,
             rand_state: 1,
             seed_override: None,
@@ -400,9 +411,74 @@ impl Interp {
             return Err(e);
         }
         self.record_error(&e);
+        self.caught_error = Some(e);
         self.do_stop();
         self.push(Object::bool(true));
         Ok(())
+    }
+
+    /// The error a top-level `stop` should report, if any (issue #142).
+    ///
+    /// Gated on `$error /newerror`, which is what Ghostscript's outermost
+    /// job wrapper keys off — verified against it directly, including the
+    /// quirk that a `stop` used for plain control flow *after* an earlier
+    /// caught-and-handled error reports that stale error, while a `stop`
+    /// with no error ever recorded reports nothing at all.
+    ///
+    /// `$error` is the authority on *which* error, not the `caught_error`
+    /// cache. `$error` is a VM dict, so a `restore` rolls it back like
+    /// anything else and can leave it naming an earlier error than the
+    /// one last caught — the cache would then report the wrong one
+    /// (Codex review of PR #138). The cache is consulted only to supply
+    /// a payload `$error` has nowhere to keep, and only when it agrees
+    /// with `$error` about the error's name.
+    ///
+    /// `last_name` is restored from `$error /command` for the same
+    /// reason: by the time `stop` runs, the caller's cleanup and the
+    /// `stop` itself have overwritten it, so `error_report` would name
+    /// `stop` as the offending command rather than the `div` or `add`
+    /// that actually failed.
+    pub(crate) fn top_level_stop_error(&mut self) -> Option<PsError> {
+        let (newerror, errorname, command) = match self.load("$error") {
+            Some(obj) => match &obj.value {
+                Value::Dict(d) => {
+                    let d = d.borrow();
+                    let flag = matches!(
+                        d.get("newerror").map(|o| o.value.clone()),
+                        Some(Value::Boolean(true))
+                    );
+                    let name = match d.get("errorname").map(|o| o.value.clone()) {
+                        Some(Value::Name(n)) => Some(n.to_string()),
+                        _ => None,
+                    };
+                    let cmd = match d.get("command").map(|o| o.value.clone()) {
+                        Some(Value::Name(n)) => Some(n.to_string()),
+                        _ => None,
+                    };
+                    (flag, name, cmd)
+                }
+                _ => (false, None, None),
+            },
+            None => (false, None, None),
+        };
+        if !newerror {
+            return None;
+        }
+        let name = errorname?;
+        let rebuilt = PsError::from_name(&name, command.clone())?;
+        // Rebuilt from `$error` for everything `$error` can express,
+        // which is everything but `syntaxerror`'s detail — matching the
+        // cache on the name alone is not enough, since two different
+        // `undefined`s share it and a restore can leave `$error` naming
+        // the earlier one (Codex review of PR #138).
+        let err = match (&rebuilt, &self.caught_error) {
+            (PsError::Syntax(_), Some(cached @ PsError::Syntax(_))) => cached.clone(),
+            _ => rebuilt,
+        };
+        if let Some(c) = command {
+            self.last_name = Some(crate::name::intern(&c).id());
+        }
+        Some(err)
     }
 
     fn record_error(&mut self, e: &PsError) {

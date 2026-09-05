@@ -84,11 +84,27 @@ fn exit(it: &mut Interp) -> Result<(), PsError> {
 fn stop(it: &mut Interp) -> Result<(), PsError> {
     if it.do_stop() {
         it.push(Object::bool(true));
+        return Ok(());
     }
     // No enclosing stopped: do_stop drained the exec stack, which ends
     // the program — the PLRM's outermost job-server context would do the
     // same. Nothing is pushed.
-    Ok(())
+    //
+    // But if an error is still pending in `$error`, ending *silently*
+    // loses it (issue #142). Ghostscript's outermost wrapper reports it
+    // instead, which is what makes the standard cleanup idiom usable:
+    //
+    //     { userproc } stopped { restore-my-state stop } if
+    //
+    // Without this, re-raising turned a hard error into no error at all
+    // for every caller that did not itself catch, so a library wrapping
+    // a caller's procedure had to choose between leaking its own state
+    // and swallowing the failure. `lib/paintkit.ps`'s `pkwet` hit
+    // exactly that.
+    match it.top_level_stop_error() {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 fn stopped(it: &mut Interp) -> Result<(), PsError> {
