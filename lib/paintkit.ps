@@ -1757,6 +1757,341 @@
     } if
 } def
 
+% --- trowel / palette knife (issue #111) ------------------------------
+% opts pktrowel -
+%
+% A rigid flat blade dragging viscous paint, not a bristle brush. This
+% is the one preset in this file that is *not* built on `pkribbon`, and
+% the reason is structural rather than stylistic: every other preset
+% here offsets a band around the path *normal*, which is what a tuft of
+% bristles does. A palette knife holds its own angle independently of
+% where it is going, so the deposit is swept along the **blade
+% direction** -- `pkribbon` cannot express that, and a preset that
+% merely widened it would be the "just a wide brush" outcome issue #111
+% explicitly rules out. As a side benefit `pktrowel` calls no `pk*`
+% procedure that redefines its own scratch names, so the clobbering
+% hazard documented in this file's header for pkdry/pkspray/pkoil does
+% not arise here at all.
+%
+% The blade at each stop is a segment of half-extent
+%
+%     h(t) = Width/2 * Pressure(t) * (0.35 + 0.65*Load)
+%
+% laid at `pathAngle + 90 + Angle`, so /Angle 0 is a blade held square
+% across the direction of travel (a straight scrape) and larger angles
+% skew it. The blade is divided into /Lanes bands across its length;
+% each lane keeps its own two-state Markov contact chain along the
+% path, and each *run* of consecutive in-contact stops is emitted as
+% one filled strip -- forward along the lane's inner offset, back along
+% its outer -- not one quad per step.
+%
+% There is deliberately no solid base pass. `pkoil` lays a full-width
+% ribbon and then puts ridges on top of it; a trowel does the opposite,
+% depositing broken masses straight onto whatever is underneath. That
+% absence is what makes the underlayer read through, and it is the
+% concrete visual difference between the two tools.
+%
+% The four "less paint" controls are separated onto genuinely different
+% axes, so each one can be seen (and tested) on its own:
+%   /Load        how much paint is on the blade -> the *width* of the
+%                deposit (a nearly empty knife lays a narrow band; a
+%                loaded one lays the full blade)
+%   /Coverage    the Markov chain's steady state -> how much of the
+%                contact area is inked, i.e. holes *within* the band
+%   /Viscosity   the Markov chain's *rate* -> run persistence. High
+%                viscosity holds paint together into long chunky
+%                masses; low viscosity chatters
+%   /Scrape      static, not stochastic-along-the-path: narrows every
+%                lane toward its own centre (opening lengthwise streaks
+%                that reveal the underlayer) and kills whole lanes
+%                outright, the way a nicked blade leaves bare tracks
+% /EdgeBuildup adds the two darker ridges a blade piles up at its ends,
+% drawn last so they sit on top; /Drag extends each run backwards and
+% forwards along the direction of travel by Drag*h, the smear paint
+% leaves past where the blade actually lifted.
+%
+% /Angle is restricted to -80..80 degrees. The footprint's thickness
+% goes as cos(Angle), so a blade held nearly parallel to its own travel
+% collapses to a sliver -- physically correct, but past this range the
+% mark stops reading as a trowel at all and an unguarded 90 would be a
+% silent no-op.
+%
+% Determinism: no library seed, fully reproducible under the caller's
+% own `N srand`, same doctrine as pkribbon/pkdry/pkspray/pkoil. The
+% random draws are structurally fixed at three per (lane, stop) plus
+% one per lane, taken whether or not they end up being used -- a lane
+% killed by /Scrape still walks its stops and still draws. That is what
+% lets one control be turned without silently re-rolling every other
+% control's texture, and it is why /Scrape's lane-kill test compares
+% against `Scrape*0.35` rather than being skipped at Scrape 0.
+%
+% Multiple subpaths each get their own independent contact chain (reset
+% at every subpath start). A degenerate single-point subpath is a
+% *pressed* knife: contact is forced on, and the single-stop run is
+% given a minimum along-travel extent of Pitch/2 so it deposits a
+% blade-shaped patch rather than the zero-area polygon a
+% forward-and-back strip through one point would otherwise be. That
+% same minimum is what keeps low-/Viscosity chatter -- whose runs are
+% frequently one stop long -- visible instead of blank.
+%
+% Safety: Lanes is capped 1..40 and Lanes * stopCount is checked
+% against 120000 inside the counting walk, the same bound and the same
+% placement argument as pkoil's. No new unbounded traversal is
+% introduced (issue #110).
+%
+% Scratch prefix pt- (pktrowel/ptroll/ptpt/ptemit/ptridge) --
+% deliberately distinct from pk-/pn-/pb-/pz-/po-/pw-/pv-, per this
+% file's header.
+%
+% @internal
+/ptroll {
+    dup 1 ge { pop true } { dup 0 le { pop false } { frnd exch lt } ifelse } ifelse
+} def
+
+% i u e ptpt  ->  x y
+% Blade-space to device space: lateral offset `u` along the blade
+% direction at stop `i`, plus `e` along the direction of travel there.
+% @internal
+/ptpt {
+    /ptpe exch def /ptpu exch def
+    ptraw exch get
+    dup 0 get /ptpx exch def
+    dup 1 get /ptpy exch def
+    2 get /ptpa exch def
+    /ptpb ptpa 90 add ptAngle add def
+    ptpx ptpb cos ptpu mul add ptpa cos ptpe mul add
+    ptpy ptpb sin ptpu mul add ptpa sin ptpe mul add
+} def
+
+% - ptemit -   (fills the ptk accumulated stops as one strip, resets ptk)
+% The two extra vertices at each end carry the /Drag smear; when Drag
+% is 0 and the run spans more than one stop they coincide with the
+% run's own endpoints, which `fill` absorbs without complaint.
+% @internal
+/ptemit {
+    ptk 0 gt {
+        /ptext ptDrag ptraw ptri 0 get get 6 get mul def
+        ptk 1 eq { /ptext ptext ptPitch 0.5 mul add def } if
+        /ptlast ptk 1 sub def
+        newpath
+        ptri 0 get ptua 0 get ptext neg ptpt moveto
+        0 1 ptlast { /ptei exch def
+            ptri ptei get ptua ptei get 0 ptpt lineto } for
+        ptri ptlast get ptua ptlast get ptext ptpt lineto
+        ptri ptlast get ptub ptlast get ptext ptpt lineto
+        ptlast -1 0 { /ptei exch def
+            ptri ptei get ptub ptei get 0 ptpt lineto } for
+        ptri 0 get ptub 0 get ptext neg ptpt lineto
+        closepath fill
+    } if
+    /ptk 0 def
+} def
+
+% na nb ptridge -   (a continuous strip between two normalized blade
+% offsets, one per subpath -- the edge buildup, which never breaks)
+% @internal
+/ptridge {
+    /ptrgb exch def /ptrga exch def
+    /ptrt0 frnd ptTrim mul def
+    /ptrt1 1 frnd ptTrim mul sub def
+    /ptk 0 def
+    0 1 ptn 1 sub {
+        /ptgi exch def
+        /ptgrec ptraw ptgi get def
+        ptgrec 3 get dup ptrt0 ge exch ptrt1 le and
+        ptgrec 5 get 3 and 3 eq or {
+            /ptgh ptgrec 6 get def
+            ptri ptk ptgi put
+            ptua ptk ptrga ptgh mul ptJitter 0.5 mul pkjit add put
+            ptub ptk ptrgb ptgh mul ptJitter 0.5 mul pkjit add put
+            /ptk ptk 1 add def
+        } { ptemit } ifelse
+        ptgrec 5 get 2 and 2 eq { ptemit } if
+    } for
+    ptemit
+} def
+
+% @kind: Procedure
+% @summary: A trowel / palette-knife stroke: a rigid flat blade dragging viscous paint, swept along the blade direction rather than the path normal, depositing broken masses with lengthwise scrape streaks, a dragged smear, and built-up ridges at the blade edges. Not built on pkribbon; lays no solid base pass, so the underlayer reads through. Deterministic under the caller's own srand; bounded by Lanes * stops.
+% @example: newpath 40 120 moveto 260 150 lineto << /Width 72 /Angle 18 /Coverage 0.82 >> pktrowel
+% @param: /Width Blade length; must be > 0 (default 24)
+% @param: /Pitch walkpath sampling pitch for the shared centerline pass; must be > 0 (default Width*0.35, capped at 4)
+% @param: /Lanes Bands the blade is divided into across its length; must be a whole number, hard safety cap 1..40 (default 14)
+% @param: /Load 0..1 paint on the blade, scaling the deposit's width from 35% of the blade to all of it (default 0.85)
+% @param: /Pressure {t -> mult} proc over normalized path progress, multiplying the blade's half-extent; must be a procedure (default { pkflat })
+% @param: /Angle Blade angle in degrees relative to square-across-travel, -80..80; footprint thickness goes as cos(Angle) (default 0)
+% @param: /Drag 0..1 along-travel smear past where the blade lifted, as a fraction of the blade's half-extent (default 0.35)
+% @param: /Viscosity 0..1 contact-run persistence; high holds paint into long chunky masses, low chatters (default 0.6)
+% @param: /Coverage 0..1 steady-state fraction of the contact area actually depositing (default 0.82)
+% @param: /Scrape 0..1 lengthwise thinning: narrows every lane toward its centre and kills whole lanes, revealing the underlayer (default 0.15)
+% @param: /EdgeBuildup 0..1 darker ridges of paint piled at the two blade edges, drawn last (default 0.35)
+% @param: /Jitter Seeded lateral displacement of the lane boundaries, deterministic under the caller's own N srand (default 0)
+% @param: /ColorJitter 0..1 per-lane color variation magnitude around the caller's current color (default 0.06)
+/pktrowel {
+    /ptopts exch def
+    /ptWidth ptopts /Width 24 pkgetdef def
+    /ptWidth load xcheck { pktrowel-width-must-not-be-a-procedure } if
+    ptWidth 0 le { pktrowel-width-must-be-positive } if
+    /ptPitch ptopts /Pitch ptWidth 0.35 mul dup 4 gt { pop 4 } if pkgetdef def
+    /ptPitch load xcheck { pktrowel-pitch-must-not-be-a-procedure } if
+    ptPitch 0 le { pktrowel-pitch-must-be-positive } if
+    /ptLanes ptopts /Lanes 14 pkgetdef def
+    /ptLanes load xcheck { pktrowel-lanes-must-not-be-a-procedure } if
+    ptLanes 1 lt ptLanes 40 gt or ptLanes truncate ptLanes ne or { pktrowel-lanes-must-be-1-to-40 } if
+    /ptLoad ptopts /Load 0.85 pkgetdef def
+    /ptLoad load xcheck { pktrowel-load-must-not-be-a-procedure } if
+    ptLoad 0 lt ptLoad 1 gt or { pktrowel-load-must-be-0-to-1 } if
+    /ptAngle ptopts /Angle 0 pkgetdef def
+    /ptAngle load xcheck { pktrowel-angle-must-not-be-a-procedure } if
+    ptAngle -80 lt ptAngle 80 gt or { pktrowel-angle-must-be-minus80-to-80 } if
+    /ptDrag ptopts /Drag 0.35 pkgetdef def
+    /ptDrag load xcheck { pktrowel-drag-must-not-be-a-procedure } if
+    ptDrag 0 lt ptDrag 1 gt or { pktrowel-drag-must-be-0-to-1 } if
+    /ptViscosity ptopts /Viscosity 0.6 pkgetdef def
+    /ptViscosity load xcheck { pktrowel-viscosity-must-not-be-a-procedure } if
+    ptViscosity 0 lt ptViscosity 1 gt or { pktrowel-viscosity-must-be-0-to-1 } if
+    /ptCoverage ptopts /Coverage 0.82 pkgetdef def
+    /ptCoverage load xcheck { pktrowel-coverage-must-not-be-a-procedure } if
+    ptCoverage 0 lt ptCoverage 1 gt or { pktrowel-coverage-must-be-0-to-1 } if
+    /ptScrape ptopts /Scrape 0.15 pkgetdef def
+    /ptScrape load xcheck { pktrowel-scrape-must-not-be-a-procedure } if
+    ptScrape 0 lt ptScrape 1 gt or { pktrowel-scrape-must-be-0-to-1 } if
+    /ptEdgeBuildup ptopts /EdgeBuildup 0.35 pkgetdef def
+    /ptEdgeBuildup load xcheck { pktrowel-edgebuildup-must-not-be-a-procedure } if
+    ptEdgeBuildup 0 lt ptEdgeBuildup 1 gt or { pktrowel-edgebuildup-must-be-0-to-1 } if
+    /ptJitter ptopts /Jitter 0 pkgetdef def
+    /ptJitter load xcheck { pktrowel-jitter-must-not-be-a-procedure } if
+    /ptColorJitter ptopts /ColorJitter 0.06 pkgetdef def
+    /ptColorJitter load xcheck { pktrowel-colorjitter-must-not-be-a-procedure } if
+    ptColorJitter 0 lt ptColorJitter 1 gt or { pktrowel-colorjitter-must-be-0-to-1 } if
+    /ptPressure ptopts /Pressure { pkflat } pkgetdef def
+    /ptPressure load xcheck /ptPressure load type dup /arraytype eq exch dup /operatortype eq exch /packedarraytype eq or or and not { pktrowel-pressure-must-be-a-procedure } if
+    % Counting pass with the safety budget checked inside the walk, so
+    % an unbounded path is rejected before any allocation (pkoil's
+    % placement argument).
+    /ptcount 0 def
+    ptPitch { pop pop pop pop pop pop /ptcount ptcount 1 add def
+              ptLanes ptcount mul 120000 gt { pktrowel-deposit-count-exceeds-safety-limit } if } walkpath
+    /ptn ptcount def
+    /ptloadf 0.35 0.65 ptLoad mul add def
+    /ptraw ptn array def
+    /ptci 0 def
+    % /Pressure is resolved here, once per stop, and carried in slot 6
+    % -- not re-evaluated inside the lane loop. The caller's proc is
+    % arbitrary code and may legitimately consume randomness ({ frnd }
+    % is a valid pressure profile), so calling it Lanes times per stop
+    % would couple lane texture to the pressure profile and break
+    % same-seed-same-picture.
+    ptPitch {
+        /ptae exch def /ptsp exch def /ptt exch def
+        /ptang exch def /pty exch def /ptx exch def
+        ptraw ptci
+            [ ptx pty ptang ptt ptsp ptae
+              ptWidth 0.5 mul ptt ptPressure mul ptloadf mul ]
+        put
+        /ptci ptci 1 add def
+    } walkpath
+    ptn 0 gt {
+        gsave
+        /ptbasecolor [ currentrgbcolor ] def
+        % Transition rate per one Width of travel: 0.5 at full
+        % viscosity (long masses) up to 6.0 at zero (fine chatter).
+        /ptrate 0.5 5.5 1 ptViscosity sub mul add def
+        % Maximum entry/exit trim per lane, as a fraction of each
+        % subpath's own progress. Intrinsic to the tool rather than a
+        % parameter: a blade with machined ends is not a blade, and
+        % there is no artistic reason to ask for one.
+        /ptTrim 0.06 def
+        /ptri ptn array def
+        /ptua ptn array def
+        /ptub ptn array def
+        /ptk 0 def
+        1 1 ptLanes {
+            /ptL exch def
+            % Lane [na, nb] in normalized blade coordinates (-1..1),
+            % then narrowed toward its own centre by /Scrape.
+            /ptna ptL 1 sub ptLanes div 2 mul 1 sub def
+            /ptnb ptL ptLanes div 2 mul 1 sub def
+            /ptnc ptna ptnb add 0.5 mul def
+            % The 1.18 baseline is an 18% *overlap* between neighbouring
+            % lanes, not slack: two polygons sharing an exact edge leave
+            % an anti-aliased hairline seam where they abut, so at
+            % /Scrape 0 an exactly-tiling blade rendered as a striped
+            % rectangle rather than a solid mass. Lanes have to bleed
+            % into each other for "no scrape" to mean no gaps, which
+            % also makes /Scrape the only control that opens one.
+            /ptshrink 1.18 ptScrape 0.85 mul sub def
+            /ptna ptnc ptna ptnc sub ptshrink mul add def
+            /ptnb ptnc ptnb ptnc sub ptshrink mul add def
+            % All four draws are unconditional: a lane killed at Scrape
+            % 0.5 must consume exactly what a live lane at Scrape 0
+            % does, or turning /Scrape re-rolls every other lane's
+            % texture.
+            /ptdead frnd ptScrape 0.35 mul lt def
+            /ptcj ptColorJitter pkjit def
+            % Per-lane entry/exit trim: a blade does not touch down or
+            % lift off all at once, and without this every lane starts
+            % and stops at the same stop, giving the mark two perfectly
+            % straight machined ends.
+            /ptt0 frnd ptTrim mul def
+            /ptt1 1 frnd ptTrim mul sub def
+            ptbasecolor 1 ptcj add shade setrgbcolor
+            /ptk 0 def
+            /ptstate false def
+            0 1 ptn 1 sub {
+                /pti exch def
+                /ptrec ptraw pti get def
+                /ptae ptrec 5 get def
+                ptae 1 and 1 eq {
+                    % Subpath start: the chain is seeded from
+                    % /Coverage, its steady state -- not from /Load,
+                    % which is a width control here and would bias the
+                    % first run.
+                    /ptstate ptCoverage ptroll def
+                    ptae 2 and 2 eq { /ptstate true def } if
+                } {
+                    /ptstep ptrec 4 get ptWidth div ptrate mul def
+                    ptstate {
+                        1 ptCoverage sub ptstep mul ptroll { /ptstate false def } if
+                    } {
+                        ptCoverage ptstep mul ptroll { /ptstate true def } if
+                    } ifelse
+                } ifelse
+                % Drawn every stop for every lane whatever the contact
+                % state, so the stream length is fixed by (Lanes, stops)
+                % alone.
+                /ptj1 ptJitter pkjit def
+                /ptj2 ptJitter pkjit def
+                % A degenerate single-point subpath (atend 3) is a
+                % pressed knife: it ignores the trim, or the one stop it
+                % has would be trimmed away and the dab would vanish.
+                /ptin ptrec 3 get dup ptt0 ge exch ptt1 le and
+                      ptae 3 and 3 eq or def
+                ptstate ptdead not and ptin and {
+                    /pth ptrec 6 get def
+                    ptri ptk pti put
+                    ptua ptk ptna pth mul ptj1 add put
+                    ptub ptk ptnb pth mul ptj2 add put
+                    /ptk ptk 1 add def
+                } {
+                    ptemit
+                } ifelse
+                ptae 2 and 2 eq { ptemit } if
+            } for
+            ptemit
+        } for
+        % Edge buildup last, so the ridges sit on top of the masses.
+        ptEdgeBuildup 0 gt {
+            /ptrwn ptEdgeBuildup 0.28 mul def
+            ptbasecolor 1 ptEdgeBuildup 0.5 mul sub shade setrgbcolor
+            1 ptrwn sub 1 ptridge
+            -1 ptrwn 1 sub ptridge
+        } if
+        ptbasecolor aload pop setrgbcolor
+        grestore
+    } if
+} def
+
 % --- watercolor wash and paper ground (issue #47) ---------------------
 % opts pkwash -
 % x y w h opts pkpaper -
