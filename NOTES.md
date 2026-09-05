@@ -111,6 +111,21 @@ behaviour the ordinary tests exercised without noticing:
   is the shape of the mistake: a residual was documented with a
   suggested workaround before checking that the workaround covered
   everything that leaks.
+- The pass loop is a `for`, which means that while the wrapped
+  procedure runs it is the *nearest enclosing loop* — so an `exit`
+  inside that procedure, meant for a loop the **caller** owns, was
+  swallowed here. Measured rather than argued: a direct call ends the
+  caller's `for` on its first iteration, the same procedure through
+  `pkwet` let all five run, and a caller's `loop` would never have
+  terminated at all. Recursion propagates `exit` correctly but gives up
+  the chance to clean up, since control never returns; what ships
+  instead is an in-flight flag in the frame, set around each pass, so
+  the loop can tell an abandoned pass from a completed one, pay back
+  that pass's `gsave`, and re-run the `exit` outside its own `for` —
+  where it reaches the caller's loop exactly as a direct call would, or
+  raises `invalidexit` if there is none. Both of those, plus a
+  procedure exiting its *own* loop and an exit escaping a nest, are
+  pinned; all four were checked against the unfixed code first.
 - Whether a displacement draw happened was keyed off the resulting
   *magnitude* rather than the pass's position, so `/Spread 0` with
   several layers skipped every draw while any positive spread took one

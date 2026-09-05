@@ -2745,8 +2745,11 @@
     % limit, so one rejected nested call would poison every later
     % top-level pkwet until the library was reloaded (Codex review).
     pqdepth 8 gt { /pqdepth pqdepth 1 sub def pkwet-nesting-too-deep } if
-    pqframes pqdepth 2 array put
+    pqframes pqdepth 3 array put
     pqframes pqdepth get 1 /pqproc load put
+    % Slot 2 is the in-flight flag: true from just before a pass's gsave
+    % until just after its grestore. See the pass loop for what reads it.
+    pqframes pqdepth get 2 false put
     /pqbase [ currentrgbcolor ] def
     % Plan every pass before running any of them, so that none of pkwet's
     % own randomness is interleaved with the wrapped proc's -- otherwise
@@ -2807,6 +2810,7 @@
     pqframes pqdepth get 0 pqplan put
     pqLayers 1 sub -1 0 {
         pqframes pqdepth get 0 get exch get
+        pqframes pqdepth get 2 true put
         gsave
             dup length 2 gt
                 { aload pop setrgbcolor translate }
@@ -2814,8 +2818,33 @@
             ifelse
             pqframes pqdepth get 1 get exec
         grestore
+        pqframes pqdepth get 2 false put
     } for
+    % `exit` inside the wrapped procedure -- terminating a loop the
+    % *caller* owns -- would otherwise be swallowed here, because this
+    % `for` is the nearest enclosing loop at the moment the procedure
+    % runs. Verified: a direct call ends the caller's `for` on the first
+    % iteration, while the same procedure through pkwet let all five run
+    % (Codex review of PR #138). A caller's `loop` would never terminate
+    % at all, and an `exit` with no enclosing loop would silently lose
+    % its `invalidexit`.
+    %
+    % So detect it and re-run it. The flag is still set only if a pass
+    % was abandoned between its gsave and its grestore, which for a
+    % procedure that returned normally cannot happen. Reading it into a
+    % plain name is safe here and nowhere else in this procedure: the
+    % wrapped procedure has finished, so no nested pkwet can be in
+    % flight to clobber it.
+    %
+    % Re-running `exit` outside our own `for` reaches whatever loop the
+    % caller has, exactly as a direct call would -- or raises
+    % `invalidexit` if there is none. The `grestore` pays back the
+    % abandoned pass's `gsave`, which the unwind skipped; that is one
+    % frame, ours. An unbalanced gsave inside the caller's own procedure
+    % is beyond anything this can see.
+    /pqbroke pqframes pqdepth get 2 get def
     /pqdepth pqdepth 1 sub def
+    pqbroke { grestore exit } if
     % No trailing setrgbcolor: every pass ran inside its own
     % gsave/grestore, so the caller's color is already restored -- and
     % restoring it *by hand* would force the graphics state into
