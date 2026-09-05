@@ -1,0 +1,140 @@
+%!PS-Adobe-3.0
+%%Title: Paintkit — fan-brush strokes (issue #114)
+%%BoundingBox: 0 0 620 700
+%%EndComments
+
+% Specimen for paintkit's pkfan (lib/paintkit.ps): a spread bundle of
+% bristles that leaves a flattened ferrule and splays apart as the
+% stroke travels.
+%
+% The row that matters most is the first: /Splay swept from 0 to 1,
+% with pkdry at matched settings beside it. At /Splay 0 pkfan *is*
+% parallel bristles; everything that makes it a fan is that one term.
+%
+% Rows 2-3 are the two mark families the tool has to cover — soft
+% feathered (many fine bristles, high load) and separated bristle marks
+% (few bristles, low load, high dropout) — plus /Ragged and /Flick,
+% which are what stop a fan reading as a comb.
+%
+% Row 4 is the point of the whole thing: evergreen branches, a grass
+% bank, and foliage clusters built from pressed-fan dabs.
+
+%   pscat --page 620x700 examples/paintkit_fan_demo.ps --png fan.png
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+
+31 srand
+
+1 1 1 setrgbcolor clippath fill
+
+/dmlabel {
+    /dmllabel exch def /dmly exch def /dmlx exch def
+    gsave
+        0.45 0.45 0.45 setrgbcolor
+        /Helvetica findfont 10 scalefont setfont
+        dmlx dmly moveto dmllabel show
+    grestore
+} def
+
+/arc1 {                                    % x y -   (a shared stroke shape)
+    /a1y exch def /a1x exch def
+    newpath a1x a1y moveto
+    a1x 60 add a1y 30 add
+    a1x 120 add a1y 40 add
+    a1x 165 add a1y 25 add curveto
+} def
+
+/meadow pal 1 get aload pop setrgbcolor
+
+% --- row 1: /Splay is the whole difference from pkdry -------------------
+20 670 (Splay 0 -- parallel bristles) dmlabel
+40 590 arc1 << /Width 58 /Splay 0 >> pkfan
+
+220 670 (Splay 0.6 -- the default fan) dmlabel
+240 590 arc1 << /Width 58 /Splay 0.6 >> pkfan
+
+420 670 (Splay 1 -- the ferrule floor holds) dmlabel
+440 590 arc1 << /Width 58 /Splay 1 >> pkfan
+
+20 550 (pkdry at matched settings, for contrast) dmlabel
+40 480 arc1 << /Width 58 /Bristles 24 /Spread 0.9 /BristleWidth 2 /Load 0.92 >> pkdry
+
+/tide pal 2 get aload pop setrgbcolor
+220 550 (soft feathered: many fine bristles, high Load) dmlabel
+240 480 arc1
+<< /Width 58 /Bristles 48 /BristleWidth 1.4 /Load 0.97 /Dropout 0.03 >> pkfan
+
+420 550 (separated bristles: few, low Load) dmlabel
+440 480 arc1
+<< /Width 58 /Bristles 12 /BristleWidth 3 /Load 0.3 /Dropout 0.6 >> pkfan
+
+% --- row 2: the controls that stop a fan reading as a comb --------------
+/ember pal 2 get aload pop setrgbcolor
+20 440 (Ragged 0 -- every bristle the same length) dmlabel
+40 370 arc1 << /Width 58 /Ragged 0 /Flick 0 >> pkfan
+
+220 440 (Ragged 0.7 -- feathered tips) dmlabel
+240 370 arc1 << /Width 58 /Ragged 0.7 /Flick 0 >> pkfan
+
+420 440 (Flick 0.9 -- bristles lifted to a point) dmlabel
+440 370 arc1 << /Width 58 /Ragged 0.4 /Flick 0.9 >> pkfan
+
+% --- row 3: cloud feathering, and a pressed dab -------------------------
+20 330 (cloud feathering -- a fan is a soft-texture tool too) dmlabel
+0.62 0.66 0.74 setrgbcolor
+40 260 arc1
+<< /Width 54 /Bristles 40 /BristleWidth 1.5 /Splay 0.7
+   /Load 0.6 /Dropout 0.35 /Ragged 0.6 >> pkfan
+
+420 330 (a pressed fan: one dab, radiating) dmlabel
+/meadow pal 3 get aload pop setrgbcolor
+newpath 520 265 moveto << /Width 70 /Bristles 20 /Ragged 0.4 >> pkfan
+
+% --- row 4: what it is actually for -------------------------------------
+20 210 (evergreen branches, a grass bank, foliage clusters) dmlabel
+
+% two conifer limbs, flicks angled down off each
+0.09 0.24 0.15 setrgbcolor
+/limb {                                    % x0 y0 x1 y1 -
+    /lby1 exch def /lbx1 exch def /lby0 exch def /lbx0 exch def
+    gsave
+        0.16 0.12 0.08 setrgbcolor 1.6 setlinewidth
+        newpath lbx0 lby0 moveto lbx1 lby1 lineto stroke
+    grestore
+    0 1 11 {
+        /lbi exch def
+        /lbf lbi 11 div def
+        /lbx lbx0 lbx1 lbx0 sub lbf mul add def
+        /lby lby0 lby1 lby0 sub lbf mul add def
+        /lbs 30 1 lbf 0.55 mul sub mul def
+        newpath lbx lby moveto lbx lbs 0.8 mul add lby lbs 0.9 mul sub lineto
+        << /Width lbs /Bristles 11 /Splay 0.8 /Ragged 0.5 /Flick 0.8 >> pkfan
+        newpath lbx lby moveto lbx lbs 0.8 mul sub lby lbs 0.9 mul sub lineto
+        << /Width lbs /Bristles 11 /Splay 0.8 /Ragged 0.5 /Flick 0.8 >> pkfan
+    } for
+} def
+
+30 100 195 175 limb
+215 90 375 160 limb
+
+% a grass bank
+0.30 0.44 0.16 setrgbcolor
+400 7 610 {
+    /gx exch def
+    newpath gx 30 moveto gx 11 gx 100 mul sin mul add 100 lineto
+    << /Width 24 /Bristles 9 /Splay 0.85 /Ragged 0.5 /Flick 0.7 >> pkfan
+} for
+
+% foliage clusters from pressed dabs
+0.18 0.34 0.15 setrgbcolor
+410 45 590 {
+    /sx exch def
+    130 34 190 {
+        /sy exch def
+        newpath sx sy moveto
+        << /Width 44 /Bristles 13 /Ragged 0.5 /Flick 0.6 >> pkfan
+    } for
+} for
+
+showpage
