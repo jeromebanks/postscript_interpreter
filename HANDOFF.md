@@ -570,6 +570,20 @@ renders eight examples in both and compares block-downsampled output).
    `tests/capabilities.rs`'s `every_migrated_file_names_
    match_the_catalog_exactly` cross-checks every file
    `capabilities::migrated_files()` reports, generically.
+   The second follow-up, a PS-native verification path, has its
+   **Phase A** done (issue #95): `%%SelfTest` doc-comment blocks run by
+   `pscat --selftest`, plus a strict `--lint` mode that actually fails
+   the process, run against rendering drivers under `selftest/drivers/`.
+   `./scripts/selftest.sh` runs both, and CI runs it as its own step.
+   **Read `docs/SELFTEST.md` before adding self-tests or a driver** —
+   same reasoning as above: it records the assertion vocabulary, why
+   there is deliberately no "assert something raised" form, and (with
+   `docs/GS_CHECK_INVENTORY.md`) exactly which defect classes stay
+   uncovered and why. Two pieces remain open, both filed:
+   **Phase B** (#134), a pixel-sample operator for the
+   geometry/measurement class Phase A structurally can't reach, and the
+   `ghostscript_accepts_*` extraction (#135), which #95 inventoried (25
+   drivers today, not the decision record's 16) rather than performed.
 
 ## Gotchas for the next implementer
 
@@ -626,6 +640,7 @@ renders eight examples in both and compares block-downsampled output).
 cargo test            # all suites, golden included (needs gs installed)
 cargo clippy --all-targets
 cargo fmt --check
+./scripts/selftest.sh                     # PS-native checks (no gs, no Rust)
 cargo run -- examples/postcard.ps         # watch it draw
 ./gallery/show.sh --live                  # the fun regression suite
 ```

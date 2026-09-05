@@ -45,6 +45,14 @@
 //! would drop data with no signal, exactly the drift this mechanism
 //! exists to prevent.
 //!
+//! One exception, for one other convention: lines inside a
+//! `%%SelfTest:`...`%%EndSelfTest` block (issue #95,
+//! `src/selftest.rs`) are invisible to every scan here. Those blocks
+//! hold PostScript as comment text, and PostScript may start a line
+//! with `@` -- see [`selftest_lines`]. `% @requires:` is *shared*
+//! between the two conventions rather than duplicated: the self-test
+//! runner reads this same tag for its load chain.
+//!
 //! ## Placement
 //!
 //! A tag block is the contiguous run of `% @...` lines immediately
@@ -127,11 +135,17 @@ fn main() {
         // String-aware, matching parse_file's own scan below -- a
         // legacy file whose only `% @...`-shaped line sits inside a
         // multiline string must not be misdetected as migrated (round
-        // 6 of Codex review on PR #97).
-        let is_migrated = text
-            .lines()
-            .zip(lines_starting_in_string(&text))
-            .any(|(l, in_string)| !in_string && tag_line(l).is_some());
+        // 6 of Codex review on PR #97). Self-test blocks are skipped
+        // for the same reason and by the same rule parse_file uses:
+        // the two scans have to agree about which lines are tags, or
+        // they disagree about which files are migrated.
+        let lines: Vec<&str> = text.lines().collect();
+        let in_string = lines_starting_in_string(&text);
+        let in_selftest = selftest_lines(&rel, &lines, &in_string);
+        let is_migrated = lines
+            .iter()
+            .enumerate()
+            .any(|(i, l)| !in_string[i] && !in_selftest[i] && tag_line(l).is_some());
 
         if !is_migrated {
             if !legacy_remaining.remove(rel.as_str()) {
@@ -298,6 +312,22 @@ fn parse_file(rel: &str, text: &str) -> ParsedFile {
     // per-character string tracking.
     let starts_in_string = lines_starting_in_string(text);
 
+    // A `%%SelfTest:` block (issue #95, `src/selftest.rs`) carries
+    // PostScript as comment text, and PostScript is free to start a
+    // line with `@`. That would read here as an unknown tag and fail
+    // the build for a reason that has nothing to do with the
+    // capability catalog, so those regions are invisible to the tag
+    // scanner -- the two `%`-comment conventions have to be able to
+    // share a file.
+    let in_selftest = selftest_lines(rel, &lines, &starts_in_string);
+    // Lines the tag scanner must not read: string content, or the
+    // inside of a self-test block.
+    let ignored: Vec<bool> = starts_in_string
+        .iter()
+        .zip(&in_selftest)
+        .map(|(s, t)| *s || *t)
+        .collect();
+
     // Every tag-shaped line must use a known tag word -- an
     // unrecognized `@word` is silently-dropped data otherwise, the
     // exact drift this mechanism exists to prevent. Also record every
@@ -310,7 +340,7 @@ fn parse_file(rel: &str, text: &str) -> ParsedFile {
     // dropped instead of failing loudly) has something to check against.
     let mut all_tag_lines: BTreeSet<usize> = BTreeSet::new();
     for (i, line) in lines.iter().enumerate() {
-        if starts_in_string[i] {
+        if ignored[i] {
             continue;
         }
         if let Some((word, _)) = tag_line(line) {
@@ -328,7 +358,7 @@ fn parse_file(rel: &str, text: &str) -> ParsedFile {
 
     let mut requires: Option<String> = None;
     for (i, line) in lines.iter().enumerate() {
-        if starts_in_string[i] {
+        if ignored[i] {
             continue;
         }
         if let Some((word, val)) = tag_line(line)
@@ -367,7 +397,7 @@ fn parse_file(rel: &str, text: &str) -> ParsedFile {
     let mut consumed_tag_lines: BTreeSet<usize> = BTreeSet::new();
 
     for (name, start_line) in defs {
-        let block = collect_tag_block(&lines, &starts_in_string, start_line);
+        let block = collect_tag_block(&lines, &ignored, start_line);
 
         if block.is_empty() {
             panic!(
@@ -601,14 +631,14 @@ fn parse_param(rel: &str, owner: &str, line: usize, val: &str) -> (String, Strin
 /// caught by a third round of Codex review on PR #97). Stops at the
 /// first line that isn't a tag line -- old prose sitting directly
 /// above (no blank-line separator required) is never accidentally
-/// included, since it doesn't start with `@`. `starts_in_string[i]`
-/// (from [`lines_starting_in_string`]) also stops the walk, since a
-/// line beginning inside an unterminated string is string content,
-/// not a comment, however `% @`-shaped it looks (round 5 of Codex
-/// review on PR #97).
+/// included, since it doesn't start with `@`. `ignored[i]` also stops
+/// the walk: a line beginning inside an unterminated string is string
+/// content, not a comment, however `% @`-shaped it looks (round 5 of
+/// Codex review on PR #97), and a line inside a `%%SelfTest:` block is
+/// PostScript the self-test harness owns, not a tag (issue #95).
 fn collect_tag_block(
     lines: &[&str],
-    starts_in_string: &[bool],
+    ignored: &[bool],
     start_line: usize,
 ) -> Vec<(usize, String, String)> {
     let mut block = Vec::new();
@@ -618,7 +648,7 @@ fn collect_tag_block(
     let mut i = start_line as isize - 2; // 0-indexed line just above start_line
     while i >= 0 {
         let idx = i as usize;
-        if starts_in_string[idx] {
+        if ignored[idx] {
             break;
         }
         match tag_line(lines[idx]) {
@@ -631,6 +661,56 @@ fn collect_tag_block(
     }
     block.reverse();
     block
+}
+
+/// Returns, for each 0-indexed line, whether it belongs to a
+/// `%%SelfTest:`...`%%EndSelfTest` block (markers included).
+///
+/// Those blocks carry PostScript as comment text (issue #95,
+/// `src/selftest.rs`), and PostScript may legitimately begin a line
+/// with `@` -- which this file's tag scanner would otherwise reject as
+/// an unknown tag, failing the build over something the capability
+/// catalog has no stake in. The two `%`-comment conventions have to be
+/// able to coexist in one file, so self-test regions are simply
+/// invisible here.
+///
+/// An unterminated block is a hard error rather than a region running
+/// to end of file: silently swallowing every tag after a missing
+/// `%%EndSelfTest` would drop catalog entries with no signal, the
+/// exact drift this build script exists to prevent. `src/selftest.rs`
+/// rejects the same shape independently -- both need to, since either
+/// one can be the first to see a malformed file.
+fn selftest_lines(rel: &str, lines: &[&str], starts_in_string: &[bool]) -> Vec<bool> {
+    let mut mask = vec![false; lines.len()];
+    let mut open: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate() {
+        if starts_in_string[i] {
+            continue;
+        }
+        if open.is_some() {
+            mask[i] = true;
+            // Exact marker, not a prefix: `%%EndSelfTestTYPO` must not
+            // close a region. src/selftest.rs applies the same rule,
+            // and the two have to agree about where a region ends.
+            if line
+                .strip_prefix("%%EndSelfTest")
+                .is_some_and(|rest| rest.trim().is_empty())
+            {
+                open = None;
+            }
+        } else if line.starts_with("%%SelfTest:") {
+            mask[i] = true;
+            open = Some(i);
+        }
+    }
+    if let Some(i) = open {
+        panic!(
+            "build.rs: {rel}:{}: `%%SelfTest:` block is never closed with `%%EndSelfTest` -- \
+             everything after it would be hidden from the capability-catalog tag scanner.",
+            i + 1
+        );
+    }
+    mask
 }
 
 /// Returns, for each 0-indexed line, whether that line begins already

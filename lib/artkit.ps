@@ -1590,6 +1590,51 @@ end
     scpx scpy scsc scang scmark
 } def
 
+% Self-tests: `pscat --selftest lib/artkit.ps` (see docs/SELFTEST.md).
+% scatter validates its whole option dict before drawing a single
+% mark, and every one of these guards is load-bearing: a silently
+% accepted bad option produces a plausible-looking page with the wrong
+% content, which is exactly the failure a rendered check can't see.
+%
+%%SelfTest: scatter-validates-its-option-dict
+%   { 0 0 100 100 screct << >> scatter }
+%   /scatter-mark-is-required
+%   (no /Mark at all) mustguard
+%   { 0 0 100 100 screct << /Mark 5 >> scatter }
+%   /scatter-mark-must-be-a-procedure
+%   (a non-callable /Mark) mustguard
+%   { 0 0 100 100 screct << /Mark { pop pop pop pop } /Weight 3 >> scatter }
+%   /scatter-weight-must-be-a-procedure
+%   (a non-callable /Weight) mustguard
+%   { 0 0 100 100 screct 5 scatter }
+%   /scatter-opts-must-be-a-dict
+%   (a number where the option dict goes) mustguard
+%%EndSelfTest
+%
+%%SelfTest: scatter-validates-its-numeric-ranges
+%   { 0 0 100 100 screct
+%     << /Mark { pop pop pop pop } /MinSpacing -1 >> scatter }
+%   /scatter-minspacing-must-be-non-negative
+%   (a negative /MinSpacing) mustguard
+%   { 0 0 100 100 screct
+%     << /Mark { pop pop pop pop } /Tries 0 >> scatter }
+%   /scatter-tries-must-be-1-to-100
+%   (/Tries below the documented range) mustguard
+%   { 0 0 100 100 screct
+%     << /Mark { pop pop pop pop } /Scale [ 2 1 ] >> scatter }
+%   /scatter-scale-range-must-be-low-then-high
+%   (a /Scale range given high-then-low) mustguard
+%   % /Count and /Density both set is ambiguous, not a merge --
+%   % rejecting it outright is the documented contract.
+%   { 0 0 100 100 screct
+%     << /Mark { pop pop pop pop } /Count 5 /Density 0.01 >> scatter }
+%   /scatter-count-and-density-are-mutually-exclusive
+%   (/Count and /Density together) mustguard
+%   { 4 srand 0 0 100 100 screct
+%     << /Mark { pop pop pop pop } /Count 5 /Seed 1 >> scatter }
+%   (a well-formed scatter call) mustpass
+%%EndSelfTest
+%
 /scatter {                                       % region opts -
     /scopts exch def
     /screg exch def

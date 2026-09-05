@@ -22,6 +22,10 @@ pub mod ops;
 pub mod paths;
 pub mod pdf;
 pub mod repl;
+// Reads library files off disk to run their `%%SelfTest` blocks —
+// a developer/CI tool, not something the wasm playground can host.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod selftest;
 pub(crate) mod shading;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod spool;

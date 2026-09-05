@@ -29,29 +29,150 @@ pub struct LintFinding {
 /// result sitting on the operand stack are both the normal, intended
 /// outcome rather than mistakes.
 pub fn check(interp: &Interp, render_checks: bool) -> Vec<LintFinding> {
+    check_with_pages(interp, render_checks, &DeclaredPages::None)
+}
+
+/// [`check`] plus the program's own `%%Pages:` declaration (issue #95),
+/// which [`scan_declared_pages`] reads from the source.
+///
+/// A separate entry point rather than an extra argument on `check`:
+/// both are public API, and a signature change would break any caller
+/// outside this crate for a parameter almost all of them would pass
+/// `None` to (Codex review, round 1).
+pub fn check_with_pages(
+    interp: &Interp,
+    render_checks: bool,
+    declared_pages: &DeclaredPages,
+) -> Vec<LintFinding> {
     let mut findings = Vec::new();
     if render_checks {
         check_blank_pages(interp, &mut findings);
+        check_declared_pages(interp, declared_pages, &mut findings);
     }
     check_gsave_balance(interp, &mut findings);
     check_stack_leaks(interp, render_checks, &mut findings);
     findings
 }
 
-fn check_blank_pages(interp: &Interp, findings: &mut Vec<LintFinding>) {
+/// The pages `--png` would write: every emitted page, plus the live
+/// canvas whenever nothing has emitted it yet (`has_trailing_art`) or
+/// nothing was ever emitted at all — the same rule `finish_headless`
+/// uses to decide what a `--png` without a `showpage` should write.
+fn pages_with_ink_flags(interp: &Interp) -> Vec<(&Pixmap, bool)> {
     let gfx = interp.gfx();
     let mut pages: Vec<(&Pixmap, bool)> = gfx
         .pages()
         .iter()
         .zip(gfx.pages_had_ink().iter().copied())
         .collect();
-    // The live canvas counts as a trailing page whenever nothing has
-    // emitted it yet (has_trailing_art) or nothing was ever emitted at
-    // all (pages is empty) — the same rule `finish_headless` uses to
-    // decide what a `--png` without a `showpage` should write.
     if pages.is_empty() || gfx.has_trailing_art() {
         pages.push((&gfx.pixmap, gfx.has_trailing_art()));
     }
+    pages
+}
+
+/// What a program's DSC header says about its own page count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeclaredPages {
+    /// No `%%Pages:` header, or the explicit `(atend)` form — DSC's
+    /// legitimate "the count comes later", which declares nothing.
+    None,
+    Count(usize),
+    /// A `%%Pages:` whose value is neither a number nor `(atend)`.
+    /// Kept as a distinct case rather than folded into `None`: a
+    /// typo'd count that reads as "no declaration" would silently
+    /// disable the very check it was written to enable (Codex review,
+    /// round 1) — precisely the failure mode issue #95 exists to close.
+    Malformed(String),
+}
+
+/// The page count a program declares about itself.
+///
+/// DSC's own header comment, not a new convention — which is the
+/// point: a program that says how many pages it produces can be
+/// checked against what it actually produced.
+///
+/// This exists for issue #95's rendering drivers, where the rule is
+/// one `showpage` per independently-checked scenario: two scenarios
+/// that accidentally share a page let the second one's ink hide the
+/// first one's blank-page regression, and that mistake is one deleted
+/// `showpage` away in ordinary editing. A declared count turns it from
+/// a convention into something checkable.
+///
+/// Scanning stops at `%%EndComments` or the first non-comment line,
+/// mirroring `pdf::scan_document_info` — column zero alone doesn't make
+/// a line a header, and a document that embeds another one further
+/// down would otherwise adopt the *embedded* count and compare it
+/// against the outer document's output (Codex review, round 1).
+pub fn scan_declared_pages(source: &[u8]) -> DeclaredPages {
+    for raw_line in source.split(|&b| b == b'\n') {
+        let line = String::from_utf8_lossy(raw_line);
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("%%Pages:") {
+            let value = value.trim();
+            if value.is_empty() {
+                return DeclaredPages::Malformed(String::new());
+            }
+            // Only the first token is the count. Older DSC allows a
+            // page-order operand after it (`%%Pages: 3 1`), and a lint
+            // heuristic must not hard-fail on a form real files use —
+            // under `--lint-strict` that would abort a run over a
+            // header the check was never meant to judge, and under
+            // plain `--lint` it would put a spurious finding in front
+            // of every `pscat-mcp` caller (blank-context review, PR
+            // #136).
+            let first = value.split_whitespace().next().unwrap_or(value);
+            if first == "(atend)" {
+                return DeclaredPages::None;
+            }
+            return match first.parse() {
+                Ok(n) => DeclaredPages::Count(n),
+                Err(_) => DeclaredPages::Malformed(value.to_string()),
+            };
+        }
+        if line.starts_with("%%EndComments") || !line.starts_with('%') {
+            break;
+        }
+    }
+    DeclaredPages::None
+}
+
+fn check_declared_pages(
+    interp: &Interp,
+    declared: &DeclaredPages,
+    findings: &mut Vec<LintFinding>,
+) {
+    let declared = match declared {
+        DeclaredPages::None => return,
+        DeclaredPages::Malformed(value) => {
+            findings.push(LintFinding {
+                check: "page-count",
+                message: format!(
+                    "`%%Pages: {value}` is neither a count nor `(atend)`, so the \
+                     declared-page check can't run"
+                ),
+            });
+            return;
+        }
+        DeclaredPages::Count(n) => *n,
+    };
+    let actual = pages_with_ink_flags(interp).len();
+    if actual != declared {
+        findings.push(LintFinding {
+            check: "page-count",
+            message: format!(
+                "the program declares `%%Pages: {declared}` but produced {actual} \
+                 — a missing or extra showpage"
+            ),
+        });
+    }
+}
+
+fn check_blank_pages(interp: &Interp, findings: &mut Vec<LintFinding>) {
+    let pages = pages_with_ink_flags(interp);
     let total = pages.len();
     for (i, (page, had_ink)) in pages.into_iter().enumerate() {
         // `had_ink` catches a page that's a lazy-erase repeat of the
@@ -205,10 +326,116 @@ mod tests {
         check(it, render_checks).iter().map(|f| f.check).collect()
     }
 
+    fn checks_with_pages(it: &Interp, declared: &DeclaredPages) -> Vec<&'static str> {
+        check_with_pages(it, true, declared)
+            .iter()
+            .map(|f| f.check)
+            .collect()
+    }
+
     #[test]
     fn blank_canvas_is_flagged() {
         let it = run("showpage");
         assert!(checks(&it, true).contains(&"blank-page"));
+    }
+
+    #[test]
+    fn a_matching_declared_page_count_is_not_flagged() {
+        let it = run("0 0 40 40 rectfill showpage 5 5 30 30 rectfill showpage");
+        assert!(!checks_with_pages(&it, &DeclaredPages::Count(2)).contains(&"page-count"));
+    }
+
+    #[test]
+    fn a_missing_showpage_merges_two_scenarios_and_is_flagged() {
+        // The failure mode this check exists for (issue #95): a
+        // rendering driver declares one page per checked scenario, and
+        // a deleted `showpage` silently merges two of them — after
+        // which the second scenario's ink hides whether the first drew
+        // anything at all.
+        let it = run("0 0 40 40 rectfill 5 5 30 30 rectfill showpage");
+        let found = check_with_pages(&it, true, &DeclaredPages::Count(2));
+        let msg = found
+            .iter()
+            .find(|f| f.check == "page-count")
+            .expect("page-count finding");
+        assert!(msg.message.contains("but produced 1"), "{}", msg.message);
+    }
+
+    #[test]
+    fn an_undeclared_page_count_is_never_flagged() {
+        // Most programs carry no `%%Pages:` at all; they must not
+        // acquire a finding for it.
+        let it = run("0 0 40 40 rectfill showpage");
+        assert!(!checks_with_pages(&it, &DeclaredPages::None).contains(&"page-count"));
+    }
+
+    #[test]
+    fn declared_pages_reads_a_dsc_header() {
+        assert_eq!(
+            scan_declared_pages(b"%!PS\n%%Pages: 7\n%%EndComments\n"),
+            DeclaredPages::Count(7)
+        );
+    }
+
+    #[test]
+    fn declared_pages_tolerates_a_trailing_page_order_operand() {
+        // Regression test (blank-context review, PR #136): `%%Pages: 3 1`
+        // is a real DSC form, and reporting it as malformed would fail
+        // a strict-lint run over a header the check never judges.
+        assert_eq!(
+            scan_declared_pages(b"%%Pages: 3 1\n"),
+            DeclaredPages::Count(3)
+        );
+        assert_eq!(
+            scan_declared_pages(b"%%Pages: 3\n"),
+            DeclaredPages::Count(3)
+        );
+    }
+
+    #[test]
+    fn declared_pages_treats_atend_as_no_declaration() {
+        // DSC's legitimate "the count comes later" form.
+        assert_eq!(
+            scan_declared_pages(b"%%Pages: (atend)\n"),
+            DeclaredPages::None
+        );
+        assert_eq!(scan_declared_pages(b"%!PS\n"), DeclaredPages::None);
+    }
+
+    #[test]
+    fn a_malformed_page_count_is_reported_not_ignored() {
+        // Regression test (Codex review, PR #136): treating a typo'd
+        // count as "no declaration" would silently disable the very
+        // check it was written to enable.
+        assert_eq!(
+            scan_declared_pages(b"%%Pages: nine\n"),
+            DeclaredPages::Malformed("nine".to_string())
+        );
+        let it = run("0 0 40 40 rectfill showpage");
+        let found = check_with_pages(&it, true, &scan_declared_pages(b"%%Pages: nine\n"));
+        let msg = found
+            .iter()
+            .find(|f| f.check == "page-count")
+            .expect("page-count finding");
+        assert!(msg.message.contains("neither a count"), "{}", msg.message);
+    }
+
+    #[test]
+    fn declared_pages_stops_at_the_end_of_the_dsc_header() {
+        // Regression test (Codex review, PR #136): column zero alone
+        // doesn't make a line a header. A document that embeds another
+        // one further down would otherwise adopt the *embedded* count
+        // and compare it against the outer document's output.
+        assert_eq!(
+            scan_declared_pages(b"%!PS\n%%EndComments\n%%Pages: 12\n"),
+            DeclaredPages::None
+        );
+        assert_eq!(
+            scan_declared_pages(b"%!PS\n0 0 moveto\n%%Pages: 12\n"),
+            DeclaredPages::None
+        );
+        // ...and an indented one isn't a header comment either.
+        assert_eq!(scan_declared_pages(b"  %%Pages: 3\n"), DeclaredPages::None);
     }
 
     #[test]

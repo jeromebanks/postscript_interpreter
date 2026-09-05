@@ -419,6 +419,92 @@
 } def
 
 % opts pkribbon -
+%
+% Self-tests: `pscat --selftest lib/paintkit.ps`. Each block below
+% pins a defect cross-model review actually found on PR #76, so a
+% guard can't be dropped or weakened without something going red --
+% see docs/SELFTEST.md for the convention and the defect map.
+%
+%%SelfTest: pkribbon-rejects-a-non-callable-pressure
+%   % PR #76 round 2: a bare number as /Pressure is never
+%   % auto-executed, so it silently leaks an extra operand into every
+%   % downstream computation instead of raising.
+%   { newpath 0 0 moveto 40 0 lineto << /Pressure 5 >> pkribbon }
+%   /pkribbon-pressure-must-be-a-procedure
+%   (a bare number as /Pressure) mustguard
+%
+%   % Round 3: `xcheck` alone isn't enough -- an executable
+%   % non-procedure passes it and corrupts the stack exactly the same
+%   % way, so the guard has to check `type` too.
+%   { newpath 0 0 moveto 40 0 lineto << /Pressure 2 cvx >> pkribbon }
+%   /pkribbon-pressure-must-be-a-procedure
+%   (an executable non-procedure as /Pressure) mustguard
+%
+%   % ...while the documented form still has to work.
+%   { newpath 0 0 moveto 40 0 lineto << /Pressure { pkflat } >> pkribbon }
+%   (a procedure literal as /Pressure) mustpass
+%%EndSelfTest
+%
+%%SelfTest: pkribbon-rejects-executable-value-options
+%   % Round 7: /Width and friends are documented as plain values, so an
+%   % executable one is malformed input -- and a bare reference to it
+%   % would auto-run before any check saw it.
+%   { newpath 0 0 moveto 40 0 lineto << /Width { 10 } >> pkribbon }
+%   /pkribbon-width-must-not-be-a-procedure
+%   (an executable /Width) mustguard
+%   { newpath 0 0 moveto 40 0 lineto << /Pitch { 3 } >> pkribbon }
+%   /pkribbon-pitch-must-not-be-a-procedure
+%   (an executable /Pitch) mustguard
+%   { newpath 0 0 moveto 40 0 lineto << /StartCap { /round } >> pkribbon }
+%   /pkribbon-startcap-must-not-be-a-procedure
+%   (an executable /StartCap) mustguard
+%%EndSelfTest
+%
+%%SelfTest: pkribbon-rejects-undocumented-cap-values
+%   % Round 2: anything outside the three documented values used to
+%   % fall through to /flat silently.
+%   { newpath 0 0 moveto 40 0 lineto << /StartCap /square >> pkribbon }
+%   /pkribbon-startcap-must-be-round-flat-or-pointed
+%   (/square as a start cap) mustguard
+%   { newpath 0 0 moveto 40 0 lineto << /EndCap /square >> pkribbon }
+%   /pkribbon-endcap-must-be-round-flat-or-pointed
+%   (/square as an end cap) mustguard
+%   { newpath 0 0 moveto 40 0 lineto << /StartCap /pointed /EndCap /flat >> pkribbon }
+%   (the documented cap values) mustpass
+%%EndSelfTest
+%
+%%SelfTest: pkribbon-rejects-out-of-range-tapers
+%   % Round 5: outside 0..1 doesn't crash, it just degrades silently --
+%   % a contract violation the caller never hears about.
+%   { newpath 0 0 moveto 40 0 lineto << /StartTaper 2 >> pkribbon }
+%   /pkribbon-starttaper-must-be-0-to-1
+%   (a /StartTaper above 1) mustguard
+%   { newpath 0 0 moveto 40 0 lineto << /EndTaper -0.5 >> pkribbon }
+%   /pkribbon-endtaper-must-be-0-to-1
+%   (a negative /EndTaper) mustguard
+%   { newpath 0 0 moveto 40 0 lineto << /StartTaper 0.25 /EndTaper 1 >> pkribbon }
+%   (tapers at the ends of the documented range) mustpass
+%%EndSelfTest
+%
+%%SelfTest: pkribbon-rejects-non-positive-width-and-pitch
+%   { newpath 0 0 moveto 40 0 lineto << /Width 0 >> pkribbon }
+%   /pkribbon-width-must-be-positive
+%   (a zero /Width) mustguard
+%   { newpath 0 0 moveto 40 0 lineto << /Pitch -1 >> pkribbon }
+%   /pkribbon-pitch-must-be-positive
+%   (a negative /Pitch) mustguard
+%%EndSelfTest
+%
+%%SelfTest: pkribbon-survives-a-degenerate-pointed-subpath
+%   % Round 6: an open subpath shorter than /Pitch that returns exactly
+%   % to its own start has no chord direction, and `atan` on (0,0) is
+%   % undefined in both pscat and Ghostscript. This must degrade to a
+%   % dot, not raise.
+%   { newpath 20 20 moveto 20 20 lineto
+%     << /Width 6 /StartCap /pointed /EndCap /pointed >> pkribbon }
+%   (a zero-length pointed subpath) mustpass
+%%EndSelfTest
+%
 % @kind: Procedure
 % @summary: Treats the current path as a centerline and fills a variable-width ribbon along it, built on walkpath. Color comes from whatever the caller already set.
 % @example: newpath ... << /Width 10 /Pressure { pktaper } >> pkribbon

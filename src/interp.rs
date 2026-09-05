@@ -993,7 +993,7 @@ impl Interp {
             .unwrap_or_else(|| unreachable!("dict stack is never empty"))
     }
 
-    pub(crate) fn dict_stack_len(&self) -> usize {
+    pub fn dict_stack_len(&self) -> usize {
         self.dstack.len()
     }
 
@@ -1157,6 +1157,19 @@ impl Interp {
     /// and why `render_checks` exists.
     pub fn lint(&self, render_checks: bool) -> Vec<crate::lint::LintFinding> {
         crate::lint::check(self, render_checks)
+    }
+
+    /// [`lint`](Self::lint) plus the program's own `%%Pages:`
+    /// declaration (issue #95), which
+    /// `crate::lint::scan_declared_pages` reads from the source. A
+    /// separate method rather than an extra argument, so `lint`'s
+    /// existing public signature keeps working.
+    pub fn lint_with_pages(
+        &self,
+        render_checks: bool,
+        declared_pages: &crate::lint::DeclaredPages,
+    ) -> Vec<crate::lint::LintFinding> {
+        crate::lint::check_with_pages(self, render_checks, declared_pages)
     }
 
     pub fn quit_requested(&self) -> bool {
