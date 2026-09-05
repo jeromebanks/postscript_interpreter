@@ -4975,6 +4975,91 @@ fn broad_a_pressed_footprint_turns_with_the_angle() {
     );
 }
 
+/// Codex review of PR #140: `frnd` really can return exactly 1.0 --
+/// seed 51463 does -- and the strict `charge > affinity` comparison
+/// then rejected that striation at `/Charge 1`, which is documented as
+/// fully loaded. A one-striation brush at full charge painted nothing.
+#[test]
+fn broad_full_charge_is_certain_contact() {
+    let mut it = fresh(200, 120);
+    it.run_str(
+        "0 0 0 setrgbcolor 51463 srand newpath 20 60 moveto 180 60 lineto \
+         << /Width 40 /Grain 1 /Charge 1 /Depletion 0 >> pkbroad",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 1000,
+        "a fully loaded brush must deposit whatever affinity it drew, got {}",
+        ink_count(&it)
+    );
+    // The other end still holds: an unloaded brush deposits nothing,
+    // including when it draws an affinity of exactly 0.
+    let mut it = fresh(200, 120);
+    it.run_str(
+        "0 0 0 setrgbcolor 51463 srand newpath 20 60 moveto 180 60 lineto \
+         << /Width 40 /Grain 1 /Charge 0 >> pkbroad",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(ink_count(&it), 0, "an unloaded brush deposits nothing");
+}
+
+/// Codex review of PR #140: the striation affinities were drawn inside
+/// the same loop that emits geometry, and `pmemit` calls `pkjit` per
+/// boundary point. So the number of points a striation deposited --
+/// which is exactly what `/Charge` and `/Depletion` control -- shifted
+/// the random stream for every later striation, and turning either knob
+/// re-rolled the band into a *different* mark instead of re-shaping the
+/// same one. That invariant is the preset's advertised behavior.
+///
+/// Read the affinities off the interpreter rather than from pixels: the
+/// claim is about which lanes were chosen, not about what they look
+/// like.
+#[test]
+fn broad_charge_does_not_reroll_the_striations() {
+    let affinity = |charge: &str| {
+        let mut it = fresh(400, 200);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 3 srand newpath 50 100 moveto 350 106 lineto \
+             << /Width 50 /Grain 6 /Depletion 0 /Charge {charge} >> pkbroad \
+             pmaffs aload pop"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        it.operand_stack()
+            .iter()
+            .map(|o| o.repr().to_string())
+            .collect::<Vec<_>>()
+    };
+    let low = affinity("0.4");
+    assert_eq!(low.len(), 6, "one affinity per striation");
+    for charge in ["0.8", "1", "0.05"] {
+        assert_eq!(
+            affinity(charge),
+            low,
+            "/Charge {charge} re-rolled the striation affinities; \
+             it must re-shape the same mark, not choose different lanes"
+        );
+    }
+    // ...and the same for the other half of the pair.
+    for depletion in ["0", "0.5", "1"] {
+        let mut it = fresh(400, 200);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 3 srand newpath 50 100 moveto 350 106 lineto \
+             << /Width 50 /Grain 6 /Depletion {depletion} /Charge 0.4 >> pkbroad \
+             pmaffs aload pop"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        let got: Vec<String> = it
+            .operand_stack()
+            .iter()
+            .map(|o| o.repr().to_string())
+            .collect();
+        assert_eq!(
+            got, low,
+            "/Depletion {depletion} re-rolled the striation affinities"
+        );
+    }
+}
+
 /// Codex review of PR #140 [P1]: the run-out taper has to narrow a
 /// striation around *its own* center, not scale its offsets from the
 /// band centerline. Scaling the absolute offsets translates the whole

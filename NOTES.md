@@ -94,6 +94,29 @@ the degenerate case does, which also fixed that footprint's own shape —
 it was hard-coded along `+x`, making it a sheared parallelogram at
 nonzero `/Angle` rather than a rotated rectangle.
 
+**A further round found two more, both about the random stream rather
+than about geometry.** The striation affinities were drawn inside the
+same loop that emits geometry, and `pmemit` calls `pkjit` once per
+boundary point — so the number of points a striation deposited, which
+is exactly what `/Charge` and `/Depletion` control, shifted the stream
+for every later striation. Turning either knob therefore re-rolled the
+band into a *different* mark rather than re-shaping the same one, which
+is the behavior this preset advertises: at seed 3 with `/Grain 2`, the
+second striation's affinity moved from 0.316 to 0.517 for no reason but
+raising `/Charge` from 0.4 to 0.8. Affinities and per-striation colors
+are now drawn up front, the way `pkwet` plans all its passes before
+running any. What that fixes is *which lanes deposit and what color
+they are*; the per-point edge jitter still runs off the shared stream,
+which is re-shaping, and is the same variable consumption the header
+already declines to make a fixed-draw-count claim about.
+
+And `frnd` really can return exactly 1.0 — seed 51463 does — so the
+strict `charge > affinity` test rejected a striation of affinity 1.0 at
+`/Charge 1`, documented as fully loaded: a one-striation brush at full
+charge painted nothing. `pmwets` now clamps both ends the way `ptroll`
+and `pfroll` already did, which is the second time this file has been
+bitten by a probability comparison that looked obviously right.
+
 Worth recording how those two were pinned, since an earlier round of
 this same PR shipped a test that compared a render to itself. The taper
 fix is asserted on `pmtaper` directly — the invariant is exactly "the

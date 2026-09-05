@@ -2701,6 +2701,23 @@
     } ifelse
 } def
 
+% charge affinity pmwets -> bool   (does this striation deposit here?)
+%
+% Clamped at both ends rather than compared directly, following ptroll
+% and pfroll above. `frnd` really can return exactly 1.0 -- seed 51463
+% does -- so a plain `charge gt affinity` rejected a striation of
+% affinity 1.0 at /Charge 1, and a full-charge single-striation brush
+% painted nothing at all (Codex review of PR #140). /Charge 1 is
+% documented as fully loaded, so it means certain contact; /Charge 0
+% means none, which the strict comparison already gave.
+% @internal
+/pmwets {
+    exch dup 1 ge
+        { pop pop true }
+        { dup 0 le { pop pop false } { lt } ifelse }
+    ifelse
+} def
+
 % v pmtaper -> tapered   (narrows a boundary toward the striation center)
 %
 % The taper has to shrink the striation around *its own* center pmnc,
@@ -2778,12 +2795,36 @@
         /pmbase [ currentrgbcolor ] def
         /pmhalf pmWidth 0.5 mul def
         /pmedge pmWidth 0.06 mul def
+        % Draw every striation's affinity and color *before* any
+        % geometry, the way pkwet plans all its passes before running
+        % any, and for the same reason. pmemit calls pkjit once per
+        % boundary point -- unconditionally, even at /Edge 0, to keep
+        % the stream fixed -- so with the two interleaved, the number of
+        % points a striation deposits shifts the stream for the next
+        % one. How many points it deposits is exactly what /Charge and
+        % /Depletion control, so turning either re-rolled the rest of
+        % the band into a *different* mark rather than re-shaping the
+        % same one: at seed 3, /Grain 2 /Depletion 0, the second
+        % striation's affinity moved from 0.316 to 0.517 for no reason
+        % but raising /Charge from 0.4 to 0.8 (Codex review of PR #140).
+        %
+        % What this fixes is which lanes deposit and what color they
+        % are. The per-point edge jitter still runs off the shared
+        % stream, so a striation's edge noise can shift with how much
+        % was laid down before it -- the same variable consumption the
+        % header already declines to make a fixed-draw-count claim
+        % about, and re-shaping rather than re-rolling.
+        pmGrain array /pmaffs exch def
+        pmGrain array /pmcjs exch def
+        0 1 pmGrain 1 sub {
+            /pmg exch def
+            pmaffs pmg frnd put
+            pmcjs pmg pmColorJitter pkjit put
+        } for
         1 1 pmGrain {
             /pmg exch def
-            % Both draws are unconditional, so /Charge and /Depletion
-            % re-shape one mark rather than re-rolling a different one.
-            /pmaff frnd def
-            /pmcj pmColorJitter pkjit def
+            /pmaff pmaffs pmg 1 sub get def
+            /pmcj pmcjs pmg 1 sub get def
             pmbase 1 pmcj add shade setrgbcolor
             % The striations abut, so they need the same overlap
             % pktrowel's lanes do, or every boundary leaves an
@@ -2805,7 +2846,7 @@
                     pmrun { pmstart pmi 1 sub pmna pmnb false pmemit /pmrun false def } if
                 } if
                 /pmch pmCharge 1 pmDepletion pmrec 3 get mul sub mul def
-                pmch pmaff gt {
+                pmch pmaff pmwets {
                     pmrun not { /pmstart pmi def /pmrun true def } if
                 } {
                     pmrun { pmstart pmi 1 sub pmna pmnb true pmemit /pmrun false def } if
@@ -2814,7 +2855,7 @@
                     % A degenerate subpath: press the footprint rather
                     % than trying to draw a zero-area strip through one
                     % stop. It honors the charge like any other stop.
-                    pmch pmaff gt { pmi pmna pmnb pmstamp } if
+                    pmch pmaff pmwets { pmi pmna pmnb pmstamp } if
                     /pmrun false def
                 } {
                     pmae 2 and 2 eq {
