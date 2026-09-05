@@ -171,14 +171,49 @@ impl Report {
 /// unprefixed, since they're the surface a block author writes.
 pub const PRELUDE: &str = r"
 % --- pscat --selftest prelude (injected; not part of any library) ---
+% The failure log. Its *entries* are a VM array and roll back under
+% `restore` like any other composite -- which is fine, because the
+% counters that decide pass/fail do not (see below), so a rolled-back
+% entry reports as an unreadable log rather than as a pass.
 userdict /pscat_st_fails 128 array put
-userdict /pscat_st_nfail 0 put
-% How many assertions actually ran. A block that asserts nothing must
-% not report ok -- that is the passes-without-testing-anything class
-% this whole mechanism exists to catch, and it was reachable by simply
-% deleting an assertion line and leaving its `{ ... }` proc behind
-% (blank-context review, PR #136).
-userdict /pscat_st_nassert 0 put
+
+% The counters, held in a *string* rather than as dictionary entries,
+% because PostScript strings are exempt from `restore` (PLRM 3.7.3.2 --
+% verified against this interpreter, not just read). Dictionary entries
+% are not: with the counters in userdict, a block that ran one real
+% assertion and then did `save ... failing assertions ... restore`
+% rolled the failure count back to zero and reported green
+% (blank-context review, PR #136). Wrapping a test in `save`/`restore`
+% to isolate VM state is the same instinct as `gsave`/`grestore`, so
+% that is a trap worth closing rather than documenting.
+%
+%   bytes 0-1  failures recorded      (big-endian, saturating at 65535)
+%   bytes 2-3  assertions run
+%   bytes 4-5  1 while an assertion is in flight, else 0
+userdict /pscat_st_ctr 8 string put
+
+% offset -> n
+/pscat_st_ctrget {
+    userdict /pscat_st_ctr get exch
+    2 copy get 256 mul
+    3 1 roll 1 add get
+    add
+} def
+
+% offset n -> -
+/pscat_st_ctrput {
+    dup 65535 gt { pop 65535 } if
+    2 copy 256 idiv
+    userdict /pscat_st_ctr get 3 1 roll put
+    256 mod
+    exch 1 add exch
+    userdict /pscat_st_ctr get 3 1 roll put
+} def
+
+% offset -> -   (add one, saturating)
+/pscat_st_ctrbump {
+    dup pscat_st_ctrget 1 add pscat_st_ctrput
+} def
 
 % (label) (why) errorname command  ->  -
 %
@@ -191,17 +226,15 @@ userdict /pscat_st_nassert 0 put
 % open, and makes it unshadowable on the way back out.
 /pscat_st_note {
     4 array astore
-    userdict /pscat_st_nfail get 128 lt
+    0 pscat_st_ctrget 128 lt
         {
             userdict /pscat_st_fails get
-            userdict /pscat_st_nfail get
+            0 pscat_st_ctrget
             3 -1 roll put
         }
         { pop }
     ifelse
-    userdict /pscat_st_nfail
-        userdict /pscat_st_nfail get 1 add
-    put
+    0 pscat_st_ctrbump
 } def
 
 % A stale $error from a previous assertion must never be able to
@@ -245,9 +278,19 @@ userdict /pscat_st_nassert 0 put
     userdict exch /pscat_st_depth exch put
     countdictstack
     userdict exch /pscat_st_ddepth exch put
-    userdict /pscat_st_nassert
-        userdict /pscat_st_nassert get 1 add
-    put
+    % One saved depth per harness, not a stack: an assertion whose proc
+    % runs another assertion would overwrite the outer one's baseline,
+    % and the outer cleanup would then restore to the wrong place. No
+    % block nests today and nesting buys nothing, so it is reported
+    % rather than supported -- the alternative is a misattributed
+    % failure under the inner label, which is what happened before this
+    % check existed (blank-context review, PR #136).
+    4 pscat_st_ctrget 0 ne {
+        (harness) (assertions cannot be nested: one assertion's proc ran another)
+        /--none-- /--none-- pscat_st_note
+    } if
+    4 1 pscat_st_ctrput
+    2 pscat_st_ctrbump
 } def
 
 % Undo whatever a caught error left behind. Dictionaries first: `end`
@@ -256,6 +299,7 @@ userdict /pscat_st_nassert 0 put
 /pscat_st_reset {
     { countdictstack userdict /pscat_st_ddepth get le { exit } if end } loop
     { count userdict /pscat_st_depth get le { exit } if pop } loop
+    4 0 pscat_st_ctrput
 } def
 
 % {proc} /guardname (label) mustguard  ->  -
@@ -327,9 +371,7 @@ userdict /pscat_st_nassert 0 put
 % a bitwise complement in PostScript, so a mistyped operand would
 % otherwise quietly test something else entirely.
 /mustbe {
-    userdict /pscat_st_nassert
-        userdict /pscat_st_nassert get 1 add
-    put
+    2 pscat_st_ctrbump
     exch dup type /booleantype ne {
         pop (was given a non-boolean, so it tests nothing)
         /--none-- /--none-- pscat_st_note
@@ -731,6 +773,12 @@ fn run_block(
         return Err(setup_failure(interp, msg));
     }
 
+    // Operands the *library* left behind at load time are not this
+    // block's doing; measuring absolutely would blame every block in
+    // the file for them (blank-context review, PR #136). Same relative
+    // rule the dict-stack check uses.
+    let operand_baseline = interp.operand_stack().len();
+
     let error = match interp.run_source(&block.body) {
         Ok(()) => None,
         Err(e) => Some(interp.error_report(&e)),
@@ -746,7 +794,10 @@ fn run_block(
         // systemdict + userdict are the permanent baseline (see
         // `Interp::pop_dict`), same rule `lint`'s dict-leak check uses.
         dict_depth: interp.dict_stack_len().saturating_sub(2),
-        operand_depth: interp.operand_stack().len(),
+        operand_depth: interp
+            .operand_stack()
+            .len()
+            .saturating_sub(operand_baseline),
         assertions: assertion_count(&interp),
     };
     // One `Interp` per block, each holding a fully loaded copy of the
@@ -764,17 +815,29 @@ fn run_block(
 
 /// Read the prelude's failure log back out of the interpreter.
 ///
-/// A block that clobbered `pscat_st_nfail`/`pscat_st_fails` with
-/// something of the wrong shape reports as a synthetic failure rather
-/// than as a pass — the alternative (treating an unreadable log as an
-/// empty one) would turn a corrupted run green.
+/// A block that clobbered the counters or the log with something of
+/// the wrong shape reports as a synthetic failure rather than as a
+/// pass — the alternative (treating an unreadable log as an empty one)
+/// would turn a corrupted run green.
+/// One of the prelude's big-endian counters, read out of its
+/// restore-exempt string. `None` means the block replaced or truncated
+/// the string, which every caller treats as the failing direction.
+fn counter(interp: &Interp, offset: usize) -> Option<usize> {
+    let obj = interp.load("pscat_st_ctr")?;
+    let Value::String(s) = &obj.value else {
+        return None;
+    };
+    let bytes = s.borrow_bytes();
+    let hi = *bytes.get(offset)? as usize;
+    let lo = *bytes.get(offset + 1)? as usize;
+    Some(hi * 256 + lo)
+}
+
+/// How many assertions ran. A block that clobbered the counter reads
+/// as zero, i.e. as having tested nothing, so it fails rather than
+/// passes.
 fn assertion_count(interp: &Interp) -> usize {
-    match interp.load("pscat_st_nassert").map(|o| o.value) {
-        Some(Value::Integer(n)) if n >= 0 => n as usize,
-        // Unreadable means the block clobbered it; treat that as
-        // "nothing ran" so it fails rather than passing.
-        _ => 0,
-    }
+    counter(interp, 2).unwrap_or(0)
 }
 
 fn collect_failures(interp: &Interp) -> (usize, Vec<Failure>) {
@@ -789,12 +852,8 @@ fn collect_failures(interp: &Interp) -> (usize, Vec<Failure>) {
             }],
         )
     };
-    let Some(count) = interp.load("pscat_st_nfail") else {
-        return unreadable("the block removed the harness's own failure counter");
-    };
-    let count = match count.value {
-        Value::Integer(n) if n >= 0 => n as usize,
-        _ => return unreadable("the block overwrote the harness's failure counter"),
+    let Some(count) = counter(interp, 0) else {
+        return unreadable("the block overwrote the harness's failure counter");
     };
     if count == 0 {
         return (0, Vec::new());

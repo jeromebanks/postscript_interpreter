@@ -379,13 +379,12 @@ fn a_block_that_leaks_a_dictionary_fails_even_with_no_failed_assertion() {
 #[test]
 fn a_proc_that_shadows_the_harnesss_own_names_cannot_defeat_the_cleanup() {
     // The assertions restore the operand and dictionary stacks after a
-    // caught error. If the depths they restore to were read back by
-    // name, a proc that opened a dictionary defining those same names
-    // would turn the whole cleanup into a no-op — verified: it left the
-    // dictionary open and the debris in place, with nothing reporting
-    // it. They travel on the operand stack instead (`mark`/
-    // `cleartomark` for the operands, a captured `countdictstack` for
-    // the dictionaries), which no `begin` can shadow.
+    // caught error. If the depths they restore to were read back
+    // through the dict stack, a proc that opened a dictionary defining
+    // those same names would turn the whole cleanup into a no-op —
+    // verified: it left the dictionary open and the debris in place,
+    // with nothing reporting it. They are written and read through
+    // `userdict` by name instead, which no `begin` can shadow.
     let dir = Scratch::new("shadowing");
     let file = dir.path().join("shadow.ps");
     std::fs::write(
@@ -549,6 +548,89 @@ fn a_proc_that_pushes_its_own_mark_does_not_confuse_the_cleanup() {
          %   { 1 mark 2 3 undefinedname } /undefinedname (again) mustguard\n\
          %   countdictstack 2 eq (and never touched the dict stack) mustbe\n\
          %%EndSelfTest\n",
+    )
+    .expect("write");
+    let out = selftest(&file);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn save_restore_cannot_roll_a_failure_back_into_a_pass() {
+    // The counters live in a PostScript *string*, which `restore` is
+    // exempt from (PLRM 3.7.3.2). As dictionary entries they were not:
+    // a block that ran one real assertion and then did `save ...
+    // failing assertions ... restore` rolled the failure count back to
+    // zero and reported green (blank-context review, PR #136).
+    // Wrapping a test in save/restore to isolate VM state is the same
+    // instinct as gsave/grestore, so it's worth closing rather than
+    // documenting.
+    let dir = Scratch::new("save-restore");
+    let file = dir.path().join("vm.ps");
+    std::fs::write(
+        &file,
+        concat!(
+            "%%SelfTest: failures-survive-save-restore\n",
+            "%   true (a real assertion, so the block isn't empty) mustbe\n",
+            "%   save\n",
+            "%   false (this must still be reported) mustbe\n",
+            "%   restore\n",
+            "%%EndSelfTest\n"
+        ),
+    )
+    .expect("write");
+    let out = selftest(&file);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "the failure was rolled back:\n{stderr}"
+    );
+}
+
+#[test]
+fn nested_assertions_are_reported_rather_than_silently_misattributed() {
+    // One saved depth per harness, so an assertion whose proc runs
+    // another would overwrite the outer baseline. Nesting buys nothing
+    // and no block does it, so it's rejected explicitly instead of
+    // producing a failure filed under the wrong label.
+    let dir = Scratch::new("nested");
+    let file = dir.path().join("nested.ps");
+    std::fs::write(
+        &file,
+        concat!(
+            "%%SelfTest: nesting-is-rejected\n",
+            "%   { { undefinedinner } /undefinedinner (inner) mustguard undefinedouter }\n",
+            "%   /undefinedouter (outer) mustguard\n",
+            "%%EndSelfTest\n"
+        ),
+    )
+    .expect("write");
+    let out = selftest(&file);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains("cannot be nested"), "{stderr}");
+}
+
+#[test]
+fn operands_the_library_itself_left_are_not_blamed_on_every_block() {
+    // The operand check is relative to what the library's own load
+    // left behind, the same way the dict check is relative to
+    // systemdict+userdict. Measuring absolutely failed every block in
+    // such a file for something no block did.
+    let dir = Scratch::new("library-leak");
+    let file = dir.path().join("leaky.ps");
+    std::fs::write(
+        &file,
+        concat!(
+            "/x { } def\n",
+            "42\n",
+            "%%SelfTest: this-block-is-fine\n",
+            "%   true (nothing wrong here) mustbe\n",
+            "%%EndSelfTest\n"
+        ),
     )
     .expect("write");
     let out = selftest(&file);

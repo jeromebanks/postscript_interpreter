@@ -94,7 +94,15 @@ pins that property.
   cleanup) and not on the operand stack under a `mark` (a proc that
   pushes a mark of its own would make `cleartomark` stop at the wrong
   one). Both shapes were tried and both broke; `userdict` has neither
-  weakness.
+  weakness. It has one limitation the mark shape didn't: there is a
+  single saved depth, so **assertions can't nest** — an assertion whose
+  proc runs another is rejected with a clear message rather than
+  producing a failure filed under the wrong label.
+- `save`/`restore` around an assertion is safe. The pass/fail counters
+  live in a PostScript *string*, which `restore` is exempt from (PLRM
+  3.7.3.2); as dictionary entries they were not, and a block that did
+  `save … failing assertions … restore` rolled its own failures back
+  and reported green.
 - Placement matters in a tag-migrated file: put the block *above* the
   `% @kind:`/`% @summary:` tag block, never between it and the
   definition it documents — those tags must stay directly above their
