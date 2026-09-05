@@ -69,7 +69,10 @@ fn main() -> ExitCode {
         // Like --spool, this is a whole mode of its own: it builds its
         // own interpreter per block and produces no page, so pairing it
         // with a render request or another source would silently ignore
-        // one of the two.
+        // one of the two. --page/--dpi are refused for exactly that
+        // reason and not because they'd be hard to honor: each block
+        // gets a fixed canvas it never reads back, so accepting them
+        // would mean quietly doing nothing with them.
         if options.file.is_some()
             || options.eval.is_some()
             || options.headless
@@ -83,6 +86,9 @@ fn main() -> ExitCode {
             || options.sweep_param.is_some()
             || options.contact_sheet.is_some()
             || options.grid.is_some()
+            || options.page != gfx::DEFAULT_PAGE
+            || options.dpi != 72.0
+            || options.halftone
         {
             eprintln!("pscat: --selftest runs alone (no file argument or other mode flags)");
             return ExitCode::FAILURE;

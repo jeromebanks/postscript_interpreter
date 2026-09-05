@@ -191,6 +191,15 @@ fn lint_is_clean_on_real_example_and_gallery_pieces() {
         "examples/etching_demo.ps",
         "examples/sweep_demo.ps",
         "gallery/compositors_proof.ps",
+        // The three committed files carrying a `%%Pages:` header, so
+        // the page-count check (issue #95) is exercised against the
+        // real corpus rather than only against drivers — a header that
+        // drifts out of step with the pages actually rendered must
+        // fail here, not surface as a mystery finding in pscat-mcp's
+        // output on someone's file.
+        "examples/font_catalog.ps",
+        "examples/international_text.ps",
+        "examples/pdf_document.ps",
     ] {
         let png = tmp(&format!("lint-corpus-{}.png", path.replace('/', "_")));
         let (ok, _out, stderr) = run(&["--png", png.to_str().unwrap(), "--lint", path], "");
@@ -561,6 +570,12 @@ fn selftest_runs_alone() {
         vec!["--selftest", "lib/paintkit.ps", "-e", "showpage"],
         vec!["--selftest", "lib/paintkit.ps", "--lint"],
         vec!["--selftest", "lib/paintkit.ps", "examples/postcard.ps"],
+        // Refused rather than honored: each block renders on a fixed
+        // canvas it never reads back, so accepting these would mean
+        // quietly ignoring them.
+        vec!["--selftest", "lib/paintkit.ps", "--page", "200x200"],
+        vec!["--selftest", "lib/paintkit.ps", "--dpi", "144"],
+        vec!["--selftest", "lib/paintkit.ps", "--halftone"],
     ] {
         let (ok, _, err) = run(&extra, "");
         assert!(!ok, "expected a refusal for {extra:?}");

@@ -359,6 +359,105 @@ fn a_block_that_leaks_a_gsave_fails_even_with_no_failed_assertion() {
 }
 
 #[test]
+fn a_block_that_leaks_a_dictionary_fails_even_with_no_failed_assertion() {
+    // Same reasoning as the gsave check: PostScript can undo its own
+    // operand debris, but a leaked `begin` would otherwise be carried
+    // silently to the end of the block.
+    let dir = Scratch::new("dict-leak");
+    let file = dir.path().join("leak.ps");
+    std::fs::write(
+        &file,
+        "%%SelfTest: leaks\n%   userdict begin\n%%EndSelfTest\n",
+    )
+    .expect("write");
+    let out = selftest(&file);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains("dictionary(ies) still open"), "{stderr}");
+}
+
+#[test]
+fn a_proc_that_shadows_the_harnesss_own_names_cannot_defeat_the_cleanup() {
+    // The assertions restore the operand and dictionary stacks after a
+    // caught error. If the depths they restore to were read back by
+    // name, a proc that opened a dictionary defining those same names
+    // would turn the whole cleanup into a no-op — verified: it left the
+    // dictionary open and the debris in place, with nothing reporting
+    // it. They travel on the operand stack instead (`mark`/
+    // `cleartomark` for the operands, a captured `countdictstack` for
+    // the dictionaries), which no `begin` can shadow.
+    let dir = Scratch::new("shadowing");
+    let file = dir.path().join("shadow.ps");
+    std::fs::write(
+        &file,
+        "%%SelfTest: shadowing-cannot-defeat-the-cleanup\n\
+         %   { 1 dict begin\n\
+         %     /pscat_st_ddepth 99 def /pscat_st_depth -1 def\n\
+         %     11 22 33 undefinedname }\n\
+         %   /undefinedname\n\
+         %   (a proc shadowing every harness name it can) mustguard\n\
+         %   count 0 eq (the debris was cleaned up anyway) mustbe\n\
+         %   countdictstack 2 eq (the dictionary was closed anyway) mustbe\n\
+         %%EndSelfTest\n",
+    )
+    .expect("write");
+    let out = selftest(&file);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn a_later_assertion_still_works_after_an_earlier_one_caught_an_error() {
+    // Within-block isolation: `stopped` leaves debris, and the next
+    // assertion has to be unaffected by it.
+    let dir = Scratch::new("sequencing");
+    let file = dir.path().join("seq.ps");
+    std::fs::write(
+        &file,
+        "/goodguard { my-guard-fired } def\n\
+         %%SelfTest: a-caught-error-does-not-affect-the-next-assertion\n\
+         %   77 88\n\
+         %   { 1 2 3 undefinedname } /undefinedname (first) mustguard\n\
+         %   { goodguard } /my-guard-fired (second) mustguard\n\
+         %   count 2 eq (the block's own operands survived) mustbe\n\
+         %%EndSelfTest\n",
+    )
+    .expect("write");
+    let out = selftest(&file);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn a_block_that_wraps_itself_in_a_dictionary_still_reports_its_failures() {
+    // The failure log is written through userdict by name. A plain
+    // `def` would land in the block's own dictionary and be discarded
+    // at its `end`, so a failing block would report clean — the worst
+    // possible direction for this mechanism to be wrong in.
+    let dir = Scratch::new("wrapped-block");
+    let file = dir.path().join("wrapped.ps");
+    std::fs::write(
+        &file,
+        "%%SelfTest: failures-survive-the-blocks-own-dictionary\n\
+         %   10 dict begin\n\
+         %     false (this must be reported, not swallowed) mustbe\n\
+         %   end\n\
+         %%EndSelfTest\n",
+    )
+    .expect("write");
+    let out = selftest(&file);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "the failure was lost:\n{stderr}");
+    assert!(stderr.contains("this must be reported"), "{stderr}");
+}
+
+#[test]
 fn a_malformed_block_fails_instead_of_being_skipped() {
     // A self-test that silently doesn't run reads as coverage that
     // isn't there — worse than no self-test at all.

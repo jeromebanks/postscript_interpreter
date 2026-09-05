@@ -73,9 +73,14 @@ pins that property.
   that isn't there, which is worse than none.
 - Each block runs in its own fresh interpreter, so one block can't
   affect another. Within a block, `mustguard`/`mustfail`/`mustpass`
-  restore the operand and dictionary stacks after a caught error.
-  PostScript has no `gsave`-depth query, so the runner checks that
-  balance itself and fails the block on a leak.
+  restore the operand and dictionary stacks after a caught error — the
+  depths they restore to ride on the operand stack (`mark`/
+  `cleartomark`, plus a captured `countdictstack`), never in named
+  variables, so a proc that opens a dictionary shadowing a harness name
+  can't turn the cleanup into a silent no-op. The runner additionally
+  checks the graphics and dictionary stacks from Rust after each block,
+  so anything that survives cleanup is reported rather than carried
+  forward.
 - Placement matters in a tag-migrated file: put the block *above* the
   `% @kind:`/`% @summary:` tag block, never between it and the
   definition it documents — those tags must stay directly above their

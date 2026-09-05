@@ -36,6 +36,13 @@ are all fatal too. Wrap each scenario `gsave`/`grestore` and consume
 what you push — several artkit procedures return a value the caller is
 expected to drop (`tfblock`, `tfcols`, `tfflow`).
 
+Note that this couples drivers to `lint::check`'s finding set as it
+grows: a *new* lint check added later applies to every driver here
+retroactively, and can turn a passing driver red without anyone having
+touched it. That's the intended direction — a driver is supposed to be
+exemplary PostScript — but it means adding a lint check means running
+`./scripts/selftest.sh` too, not just `cargo test`.
+
 ## Headers a driver needs
 
 ```postscript

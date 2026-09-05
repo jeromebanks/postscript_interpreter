@@ -43,10 +43,12 @@
 //! therefore cannot affect any other block. Within a block,
 //! `mustguard`/`mustfail`/`mustpass` restore the operand and
 //! dictionary stacks after a caught error so one assertion's debris
-//! can't corrupt the next; the graphics state has no PostScript-level
-//! depth query, so instead the runner checks `gsave` balance after the
-//! block and reports an imbalance as a failure — a leak becomes loud
-//! rather than silent.
+//! can't corrupt the next — the depths they restore to travel on the
+//! operand stack rather than in named variables, so a proc that opens
+//! a dictionary shadowing a harness name can't turn the cleanup into a
+//! no-op. The graphics and dictionary stacks are checked from Rust
+//! after each block as well, so anything that does survive the
+//! cleanup is reported rather than silently carried forward.
 
 use std::path::{Path, PathBuf};
 
@@ -114,11 +116,17 @@ pub struct BlockResult {
     pub error: Option<String>,
     /// Unmatched `gsave`s left open by the block.
     pub gsave_depth: usize,
+    /// Unmatched `begin`s left open by the block — `systemdict` and
+    /// `userdict` are the permanent baseline, so anything past 2.
+    pub dict_depth: usize,
 }
 
 impl BlockResult {
     pub fn ok(&self) -> bool {
-        self.failure_count == 0 && self.error.is_none() && self.gsave_depth == 0
+        self.failure_count == 0
+            && self.error.is_none()
+            && self.gsave_depth == 0
+            && self.dict_depth == 0
     }
 }
 
@@ -143,19 +151,31 @@ impl Report {
 /// unprefixed, since they're the surface a block author writes.
 pub const PRELUDE: &str = r"
 % --- pscat --selftest prelude (injected; not part of any library) ---
-/pscat_st_fails 128 array def
-/pscat_st_nfail 0 def
-/pscat_st_depth 0 def
-/pscat_st_ddepth 0 def
+userdict /pscat_st_fails 128 array put
+userdict /pscat_st_nfail 0 put
 
 % (label) (why) errorname command  ->  -
+%
+% Reads and writes the log through `userdict` explicitly rather than
+% through the dict stack. A plain `def` lands in whatever dictionary is
+% on top, so a block that wraps its assertions in `10 dict begin ...
+% end` would record its failures into that dictionary and lose every
+% one of them at the `end` -- the run would then report clean. Naming
+% userdict pins the log to one place regardless of what the block has
+% open, and makes it unshadowable on the way back out.
 /pscat_st_note {
     4 array astore
-    pscat_st_nfail 128 lt
-        { pscat_st_fails pscat_st_nfail 3 -1 roll put }
+    userdict /pscat_st_nfail get 128 lt
+        {
+            userdict /pscat_st_fails get
+            userdict /pscat_st_nfail get
+            3 -1 roll put
+        }
         { pop }
     ifelse
-    /pscat_st_nfail pscat_st_nfail 1 add def
+    userdict /pscat_st_nfail
+        userdict /pscat_st_nfail get 1 add
+    put
 } def
 
 % A stale $error from a previous assertion must never be able to
@@ -166,19 +186,33 @@ pub const PRELUDE: &str = r"
     $error /command /--none-- put
 } def
 
-% Record where the stacks stood, with the proc under test still on
-% top (hence `count 1 sub`: `stopped` is about to consume it).
-/pscat_st_mark {
-    count 1 sub /pscat_st_depth exch def
-    countdictstack /pscat_st_ddepth exch def
+% Arm an assertion: capture the dict-stack depth and drop a mark, so
+% whatever the proc leaves behind can be undone.
+%   {proc}  ->  D mark {proc}
+%
+% Both live on the *operand stack*, never in named variables, and that
+% is the whole point: the proc under test may open a dictionary of its
+% own that shadows any name the harness would look up, which turns the
+% cleanup below into a silent no-op. Verified before this shape was
+% chosen -- a proc doing `1 dict begin /pscat_st_ddepth 99 def` left
+% its dictionary open and its debris in place, with nothing reporting
+% it. The mark does the same job for the operand stack, where the
+% junk's depth isn't knowable in advance.
+/pscat_st_arm {
+    countdictstack exch
+    mark exch
 } def
 
-% Undo whatever a caught error left behind. Dictionaries first: `end`
-% doesn't touch the operand stack, whereas popping operands first
-% would be undone by nothing.
+% Undo whatever a caught error left behind.
+%   D mark junk...  ->  -
+%
+% A proc that swallows our mark (its own unbalanced `cleartomark`, say)
+% makes this raise rather than clean up, which fails the block loudly
+% -- the acceptable end of the tradeoff, unlike the silent version.
 /pscat_st_reset {
-    { countdictstack pscat_st_ddepth le { exit } if end } loop
-    { count pscat_st_depth le { exit } if pop } loop
+    cleartomark
+    { countdictstack 1 index le { exit } if end } loop
+    pop
 } def
 
 % {proc} /guardname (label) mustguard  ->  -
@@ -186,11 +220,15 @@ pub const PRELUDE: &str = r"
 % libraries reject malformed input by invoking a self-documenting
 % undefined name, and matching that name is what keeps a typo in the
 % test body from passing as a caught guard.
+%
+% Every branch runs pscat_st_reset *before* reading pscat_st_label or
+% pscat_st_want: the reset is what pops a dictionary the proc left
+% open, so a name lookup after it can't hit a shadowing definition.
 /mustguard {
     /pscat_st_label exch def
     /pscat_st_want exch def
-    pscat_st_mark
     pscat_st_clearerr
+    pscat_st_arm
     stopped {
         pscat_st_reset
         $error /errorname get /undefined eq
@@ -212,8 +250,8 @@ pub const PRELUDE: &str = r"
 /mustfail {
     /pscat_st_label exch def
     /pscat_st_want exch def
-    pscat_st_mark
     pscat_st_clearerr
+    pscat_st_arm
     stopped {
         pscat_st_reset
         $error /errorname get pscat_st_want ne {
@@ -230,8 +268,8 @@ pub const PRELUDE: &str = r"
 % {proc} (label) mustpass  ->  -
 /mustpass {
     /pscat_st_label exch def
-    pscat_st_mark
     pscat_st_clearerr
+    pscat_st_arm
     stopped {
         pscat_st_reset
         pscat_st_label (raised an error but was expected to succeed)
@@ -550,6 +588,9 @@ fn run_block(
         failure_count,
         error,
         gsave_depth: interp.gfx().gsave_depth(),
+        // systemdict + userdict are the permanent baseline (see
+        // `Interp::pop_dict`), same rule `lint`'s dict-leak check uses.
+        dict_depth: interp.dict_stack_len().saturating_sub(2),
     })
 }
 
@@ -651,6 +692,13 @@ pub fn format_report(report: &Report) -> String {
                 out,
                 "         {} unmatched gsave(s) left open by the block",
                 block.gsave_depth
+            );
+        }
+        if block.dict_depth > 0 {
+            let _ = writeln!(
+                out,
+                "         {} dictionary(ies) still open at the end of the block",
+                block.dict_depth
             );
         }
     }

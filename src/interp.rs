@@ -993,7 +993,7 @@ impl Interp {
             .unwrap_or_else(|| unreachable!("dict stack is never empty"))
     }
 
-    pub(crate) fn dict_stack_len(&self) -> usize {
+    pub fn dict_stack_len(&self) -> usize {
         self.dstack.len()
     }
 
