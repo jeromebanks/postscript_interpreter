@@ -39,34 +39,60 @@ fi
 status=0
 
 echo "== %%SelfTest blocks =="
-found_blocks=0
-for lib in "$ROOT"/lib/*.ps; do
-    # Ask the parser which files carry blocks, never `grep`: a
-    # `%%SelfTest:`-shaped line inside a multiline PostScript string is
-    # string content, which the parser ignores and grep cannot see. The
-    # two disagreeing meant CI rejected a file shape the parser
-    # deliberately supports (Codex review, PR #136).
-    # `$(...)` inside `[ -n ... ]` discards the command's exit status,
-    # so a library whose blocks are malformed (a parse error) read as
-    # "no blocks" and was skipped as a success — even under `set -e`
-    # (Codex review, PR #136). Capture the status separately.
+MANIFEST="$ROOT/selftest/libraries.txt"
+if [ ! -f "$MANIFEST" ]; then
+    echo "selftest.sh: missing $MANIFEST" >&2
+    exit 1
+fi
+
+# Two-way cross-check against the manifest, not bare discovery.
+# Discovery alone can't see a *deletion*: a library that loses its last
+# block simply stops being discovered, and this pass stays green while
+# its coverage drops to zero (Codex review, PR #136).
+listed=$(grep -vE '^[[:space:]]*(#|$)' "$MANIFEST" || true)
+if [ -z "$listed" ]; then
+    echo "selftest.sh: $MANIFEST lists no libraries" >&2
+    exit 1
+fi
+
+# 1. Every listed library must actually run its blocks. `--selftest`
+#    already fails a file that yields none, so deletion fails here.
+while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    if [ ! -f "$ROOT/$rel" ]; then
+        echo "selftest.sh: $MANIFEST lists $rel, which does not exist" >&2
+        status=1
+        continue
+    fi
+    if ! "$BIN" --selftest "$ROOT/$rel"; then
+        status=1
+    fi
+done <<EOF_LISTED
+$listed
+EOF_LISTED
+
+# 2. Every library that *has* blocks must be listed, so a newly
+#    migrated file can't be silently left out of the pass. Recursive:
+#    lib/ has real sources under fonts/ and styles/ too.
+while IFS= read -r lib; do
+    rel=${lib#"$ROOT"/}
+    # `$(...)` inside a test discards the command's exit status, so a
+    # library whose blocks are malformed would read as "no blocks" and
+    # be skipped as a success — even under `set -e`.
     if ! blocks=$("$BIN" --selftest-list "$lib"); then
-        echo "selftest.sh: cannot list blocks in ${lib#"$ROOT"/}" >&2
+        echo "selftest.sh: cannot list blocks in $rel" >&2
         status=1
         continue
     fi
     [ -n "$blocks" ] || continue
-    found_blocks=1
-    if ! "$BIN" --selftest "$lib"; then
+    if ! printf '%s\n' "$listed" | grep -qxF "$rel"; then
+        echo "selftest.sh: $rel has %%SelfTest blocks but is not listed in $MANIFEST" >&2
         status=1
     fi
-done
-if [ "$found_blocks" -eq 0 ]; then
-    echo "selftest.sh: no lib/*.ps file carries a %%SelfTest block" >&2
-    status=1
-fi
+done <<EOF_FOUND
+$(find "$ROOT/lib" -name '*.ps' | sort)
+EOF_FOUND
 
-echo
 echo "== strict lint over the rendering drivers =="
 # A bare lib/*.ps file draws nothing on load, so --lint has nothing to
 # judge without a driver that actually calls into it. Each driver

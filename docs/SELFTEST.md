@@ -223,8 +223,18 @@ things is worse than one with a documented edge:
    block of whatever they cover, if the file is tag-migrated).
 2. Add `selftest/drivers/yourkit.ps` with a `%%SelfTestPage: WxH`
    header, a `%%Pages:` count, and one `showpage` per scenario.
-3. Nothing else. `scripts/selftest.sh` and `tests/selftest.rs` both
-   discover files rather than listing them — via
-   `pscat --selftest-list`, the parser's own answer, never a `grep`:
-   grep can't see PostScript string context, so the two would disagree
-   about a marker-shaped line inside a multiline string.
+3. Add its path to `selftest/libraries.txt`.
+
+That third step isn't bookkeeping. Discovery alone can't see a
+*deletion*: a library that loses its last block simply stops being
+discovered, and both CI paths stay green while its guard coverage drops
+to zero. The manifest is cross-checked both ways — every listed file
+must have blocks, and every file with blocks must be listed — so
+migrating a library and un-migrating one both fail loudly. Same
+reasoning as `build.rs`'s `LEGACY_FILES`.
+
+Discovery itself asks the parser (`pscat --selftest-list`), never a
+`grep`: grep can't see PostScript string context, so the two would
+disagree about a marker-shaped line inside a multiline string. It walks
+`lib/` recursively, since `lib/fonts/` and `lib/styles/` hold real
+library sources too.

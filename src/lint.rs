@@ -159,13 +159,20 @@ fn check_declared_pages(
         }
         DeclaredPages::Count(n) => *n,
     };
-    let actual = pages_with_ink_flags(interp).len();
+    // Emitted pages only — deliberately *not* `pages_with_ink_flags`,
+    // which appends the live trailing canvas. Counting that made a
+    // driver whose *final* `showpage` was deleted still match its
+    // declaration, so the one mistake this check exists to catch was
+    // the one it missed (Codex review, round 8). The trailing canvas
+    // remains the right rule for blank-page checking, which is about
+    // what `--png` would write rather than about page boundaries.
+    let actual = interp.gfx().pages().len();
     if actual != declared {
         findings.push(LintFinding {
             check: "page-count",
             message: format!(
-                "the program declares `%%Pages: {declared}` but produced {actual} \
-                 — a missing or extra showpage"
+                "the program declares `%%Pages: {declared}` but emitted {actual} \
+                 showpage(s) — a missing or extra one"
             ),
         });
     }
@@ -358,7 +365,22 @@ mod tests {
             .iter()
             .find(|f| f.check == "page-count")
             .expect("page-count finding");
-        assert!(msg.message.contains("but produced 1"), "{}", msg.message);
+        assert!(msg.message.contains("emitted 1"), "{}", msg.message);
+    }
+
+    #[test]
+    fn a_deleted_final_showpage_is_flagged() {
+        // Regression test (Codex review, PR #136): counting the live
+        // trailing canvas as a page made the *last* scenario's missing
+        // `showpage` invisible — the check matched its declaration
+        // anyway.
+        let it = run("0 0 40 40 rectfill showpage 5 5 30 30 rectfill");
+        let found = check_with_pages(&it, true, &DeclaredPages::Count(2));
+        let msg = found
+            .iter()
+            .find(|f| f.check == "page-count")
+            .expect("page-count finding");
+        assert!(msg.message.contains("emitted 1"), "{}", msg.message);
     }
 
     #[test]

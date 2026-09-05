@@ -1,0 +1,15 @@
+# Libraries that carry %%SelfTest blocks, one repo-relative path per
+# line. `#` comments and blank lines are ignored.
+#
+# This list exists because discovery alone can't detect *deletion*:
+# a library that loses its last block simply stops being discovered,
+# and both CI paths stay green while its guard coverage silently drops
+# to zero (Codex review, PR #136). Same reasoning as build.rs's
+# LEGACY_FILES, and the same two-way cross-check:
+#
+#   - every file listed here must have at least one block, and
+#   - every lib/**/*.ps that has blocks must be listed here.
+#
+# So migrating a library is: add its blocks, add its name here.
+lib/artkit.ps
+lib/paintkit.ps

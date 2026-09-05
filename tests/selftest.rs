@@ -902,19 +902,69 @@ fn a_malformed_block_fails_instead_of_being_skipped() {
     );
 }
 
-#[test]
-fn every_library_that_carries_blocks_passes_them() {
-    // What scripts/selftest.sh runs, run again under `cargo test` so a
-    // regression shows up in CI's existing gate too.
-    let mut checked = 0;
-    for entry in std::fs::read_dir(repo_root().join("lib")).expect("read lib/") {
-        let path = entry.expect("dir entry").path();
-        if path.extension().is_none_or(|e| e != "ps") {
-            continue;
+/// Every `.ps` file under `lib/`, recursively — `lib/fonts/` and
+/// `lib/styles/` hold real library sources too, and a non-recursive
+/// glob would never see one that adopted the convention (Codex review,
+/// PR #136).
+fn library_files() -> Vec<PathBuf> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("read a lib directory") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "ps") {
+                out.push(path);
+            }
         }
-        // Parser-backed, like scripts/selftest.sh: a substring search
-        // would also match a `%%SelfTest:` line inside a multiline
-        // PostScript string, which the parser correctly ignores.
+    }
+    let mut found = Vec::new();
+    walk(&repo_root().join("lib"), &mut found);
+    found.sort();
+    found
+}
+
+/// The libraries `selftest/libraries.txt` declares as carrying blocks.
+fn manifest() -> Vec<String> {
+    let text = std::fs::read_to_string(repo_root().join("selftest/libraries.txt"))
+        .expect("read selftest/libraries.txt");
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn every_manifested_library_passes_its_blocks() {
+    // Keyed off the manifest rather than off discovery, because
+    // discovery can't see a *deletion*: a library that loses its last
+    // block simply stops being discovered, and both CI paths stay
+    // green while its coverage drops to zero (Codex review, PR #136).
+    // `--selftest` already fails a file with no blocks, so this catches
+    // it.
+    let listed = manifest();
+    assert!(
+        listed.len() >= 2,
+        "expected at least two migrated libraries"
+    );
+    for rel in listed {
+        let path = repo_root().join(&rel);
+        assert!(path.exists(), "{rel} is listed but doesn't exist");
+        let out = selftest(&path);
+        assert!(
+            out.status.success(),
+            "{rel} failed its own self-tests:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+#[test]
+fn every_library_with_blocks_is_in_the_manifest() {
+    // The other half of the cross-check: a newly migrated library must
+    // be registered, not silently left out of the pass.
+    let listed = manifest();
+    for path in library_files() {
         let bytes = std::fs::read(&path).expect("read");
         if pscat::selftest::parse_blocks(&bytes)
             .expect("the library's blocks parse")
@@ -922,16 +972,16 @@ fn every_library_that_carries_blocks_passes_them() {
         {
             continue;
         }
-        checked += 1;
-        let out = selftest(&path);
+        let rel = path
+            .strip_prefix(repo_root())
+            .expect("under the repo root")
+            .to_string_lossy()
+            .into_owned();
         assert!(
-            out.status.success(),
-            "{} failed its own self-tests:\n{}",
-            path.display(),
-            String::from_utf8_lossy(&out.stderr)
+            listed.contains(&rel),
+            "{rel} has %%SelfTest blocks but isn't listed in selftest/libraries.txt"
         );
     }
-    assert!(checked >= 2, "expected at least two migrated libraries");
 }
 
 // --- Phase A mechanism 2: strict `--lint` over rendering drivers -----
