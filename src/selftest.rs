@@ -80,7 +80,11 @@ pub struct SelfTestBlock {
     pub name: String,
     /// 1-indexed line of the `%%SelfTest:` marker, for error messages.
     pub line: usize,
-    pub body: String,
+    /// The block's PostScript, `%` markers stripped. Bytes rather than
+    /// `String`: a `.ps` file may legitimately carry non-UTF-8 string
+    /// data, and a lossy conversion would execute something other than
+    /// what the author wrote.
+    pub body: Vec<u8>,
 }
 
 /// One failed assertion, as the PostScript prelude recorded it.
@@ -238,9 +242,12 @@ pub const PRELUDE: &str = r"
 } def
 
 % bool (label) mustbe  ->  -
+% A non-boolean is reported rather than coerced: `not` on an integer is
+% a bitwise complement in PostScript, so a mistyped operand would
+% otherwise quietly test something else entirely.
 /mustbe {
     exch dup type /booleantype ne {
-        pop pop (mustbe) (was given a non-boolean)
+        pop (was given a non-boolean, so it tests nothing)
         /--none-- /--none-- pscat_st_note
     } {
         not { (assertion was false) /--none-- /--none-- pscat_st_note } { pop } ifelse
@@ -249,25 +256,59 @@ pub const PRELUDE: &str = r"
 % --- end prelude ---
 ";
 
+/// A library's source split into lines, with any `\r` before the `\n`
+/// dropped — a CRLF-checked-out file must parse the same as an LF one,
+/// or `%%EndSelfTest\r` stops matching its own marker.
+///
+/// Bytes, not `str`, throughout: a `.ps` file is allowed to hold
+/// non-UTF-8 string data, and running a lossy conversion of a block
+/// body would silently replace those bytes with U+FFFD and execute
+/// something the author didn't write.
+fn lines(source: &[u8]) -> Vec<&[u8]> {
+    if source.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<&[u8]> = source
+        .split(|&b| b == b'\n')
+        .map(|l| l.strip_suffix(b"\r").unwrap_or(l))
+        .collect();
+    // `split` yields a trailing empty element for a source ending in a
+    // newline; `str::lines()` doesn't, and the difference isn't
+    // cosmetic here — that phantom line isn't a `%` comment, so an
+    // unterminated block at end of file would be reported as "this
+    // line isn't a comment" rather than "never closed".
+    if source.ends_with(b"\n") {
+        out.pop();
+    }
+    out
+}
+
 /// Parse every `%%SelfTest:` block out of a library's source.
 ///
 /// Every malformation is a hard error rather than a skipped block: a
 /// self-test that silently doesn't run is worse than no self-test at
 /// all, since it reads as coverage that isn't there.
-pub fn parse_blocks(source: &str) -> Result<Vec<SelfTestBlock>, String> {
+pub fn parse_blocks(source: &[u8]) -> Result<Vec<SelfTestBlock>, String> {
     let mut blocks: Vec<SelfTestBlock> = Vec::new();
-    let mut lines = source.lines().enumerate();
-    while let Some((i, line)) = lines.next() {
-        if !line.starts_with(BEGIN) {
-            if line.starts_with(END) {
+    let all = lines(source);
+    let mut i = 0;
+    while i < all.len() {
+        let line = all[i];
+        if !line.starts_with(BEGIN.as_bytes()) {
+            if line.starts_with(END.as_bytes()) {
                 return Err(format!(
                     "line {}: `{END}` with no matching `{BEGIN}`",
                     i + 1
                 ));
             }
+            i += 1;
             continue;
         }
-        let name = line[BEGIN.len()..].trim();
+        // The name is an identifier, so it has to be text even in a
+        // file whose string data isn't.
+        let name = std::str::from_utf8(&line[BEGIN.len()..])
+            .map_err(|_| format!("line {}: self-test name is not valid UTF-8", i + 1))?
+            .trim();
         if name.is_empty() {
             return Err(format!("line {}: `{BEGIN}` needs a name", i + 1));
         }
@@ -284,14 +325,16 @@ pub fn parse_blocks(source: &str) -> Result<Vec<SelfTestBlock>, String> {
                 prev.line
             ));
         }
-        let mut body = String::new();
+        let mut body: Vec<u8> = Vec::new();
         let mut closed = false;
-        for (j, body_line) in lines.by_ref() {
-            if body_line.starts_with(END) {
+        let mut j = i + 1;
+        while j < all.len() {
+            let body_line = all[j];
+            if body_line.starts_with(END.as_bytes()) {
                 closed = true;
                 break;
             }
-            if body_line.starts_with(BEGIN) {
+            if body_line.starts_with(BEGIN.as_bytes()) {
                 return Err(format!(
                     "line {}: `{BEGIN}` inside the block opened on line {} \
                      (blocks don't nest -- is a `{END}` missing?)",
@@ -299,7 +342,7 @@ pub fn parse_blocks(source: &str) -> Result<Vec<SelfTestBlock>, String> {
                     i + 1
                 ));
             }
-            let Some(rest) = body_line.strip_prefix('%') else {
+            let Some(rest) = body_line.strip_prefix(b"%") else {
                 return Err(format!(
                     "line {}: every line of self-test `{name}` must be a `%` comment, \
                      so the library stays inert when it's run normally",
@@ -309,8 +352,9 @@ pub fn parse_blocks(source: &str) -> Result<Vec<SelfTestBlock>, String> {
             // One optional space after the `%` is the comment marker,
             // not indentation -- everything past it is preserved so a
             // block author can indent PostScript freely.
-            body.push_str(rest.strip_prefix(' ').unwrap_or(rest));
-            body.push('\n');
+            body.extend_from_slice(rest.strip_prefix(b" ").unwrap_or(rest));
+            body.push(b'\n');
+            j += 1;
         }
         if !closed {
             return Err(format!(
@@ -318,7 +362,7 @@ pub fn parse_blocks(source: &str) -> Result<Vec<SelfTestBlock>, String> {
                 i + 1
             ));
         }
-        if body.trim().is_empty() {
+        if body.iter().all(|b| b.is_ascii_whitespace()) {
             return Err(format!(
                 "line {}: self-test `{name}` has an empty body",
                 i + 1
@@ -329,6 +373,9 @@ pub fn parse_blocks(source: &str) -> Result<Vec<SelfTestBlock>, String> {
             line: i + 1,
             body,
         });
+        // Resume after the `%%EndSelfTest` line, never inside the
+        // block just consumed.
+        i = j + 1;
     }
     Ok(blocks)
 }
@@ -343,9 +390,15 @@ pub fn parse_blocks(source: &str) -> Result<Vec<SelfTestBlock>, String> {
 /// `(path) run` pairs is rejected: quietly ignoring a shape this
 /// doesn't understand would load the wrong prerequisites and blame the
 /// resulting failures on the library.
-pub fn parse_requires(source: &str) -> Result<Vec<String>, String> {
+pub fn parse_requires(source: &[u8]) -> Result<Vec<String>, String> {
     let mut found: Option<&str> = None;
-    for (i, line) in source.lines().enumerate() {
+    for (i, line) in lines(source).into_iter().enumerate() {
+        // A tag line is plain ASCII by construction; anything else on
+        // that line isn't one, so a non-UTF-8 line is skipped rather
+        // than failing the whole file.
+        let Ok(line) = std::str::from_utf8(line) else {
+            continue;
+        };
         let Some(rest) = line.trim_start().strip_prefix('%') else {
             continue;
         };
@@ -417,12 +470,8 @@ fn resolve_required(under_test: &Path, rel: &str) -> Option<PathBuf> {
 /// but only the second is a statement about the library under test.
 pub fn run_file(path: &Path) -> Result<Report, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    // Blocks and tags are ASCII comment text; scanning a lossy view is
-    // safe, but the file is *executed* as its original bytes (a lib
-    // may legitimately carry non-UTF-8 string data).
-    let text = String::from_utf8_lossy(&bytes);
-    let blocks = parse_blocks(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-    let requires = parse_requires(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    let blocks = parse_blocks(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    let requires = parse_requires(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
 
     let mut prerequisites: Vec<(String, Vec<u8>)> = Vec::new();
     for rel in &requires {
@@ -489,7 +538,7 @@ fn run_block(
         ));
     }
 
-    let error = match interp.run_source(block.body.as_bytes()) {
+    let error = match interp.run_source(&block.body) {
         Ok(()) => None,
         Err(e) => Some(interp.error_report(&e)),
     };
@@ -629,17 +678,17 @@ mod tests {
     #[test]
     fn parses_a_block_and_strips_one_leading_space() {
         let src = "%%SelfTest: alpha\n%   1 2 add\n%%EndSelfTest\n";
-        let blocks = parse_blocks(src).expect("parses");
+        let blocks = parse_blocks(src.as_bytes()).expect("parses");
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].name, "alpha");
         assert_eq!(blocks[0].line, 1);
-        assert_eq!(blocks[0].body, "  1 2 add\n");
+        assert_eq!(blocks[0].body, b"  1 2 add\n");
     }
 
     #[test]
     fn ignores_ordinary_comments_and_code_between_blocks() {
         let src = "% just a comment\n/foo { } def\n%%SelfTest: a\n% 1\n%%EndSelfTest\n";
-        assert_eq!(parse_blocks(src).expect("parses").len(), 1);
+        assert_eq!(parse_blocks(src.as_bytes()).expect("parses").len(), 1);
     }
 
     #[test]
@@ -648,55 +697,101 @@ mod tests {
         // inert on a normal `run`; a bare code line inside a block
         // would execute at load time.
         let src = "%%SelfTest: a\n1 2 add\n%%EndSelfTest\n";
-        let err = parse_blocks(src).expect_err("rejected");
+        let err = parse_blocks(src.as_bytes()).expect_err("rejected");
         assert!(err.contains("must be a `%` comment"), "{err}");
     }
 
     #[test]
     fn an_unterminated_block_is_an_error() {
         let src = "%%SelfTest: a\n% 1 2 add\n";
-        let err = parse_blocks(src).expect_err("rejected");
+        let err = parse_blocks(src.as_bytes()).expect_err("rejected");
         assert!(err.contains("never closed"), "{err}");
     }
 
     #[test]
     fn a_duplicate_name_is_an_error() {
         let src = "%%SelfTest: a\n% 1\n%%EndSelfTest\n%%SelfTest: a\n% 2\n%%EndSelfTest\n";
-        let err = parse_blocks(src).expect_err("rejected");
+        let err = parse_blocks(src.as_bytes()).expect_err("rejected");
         assert!(err.contains("duplicate"), "{err}");
     }
 
     #[test]
     fn an_empty_body_is_an_error() {
         let src = "%%SelfTest: a\n%\n%%EndSelfTest\n";
-        let err = parse_blocks(src).expect_err("rejected");
+        let err = parse_blocks(src.as_bytes()).expect_err("rejected");
         assert!(err.contains("empty body"), "{err}");
     }
 
     #[test]
     fn a_nameless_block_is_an_error() {
-        let err = parse_blocks("%%SelfTest:\n% 1\n%%EndSelfTest\n").expect_err("rejected");
+        let err = parse_blocks(b"%%SelfTest:\n% 1\n%%EndSelfTest\n").expect_err("rejected");
         assert!(err.contains("needs a name"), "{err}");
     }
 
     #[test]
     fn a_stray_end_marker_is_an_error() {
-        let err = parse_blocks("%%EndSelfTest\n").expect_err("rejected");
+        let err = parse_blocks(b"%%EndSelfTest\n").expect_err("rejected");
         assert!(err.contains("no matching"), "{err}");
     }
 
     #[test]
     fn a_nested_begin_marker_is_an_error() {
         let src = "%%SelfTest: a\n% 1\n%%SelfTest: b\n% 2\n%%EndSelfTest\n";
-        let err = parse_blocks(src).expect_err("rejected");
+        let err = parse_blocks(src.as_bytes()).expect_err("rejected");
         assert!(err.contains("don't nest"), "{err}");
+    }
+
+    #[test]
+    fn crlf_line_endings_parse_the_same_as_lf() {
+        // A CRLF checkout would otherwise leave `%%EndSelfTest\r`
+        // failing to match its own marker, and the block would read as
+        // unterminated.
+        let src = b"%%SelfTest: alpha\r\n%   1 2 add\r\n%%EndSelfTest\r\n";
+        let blocks = parse_blocks(src).expect("parses");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].body, b"  1 2 add\n");
+    }
+
+    #[test]
+    fn a_non_utf8_body_is_preserved_byte_for_byte() {
+        // `.ps` files may carry non-UTF-8 string data. A lossy read
+        // would replace these bytes with U+FFFD and execute something
+        // the author didn't write.
+        let mut src = b"%%SelfTest: alpha\n% (".to_vec();
+        src.extend_from_slice(&[0xff, 0xfe]);
+        src.extend_from_slice(b") pop\n%%EndSelfTest\n");
+        let blocks = parse_blocks(&src).expect("parses");
+        assert_eq!(blocks[0].body, b"(\xff\xfe) pop\n");
+    }
+
+    #[test]
+    fn parsing_resumes_after_a_block_not_inside_it() {
+        let src =
+            b"%%SelfTest: a\n% 1\n%%EndSelfTest\n/x { } def\n%%SelfTest: b\n% 2\n%%EndSelfTest\n";
+        let blocks = parse_blocks(src).expect("parses");
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[1].name, "b");
+        assert_eq!(blocks[1].line, 5);
+    }
+
+    #[test]
+    fn the_prelude_and_rust_agree_on_the_failure_cap() {
+        // The cap lives in two places by necessity — PostScript has no
+        // growable array, so the prelude preallocates — and a mismatch
+        // would silently drop or misreport failures.
+        let cap = MAX_FAILURES.to_string();
+        assert_eq!(
+            PRELUDE.matches(&cap).count(),
+            2,
+            "PRELUDE must allocate and bound at exactly MAX_FAILURES ({cap})"
+        );
     }
 
     #[test]
     fn requires_reads_the_capability_catalog_tag() {
         let src = "% @requires: (lib/artkit.ps) run (lib/hatchkit.ps) run\n";
         assert_eq!(
-            parse_requires(src).expect("parses"),
+            parse_requires(src.as_bytes()).expect("parses"),
             vec!["lib/artkit.ps".to_string(), "lib/hatchkit.ps".to_string()]
         );
     }
@@ -704,7 +799,7 @@ mod tests {
     #[test]
     fn no_requires_tag_means_no_prerequisites() {
         assert!(
-            parse_requires("% ordinary comment\n")
+            parse_requires(b"% ordinary comment\n")
                 .expect("parses")
                 .is_empty()
         );
@@ -714,13 +809,13 @@ mod tests {
     fn a_requires_shape_this_cant_read_is_an_error() {
         // Silently loading nothing would blame the library for
         // failures caused by a missing prerequisite.
-        let err = parse_requires("% @requires: lib/artkit.ps\n").expect_err("rejected");
+        let err = parse_requires(b"% @requires: lib/artkit.ps\n").expect_err("rejected");
         assert!(err.contains("sequence of"), "{err}");
     }
 
     #[test]
     fn a_requires_path_without_run_is_an_error() {
-        let err = parse_requires("% @requires: (lib/artkit.ps)\n").expect_err("rejected");
+        let err = parse_requires(b"% @requires: (lib/artkit.ps)\n").expect_err("rejected");
         assert!(err.contains("expected `run`"), "{err}");
     }
 }
