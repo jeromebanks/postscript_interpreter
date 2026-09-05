@@ -2300,6 +2300,13 @@
     /pqLayers load xcheck { pkwet-layers-must-not-be-a-procedure } if
     pqLayers 1 lt pqLayers 6 gt or pqLayers truncate pqLayers ne or
         { pkwet-layers-must-be-1-to-6 } if
+    % `/Layers 3.0` clears the whole-number check above and is a
+    % perfectly reasonable thing for a caller to compute, but it is still
+    % a real, and `real array` raises typecheck in both pscat and
+    % Ghostscript. Normalize rather than reject: the value passed the
+    % contract, so failing later on its representation would be a bug in
+    % us, not bad input (Codex review).
+    /pqLayers pqLayers cvi def
     /pqSpread pqopts /Spread pqSoft 14 mul pkgetdef def
     /pqSpread load xcheck { pkwet-spread-must-not-be-a-procedure } if
     pqSpread 0 lt { pkwet-spread-must-not-be-negative } if
@@ -2345,7 +2352,19 @@
                 /pqang pqi 137.5 mul 40 pkjit add def
                 pqang cos pqmag mul  pqang sin pqmag mul
             } { 0 0 } ifelse
-            pqbase pqUnder pqf pqPickup mul mix3
+            % The core pass carries no color at all -- a 2-element plan
+            % entry rather than a 5-element one. Its pickup mix is the
+            % identity (f is 0 there), so setting the color would be a
+            % no-op numerically while still switching the graphics state
+            % into DeviceRGB, which would make the wrapped procedure run
+            % in a different color space than the caller chose: a
+            % DeviceGray procedure using `setcolor` raises typecheck
+            % under pkwet but works when called directly, so /Soft 0
+            % would not have been the plain call it claims to be (Codex
+            % review). The softening passes do set an RGB color, because
+            % mixing toward /Under is defined in RGB -- each is inside
+            % its own gsave/grestore, so that never escapes.
+            pqf 0 gt { pqbase pqUnder pqf pqPickup mul mix3 } if
         ]
         put
     } for
@@ -2368,8 +2387,14 @@
     % walkpath already demands of its own callers.
     pqplan /pqproc load
     pqLayers 1 sub -1 0 {
-        2 index exch get aload pop
-        gsave setrgbcolor translate dup exec grestore
+        2 index exch get
+        gsave
+            dup length 2 gt
+                { aload pop setrgbcolor translate }
+                { aload pop translate }
+            ifelse
+            dup exec
+        grestore
     } for
     pop pop
     % No trailing setrgbcolor: every pass ran inside its own

@@ -4455,3 +4455,49 @@ fn wet_zero_spread_stays_on_the_same_random_stream() {
         "/Spread must not change how much of the caller's stream pkwet consumes"
     );
 }
+
+/// Codex review of PR #138, round 2: even after dropping the trailing
+/// `setrgbcolor`, every pass set an RGB color -- including the core
+/// pass, whose pickup mix is the identity. So the wrapped procedure ran
+/// in DeviceRGB whatever space the caller chose, and `/Soft 0` was not
+/// the plain call it claims to be: a DeviceGray procedure using
+/// `setcolor` works when called directly and raised `typecheck` under
+/// pkwet. The core pass now carries no color at all.
+#[test]
+fn wet_runs_the_core_pass_in_the_callers_color_space() {
+    // `setcolor` takes one operand in DeviceGray and three in DeviceRGB,
+    // so a gray procedure using it is a direct probe of which space the
+    // wrapped code actually ran in.
+    let mut it = fresh(300, 200);
+    it.run_str(
+        "0.35 setgray 5 srand \
+         { 0.2 setcolor newpath 60 100 moveto 240 100 lineto \
+           << /Width 20 >> pkribbon } \
+         << /Soft 0 >> pkwet",
+    )
+    .unwrap_or_else(|e| {
+        panic!(
+            "a DeviceGray procedure must run in DeviceGray under /Soft 0: {}",
+            it.error_report(&e)
+        )
+    });
+    assert!(ink_count(&it) > 100, "the gray-space mark should paint");
+}
+
+/// Codex review of PR #138, round 2: `/Layers 3.0` clears the
+/// whole-number check but is still a real, and `real array` raises
+/// typecheck in both pscat and Ghostscript. A value that passed the
+/// documented contract must not fail later on its representation.
+#[test]
+fn wet_accepts_a_whole_valued_real_layer_count() {
+    for layers in ["3", "3.0"] {
+        let mut it = fresh(300, 200);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 5 srand \
+             {{ newpath 60 100 moveto 240 100 lineto << /Width 20 >> pkribbon }} \
+             << /Layers {layers} /Spread 8 /Under [0.9 0.9 0.9] >> pkwet"
+        ))
+        .unwrap_or_else(|e| panic!("/Layers {layers} should work: {}", it.error_report(&e)));
+        assert!(ink_count(&it) > 100, "/Layers {layers} should paint");
+    }
+}
