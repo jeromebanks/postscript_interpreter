@@ -769,10 +769,6 @@ fn run_block(
         interp.break_permanent_dict_cycle();
         msg
     };
-    if let Err(e) = interp.run_str(PRELUDE) {
-        let msg = format!("selftest prelude failed: {}", interp.error_report(&e));
-        return Err(setup_failure(interp, msg));
-    }
     for (name, body) in prerequisites {
         if let Err(e) = interp.run_source(body) {
             let msg = format!(
@@ -788,6 +784,18 @@ fn run_block(
             path.display(),
             interp.error_report(&e)
         );
+        return Err(setup_failure(interp, msg));
+    }
+    // The prelude installs *last*, after every library, so nothing a
+    // library defines can shadow the assertion vocabulary. Installing
+    // it first meant a library defining `/mustbe { pop pop } def` made
+    // that assertion silently disappear — and if the block ran any
+    // other real assertion, the counter stayed nonzero and the run
+    // still passed (Codex review, round 5). Only the block itself runs
+    // after this point, and a block redefining its own assertions is
+    // deliberate sabotage rather than an accident a library can cause.
+    if let Err(e) = interp.run_str(PRELUDE) {
+        let msg = format!("selftest prelude failed: {}", interp.error_report(&e));
         return Err(setup_failure(interp, msg));
     }
 

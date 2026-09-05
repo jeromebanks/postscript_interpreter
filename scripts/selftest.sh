@@ -33,7 +33,16 @@ for lib in "$ROOT"/lib/*.ps; do
     # string content, which the parser ignores and grep cannot see. The
     # two disagreeing meant CI rejected a file shape the parser
     # deliberately supports (Codex review, PR #136).
-    [ -n "$("$BIN" --selftest-list "$lib")" ] || continue
+    # `$(...)` inside `[ -n ... ]` discards the command's exit status,
+    # so a library whose blocks are malformed (a parse error) read as
+    # "no blocks" and was skipped as a success — even under `set -e`
+    # (Codex review, PR #136). Capture the status separately.
+    if ! blocks=$("$BIN" --selftest-list "$lib"); then
+        echo "selftest.sh: cannot list blocks in ${lib#"$ROOT"/}" >&2
+        status=1
+        continue
+    fi
+    [ -n "$blocks" ] || continue
     found_blocks=1
     if ! "$BIN" --selftest "$lib"; then
         status=1

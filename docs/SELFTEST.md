@@ -89,6 +89,10 @@ pins that property.
   it catches movement in *both* directions — a block that consumes a
   library-owned operand hasn't returned the stack as it found it
   either.
+- The assertion vocabulary installs *after* the library under test, so
+  nothing a library defines can shadow it. The other order let a
+  library define `/mustbe { pop pop } def` and make that assertion
+  silently disappear.
 - Each block runs in its own fresh interpreter, so one block can't
   affect another. Within a block, `mustguard`/`mustfail`/`mustpass`
   restore the operand and dictionary stacks after a caught error. The

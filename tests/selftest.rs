@@ -709,6 +709,54 @@ fn block_discovery_agrees_with_the_parser_about_strings() {
 }
 
 #[test]
+fn a_library_cannot_disable_the_assertion_vocabulary() {
+    // The prelude installs after every library, so nothing a library
+    // defines can shadow the assertions. Installing it first meant a
+    // library defining `/mustbe { pop pop } def` made that assertion
+    // silently disappear — and with any other real assertion in the
+    // block, the counter stayed nonzero and the run still passed
+    // (Codex review, round 5).
+    let dir = Scratch::new("hijack");
+    let file = dir.path().join("hijack.ps");
+    std::fs::write(
+        &file,
+        concat!(
+            "/mustbe { pop pop } def\n",
+            "%%SelfTest: a-library-cannot-disable-assertions\n",
+            "%   false (this must still be reported) mustbe\n",
+            "%   true (a second, real assertion) mustbe\n",
+            "%%EndSelfTest\n"
+        ),
+    )
+    .expect("write");
+    let out = selftest(&file);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "the library disabled mustbe:\n{stderr}"
+    );
+    assert!(stderr.contains("this must still be reported"), "{stderr}");
+}
+
+#[test]
+fn discovery_reports_a_parse_error_rather_than_no_blocks() {
+    // `--selftest-list` is what scripts/selftest.sh uses to decide
+    // which files to check. A malformed file must not read as "no
+    // blocks" and get skipped as a success.
+    let dir = Scratch::new("discovery-error");
+    let file = dir.path().join("bad.ps");
+    std::fs::write(&file, "%%SelfTest: unclosed\n% 1 2 add\n").expect("write");
+    let out = Command::new(BIN)
+        .arg("--selftest-list")
+        .arg(&file)
+        .output()
+        .expect("run pscat --selftest-list");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains("never closed"), "{stderr}");
+}
+
+#[test]
 fn a_malformed_block_fails_instead_of_being_skipped() {
     // A self-test that silently doesn't run reads as coverage that
     // isn't there — worse than no self-test at all.
