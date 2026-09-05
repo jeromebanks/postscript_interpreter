@@ -4937,6 +4937,44 @@ fn broad_a_pressed_footprint_honors_the_charge() {
     assert_eq!(ink_count(&it), 0, "an unloaded brush stamps nothing");
 }
 
+/// The footprint's long axis is the stop's travel direction turned by
+/// /Angle. It used to be hard-coded along +x, which made the stamp a
+/// sheared parallelogram at nonzero /Angle instead of the rotated
+/// rectangle a flat brush actually presses. Both other degenerate tests
+/// run at /Angle 0, where the two agree, so this is the one that pins
+/// the rotation.
+#[test]
+fn broad_a_pressed_footprint_turns_with_the_angle() {
+    let stamp = |angle: &str| {
+        let mut it = fresh(200, 200);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 29 srand newpath 100 100 moveto \
+             << /Width 60 /Charge 1 /Depletion 0 /Angle {angle} >> pkbroad"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        it
+    };
+    let flat = stamp("0");
+    let turned = stamp("60");
+    assert_ne!(
+        pixels(&flat),
+        pixels(&turned),
+        "/Angle must turn the pressed footprint"
+    );
+    // The discriminator is area, not extent. Turning the brush is a
+    // *rotation*, which preserves the footprint's area at every angle.
+    // Shearing it -- holding the long axis along +x while the width
+    // swings to Angle+90 -- scales the area by cos(Angle), so the old
+    // hard-coded version lost half its ink at /Angle 60 while still
+    // looking like a plausible slanted mark.
+    let (flat_ink, turned_ink) = (ink_count(&flat) as f64, ink_count(&turned) as f64);
+    assert!(
+        (turned_ink - flat_ink).abs() < flat_ink * 0.15,
+        "turning the brush must preserve the footprint's area (a rotation), \
+         not scale it by cos(Angle) (a shear): flat {flat_ink} turned {turned_ink}"
+    );
+}
+
 /// Codex review of PR #140 [P1]: the run-out taper has to narrow a
 /// striation around *its own* center, not scale its offsets from the
 /// band centerline. Scaling the absolute offsets translates the whole
