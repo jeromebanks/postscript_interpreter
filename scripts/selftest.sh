@@ -28,7 +28,12 @@ status=0
 echo "== %%SelfTest blocks =="
 found_blocks=0
 for lib in "$ROOT"/lib/*.ps; do
-    grep -q '^%%SelfTest:' "$lib" || continue
+    # Ask the parser which files carry blocks, never `grep`: a
+    # `%%SelfTest:`-shaped line inside a multiline PostScript string is
+    # string content, which the parser ignores and grep cannot see. The
+    # two disagreeing meant CI rejected a file shape the parser
+    # deliberately supports (Codex review, PR #136).
+    [ -n "$("$BIN" --selftest-list "$lib")" ] || continue
     found_blocks=1
     if ! "$BIN" --selftest "$lib"; then
         status=1

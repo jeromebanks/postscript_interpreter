@@ -576,6 +576,10 @@ fn selftest_runs_alone() {
         vec!["--selftest", "lib/paintkit.ps", "--page", "200x200"],
         vec!["--selftest", "lib/paintkit.ps", "--dpi", "144"],
         vec!["--selftest", "lib/paintkit.ps", "--halftone"],
+        // Accepted-and-ignored is the same silent-no-op class this
+        // whole feature exists to close (Codex review, PR #136).
+        vec!["--selftest", "lib/paintkit.ps", "--pstack-on-error"],
+        vec!["--selftest", "lib/paintkit.ps", "--speed", "10"],
     ] {
         let (ok, _, err) = run(&extra, "");
         assert!(!ok, "expected a refusal for {extra:?}");
@@ -615,4 +619,5 @@ fn usage_lists_the_new_flags() {
     let (_, out, _) = run(&["--help"], "");
     assert!(out.contains("--lint-strict"), "{out}");
     assert!(out.contains("--selftest"), "{out}");
+    assert!(out.contains("--selftest-list"), "{out}");
 }

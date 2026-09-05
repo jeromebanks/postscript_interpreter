@@ -642,6 +642,73 @@ fn operands_the_library_itself_left_are_not_blamed_on_every_block() {
 }
 
 #[test]
+fn a_block_that_consumes_library_operands_fails_too() {
+    // The operand check is relative, and it has to catch movement in
+    // *both* directions: a block that pops an operand the library left
+    // hasn't returned the stack as it found it either. `saturating_sub`
+    // clamped that deficit to zero and reported ok (Codex review,
+    // round 4).
+    let dir = Scratch::new("operand-deficit");
+    let file = dir.path().join("deficit.ps");
+    std::fs::write(
+        &file,
+        concat!(
+            "42\n",
+            "%%SelfTest: eats-a-library-operand\n",
+            "%   pop\n",
+            "%   true (otherwise fine) mustbe\n",
+            "%%EndSelfTest\n"
+        ),
+    )
+    .expect("write");
+    let out = selftest(&file);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains("did not push"), "{stderr}");
+}
+
+#[test]
+fn block_discovery_agrees_with_the_parser_about_strings() {
+    // `scripts/selftest.sh` used `grep '^%%SelfTest:'` to decide which
+    // libraries carry blocks. grep can't see string context, so a
+    // marker-shaped line inside a multiline PostScript string selected
+    // the file and `--selftest` then failed "no blocks" — CI rejecting
+    // a shape the parser deliberately supports (Codex review, round 4).
+    // `--selftest-list` is the parser's own answer.
+    let dir = Scratch::new("discovery");
+    let file = dir.path().join("stringy.ps");
+    std::fs::write(
+        &file,
+        "/banner (one\n%%SelfTest: not-a-real-block\n%%EndSelfTest\nfour) def\n",
+    )
+    .expect("write");
+
+    let listed = Command::new(BIN)
+        .arg("--selftest-list")
+        .arg(&file)
+        .output()
+        .expect("run pscat --selftest-list");
+    assert!(listed.status.success());
+    assert!(
+        String::from_utf8_lossy(&listed.stdout).trim().is_empty(),
+        "the parser sees no blocks here, so discovery must not either"
+    );
+
+    // ...and it does report the real ones.
+    let real = Command::new(BIN)
+        .arg("--selftest-list")
+        .arg(repo_root().join("lib/artkit.ps"))
+        .output()
+        .expect("run pscat --selftest-list");
+    assert!(real.status.success());
+    assert!(
+        String::from_utf8_lossy(&real.stdout).contains("scatter-validates-its-option-dict"),
+        "{}",
+        String::from_utf8_lossy(&real.stdout)
+    );
+}
+
+#[test]
 fn a_malformed_block_fails_instead_of_being_skipped() {
     // A self-test that silently doesn't run reads as coverage that
     // isn't there — worse than no self-test at all.
@@ -667,8 +734,14 @@ fn every_library_that_carries_blocks_passes_them() {
         if path.extension().is_none_or(|e| e != "ps") {
             continue;
         }
-        let text = std::fs::read_to_string(&path).expect("read");
-        if !text.contains("\n%%SelfTest:") && !text.starts_with("%%SelfTest:") {
+        // Parser-backed, like scripts/selftest.sh: a substring search
+        // would also match a `%%SelfTest:` line inside a multiline
+        // PostScript string, which the parser correctly ignores.
+        let bytes = std::fs::read(&path).expect("read");
+        if pscat::selftest::parse_blocks(&bytes)
+            .expect("the library's blocks parse")
+            .is_empty()
+        {
             continue;
         }
         checked += 1;

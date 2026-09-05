@@ -7,6 +7,11 @@ use pscat::spool::Watcher;
 use pscat::window::{WindowOptions, run_interactive, run_spool, run_windowed};
 use pscat::{Interp, gfx};
 
+/// Interpreter steps per rendered frame in the windowed modes. Named
+/// so `--selftest`'s runs-alone check can tell "the user asked for a
+/// speed" from the default it would silently ignore.
+const DEFAULT_STEPS_PER_FRAME: usize = 100;
+
 struct Options {
     file: Option<String>,
     eval: Option<String>,
@@ -40,6 +45,9 @@ struct Options {
     /// Run a library's `%%SelfTest` blocks and exit (issue #95, Phase
     /// A mechanism 1).
     selftest: Option<String>,
+    /// Print a file's `%%SelfTest` block names and exit — parser-backed
+    /// discovery for `scripts/selftest.sh`.
+    selftest_list: Option<String>,
     /// Reseed with each value in turn, once per sweep frame (issue
     /// #21): overrides every `srand` call transparently, so it works
     /// on found art unmodified.
@@ -65,6 +73,25 @@ fn main() -> ExitCode {
         }
     };
 
+    if let Some(path) = &options.selftest_list {
+        // Deliberately quiet and exit-0 even for a file with no blocks:
+        // this answers "which files have blocks", where none is a
+        // legitimate answer. `--selftest` on an explicitly named file
+        // is the opposite — there, no blocks is a failure.
+        return match pscat::selftest::list_blocks(std::path::Path::new(path)) {
+            Ok(names) => {
+                for name in names {
+                    println!("{name}");
+                }
+                ExitCode::SUCCESS
+            }
+            Err(msg) => {
+                eprintln!("pscat: selftest: {msg}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
     if let Some(path) = &options.selftest {
         // Like --spool, this is a whole mode of its own: it builds its
         // own interpreter per block and produces no page, so pairing it
@@ -89,6 +116,8 @@ fn main() -> ExitCode {
             || options.page != gfx::DEFAULT_PAGE
             || options.dpi != 72.0
             || options.halftone
+            || options.pstack_on_error
+            || options.steps_per_frame != DEFAULT_STEPS_PER_FRAME
         {
             eprintln!("pscat: --selftest runs alone (no file argument or other mode flags)");
             return ExitCode::FAILURE;
@@ -1088,7 +1117,7 @@ fn parse_args() -> Result<Options, String> {
         eval: None,
         headless: false,
         png: None,
-        steps_per_frame: 100,
+        steps_per_frame: DEFAULT_STEPS_PER_FRAME,
         page: gfx::DEFAULT_PAGE,
         dpi: 72.0,
         svg: None,
@@ -1100,6 +1129,7 @@ fn parse_args() -> Result<Options, String> {
         lint: false,
         lint_strict: false,
         selftest: None,
+        selftest_list: None,
         sweep_seed: None,
         sweep_param: None,
         contact_sheet: None,
@@ -1159,6 +1189,16 @@ fn parse_args() -> Result<Options, String> {
             }
             "--selftest" => {
                 options.selftest = Some(args.next().ok_or("missing file after --selftest")?);
+            }
+            // Discovery for scripts/selftest.sh. A `grep '^%%SelfTest:'`
+            // can't tell a real marker from one inside a multiline
+            // PostScript string, which the parser deliberately ignores —
+            // so the two disagreed, and CI rejected a file shape the
+            // parser supports (Codex review, round 4). Asking the parser
+            // is the only way to keep them from drifting.
+            "--selftest-list" => {
+                options.selftest_list =
+                    Some(args.next().ok_or("missing file after --selftest-list")?);
             }
             "--speed" => {
                 let n = args.next().ok_or("missing value after --speed")?;
@@ -1262,6 +1302,7 @@ fn print_usage() {
     println!("                      the exit code");
     println!("      --lint-strict   as --lint, but exit non-zero if anything is found");
     println!("      --selftest FILE run FILE's %%SelfTest blocks and exit (runs alone)");
+    println!("      --selftest-list FILE   print FILE's %%SelfTest block names, then exit");
     println!("      --fonts         list every findfont-reachable face and alias, then exit");
     println!(
         "      --capabilities  print the agent-usable art catalog (fonts, palettes, templates, procedures) as JSON, then exit"

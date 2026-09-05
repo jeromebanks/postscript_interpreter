@@ -85,6 +85,10 @@ pins that property.
   a failure rather than a vacuous pass.
 - A block must also leave the operand, dictionary and graphics stacks
   as it found them; all three are checked from Rust after the block.
+  The operand check is relative to what loading the library left, and
+  it catches movement in *both* directions — a block that consumes a
+  library-owned operand hasn't returned the stack as it found it
+  either.
 - Each block runs in its own fresh interpreter, so one block can't
   affect another. Within a block, `mustguard`/`mustfail`/`mustpass`
   restore the operand and dictionary stacks after a caught error. The
@@ -208,4 +212,7 @@ things is worse than one with a documented edge:
 2. Add `selftest/drivers/yourkit.ps` with a `%%SelfTestPage: WxH`
    header, a `%%Pages:` count, and one `showpage` per scenario.
 3. Nothing else. `scripts/selftest.sh` and `tests/selftest.rs` both
-   discover files rather than listing them.
+   discover files rather than listing them — via
+   `pscat --selftest-list`, the parser's own answer, never a `grep`:
+   grep can't see PostScript string context, so the two would disagree
+   about a marker-shaped line inside a multiline string.

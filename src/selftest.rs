@@ -119,8 +119,12 @@ pub struct BlockResult {
     /// Unmatched `begin`s left open by the block — `systemdict` and
     /// `userdict` are the permanent baseline, so anything past 2.
     pub dict_depth: usize,
-    /// Operands the block left on the stack.
-    pub operand_depth: usize,
+    /// How the operand stack moved during the block, relative to what
+    /// loading the library left. Signed on purpose: a block that
+    /// *consumed* library-owned operands hasn't left the stack as it
+    /// found it either, and clamping that to zero let it report ok
+    /// (Codex review, round 4).
+    pub operand_delta: i64,
     /// How many assertions actually ran. Zero means the block tested
     /// nothing, which is a failure, not a pass.
     pub assertions: usize,
@@ -139,7 +143,7 @@ impl BlockResult {
             && self.error.is_none()
             && self.gsave_depth == 0
             && self.dict_depth == 0
-            && self.operand_depth == 0
+            && self.operand_delta == 0
             && self.assertions > 0
     }
 }
@@ -688,6 +692,20 @@ fn resolve_required(under_test: &Path, rel: &str) -> Option<PathBuf> {
     crate::paths::program_file(rel)
 }
 
+/// The names of `path`'s `%%SelfTest` blocks, in file order.
+///
+/// Exists so callers deciding *which* files carry blocks ask the same
+/// parser that will later run them. `scripts/selftest.sh` used a
+/// `grep '^%%SelfTest:'` for this, which can't tell a real marker from
+/// one inside a multiline PostScript string — the parser ignores those,
+/// so the two disagreed and CI rejected a file shape the parser
+/// deliberately supports (Codex review, round 4).
+pub fn list_blocks(path: &Path) -> Result<Vec<String>, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let blocks = parse_blocks(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(blocks.into_iter().map(|b| b.name).collect())
+}
+
 /// Run every `%%SelfTest:` block in `path`.
 ///
 /// `Err` means the file itself couldn't be read or its blocks couldn't
@@ -794,10 +812,7 @@ fn run_block(
         // systemdict + userdict are the permanent baseline (see
         // `Interp::pop_dict`), same rule `lint`'s dict-leak check uses.
         dict_depth: interp.dict_stack_len().saturating_sub(2),
-        operand_depth: interp
-            .operand_stack()
-            .len()
-            .saturating_sub(operand_baseline),
+        operand_delta: interp.operand_stack().len() as i64 - operand_baseline as i64,
         assertions: assertion_count(&interp),
     };
     // One `Interp` per block, each holding a fully loaded copy of the
@@ -937,12 +952,22 @@ pub fn format_report(report: &Report) -> String {
                 block.dict_depth
             );
         }
-        if block.operand_depth > 0 {
-            let _ = writeln!(
-                out,
-                "         {} operand(s) left on the stack by the block",
-                block.operand_depth
-            );
+        match block.operand_delta.cmp(&0) {
+            std::cmp::Ordering::Greater => {
+                let _ = writeln!(
+                    out,
+                    "         {} operand(s) left on the stack by the block",
+                    block.operand_delta
+                );
+            }
+            std::cmp::Ordering::Less => {
+                let _ = writeln!(
+                    out,
+                    "         {} operand(s) the block consumed but did not push",
+                    -block.operand_delta
+                );
+            }
+            std::cmp::Ordering::Equal => {}
         }
         if block.assertions == 0 {
             let _ = writeln!(
