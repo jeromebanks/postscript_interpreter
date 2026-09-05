@@ -689,7 +689,13 @@ fn selftest_lines(rel: &str, lines: &[&str], starts_in_string: &[bool]) -> Vec<b
         }
         if open.is_some() {
             mask[i] = true;
-            if line.starts_with("%%EndSelfTest") {
+            // Exact marker, not a prefix: `%%EndSelfTestTYPO` must not
+            // close a region. src/selftest.rs applies the same rule,
+            // and the two have to agree about where a region ends.
+            if line
+                .strip_prefix("%%EndSelfTest")
+                .is_some_and(|rest| rest.trim().is_empty())
+            {
                 open = None;
             }
         } else if line.starts_with("%%SelfTest:") {

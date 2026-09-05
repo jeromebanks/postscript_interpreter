@@ -757,6 +757,85 @@ fn discovery_reports_a_parse_error_rather_than_no_blocks() {
 }
 
 #[test]
+fn a_block_that_quits_early_fails() {
+    // `quit` makes run_source return Ok after clearing the remaining
+    // frames, so the block skipped every assertion after it and
+    // reported success (Codex review, round 6).
+    let dir = Scratch::new("quit");
+    let file = dir.path().join("quit.ps");
+    std::fs::write(
+        &file,
+        concat!(
+            "%%SelfTest: quits-early\n",
+            "%   true (one real assertion) mustbe\n",
+            "%   quit\n",
+            "%   false (never reached) mustbe\n",
+            "%%EndSelfTest\n"
+        ),
+    )
+    .expect("write");
+    let out = selftest(&file);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains("called `quit`"), "{stderr}");
+}
+
+#[test]
+fn a_proc_that_shadows_an_operator_the_cleanup_uses_does_not_hang() {
+    // The cleanup runs while a dictionary the tested proc opened is
+    // still on the dict stack, so an unbound `end` resolved through it:
+    // a dictionary containing `/end {}` made the loop spin forever and
+    // hung --selftest outright (Codex review, round 6). Every prelude
+    // procedure is `bind`-ed now.
+    //
+    // If this regresses, this test hangs rather than fails — which is
+    // still a CI signal, just a slower one.
+    let dir = Scratch::new("shadowed-end");
+    let file = dir.path().join("shend.ps");
+    std::fs::write(
+        &file,
+        concat!(
+            "%%SelfTest: a-proc-that-shadows-end\n",
+            "%   { 1 dict begin /end {} def /pop {} def undefinedname }\n",
+            "%   /undefinedname (probe) mustguard\n",
+            "%%EndSelfTest\n"
+        ),
+    )
+    .expect("write");
+    let out = selftest(&file);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn only_the_exact_end_marker_closes_a_block() {
+    // A prefix match let `%%EndSelfTestTYPO` close the block, after
+    // which the remaining `%` lines read as ordinary library comments
+    // — so a block with one earlier passing assertion silently skipped
+    // the rest and reported green (Codex review, round 6).
+    let dir = Scratch::new("typo-end");
+    let file = dir.path().join("typo.ps");
+    std::fs::write(
+        &file,
+        concat!(
+            "%%SelfTest: typo-terminator\n",
+            "%   true (first) mustbe\n",
+            "%%EndSelfTestTYPO\n",
+            "%   false (this must not be skipped) mustbe\n",
+            "%%EndSelfTest\n"
+        ),
+    )
+    .expect("write");
+    let out = selftest(&file);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains("must not be skipped"), "{stderr}");
+}
+
+#[test]
 fn a_malformed_block_fails_instead_of_being_skipped() {
     // A self-test that silently doesn't run reads as coverage that
     // isn't there — worse than no self-test at all.

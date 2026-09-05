@@ -173,6 +173,14 @@ impl Report {
 /// Everything internal is `pscat_st_`-prefixed so it can't collide
 /// with a library's own names; only the four assertion operators are
 /// unprefixed, since they're the surface a block author writes.
+///
+/// Every procedure here is `bind`-ed. That is not style: the cleanup
+/// runs *while a dictionary the tested proc opened is still on the
+/// dict stack*, so an unbound `end`/`count`/`pop` resolves through it.
+/// A proc that opened a dictionary containing `/end {}` made
+/// `pscat_st_reset`'s first loop spin forever, hanging `--selftest`
+/// outright (Codex review, round 6). `bind` substitutes the operator
+/// objects at definition time, which no later definition can reach.
 pub const PRELUDE: &str = r"
 % --- pscat --selftest prelude (injected; not part of any library) ---
 % The failure log. Its *entries* are a VM array and roll back under
@@ -202,7 +210,7 @@ userdict /pscat_st_ctr 8 string put
     2 copy get 256 mul
     3 1 roll 1 add get
     add
-} def
+} bind def
 
 % offset n -> -
 /pscat_st_ctrput {
@@ -212,12 +220,12 @@ userdict /pscat_st_ctr 8 string put
     256 mod
     exch 1 add exch
     userdict /pscat_st_ctr get 3 1 roll put
-} def
+} bind def
 
 % offset -> -   (add one, saturating)
 /pscat_st_ctrbump {
     dup pscat_st_ctrget 1 add pscat_st_ctrput
-} def
+} bind def
 
 % (label) (why) errorname command  ->  -
 %
@@ -239,7 +247,7 @@ userdict /pscat_st_ctr 8 string put
         { pop }
     ifelse
     0 pscat_st_ctrbump
-} def
+} bind def
 
 % A stale $error from a previous assertion must never be able to
 % satisfy the next one, so every assertion clears it first.
@@ -247,7 +255,7 @@ userdict /pscat_st_ctr 8 string put
     $error /newerror false put
     $error /errorname /--none-- put
     $error /command /--none-- put
-} def
+} bind def
 
 % Arm an assertion: record where the stacks stood, with the proc under
 % test still on top (hence `count 1 sub`: `stopped` is about to consume
@@ -295,7 +303,7 @@ userdict /pscat_st_ctr 8 string put
     } if
     4 1 pscat_st_ctrput
     2 pscat_st_ctrbump
-} def
+} bind def
 
 % Undo whatever a caught error left behind. Dictionaries first: `end`
 % doesn't touch the operand stack, whereas popping operands first would
@@ -304,7 +312,7 @@ userdict /pscat_st_ctr 8 string put
     { countdictstack userdict /pscat_st_ddepth get le { exit } if end } loop
     { count userdict /pscat_st_depth get le { exit } if pop } loop
     4 0 pscat_st_ctrput
-} def
+} bind def
 
 % {proc} /guardname (label) mustguard  ->  -
 % The proc must raise `undefined` on exactly /guardname -- this repo's
@@ -333,7 +341,7 @@ userdict /pscat_st_ctr 8 string put
         pscat_st_label (completed without raising the expected guard)
         /--none-- /--none-- pscat_st_note
     } ifelse
-} def
+} bind def
 
 % {proc} /errorname (label) mustfail  ->  -
 % For guards that raise a real interpreter error (typecheck,
@@ -354,7 +362,7 @@ userdict /pscat_st_ctr 8 string put
         pscat_st_label (completed without raising the expected error)
         /--none-- /--none-- pscat_st_note
     } ifelse
-} def
+} bind def
 
 % {proc} (label) mustpass  ->  -
 /mustpass {
@@ -368,7 +376,7 @@ userdict /pscat_st_ctr 8 string put
     } {
         pscat_st_reset
     } ifelse
-} def
+} bind def
 
 % bool (label) mustbe  ->  -
 % A non-boolean is reported rather than coerced: `not` on an integer is
@@ -382,7 +390,7 @@ userdict /pscat_st_ctr 8 string put
     } {
         not { (assertion was false) /--none-- /--none-- pscat_st_note } { pop } ifelse
     } ifelse
-} def
+} bind def
 % --- end prelude ---
 ";
 
@@ -462,7 +470,7 @@ fn selftest_regions(lines: &[&[u8]], in_string: &[bool]) -> Vec<bool> {
         }
         if open.is_some() {
             mask[i] = true;
-            if line.starts_with(END.as_bytes()) {
+            if is_end_marker(line) {
                 open = None;
             }
         } else if line.starts_with(BEGIN.as_bytes()) {
@@ -476,6 +484,18 @@ fn selftest_regions(lines: &[&[u8]], in_string: &[bool]) -> Vec<bool> {
         }
     }
     mask
+}
+
+/// Is this line exactly `%%EndSelfTest` (trailing whitespace aside)?
+///
+/// A prefix match let `%%EndSelfTestTYPO` close a block, after which
+/// every remaining `%` line read as an ordinary library comment — so a
+/// block with one earlier passing assertion silently skipped the rest
+/// and reported green (Codex review, round 6). `build.rs` applies the
+/// same rule, since the two have to agree about where a region ends.
+fn is_end_marker(line: &[u8]) -> bool {
+    line.strip_prefix(END.as_bytes())
+        .is_some_and(|rest| rest.iter().all(|b| b.is_ascii_whitespace()))
 }
 
 fn lines(source: &[u8]) -> Vec<&[u8]> {
@@ -514,7 +534,7 @@ pub fn parse_blocks(source: &[u8]) -> Result<Vec<SelfTestBlock>, String> {
             continue;
         }
         if !line.starts_with(BEGIN.as_bytes()) {
-            if line.starts_with(END.as_bytes()) {
+            if is_end_marker(line) {
                 return Err(format!(
                     "line {}: `{END}` with no matching `{BEGIN}`",
                     i + 1
@@ -549,7 +569,7 @@ pub fn parse_blocks(source: &[u8]) -> Result<Vec<SelfTestBlock>, String> {
         let mut j = i + 1;
         while j < all.len() {
             let body_line = all[j];
-            if body_line.starts_with(END.as_bytes()) {
+            if is_end_marker(body_line) {
                 closed = true;
                 break;
             }
@@ -809,7 +829,16 @@ fn run_block(
         Ok(()) => None,
         Err(e) => Some(interp.error_report(&e)),
     };
-    let (failure_count, failures) = collect_failures(&interp);
+    let (mut failure_count, mut failures) = collect_failures(&interp);
+    if let Some(why) = stopped_early(&interp) {
+        failures.push(Failure {
+            label: "(harness)".to_string(),
+            why: why.to_string(),
+            errorname: "--none--".to_string(),
+            command: "--none--".to_string(),
+        });
+        failure_count += 1;
+    }
     let result = BlockResult {
         name: block.name.clone(),
         line: block.line,
@@ -861,6 +890,24 @@ fn counter(interp: &Interp, offset: usize) -> Option<usize> {
 /// passes.
 fn assertion_count(interp: &Interp) -> usize {
     counter(interp, 2).unwrap_or(0)
+}
+
+/// Did the block stop early without saying so?
+///
+/// `quit` makes `run_source` return `Ok(())` after clearing the
+/// remaining execution frames, so a block that calls it — directly, or
+/// from a proc under `mustpass` — skipped every assertion after that
+/// point and reported success (Codex review, round 6). The in-flight
+/// flag catches the same shape from the other side: an assertion that
+/// was armed and never reset.
+fn stopped_early(interp: &Interp) -> Option<&'static str> {
+    if interp.quit_requested() {
+        return Some("the block called `quit`, so any assertions after it never ran");
+    }
+    if counter(interp, 4).unwrap_or(1) != 0 {
+        return Some("an assertion was still in flight when the block ended");
+    }
+    None
 }
 
 fn collect_failures(interp: &Interp) -> (usize, Vec<Failure>) {

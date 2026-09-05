@@ -62,7 +62,10 @@ pins that property.
 ### Writing a block
 
 - `%%SelfTest:` and `%%EndSelfTest` start at column 0; every line
-  between them is a `%` comment. One space after the `%` is the
+  between them is a `%` comment. The closing marker must be exactly
+  that — `%%EndSelfTestTYPO` doesn't close a block, it's an error,
+  because a typo'd terminator would silently turn the rest of the
+  block into ordinary comments. One space after the `%` is the
   comment marker; the rest is preserved, so indent freely.
 - Prerequisites come from the file's existing `% @requires:` tag —
   the same one `build.rs`'s capability catalog reads. There is no
@@ -89,8 +92,13 @@ pins that property.
   it catches movement in *both* directions — a block that consumes a
   library-owned operand hasn't returned the stack as it found it
   either.
+- A block that calls `quit` fails: `quit` unwinds cleanly, so every
+  assertion after it would simply not run.
 - The assertion vocabulary installs *after* the library under test, so
-  nothing a library defines can shadow it. The other order let a
+  nothing a library defines can shadow it. Every prelude procedure is
+  also `bind`-ed, because the cleanup runs while a dictionary the
+  tested proc opened is still on the dict stack — an unbound `end`
+  resolved through it, and a proc defining `/end {}` hung the runner. The other order let a
   library define `/mustbe { pop pop } def` and make that assertion
   silently disappear.
 - Each block runs in its own fresh interpreter, so one block can't
