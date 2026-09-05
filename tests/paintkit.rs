@@ -4074,7 +4074,7 @@ fn wet_spread_widens_the_affected_area() {
     let tight = ink(2.0);
     let wide = ink(30.0);
     assert!(
-        wide > tight,
+        wide > tight * 5 / 4,
         "Spread must widen the mark's reach: tight {tight} wide {wide}"
     );
 }
@@ -4236,5 +4236,128 @@ fn ghostscript_accepts_paintkit_wet() {
     assert!(
         status.success(),
         "gs rejected examples/paintkit_wet_demo.ps"
+    );
+}
+
+/// pkwet must leave the operand stack exactly as it found it. Its
+/// /Under validation checks each component's type and then its range,
+/// and the two checks have to consume between them exactly the value
+/// `get` produced -- a shape that is correct here but easy to break,
+/// and whose failure mode is a mystery `typecheck` several calls later
+/// rather than anything pointing back at pkwet.
+#[test]
+fn wet_leaves_the_operand_stack_balanced() {
+    for opts in [
+        "/Soft 0.8",                      // default /Under, the pkgetdef path
+        "/Soft 0.8 /Under [0.1 0.2 0.3]", // reals
+        "/Soft 0.8 /Under [0 1 0]",       // integers, the integertype branch
+        "/Soft 0",                        // the single-pass short path
+    ] {
+        let mut it = fresh(200, 200);
+        it.run_str(&format!(
+            "1 1 1 setrgbcolor \
+             {{ newpath 20 100 moveto 180 100 lineto << /Width 12 >> pkribbon }} \
+             << {opts} >> pkwet"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        assert_eq!(
+            it.operand_stack().len(),
+            0,
+            "{opts} left operands behind: {:?}",
+            it.operand_stack()
+                .iter()
+                .map(|o| o.repr())
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+/// The contract an artist actually needs: turning one knob must not
+/// re-roll the others' texture. /Layers legitimately changes how many
+/// times the proc runs, so it changes consumption -- but /Pickup,
+/// /Under and /Spread must not, and neither must a /Soft that resolves
+/// to the same /Layers. Same downstream-marker technique as
+/// `trowel_consumes_a_fixed_number_of_random_draws`.
+#[test]
+fn wet_consumes_a_fixed_number_of_draws_at_a_fixed_layer_count() {
+    let downstream_mark = |opts: &str| {
+        let mut it = fresh(400, 240);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 11 srand \
+             {{ newpath 60 140 moveto 340 140 lineto << /Width 24 >> pkribbon }} \
+             << /Layers 4 {opts} >> pkwet \
+             0 0 0 setrgbcolor newpath 20 frnd 340 mul add 20 moveto 0 12 rlineto \
+             6 setlinewidth stroke"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        (0..400)
+            .find(|&x| {
+                (205..225).any(|y| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+            })
+            .expect("marker drawn")
+    };
+    let baseline = downstream_mark("/Spread 10");
+    for opts in [
+        "/Spread 10 /Pickup 0",
+        "/Spread 10 /Pickup 1",
+        "/Spread 10 /Under [0.2 0.4 0.9]",
+        "/Spread 40",
+        "/Spread 10 /Soft 0.9",
+    ] {
+        assert_eq!(
+            downstream_mark(opts),
+            baseline,
+            "{opts} changed how much of the caller's random stream pkwet consumed"
+        );
+    }
+}
+
+/// pkwet re-enters the caller's procedure in a loop, which no other
+/// preset here does -- so a wrapped proc that defines its own names
+/// must not disturb the passes still to come. (The `pq-` prefix
+/// reservation is what makes this hold; this pins the realistic case,
+/// a proc keeping its own state across passes.)
+#[test]
+fn wet_survives_a_proc_that_defines_its_own_names() {
+    let mut it = fresh(300, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 5 srand /passes 0 def \
+         { /passes passes 1 add def \
+           /myw 20 def \
+           newpath 50 100 moveto 250 100 lineto << /Width myw >> pkribbon } \
+         << /Layers 5 /Spread 12 /Under [0.9 0.9 0.9] >> pkwet \
+         passes",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(
+        it.operand_stack().last().expect("passes").repr(),
+        "5",
+        "every planned pass should have run the caller's proc"
+    );
+}
+
+/// pkwet's own displacement must not depend on how much randomness the
+/// wrapped brush consumes -- otherwise swapping the brush inside the
+/// braces would move the halo as well as change the mark. The whole
+/// pass plan is therefore drawn before any caller code runs.
+#[test]
+fn wet_geometry_does_not_depend_on_the_procs_own_random_appetite() {
+    let plan_marker = |extra_draws: &str| {
+        let mut it = fresh(300, 200);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 5 srand \
+             {{ {extra_draws} newpath 50 100 moveto 250 100 lineto \
+                << /Width 20 >> pkribbon }} \
+             << /Layers 5 /Spread 14 /Pickup 0 >> pkwet"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        pixels(&it)
+    };
+    // /Pickup 0 keeps every pass the same color, so the only thing the
+    // pixels can differ by is where the passes landed.
+    assert_eq!(
+        plan_marker(""),
+        plan_marker("frnd pop frnd pop frnd pop"),
+        "the pass plan must be fixed before the wrapped proc runs"
     );
 }

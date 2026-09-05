@@ -2236,6 +2236,20 @@
 % around the mark instead of piling onto one side and reading as a drop
 % shadow.
 %
+% Every pass's displacement and colour is computed *before* the first
+% pass runs, into one plan array. Interleaving pkwet's own draws with
+% the wrapped proc's would make this mark's geometry depend on how much
+% randomness the caller's proc happens to consume — so swapping
+% pkribbon for pkspray inside the braces would move the halo, not just
+% change the brush. Drawing the plan up front decouples them, and it
+% means no caller code has run yet when the plan is fixed.
+%
+% One consequence of the grading being between an outermost pass and a
+% core: a single-layer call has no such span, so at /Layers 1 there is
+% only the core pass, sitting exactly on the path, and /Spread has
+% nothing to act on and is inert. That is why /Soft 0 (which resolves to
+% Layers 1) is byte-identical to a plain call whatever /Spread says.
+%
 % /Soft is the one knob that matters: it supplies /Layers and /Spread,
 % and every other key is a refinement. At /Soft 0 pkwet draws a single
 % pass, at the caller's exact colour, with no displacement and without
@@ -2272,7 +2286,7 @@
 % @param: /Under [r g b] the color already on the canvas that this mark settles into; the outermost pass is nearly this color (default [1 1 1])
 % @param: /Pickup 0..1 how far the outermost pass mixes toward Under; lower keeps the mark's own color out to its edge (default 0.85)
 % @param: /Layers Passes to draw, outermost first; must be a whole number, hard cap 1..6 (default 1 + round(Soft*5))
-% @param: /Spread How far in points the outermost pass is displaced from the true path (default Soft*14)
+% @param: /Spread How far in points the outermost pass is displaced from the true path; inert at Layers 1, which has only a core pass (default Soft*14)
 /pkwet {
     /pqopts exch def
     /pqproc exch def
@@ -2302,26 +2316,40 @@
         dup 0 lt exch 1 gt or { pkwet-under-components-must-be-0-to-1 } if
     } for
     /pqbase [ currentrgbcolor ] def
+    % Plan every pass before running any of them, so that none of pkwet's
+    % own randomness is interleaved with the wrapped proc's -- otherwise
+    % this mark's halo would shift according to how many draws the
+    % caller's brush happens to take.
+    /pqplan pqLayers array def
+    0 1 pqLayers 1 sub {
+        /pqi exch def
+        % 1.0 at the outermost pass, 0.0 at the core. A single-pass call
+        % has no outermost/core span to grade across, and the obvious
+        % (pqi / (Layers-1)) divides by zero there.
+        /pqf pqLayers 1 gt { pqi pqLayers 1 sub div } { 0 } ifelse def
+        /pqmag pqf pqSpread mul def
+        pqplan pqi
+        [
+            % The displacement draw happens only when there is a
+            % displacement to make. That is what lets /Soft 0 leave the
+            % caller's random stream untouched, and so render
+            % byte-identically to calling the proc directly.
+            pqmag 0 gt {
+                /pqang pqi 137.5 mul 40 pkjit add def
+                pqang cos pqmag mul  pqang sin pqmag mul
+            } { 0 0 } ifelse
+            pqbase pqUnder pqf pqPickup mul mix3
+        ]
+        put
+    } for
     % Outermost pass first, so each subsequent (less displaced, less
     % mixed) pass is laid over it and the caller's own color lands last,
     % exactly on the path.
     pqLayers 1 sub -1 0 {
-        /pqi exch def
-        % 1.0 at the outermost pass, 0.0 at the core. A single-pass call
-        % has no outermost/core distinction to draw, and the obvious
-        % (pqi / (Layers-1)) divides by zero there.
-        /pqf pqLayers 1 gt { pqi pqLayers 1 sub div } { 0 } ifelse def
-        /pqmag pqf pqSpread mul def
+        pqplan exch get /pqpass exch def
         gsave
-            % The random draw happens only when there is a displacement
-            % to make, which is what lets /Soft 0 leave the caller's
-            % stream untouched and so render byte-identically to calling
-            % the proc directly.
-            pqmag 0 gt {
-                /pqang pqi 137.5 mul 40 pkjit add def
-                pqang cos pqmag mul  pqang sin pqmag mul  translate
-            } if
-            pqbase pqUnder pqf pqPickup mul mix3 setrgbcolor
+            pqpass 0 get pqpass 1 get translate
+            pqpass 2 get pqpass 3 get pqpass 4 get setrgbcolor
             pqproc
         grestore
     } for
