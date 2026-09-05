@@ -2652,35 +2652,45 @@
 % frame array without bound, and that guard rolls the counter back
 % before it signals, so the rejection itself cannot poison later calls.
 %
-% What is *not* handled is an error raised inside a wrapped procedure
-% and then caught by the caller with `stopped`. The unwind skips this
-% procedure's remaining work, and *two* things leak, not one (a first
-% version of this note claimed only the first, and was wrong):
+% The procedure has to construct its own path, and that is a real
+% precondition rather than a stylistic one. Each pass displaces itself
+% with `translate`, and a PostScript path is in device space from the
+% moment it is built -- so a path constructed *before* the call cannot
+% be moved by any transform set afterwards. Every pass would then walk
+% the identical geometry and the mark would come out with no softening
+% at all, silently: measured at 2044 ink pixels against 4676 for the
+% same call with the path built inside (Codex review of PR #138).
+% Rebuilding a caller's path under each transform would mean capturing
+% it with `pathforall` and replaying it, which is a second mechanism
+% for a usage every example, every test and the @example tag already
+% writes the other way -- so this is documented and pinned instead.
 %
-%   * `pqdepth` stays elevated, because the decrement never runs. This
-%     half is bounded and self-announcing: after eight such leaks the
-%     next call raises `pkwet-nesting-too-deep` rather than corrupting
-%     anything silently, and a caller that deliberately catches errors
-%     and keeps rendering can reset it with `/pqdepth 0 def`.
-%   * One graphics-state frame per abandoned pass leaks, because the
-%     matching `grestore` never runs either. That is the real residual:
-%     the caller resumes one gsave deep, in a translated state, and for
-%     a soft pass in DeviceRGB with this preset's mixed color. No reset
-%     a caller can write repairs that, since the frame count is not
-%     observable from PostScript.
+% An error raised inside a wrapped procedure is handled, and it took
+% three review findings to get there -- all of them, it turned out, the
+% same missing unwind-protect. Left uncaught, an error skipped this
+% procedure's remaining work, so one graphics-state frame leaked per
+% abandoned pass (the caller resumed one gsave deep, translated, in
+% this preset's mixed color) *and* pqdepth stayed elevated. The second
+% of those is the dangerous one: with pqdepth naming the inner frame,
+% an outer invocation's next pass read that frame and executed the
+% *inner* call's procedure, turning an error the caller had already
+% caught into an uncaught one.
 %
-% The textbook fix -- run the procedure inside `stopped`, restore both,
-% re-raise with `stop` -- was built and rejected, and the reason is an
+% Each pass therefore runs under `stopped`, restores its own gsave and
+% its own single depth increment, and re-raises. Every level unwinds
+% exactly its own increment on the way past, so an inner call restores
+% 2 -> 1 before re-raising and the outer resumes naming its own frame.
+%
+% That idiom was previously unavailable, and the reason was an
 % interpreter gap rather than anything about this preset: pscat's
-% top-level `stop` with no enclosing `stopped` ends execution
-% *silently* (exit 0, no message), where Ghostscript reports
-% `Error: /undefined in nosuchname` from `$error` and this repo's own
-% `record_error` already populates `$error /errorname`. Re-raising
-% would therefore turn a hard error into no error at all for every
-% caller that does *not* catch -- strictly worse than the leak. Filed
-% as issue #142; once `stop` reaching the top level reports like
-% Ghostscript's, the idiom above becomes available and this section
-% should adopt it. Recorded rather than papered over (Codex review).
+% top-level `stop` with no enclosing `stopped` ended execution
+% *silently* (exit 0, no message) where Ghostscript reports the pending
+% error from `$error`, so re-raising turned a hard error into no error
+% at all for every caller that did not itself catch. That is issue
+% #142, fixed in this branch -- `stop` now consults `$error /newerror`
+% and reports, matching Ghostscript on all three of its cases. The same
+% gap is documented in artkit.ps's scatter `/Seed` restore, which can
+% adopt the idiom too now.
 
 % Per-invocation state for pkwet, indexed by nesting depth. See the
 % header for why neither plain names nor the operand stack will do.
@@ -2697,7 +2707,7 @@
 /pqdepth 0 def
 
 % @kind: Procedure
-% @summary: Runs a mark-drawing procedure several times, each pass displaced further and mixed further toward a declared backdrop color, so the mark's core stays solid while its edge grades away into the layer beneath. The wet-on-wet softener for skies, clouds, mist and distant forms; works with every stroke preset in this file. Pair it with a broken or particulate brush (pkspray, pkdry, pktrowel at low Coverage) -- a solid brush keeps its own hard silhouette and only gains a halo. Uses no alpha, so unlike pkwash it needs no Ghostscript fallback.
+% @summary: Runs a mark-drawing procedure several times, each pass displaced further and mixed further toward a declared backdrop color, so the mark's core stays solid while its edge grades away into the layer beneath. The wet-on-wet softener for skies, clouds, mist and distant forms; works with every stroke preset in this file. The procedure must build its own path: a path constructed before the call cannot be displaced, because PostScript paths are in device space once built, so every pass would land on the same geometry and nothing would soften. Pair it with a broken or particulate brush (pkspray, pkdry, pktrowel at low Coverage) -- a solid brush keeps its own hard silhouette and only gains a halo. Uses no alpha, so unlike pkwash it needs no Ghostscript fallback.
 % @example: { newpath 40 120 moveto 260 150 lineto << /Width 40 >> pkribbon } << /Soft 0.7 /Under [0.62 0.72 0.86] >> pkwet
 % @param: /Soft 0..1 master softness; supplies the defaults for Layers and Spread. 0 is a single undisplaced pass identical to calling the proc directly (default 0.6)
 % @param: /Under [r g b] the color already on the canvas that this mark settles into; the outermost pass is nearly this color (default [1 1 1])
@@ -2745,11 +2755,8 @@
     % limit, so one rejected nested call would poison every later
     % top-level pkwet until the library was reloaded (Codex review).
     pqdepth 8 gt { /pqdepth pqdepth 1 sub def pkwet-nesting-too-deep } if
-    pqframes pqdepth 3 array put
+    pqframes pqdepth 2 array put
     pqframes pqdepth get 1 /pqproc load put
-    % Slot 2 is the in-flight flag: true from just before a pass's gsave
-    % until just after its grestore. See the pass loop for what reads it.
-    pqframes pqdepth get 2 false put
     /pqbase [ currentrgbcolor ] def
     % Plan every pass before running any of them, so that none of pkwet's
     % own randomness is interleaved with the wrapped proc's -- otherwise
@@ -2808,43 +2815,61 @@
     % overwriting the outer one's plan mid-loop. See the header for why
     % neither plain names nor the operand stack works here.
     pqframes pqdepth get 0 pqplan put
+    % Each pass runs under `stopped`, which is what makes this wrapper
+    % safe to abandon. Three separate review findings were all the same
+    % missing unwind-protect: a caught error leaked one graphics-state
+    % frame per abandoned pass; it also left pqdepth naming the inner
+    % frame, so an outer invocation's next pass executed the *inner*
+    % call's procedure and turned a caught error into an uncaught one;
+    % and a caller-owned `exit` was swallowed by this `for`. Catching
+    % here closes all three, because every level unwinds exactly its own
+    % one increment on the way past: an inner pkwet restores 2 -> 1
+    % before re-raising, so the outer resumes with pqdepth naming its
+    % own frame.
+    %
+    % Re-raising with `stop` is only usable because pscat now reports a
+    % `stop` that reaches the top level, matching Ghostscript (issue
+    % #142, fixed in this branch). Before that it ended execution
+    % silently, which is why this was documented as a residual instead.
+    %
+    % `exit` needs the other branch. An `exit` inside the procedure hits
+    % this `stopped` boundary and becomes `invalidexit` rather than
+    % reaching any loop, so the two cases are told apart by errorname
+    % and the exit is re-run outside our own `for` -- where it finds
+    % whatever loop the caller has, exactly as a direct call would, or
+    % raises `invalidexit` again if there is none. `$error` still holds
+    % the original name when an inner pkwet re-raises with `stop`,
+    % since `stop` records nothing of its own.
+    % The two branches unwind differently, which is why one needs a flag
+    % and the other does not. `stop` leaves this procedure outright, so
+    % the error branch finishes its cleanup inline. `exit` leaves only
+    % the `for` -- execution then continues at the statements below it --
+    % so re-running it inside the loop would just be swallowed by that
+    % same loop again. It has to be re-run *after* the loop, and the flag
+    % carries it that one step, during which no caller code runs. A
+    % nested pkwet's re-raised exit arrives here as an exit propagating
+    % into this `for`, which trips this same branch, so every level
+    % re-raises exactly once on the way out.
+    /pqexiting false def
     pqLayers 1 sub -1 0 {
         pqframes pqdepth get 0 get exch get
-        pqframes pqdepth get 2 true put
         gsave
             dup length 2 gt
                 { aload pop setrgbcolor translate }
                 { aload pop translate }
             ifelse
-            pqframes pqdepth get 1 get exec
+            { pqframes pqdepth get 1 get exec } stopped
+        {
+            grestore
+            /pqdepth pqdepth 1 sub def
+            $error /errorname known
+                { $error /errorname get /invalidexit eq } { false } ifelse
+            { /pqexiting true def exit } { stop } ifelse
+        } if
         grestore
-        pqframes pqdepth get 2 false put
     } for
-    % `exit` inside the wrapped procedure -- terminating a loop the
-    % *caller* owns -- would otherwise be swallowed here, because this
-    % `for` is the nearest enclosing loop at the moment the procedure
-    % runs. Verified: a direct call ends the caller's `for` on the first
-    % iteration, while the same procedure through pkwet let all five run
-    % (Codex review of PR #138). A caller's `loop` would never terminate
-    % at all, and an `exit` with no enclosing loop would silently lose
-    % its `invalidexit`.
-    %
-    % So detect it and re-run it. The flag is still set only if a pass
-    % was abandoned between its gsave and its grestore, which for a
-    % procedure that returned normally cannot happen. Reading it into a
-    % plain name is safe here and nowhere else in this procedure: the
-    % wrapped procedure has finished, so no nested pkwet can be in
-    % flight to clobber it.
-    %
-    % Re-running `exit` outside our own `for` reaches whatever loop the
-    % caller has, exactly as a direct call would -- or raises
-    % `invalidexit` if there is none. The `grestore` pays back the
-    % abandoned pass's `gsave`, which the unwind skipped; that is one
-    % frame, ours. An unbalanced gsave inside the caller's own procedure
-    % is beyond anything this can see.
-    /pqbroke pqframes pqdepth get 2 get def
-    /pqdepth pqdepth 1 sub def
-    pqbroke { grestore exit } if
+    pqexiting not { /pqdepth pqdepth 1 sub def } if
+    pqexiting { exit } if
     % No trailing setrgbcolor: every pass ran inside its own
     % gsave/grestore, so the caller's color is already restored -- and
     % restoring it *by hand* would force the graphics state into

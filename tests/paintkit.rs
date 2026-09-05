@@ -5177,6 +5177,98 @@ fn wet_nesting_guard_rolls_back_the_depth_it_claimed() {
     );
 }
 
+/// Codex review of PR #138: the wrapped procedure must build its own
+/// path. A PostScript path is in device space once constructed, so a
+/// path built before the call cannot be moved by the per-pass
+/// `translate`, every pass walks identical geometry, and the mark comes
+/// out unsoftened -- silently. Documented as a precondition rather than
+/// worked around with a `pathforall` replay; this pins the difference so
+/// the documentation cannot quietly stop being true.
+#[test]
+fn wet_softens_only_when_the_procedure_builds_its_own_path() {
+    let ink = |src: &str| {
+        let mut it = fresh(200, 120);
+        it.run_str(src)
+            .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        ink_count(&it)
+    };
+    let opts = "<< /Soft 0.9 /Under [1 1 1] >>";
+    let mark = "newpath 20 60 moveto 180 60 lineto";
+    let inside = ink(&format!(
+        "0 0 0 setrgbcolor 5 srand \
+         {{ {mark} << /Width 12 >> pkribbon }} {opts} pkwet"
+    ));
+    let outside = ink(&format!(
+        "0 0 0 setrgbcolor 5 srand {mark} \
+         {{ << /Width 12 >> pkribbon }} {opts} pkwet"
+    ));
+    assert!(
+        inside > outside * 2,
+        "building the path inside the procedure is what lets the passes \
+         spread: inside {inside}, outside {outside}"
+    );
+}
+
+/// Codex review of PR #138: an error caught by the caller used to leave
+/// `pqdepth` naming the *inner* frame, so an outer invocation's next
+/// pass read that frame and executed the inner call's procedure --
+/// turning an error the caller had already handled into an uncaught
+/// one, and never completing the outer call.
+#[test]
+fn wet_a_caught_nested_error_leaves_the_outer_call_intact() {
+    let mut it = fresh(300, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 5 srand /seen 0 def \
+         { { { nosuchname } << /Layers 2 >> pkwet } stopped { /seen seen 1 add def } if \
+           newpath 60 100 moveto 240 100 lineto << /Width 12 >> pkribbon } \
+         << /Layers 2 >> pkwet \
+         seen pqdepth",
+    )
+    .unwrap_or_else(|e| panic!("the outer call must survive: {}", it.error_report(&e)));
+    let stack: Vec<String> = it
+        .operand_stack()
+        .iter()
+        .map(|o| o.repr().to_string())
+        .collect();
+    assert_eq!(
+        stack,
+        vec!["2".to_string(), "0".to_string()],
+        "both outer passes should run and catch their own inner error, \
+         and the depth must come back to 0"
+    );
+    assert!(ink_count(&it) > 100, "the outer call should still paint");
+}
+
+/// ...and the graphics state comes back untouched, which is the other
+/// half of the same unwind. Before this, each abandoned pass leaked one
+/// gsave frame, so the caller resumed translated and in pkwet's mixed
+/// color rather than its own.
+#[test]
+fn wet_a_caught_error_restores_the_graphics_state() {
+    let mut it = fresh(200, 120);
+    it.run_str(
+        "0.2 0.4 0.8 setrgbcolor 5 srand \
+         matrix currentmatrix \
+         { { nosuchname } << /Soft 0.8 /Layers 3 >> pkwet } stopped pop \
+         matrix currentmatrix",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let stack: Vec<String> = it
+        .operand_stack()
+        .iter()
+        .map(|o| o.repr().to_string())
+        .collect();
+    assert_eq!(
+        stack[0], stack[1],
+        "a caught error must leave the CTM where it found it, got {stack:?}"
+    );
+    let (r, g, b) = it.gfx().rgb();
+    assert!(
+        (r - 0.2).abs() < 1e-6 && (g - 0.4).abs() < 1e-6 && (b - 0.8).abs() < 1e-6,
+        "a caught error must leave the caller's color alone, got {r} {g} {b}"
+    );
+}
+
 /// Codex review of PR #138: the pass loop is a `for`, so while the
 /// wrapped procedure runs it is the *nearest enclosing loop* -- and an
 /// `exit` meant for a loop the caller owns was swallowed here. A

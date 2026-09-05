@@ -92,25 +92,34 @@ behaviour the ordinary tests exercised without noticing:
   the operand or dict stack while caller code runs. Depth is capped at
   8, and the guard rolls the counter back before signalling so its own
   rejection cannot poison later calls.
-- An error raised *inside* a wrapped procedure and then caught by the
-  caller leaks two things, not one — the second round of review here
-  said only the first, and was wrong. The depth counter stays elevated,
-  which is bounded and self-announcing (eight leaks and the next call
-  raises `pkwet-nesting-too-deep`) and which a caller can reset with
-  `/pqdepth 0 def`. But one *graphics-state frame* per abandoned pass
-  leaks too, since the matching `grestore` never runs, and no reset a
-  caller can write repairs that. Running the procedure under `stopped`
-  and re-raising is the textbook fix and was built and rejected: pscat's
-  top-level `stop` with no enclosing `stopped` ends execution silently
-  (exit 0, no message) where Ghostscript reports the pending error from
-  `$error`, so re-raising turns a hard error into none at all for every
-  caller that does *not* catch. That is an interpreter conformance gap
-  rather than anything about this preset — `record_error` already fills
-  in `$error /errorname` — so it is filed as **#142** with the repro,
-  and `pkwet` adopts the idiom once it lands. The lesson worth keeping
-  is the shape of the mistake: a residual was documented with a
-  suggested workaround before checking that the workaround covered
-  everything that leaks.
+- **Three separate review findings turned out to be one missing
+  unwind-protect, and the honest fix was to stop documenting it and go
+  remove the cause.** An error raised inside a wrapped procedure and
+  caught by the caller leaked a graphics-state frame per abandoned pass
+  *and* left `pqdepth` elevated — and the second of those was much
+  worse than a leak: with `pqdepth` naming the inner frame, an outer
+  invocation's next pass read that frame and executed the **inner**
+  call's procedure, so an error the caller had already caught came back
+  uncaught. Two rounds of this were documented as a residual, the first
+  time with a `/pqdepth 0 def` workaround that did not cover the gsave
+  half at all. Each pass now runs under `stopped` and restores its own
+  gsave and its own single depth increment before re-raising, so every
+  level unwinds exactly what it claimed.
+
+  That idiom needed **#142**, fixed in this branch: pscat's top-level
+  `stop` ended execution silently where Ghostscript reports the pending
+  error from `$error`, so re-raising would have turned a hard error
+  into none at all for every caller that did not catch. `record_error`
+  already populated `$error`, so the fix is to consult `/newerror` in
+  `stop` and return the caught error instead of `Ok(())`. Verified
+  against Ghostscript on all three of its cases, including the quirk
+  that a control-flow `stop` after an earlier *handled* error reports
+  that stale error. The lesson worth keeping is the shape of the
+  mistake — a residual documented twice, with a workaround that was
+  never checked against everything that leaked, when the cause was one
+  small interpreter gap the repo had already hit elsewhere (artkit's
+  scatter `/Seed` restore documents the same blocker, and can adopt the
+  idiom now).
 - The pass loop is a `for`, which means that while the wrapped
   procedure runs it is the *nearest enclosing loop* — so an `exit`
   inside that procedure, meant for a loop the **caller** owns, was
