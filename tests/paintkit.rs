@@ -3940,3 +3940,301 @@ fn trowel_viscosity_does_not_drag_coverage_along_with_it() {
         drift * 100.0
     );
 }
+
+// --- pkwet: wet interaction for soft layered paint (issue #113) ------
+//
+// pkwet is the one entry point in this file that draws no mark of its
+// own -- it re-runs the caller's mark-drawing procedure, each pass
+// displaced further and mixed further toward a declared backdrop. The
+// tests below pin the three things that makes load-bearing: that
+// /Soft 0 is *exactly* a plain call (so the wrapper is free when it's
+// switched off), that softening actually produces the intermediate
+// tones a graded edge is made of, and that it touches no alpha (which
+// is what spares it pkwash's Ghostscript fallback).
+
+/// Pixels that are neither the mark's own color nor the backdrop --
+/// i.e. the graded edge itself. With a black mark on white and
+/// /Under white, that's everything in between.
+fn midtone_count(it: &Interp) -> usize {
+    it.gfx()
+        .pixmap
+        .pixels()
+        .iter()
+        .filter(|&&p| {
+            let l = luma(p);
+            l > 60.0 && l < 200.0
+        })
+        .count()
+}
+
+const WET_MARK: &str = "newpath 60 100 moveto 340 100 lineto << /Width 30 /Bristles 24 >> pkdry";
+
+fn wet(opts: &str) -> Interp {
+    let mut it = fresh(400, 200);
+    it.run_str(&format!(
+        "0 0 0 setrgbcolor 11 srand {{ {WET_MARK} }} << {opts} >> pkwet"
+    ))
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    it
+}
+
+/// The contract that makes the wrapper free when it's switched off: at
+/// /Soft 0 pkwet draws one undisplaced pass in the caller's exact color
+/// *and takes no random draws of its own*, so the result is
+/// byte-identical to calling the procedure directly. The displacement
+/// draw is deliberately made only when there is a displacement to make
+/// -- take it unconditionally and this test fails on the shifted
+/// random stream alone.
+#[test]
+fn wet_soft_zero_is_identical_to_calling_the_proc() {
+    let wrapped = pixels(&wet("/Soft 0"));
+    let mut plain = fresh(400, 200);
+    plain
+        .run_str(&format!("0 0 0 setrgbcolor 11 srand {WET_MARK}"))
+        .unwrap_or_else(|e| panic!("{}", plain.error_report(&e)));
+    assert_eq!(
+        wrapped,
+        pixels(&plain),
+        "/Soft 0 must be byte-identical to calling the proc directly"
+    );
+}
+
+/// The acceptance criterion: "visibly softer interaction than an
+/// ordinary opaque paintkit mark". A hard mark on a plain backdrop has
+/// midtones only where its own edge is anti-aliased; a softened one is
+/// mostly midtone, because that *is* the graded edge.
+#[test]
+fn wet_softens_the_mark_against_its_backdrop() {
+    let hard = midtone_count(&wet("/Soft 0"));
+    let soft = midtone_count(&wet("/Soft 0.9"));
+    assert!(
+        soft > hard * 3,
+        "a wet mark must grade into its backdrop: hard {hard} soft {soft}"
+    );
+}
+
+/// /Soft is the single knob: more of it means more grading.
+#[test]
+fn wet_soft_is_monotonic() {
+    let a = midtone_count(&wet("/Soft 0.2"));
+    let b = midtone_count(&wet("/Soft 0.6"));
+    let c = midtone_count(&wet("/Soft 1"));
+    assert!(
+        a < b && b < c,
+        "grading should increase with /Soft: {a} {b} {c}"
+    );
+}
+
+/// /Pickup is how far the outermost pass mixes toward /Under. At 0 every
+/// pass keeps the caller's own color, so displacing them just makes a
+/// bigger solid mark rather than a graded one.
+#[test]
+fn wet_pickup_controls_how_far_the_edge_dissolves() {
+    let none = midtone_count(&wet("/Soft 0.9 /Pickup 0"));
+    let full = midtone_count(&wet("/Soft 0.9 /Pickup 0.95"));
+    assert!(
+        full > none * 2,
+        "Pickup must drive the dissolve: none {none} full {full}"
+    );
+}
+
+/// /Under is a *declared* backdrop -- pkwet cannot read the canvas
+/// (that needs a pixel-sample operator, issue #134), so this asserts the
+/// declaration is honored: with a strongly colored /Under the outer
+/// passes must actually carry that hue.
+#[test]
+fn wet_outer_passes_carry_the_declared_under_color() {
+    let mut it = fresh(400, 200);
+    it.run_str(&format!(
+        "0 0 0 setrgbcolor 11 srand {{ {WET_MARK} }} \
+         << /Soft 1 /Pickup 0.9 /Under [1 0 0] >> pkwet"
+    ))
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let reddish = it
+        .gfx()
+        .pixmap
+        .pixels()
+        .iter()
+        .filter(|&&p| p.red() as i32 - p.green() as i32 > 60 && p.red() > 90)
+        .count();
+    assert!(
+        reddish > 300,
+        "the outer passes should carry /Under's hue, got {reddish} reddish pixels"
+    );
+}
+
+/// /Spread is how far the outermost pass is displaced, so it widens the
+/// area the mark affects.
+#[test]
+fn wet_spread_widens_the_affected_area() {
+    let ink = |spread: f64| {
+        let it = wet(&format!("/Soft 0.9 /Spread {spread} /Pickup 0.4"));
+        ink_count(&it)
+    };
+    let tight = ink(2.0);
+    let wide = ink(30.0);
+    assert!(
+        wide > tight,
+        "Spread must widen the mark's reach: tight {tight} wide {wide}"
+    );
+}
+
+#[test]
+fn wet_is_deterministic_under_a_seed() {
+    let run = || pixels(&wet("/Soft 0.8"));
+    assert_eq!(run(), run(), "pkwet must be deterministic under a seed");
+}
+
+/// pkwet's whole portability story is that it uses no alpha, so unlike
+/// pkwash it needs no Ghostscript fallback. Assert that directly rather
+/// than trusting the comment: an alpha left set would also leak into
+/// everything the caller drew afterwards.
+#[test]
+fn wet_never_touches_alpha() {
+    let alpha_after = |prelude: &str| {
+        let mut it = fresh(400, 200);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 11 srand {prelude} \
+             {{ {WET_MARK} }} << /Soft 1 >> pkwet currentalpha"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        it.operand_stack()
+            .last()
+            .expect("currentalpha left a value")
+            .repr()
+    };
+    // Default: pkwet neither sets an alpha nor leaves one behind.
+    assert_eq!(alpha_after(""), "1.0", "pkwet must leave alpha alone");
+    // And an alpha the caller set survives it: pkwet has no alpha
+    // handling of its own to clobber it with. (0.5 round-trips exactly
+    // through the f32 the graphics state stores.)
+    assert_eq!(
+        alpha_after("0.5 setalpha"),
+        "0.5",
+        "pkwet must not clobber an alpha the caller set"
+    );
+}
+
+#[test]
+fn wet_restores_the_callers_color() {
+    let mut it = fresh(200, 200);
+    it.run_str(
+        "0.2 0.4 0.8 setrgbcolor 9 srand \
+         { newpath 40 100 moveto 160 100 lineto << /Width 20 >> pkribbon } \
+         << /Soft 1 /Under [1 0 0] >> pkwet",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let (r, g, b) = it.gfx().rgb();
+    assert!(
+        (r - 0.2).abs() < 1e-6 && (g - 0.4).abs() < 1e-6 && (b - 0.8).abs() < 1e-6,
+        "pkwet must leave the caller's color alone, got {r} {g} {b}"
+    );
+}
+
+/// The reason pkwet is a wrapper rather than a /Wet key on each preset:
+/// one implementation has to serve every stroke family, including any
+/// added later.
+#[test]
+fn wet_works_with_every_stroke_family() {
+    for mark in [
+        "<< /Width 24 >> pkribbon",
+        "<< /Width 24 /Angle 30 >> pknib",
+        "<< /Width 24 /Bristles 20 >> pkdry",
+        "<< /Nozzle 12 /Density 30 >> pkspray",
+        "<< /Width 24 /Ridges 8 >> pkoil",
+        "<< /Width 24 >> pktrowel",
+    ] {
+        let mut it = fresh(300, 160);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 5 srand \
+             {{ newpath 50 80 moveto 250 80 lineto {mark} }} \
+             << /Soft 0.8 /Under [0.9 0.9 0.9] >> pkwet"
+        ))
+        .unwrap_or_else(|e| panic!("{mark} under pkwet: {}", it.error_report(&e)));
+        assert!(ink_count(&it) > 100, "{mark} under pkwet painted nothing");
+    }
+}
+
+/// A single-layer call has no outermost/core distinction to grade, and
+/// the obvious `pqi / (Layers-1)` divides by zero there -- an
+/// `undefinedresult` this found the first time it was rendered.
+#[test]
+fn wet_a_single_layer_does_not_divide_by_zero() {
+    let mut it = fresh(300, 160);
+    it.run_str(
+        "0 0 0 setrgbcolor 5 srand \
+         { newpath 50 80 moveto 250 80 lineto << /Width 24 >> pkribbon } \
+         << /Layers 1 /Spread 20 >> pkwet",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 100,
+        "a one-layer wet call should still paint"
+    );
+}
+
+#[test]
+fn wet_validation_guards() {
+    fn err(src: &str) -> String {
+        let mut it = fresh(120, 120);
+        let e = it.run_str(src).unwrap_err();
+        it.error_report(&e).to_string()
+    }
+    let m = "{ newpath 10 10 moveto 100 10 lineto << /Width 10 >> pkribbon }";
+    for (opts, want) in [
+        ("/Soft 1.5", "pkwet-soft-must-be-0-to-1"),
+        ("/Soft -0.1", "pkwet-soft-must-be-0-to-1"),
+        ("/Layers 0", "pkwet-layers-must-be-1-to-6"),
+        ("/Layers 7", "pkwet-layers-must-be-1-to-6"),
+        ("/Layers 2.5", "pkwet-layers-must-be-1-to-6"),
+        ("/Spread -1", "pkwet-spread-must-not-be-negative"),
+        ("/Pickup 2", "pkwet-pickup-must-be-0-to-1"),
+        ("/Under 4", "pkwet-under-must-be-a-3-element-array"),
+        ("/Under [0 0]", "pkwet-under-must-be-a-3-element-array"),
+        ("/Under [0 0 0 0]", "pkwet-under-must-be-a-3-element-array"),
+        ("/Under [(a) 0 0]", "pkwet-under-components-must-be-numbers"),
+        ("/Under [2 0 0]", "pkwet-under-components-must-be-0-to-1"),
+        ("/Soft { 1 }", "pkwet-soft-must-not-be-a-procedure"),
+    ] {
+        let report = err(&format!("{m} << {opts} >> pkwet"));
+        assert!(
+            report.contains(want),
+            "expected {want} for {opts}, got {report}"
+        );
+    }
+    // The first operand really must be a procedure, not just anything.
+    assert!(
+        err("42 << /Soft 0.5 >> pkwet").contains("pkwet-first-operand-must-be-a-procedure"),
+        "a non-procedure first operand must be rejected"
+    );
+}
+
+#[test]
+fn ghostscript_accepts_paintkit_wet() {
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let status = std::process::Command::new("gs")
+        .args([
+            "-dNOSAFER",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g620x560",
+            "-r72",
+            "-o/dev/null",
+            "examples/paintkit_wet_demo.ps",
+        ])
+        .status()
+        .expect("run gs");
+    assert!(
+        status.success(),
+        "gs rejected examples/paintkit_wet_demo.ps"
+    );
+}

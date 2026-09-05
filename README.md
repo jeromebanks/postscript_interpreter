@@ -542,6 +542,46 @@ so turning one control doesn't re-roll another's texture; bounded by
 the same path set twice, once in `pktrowel` and once in `pkoil`, for
 the contrast.
 
+`pkwet` (issue #113) is the wet-on-wet softener, and the only entry
+point in the file that draws no mark of its own. It takes the caller's
+*mark-drawing procedure* and re-runs it, each pass displaced a little
+further from the true path and mixed a little further toward `/Under` —
+the color the artist declares is already on the canvas there — so the
+mark's core stays solid while its edge grades away into the layer
+beneath:
+
+```postscript
+{ newpath 40 400 moveto 200 430 380 390 560 420 curveto
+  << /Nozzle 22 /Density 70 >> pkspray }
+<< /Soft 0.8 /Under [0.62 0.72 0.86] >> pkwet
+```
+
+Being a wrapper rather than a `/Wet` key bolted onto each preset means
+one implementation serves all six stroke families and anything added
+later. `/Soft` is the only knob that matters — it supplies `/Layers`
+and `/Spread` — and at `/Soft 0` it is byte-identical to calling the
+procedure directly, random stream included.
+
+There is deliberately **no alpha** in it. The obvious implementation is
+a translucent pass, and it was built and rendered before being
+rejected: alpha applies to every fill the wrapped proc makes, and
+`pkoil`'s ridges and `pktrowel`'s 18% seam-closing lane overlap then
+composite against *themselves*, blotching the first and putting a dark
+stripe at every lane boundary of the second — reintroducing the exact
+artifact issue #111 removed. Grading opaque passes avoids that and, as
+a bonus, needs nothing Ghostscript lacks, so `pkwet` has no
+reduced-fidelity fallback path the way `pkwash` does.
+
+Pickup is *declared*, not sampled: reading color back off the canvas
+needs a pixel-sample operator PostScript doesn't have (issue #134), and
+the artist knows what they just laid down anyway. Pair `pkwet` with a
+broken or particulate brush — `pkspray`, `pkdry`, `pktrowel` at low
+`/Coverage`. A solid brush keeps its own hard silhouette and merely
+gains a halo; `examples/paintkit_wet_demo.ps` shows that comparison
+side by side, along with a sky, clouds and two banks of mist. A
+low-`/Coverage` mark is full of gaps, so mist laid on with one lets a
+treeline read straight through it without any translucency at all.
+
 `pkwash` (issue #47) is the watercolor medium, and the one preset here
 that needs something from the interpreter rather than only from
 PostScript: it fills the current path as a *translucent* wash. Two new

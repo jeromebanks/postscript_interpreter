@@ -2165,6 +2165,169 @@
     } if
 } def
 
+% --- wet interaction: soft layered paint (issue #113) -----------------
+% proc opts pkwet -
+%
+% Softens *any* mark so it settles into the layer beneath instead of
+% sitting on top of it — the wet-on-wet vocabulary blended skies,
+% clouds, mist and distant forms are made of.
+%
+% Unlike every other entry point in this file, `pkwet` does not draw a
+% mark of its own: it takes the caller's own mark-drawing procedure and
+% re-runs it. That is deliberate. The alternative — a /Wet key bolted
+% onto each of pkribbon/pknib/pkdry/pkspray/pkoil/pktrowel — is six
+% copies of one idea with six chances to drift apart, and it would still
+% miss whatever preset is written next. As a wrapper this works with all
+% six today and with anything added later, for one implementation:
+%
+%   { newpath 40 400 moveto 200 430 380 390 560 420 curveto
+%     << /Width 60 >> pkribbon }
+%   << /Soft 0.7 /Under [0.62 0.72 0.86] >> pkwet
+%
+% Why there is no alpha here
+% --------------------------
+% The obvious implementation is a translucent pass: set an alpha, draw,
+% let what's underneath show through. It was built and rendered, and it
+% is wrong for this library, for two measured reasons.
+%
+% Alpha applies to *every fill the wrapped proc makes*, and half these
+% presets are built from many deliberately overlapping fills — pkoil
+% lays a base ribbon plus a dozen ridges, and pktrowel's lanes overlap
+% by 18% precisely so their shared edges don't leave anti-aliased seams.
+% Under a single translucent pass each of those internal overlaps
+% composites against itself, so pkoil's ridges blotch against their own
+% base and pktrowel's seam-closing overlap comes back as a dark stripe
+% at every lane boundary — reintroducing, from the other direction, the
+% exact striped-rectangle artifact issue #111 removed. Stacking several
+% offset translucent passes compounds it into visible ghosting.
+%
+% The second reason is portability: Ghostscript has no PostScript-
+% callable alpha operator at all (see pkwash's header), so an
+% alpha-based pkwet would need pkwash's degraded flattening fallback,
+% where overlaps stop mixing. Grading opaque passes needs no alpha at
+% all, so pkwet has no reduced-fidelity path to fall back to and no
+% `pkalphaok` branch: it does the same thing under Ghostscript that it
+% does here. (Its seeded displacement angles come from `rand`, so the
+% precise scatter still lands differently under gs's own generator --
+% exactly as it does for every other seeded preset in this file, and
+% for the wrapped preset's own texture. "No fallback" is the claim, not
+% "pixel-identical".)
+%
+% What it does instead
+% --------------------
+% The proc is run /Layers times, outermost pass first, each one
+% displaced a little further from the mark's true position and mixed a
+% little further toward /Under — the colour the artist declares is
+% already on the canvas there. The outermost pass is nearly /Under
+% itself, so it dissolves invisibly into the backdrop; the last pass
+% sits exactly on the path in the caller's own colour. The result is a
+% mark whose core is solid and whose edge grades away, which is what
+% wet paint worked into a wet ground actually looks like.
+%
+% Pickup is *declared*, not sampled. Really picking colour up off the
+% canvas means reading back pixels, and PostScript has no operator for
+% that (it is precisely the gap tracked as issue #134). Since the artist
+% knows what they just laid down, /Under asks them rather than guessing
+% — and for the skies, mists and distant planes this is for, the
+% backdrop is a known near-flat tone anyway.
+%
+% Displacement directions are spaced by the golden angle (137.5°) plus
+% a seeded wobble, so however few passes there are they distribute
+% around the mark instead of piling onto one side and reading as a drop
+% shadow.
+%
+% /Soft is the one knob that matters: it supplies /Layers and /Spread,
+% and every other key is a refinement. At /Soft 0 pkwet draws a single
+% pass, at the caller's exact colour, with no displacement and without
+% touching the random stream — byte-identical to calling the proc
+% directly, which `wet_soft_zero_is_identical_to_calling_the_proc`
+% pins.
+%
+% Revealing a *textured* underlayer still works, and does not need
+% translucency: reach for a broken brush. A pkdry or pktrowel mark at
+% low /Coverage is full of gaps, so mist laid on with one lets a
+% treeline read straight through it. The specimen shows this.
+%
+% Cost: the wrapped proc runs up to /Layers times, so total work is up
+% to 6x whatever that proc costs, including its own deposit budget.
+% pkwet adds no budget of its own beyond the 1..6 cap — the same shape
+% of nested-cost gap pkdry documents for its own bristle dashes (#79).
+%
+% pkwash is deliberately *not* wrappable: it resets alpha and blend mode
+% itself, by design, so it will not honor a surrounding context. pkwet
+% is for the stroke families.
+%
+% Determinism: the caller's own `N srand`, matching the presets it
+% wraps rather than pkwash's private generator — one call should not
+% mix two randomness doctrines.
+%
+% Scratch prefix pq- (pkwet), distinct from pk-/pn-/pb-/pz-/po-/pt-/
+% pw-/pv- per this file's header. It has to be: the wrapped proc almost
+% always calls a preset that redefines its own prefix.
+
+% @kind: Procedure
+% @summary: Runs a mark-drawing procedure several times, each pass displaced further and mixed further toward a declared backdrop color, so the mark's core stays solid while its edge grades away into the layer beneath. The wet-on-wet softener for skies, clouds, mist and distant forms; works with every stroke preset in this file. Pair it with a broken or particulate brush (pkspray, pkdry, pktrowel at low Coverage) -- a solid brush keeps its own hard silhouette and only gains a halo. Uses no alpha, so unlike pkwash it needs no Ghostscript fallback.
+% @example: { newpath 40 120 moveto 260 150 lineto << /Width 40 >> pkribbon } << /Soft 0.7 /Under [0.62 0.72 0.86] >> pkwet
+% @param: /Soft 0..1 master softness; supplies the defaults for Layers and Spread. 0 is a single undisplaced pass identical to calling the proc directly (default 0.6)
+% @param: /Under [r g b] the color already on the canvas that this mark settles into; the outermost pass is nearly this color (default [1 1 1])
+% @param: /Pickup 0..1 how far the outermost pass mixes toward Under; lower keeps the mark's own color out to its edge (default 0.85)
+% @param: /Layers Passes to draw, outermost first; must be a whole number, hard cap 1..6 (default 1 + round(Soft*5))
+% @param: /Spread How far in points the outermost pass is displaced from the true path (default Soft*14)
+/pkwet {
+    /pqopts exch def
+    /pqproc exch def
+    /pqproc load xcheck
+        /pqproc load type dup /arraytype eq exch /packedarraytype eq or
+        and not { pkwet-first-operand-must-be-a-procedure } if
+    /pqSoft pqopts /Soft 0.6 pkgetdef def
+    /pqSoft load xcheck { pkwet-soft-must-not-be-a-procedure } if
+    pqSoft 0 lt pqSoft 1 gt or { pkwet-soft-must-be-0-to-1 } if
+    /pqLayers pqopts /Layers pqSoft 5 mul round cvi 1 add pkgetdef def
+    /pqLayers load xcheck { pkwet-layers-must-not-be-a-procedure } if
+    pqLayers 1 lt pqLayers 6 gt or pqLayers truncate pqLayers ne or
+        { pkwet-layers-must-be-1-to-6 } if
+    /pqSpread pqopts /Spread pqSoft 14 mul pkgetdef def
+    /pqSpread load xcheck { pkwet-spread-must-not-be-a-procedure } if
+    pqSpread 0 lt { pkwet-spread-must-not-be-negative } if
+    /pqPickup pqopts /Pickup 0.85 pkgetdef def
+    /pqPickup load xcheck { pkwet-pickup-must-not-be-a-procedure } if
+    pqPickup 0 lt pqPickup 1 gt or { pkwet-pickup-must-be-0-to-1 } if
+    /pqUnder pqopts /Under [ 1 1 1 ] pkgetdef def
+    /pqUnder load xcheck { pkwet-under-must-not-be-a-procedure } if
+    /pqUnder load type /arraytype ne { pkwet-under-must-be-a-3-element-array } if
+    pqUnder length 3 ne { pkwet-under-must-be-a-3-element-array } if
+    0 1 2 {
+        pqUnder exch get dup type dup /integertype ne exch /realtype ne and
+            { pkwet-under-components-must-be-numbers } if
+        dup 0 lt exch 1 gt or { pkwet-under-components-must-be-0-to-1 } if
+    } for
+    /pqbase [ currentrgbcolor ] def
+    % Outermost pass first, so each subsequent (less displaced, less
+    % mixed) pass is laid over it and the caller's own color lands last,
+    % exactly on the path.
+    pqLayers 1 sub -1 0 {
+        /pqi exch def
+        % 1.0 at the outermost pass, 0.0 at the core. A single-pass call
+        % has no outermost/core distinction to draw, and the obvious
+        % (pqi / (Layers-1)) divides by zero there.
+        /pqf pqLayers 1 gt { pqi pqLayers 1 sub div } { 0 } ifelse def
+        /pqmag pqf pqSpread mul def
+        gsave
+            % The random draw happens only when there is a displacement
+            % to make, which is what lets /Soft 0 leave the caller's
+            % stream untouched and so render byte-identically to calling
+            % the proc directly.
+            pqmag 0 gt {
+                /pqang pqi 137.5 mul 40 pkjit add def
+                pqang cos pqmag mul  pqang sin pqmag mul  translate
+            } if
+            pqbase pqUnder pqf pqPickup mul mix3 setrgbcolor
+            pqproc
+        grestore
+    } for
+    pqbase aload pop setrgbcolor
+} def
+
 % --- watercolor wash and paper ground (issue #47) ---------------------
 % opts pkwash -
 % x y w h opts pkpaper -

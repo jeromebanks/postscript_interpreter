@@ -3,6 +3,75 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## `lib/paintkit.ps`: `pkwet`, wet interaction for soft layered paint (issue #113, 2026-09-04)
+
+Second child of epic #112. Adds `pkwet`, with `/Soft` `/Under`
+`/Pickup` `/Layers` `/Spread`. Scratch prefix `pq-`.
+
+**It is a wrapper, not a brush.** `pkwet` is the only entry point in
+this file that draws no mark of its own: it takes the caller's
+mark-drawing *procedure* and re-runs it, outermost pass first, each one
+displaced further off the path and mixed further toward `/Under`. The
+alternative — a `/Wet` key added to each of the six stroke presets — is
+six copies of one idea with six chances to drift, and would still miss
+the next preset written. As a wrapper it serves all six today for one
+implementation.
+
+**Pickup is declared, not sampled.** Genuinely picking color up off the
+canvas means reading back pixels, and PostScript has no operator for it
+— that is exactly the gap tracked as #134. So `/Under` asks the artist
+what is underneath rather than guessing, which costs nothing for the
+skies, mists and distant planes this is for, where the backdrop is a
+known near-flat tone.
+
+**No alpha, and that was the decision the work turned on.** The obvious
+implementation is a translucent pass. It was built and rendered before
+being rejected, on two measured grounds. Alpha applies to *every* fill
+the wrapped proc makes, and half these presets are built from
+deliberately overlapping fills — `pkoil` lays a base ribbon plus a
+dozen ridges, and `pktrowel`'s lanes overlap by 18% precisely so their
+shared edges leave no anti-aliased seam. Under one translucent pass
+each of those internal overlaps composites against itself: `pkoil`'s
+ridges blotch against their own base and `pktrowel`'s seam-closing
+overlap returns as a dark stripe at every lane boundary — the exact
+striped-rectangle artifact #111 had just removed, arriving from the
+other direction. Stacking offset translucent passes compounds it into
+ghosting. The second ground is portability: an alpha-based `pkwet`
+would need `pkwash`'s degraded flattening fallback under Ghostscript,
+whereas grading opaque passes needs nothing gs lacks, so `pkwet` has no
+reduced-fidelity path at all.
+
+**The artistic finding, which the renders produced and no test would
+have:** `pkwet` must be paired with a *broken or particulate* brush.
+`pkspray` alone is a thin scatter of hard specks; the identical call
+wrapped in `pkwet` is a soft cloud mass — that pairing is what the
+acceptance criterion's "visibly softer" means here. A solid brush
+(`pkribbon`, `pkoil`) keeps its own hard silhouette and merely gains a
+halo, because translating opaque copies of a hard shape cannot dissolve
+that shape's own edge. The specimen shows all four cases side by side
+rather than hiding the limitation. Relatedly, revealing a *textured*
+underlayer turns out not to need translucency at all: a low-`/Coverage`
+`pktrowel` or `pkdry` mark is full of gaps, so mist laid on with one
+lets a treeline read through it.
+
+**Tradeoffs.** Displacement directions are spaced by the golden angle
+plus a seeded wobble, so few passes still distribute around the mark
+instead of piling onto one side and reading as a drop shadow. `/Layers`
+is capped 1..6, which is the only bound `pkwet` adds — total work is up
+to 6× the wrapped proc's own cost including its deposit budget, the
+same shape of nested-cost gap `pkdry` documents (#79). `/Soft 0` takes
+no random draw of its own (the displacement draw happens only when
+there is a displacement to make), which is what makes it byte-identical
+to a plain call — pinned by
+`wet_soft_zero_is_identical_to_calling_the_proc`. A single-layer call
+has no outermost/core distinction and the obvious `i/(Layers-1)`
+divides by zero there; found by rendering, guarded, and pinned.
+
+**Deferred:** no `/Alpha` opt-in, on the evidence above — `pkwash`
+already exists where genuine translucency is wanted. `pkwash` itself is
+deliberately not wrappable, since it resets alpha and blend mode by
+design and so will not honor a surrounding context.
+
 ## `lib/paintkit.ps`: `pktrowel`, trowel / palette-knife strokes (issue #111, 2026-09-04)
 
 First child of epic #112 (wet-on-wet landscape capabilities). Adds
