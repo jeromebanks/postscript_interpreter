@@ -5269,47 +5269,61 @@ fn wet_a_caught_error_restores_the_graphics_state() {
     );
 }
 
-/// Codex review of PR #138: the pass loop is a `for`, so while the
-/// wrapped procedure runs it is the *nearest enclosing loop* -- and an
-/// `exit` meant for a loop the caller owns was swallowed here. A
-/// caller's `loop` would never terminate.
+/// `pkwet` runs each pass under `stopped`, which makes it a boundary
+/// for `exit` as well: per the PLRM, `exit` looks for the innermost
+/// enclosing loop and a `stopped` context reached first is an error. So
+/// a wrapped procedure cannot `exit` a loop the caller owns through
+/// pkwet -- it gets a loud `invalidexit`.
 ///
-/// The counter is the observable: a direct call ends the caller's `for`
-/// on the first iteration, so the body runs once.
+/// Two rejected alternatives, both worse. Swallowing the exit silently
+/// (the original behavior) let a caller's `loop` run forever. Telling
+/// exits from errors apart by reading `$error /errorname` inferred a
+/// control operation from a name that can be stale: a procedure doing
+/// its own cleanup, `{ { exit } stopped { stop } if }`, re-raises a
+/// `stop` while errorname still reads `/invalidexit`, and the heuristic
+/// turned that deliberate `stop` into an exit of the caller's loop --
+/// reporting `false` to their `stopped` (Codex review, round 4).
 #[test]
-fn wet_does_not_swallow_an_exit_meant_for_the_callers_loop() {
-    fn runs(wrapper: &str) -> String {
-        let mut it = fresh(120, 60);
-        it.run_str(&format!(
+fn wet_blocks_a_callers_exit_loudly_rather_than_swallowing_it() {
+    let mut it = fresh(120, 60);
+    let e = it
+        .run_str(
             "0 0 0 setrgbcolor 5 srand /n 0 def \
-             0 1 4 {{ pop {wrapper} /n n 1 add def }} for n"
-        ))
-        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
-        it.operand_stack().last().expect("n").repr().to_string()
-    }
-    let mark = "newpath 10 10 moveto 100 10 lineto << /Width 5 >> pkribbon exit";
-    let direct = runs(mark);
-    assert_eq!(direct, "0", "a direct call's exit ends the caller's for");
-    for opts in ["/Soft 0", "/Soft 0.8 /Layers 4"] {
-        assert_eq!(
-            runs(&format!("{{ {mark} }} << {opts} >> pkwet")),
-            direct,
-            "pkwet << {opts} >> swallowed an exit the caller's loop owned"
-        );
-    }
-    // ...including through a nest, where the flag lives in two frames.
-    assert_eq!(
-        runs(&format!(
-            "{{ {{ {mark} }} << /Soft 0.5 >> pkwet }} << /Soft 0.5 >> pkwet"
-        )),
-        direct,
-        "a nested pkwet swallowed the exit"
+             0 1 4 { pop \
+               { newpath 10 10 moveto 100 10 lineto << /Width 5 >> pkribbon exit } \
+               << /Soft 0.8 >> pkwet \
+               /n n 1 add def } for",
+        )
+        .unwrap_err();
+    assert!(
+        it.error_report(&e).contains("invalidexit"),
+        "an exit across pkwet's stopped boundary must raise invalidexit, got {}",
+        it.error_report(&e)
     );
 }
 
-/// ...and the two halves of that: a procedure with its *own* loop must
-/// keep its exit, and an exit with no enclosing loop at all must still
-/// raise invalidexit rather than being quietly absorbed.
+/// ...and the case that heuristic got wrong: a procedure that catches
+/// its own `exit` and re-raises with `stop` must reach the caller's
+/// `stopped` as a stop, not be mistaken for a loop exit.
+#[test]
+fn wet_forwards_a_procedures_own_stop_as_a_stop() {
+    let mut it = fresh(200, 120);
+    it.run_str(
+        "0 0 0 setrgbcolor 5 srand \
+         { { { exit } stopped { stop } if \
+             newpath 20 60 moveto 180 60 lineto << /Width 8 >> pkribbon } \
+           << /Soft 0.5 >> pkwet } stopped",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(
+        it.operand_stack().last().expect("stopped result").repr(),
+        "true",
+        "the caller's stopped must see the procedure's deliberate stop"
+    );
+}
+
+/// A procedure with its *own* loop keeps its exit -- pkwet's boundary
+/// only blocks an exit that would have to cross it.
 #[test]
 fn wet_re_propagates_an_exit_without_inventing_or_hiding_one() {
     let mut it = fresh(120, 60);

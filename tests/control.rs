@@ -117,6 +117,37 @@ fn a_top_level_stop_reports_the_pending_error() {
     );
 }
 
+/// `$error`, not the Rust-side cache, decides *which* error a top-level
+/// `stop` reports. `$error` is a VM dict, so a `restore` rolls it back
+/// like anything else and can leave it naming an earlier error than the
+/// one last caught -- matching on the error's name alone is not enough,
+/// since two different `undefined`s share it (Codex review of PR #138).
+#[test]
+fn a_top_level_stop_follows_a_restored_error_dict() {
+    assert_eq!(
+        eval_err(
+            "{ firsterror } stopped pop /s save def \
+             { seconderror } stopped pop s restore stop"
+        ),
+        PsError::Undefined("firsterror".to_string())
+    );
+}
+
+/// ...and the report still names the operator that actually failed. By
+/// the time `stop` runs, the caller's cleanup and the `stop` itself have
+/// overwritten `last_name`, so `OffendingCommand` read `stop` rather
+/// than the `div` that raised.
+#[test]
+fn a_re_raised_error_still_names_its_own_offending_command() {
+    let mut it = Interp::new();
+    let e = it.run_str("{ 1 0 div } stopped { stop } if").unwrap_err();
+    let report = it.error_report(&e);
+    assert!(
+        report.contains("undefinedresult") && report.contains("OffendingCommand: div"),
+        "a re-raised error must still name div, got {report}"
+    );
+}
+
 /// ...but a `stop` with no error ever recorded stays silent, matching
 /// Ghostscript. Gating on `$error /newerror` is what separates the two,
 /// and without it every control-flow `stop` would become an error.

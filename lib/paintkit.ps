@@ -2833,24 +2833,25 @@
     % silently, which is why this was documented as a residual instead.
     %
     % `exit` needs the other branch. An `exit` inside the procedure hits
-    % this `stopped` boundary and becomes `invalidexit` rather than
-    % reaching any loop, so the two cases are told apart by errorname
-    % and the exit is re-run outside our own `for` -- where it finds
-    % whatever loop the caller has, exactly as a direct call would, or
-    % raises `invalidexit` again if there is none. `$error` still holds
-    % the original name when an inner pkwet re-raises with `stop`,
-    % since `stop` records nothing of its own.
-    % The two branches unwind differently, which is why one needs a flag
-    % and the other does not. `stop` leaves this procedure outright, so
-    % the error branch finishes its cleanup inline. `exit` leaves only
-    % the `for` -- execution then continues at the statements below it --
-    % so re-running it inside the loop would just be swallowed by that
-    % same loop again. It has to be re-run *after* the loop, and the flag
-    % carries it that one step, during which no caller code runs. A
-    % nested pkwet's re-raised exit arrives here as an exit propagating
-    % into this `for`, which trips this same branch, so every level
-    % re-raises exactly once on the way out.
-    /pqexiting false def
+    % this `stopped` boundary and becomes `invalidexit` -- which is the
+    % PLRM's own rule, not a quirk of this preset: `exit` looks for the
+    % innermost enclosing loop, and a `stopped` context reached first is
+    % an error. So a wrapped procedure cannot `exit` a loop the caller
+    % owns through pkwet, and gets a loud `invalidexit` if it tries.
+    %
+    % An earlier round instead told the two apart by reading `errorname`
+    % and re-running the exit outside this `for`. That is removed. It
+    % inferred a control operation from a *name that can be stale*: a
+    % procedure doing its own cleanup, `{ { exit } stopped { stop } if }`,
+    % re-raises a `stop` while `$error /errorname` still reads
+    % `/invalidexit`, so the heuristic turned that caller's deliberate
+    % `stop` into an exit of the caller's loop and reported `false` to
+    % their `stopped` (Codex review of PR #138, round 4). It also left
+    % `$error /newerror` set on the forwarded path, so a later
+    % control-flow `stop` raised the stale `invalidexit`. Blocking `exit`
+    % the way the PLRM says is both simpler and honest; swallowing it
+    % silently, which is what this did originally, is the one behavior
+    % that would not be.
     pqLayers 1 sub -1 0 {
         pqframes pqdepth get 0 get exch get
         gsave
@@ -2862,14 +2863,11 @@
         {
             grestore
             /pqdepth pqdepth 1 sub def
-            $error /errorname known
-                { $error /errorname get /invalidexit eq } { false } ifelse
-            { /pqexiting true def exit } { stop } ifelse
+            stop
         } if
         grestore
     } for
-    pqexiting not { /pqdepth pqdepth 1 sub def } if
-    pqexiting { exit } if
+    /pqdepth pqdepth 1 sub def
     % No trailing setrgbcolor: every pass ran inside its own
     % gsave/grestore, so the caller's color is already restored -- and
     % restoring it *by hand* would force the graphics state into

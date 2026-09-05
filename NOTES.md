@@ -120,21 +120,47 @@ behaviour the ordinary tests exercised without noticing:
   small interpreter gap the repo had already hit elsewhere (artkit's
   scatter `/Seed` restore documents the same blocker, and can adopt the
   idiom now).
-- The pass loop is a `for`, which means that while the wrapped
-  procedure runs it is the *nearest enclosing loop* — so an `exit`
-  inside that procedure, meant for a loop the **caller** owns, was
-  swallowed here. Measured rather than argued: a direct call ends the
+
+  Two follow-ups on the interpreter side, both from review of that
+  change. `$error` — not a Rust-side cache — has to decide *which*
+  error a top-level `stop` reports, because `$error` is a VM dict a
+  `restore` rolls back: after
+  `{ first } stopped pop /s save def { second } stopped pop s restore`,
+  `$error` correctly names `first` while a cache still holds `second`,
+  and matching the two on the error's *name* is not enough since both
+  are `undefined`. The error is therefore rebuilt from `$error` for
+  everything `$error` can express, with the cache supplying only
+  `syntaxerror`'s detail, which it has nowhere to keep. And `last_name`
+  is restored from `$error /command` before reporting: by the time
+  `stop` runs, the caller's cleanup and the `stop` itself have
+  overwritten it, so `OffendingCommand` named `stop` rather than the
+  `div` that actually failed.
+- **`exit` took three attempts, and the one that shipped is the one
+  that adds no mechanism.** The pass loop is a `for`, so while the
+  wrapped procedure runs it is the nearest enclosing loop — an `exit`
+  meant for a loop the *caller* owns was swallowed, and a caller's
+  `loop` would never have terminated. Measured: a direct call ends the
   caller's `for` on its first iteration, the same procedure through
-  `pkwet` let all five run, and a caller's `loop` would never have
-  terminated at all. Recursion propagates `exit` correctly but gives up
-  the chance to clean up, since control never returns; what ships
-  instead is an in-flight flag in the frame, set around each pass, so
-  the loop can tell an abandoned pass from a completed one, pay back
-  that pass's `gsave`, and re-run the `exit` outside its own `for` —
-  where it reaches the caller's loop exactly as a direct call would, or
-  raises `invalidexit` if there is none. Both of those, plus a
-  procedure exiting its *own* loop and an exit escaping a nest, are
-  pinned; all four were checked against the unfixed code first.
+  `pkwet` let all five run.
+
+  The second attempt kept an in-flight flag per frame and re-ran the
+  exit after the loop. The third, once each pass ran under `stopped`,
+  told exits from errors apart by reading `$error /errorname` for
+  `/invalidexit`. Review killed that one: it inferred a *control
+  operation* from a name that can be stale, so a procedure doing its
+  own cleanup — `{ { exit } stopped { stop } if }` — re-raised a `stop`
+  while errorname still read `/invalidexit`, and the heuristic turned
+  that deliberate stop into an exit of the caller's loop, reporting
+  `false` to their `stopped`.
+
+  What ships is the PLRM's own rule with nothing added: `exit` looks
+  for the innermost enclosing loop, and a `stopped` context reached
+  first is an error. So a wrapped procedure simply cannot `exit` a
+  caller-owned loop through `pkwet`, and gets a loud `invalidexit` if
+  it tries. A procedure exiting its *own* loop is unaffected. That is a
+  real restriction, but it is documented and noisy, where the original
+  behavior was silent — and the two clever alternatives each shipped a
+  bug that review had to find.
 - Whether a displacement draw happened was keyed off the resulting
   *magnitude* rather than the pass's position, so `/Spread 0` with
   several layers skipped every draw while any positive spread took one
