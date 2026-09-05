@@ -579,10 +579,10 @@ renders eight examples in both and compares block-downsampled output).
    same reasoning as above: it records the assertion vocabulary, why
    there is deliberately no "assert something raised" form, and (with
    `docs/GS_CHECK_INVENTORY.md`) exactly which defect classes stay
-   uncovered and why. Two pieces remain open, both filed as follow-ups:
-   **Phase B**, a pixel-sample operator for the geometry/measurement
-   class Phase A structurally can't reach, and the
-   `ghostscript_accepts_*` extraction, which #95 inventoried (25
+   uncovered and why. Two pieces remain open, both filed:
+   **Phase B** (#134), a pixel-sample operator for the
+   geometry/measurement class Phase A structurally can't reach, and the
+   `ghostscript_accepts_*` extraction (#135), which #95 inventoried (25
    drivers today, not the decision record's 16) rather than performed.
 
 ## Gotchas for the next implementer

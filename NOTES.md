@@ -89,8 +89,9 @@ automated fix, because `examples/sweep_demo.ps` and
 and aren't distinguishable from a genuine omission by output alone.
 
 **Deferred:** Phase B (the pixel-sample operator for the
-geometry/measurement class) and the `ghostscript_accepts_*` extraction
-itself, both filed as follow-ups. Only `paintkit` and `artkit` carry
+geometry/measurement class, issue #134) and the `ghostscript_accepts_*`
+extraction itself (issue #135, which treats
+`docs/GS_CHECK_INVENTORY.md` as its spec). Only `paintkit` and `artkit` carry
 blocks and drivers so far; adding a library is a file drop, since both
 the script and the tests discover rather than enumerate.
 

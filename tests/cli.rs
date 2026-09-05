@@ -579,7 +579,10 @@ fn selftest_reports_a_missing_file_without_panicking() {
 fn selftest_names_each_block_it_ran() {
     let (ok, _, err) = run(&["--selftest", "lib/paintkit.ps"], "");
     assert!(ok, "{err}");
-    assert!(err.contains("pkribbon-rejects-a-non-callable-pressure"), "{err}");
+    assert!(
+        err.contains("pkribbon-rejects-a-non-callable-pressure"),
+        "{err}"
+    );
     assert!(err.contains("block(s) passed"), "{err}");
 }
 

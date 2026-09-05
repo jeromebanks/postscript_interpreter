@@ -124,5 +124,7 @@ argument for keeping them separate: an extraction that treats the
 family as uniform would silently weaken checks 1, 4, 23 and 25, which
 is a worse outcome than not extracting yet.
 
-Tracked as its own issue, referenced from `docs/SELFTEST.md`'s
-"What Phase A does not cover".
+Tracked as **issue #135**, referenced from `docs/SELFTEST.md`'s "What
+Phase A does not cover". That issue treats this file as its spec: if
+the count or an assertion changes before it lands, update this file
+rather than the issue body.

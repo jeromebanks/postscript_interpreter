@@ -164,12 +164,12 @@ things is worse than one with a documented edge:
 - **Rows 1–4 and 13 — geometry and measurement correctness.** These
   need pixel readback (does this region have ink? does measured width
   track pressure?), which PostScript has no operator for. That is
-  Phase B's pixel-sample operator, tracked separately.
-- **The `ghostscript_accepts_*` extraction itself.** Inventoried here
-  (issue #95's acceptance criterion asks for the inventory "before any
-  extraction"), not performed. `docs/GS_CHECK_INVENTORY.md` explains
-  what reading all 25 in full turned up that makes a uniform extraction
-  script insufficient.
+  Phase B's pixel-sample operator — **issue #134**.
+- **The `ghostscript_accepts_*` extraction itself — issue #135.**
+  Inventoried here (issue #95's acceptance criterion asks for the
+  inventory "before any extraction"), not performed.
+  `docs/GS_CHECK_INVENTORY.md` explains what reading all 25 in full
+  turned up that makes a uniform extraction script insufficient.
 - **Cross-model review.** Not weakened by any of this. Row 17 was found
   by a second model reading the code, and nothing here reads code the
   way a second model does.
