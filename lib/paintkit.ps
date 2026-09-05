@@ -2302,10 +2302,19 @@
 % again on the next iteration, never across it.
 %
 % Depth is capped (pkwet-nesting-too-deep past 8) rather than growing a
-% frame array without bound. Note the counter is restored on the normal
-% path only: an error raised inside a wrapped procedure aborts the
-% render anyway, and unwinding it properly would need `stopped`, which
-% would also swallow the caller's own errors.
+% frame array without bound, and that guard rolls the counter back
+% before it signals, so the rejection itself cannot poison later calls.
+%
+% What is *not* handled is an error raised inside a wrapped procedure
+% and then caught with `stopped`: the unwind skips every enclosing
+% pkwet's own decrement, so the counter stays high and later top-level
+% calls can hit the cap spuriously. The obvious fix -- running the
+% procedure inside `stopped` and re-raising -- was built and rejected:
+% pscat's top-level `stop` with no enclosing `stopped` ends execution
+% *silently*, which turned a hard error into no error at all, and that
+% is strictly worse than a stale counter. A caller that deliberately
+% catches errors and keeps rendering can reset it with `/pqdepth 0 def`
+% between marks. Recorded rather than papered over (Codex review).
 
 % Per-invocation state for pkwet, indexed by nesting depth. See the
 % header for why neither plain names nor the operand stack will do.
@@ -2365,7 +2374,11 @@
         dup 0 lt exch 1 gt or { pkwet-under-components-must-be-0-to-1 } if
     } for
     /pqdepth pqdepth 1 add def
-    pqdepth 8 gt { pkwet-nesting-too-deep } if
+    % Roll the depth back *before* signalling. A caller that catches this
+    % with `stopped` would otherwise be left with pqdepth stuck above the
+    % limit, so one rejected nested call would poison every later
+    % top-level pkwet until the library was reloaded (Codex review).
+    pqdepth 8 gt { /pqdepth pqdepth 1 sub def pkwet-nesting-too-deep } if
     pqframes pqdepth 2 array put
     pqframes pqdepth get 1 /pqproc load put
     /pqbase [ currentrgbcolor ] def
@@ -2418,19 +2431,13 @@
     % mixed) pass is laid over it and the caller's own color lands last,
     % exactly on the path.
     %
-    % The plan and the procedure are carried on the *operand stack* for
-    % the duration, and the loop body reads no pq* name at all. It has
-    % to: this is the only preset here that re-enters caller code in a
-    % loop, so a wrapped procedure that itself calls pkwet -- softening
-    % an already-soft composite mark is a reasonable thing to write --
-    % would otherwise overwrite pqplan and pqproc mid-loop, and the outer
-    % call would resume against the inner one's plan (Codex review).
-    % Prefix reservation cannot help here, because the clashing name
-    % belongs to pkwet itself.
-    %
-    % This does require the wrapped procedure to leave the operand stack
-    % as it found it, which every preset in this file already does and
-    % walkpath already demands of its own callers.
+    % The plan and the procedure are read out of this invocation's frame
+    % (pqframes pqdepth get) immediately before each pass and again on
+    % the next, never held across the call. That is what lets a wrapped
+    % procedure call pkwet itself -- softening an already-soft composite
+    % mark is a reasonable thing to write -- without the inner call
+    % overwriting the outer one's plan mid-loop. See the header for why
+    % neither plain names nor the operand stack works here.
     pqframes pqdepth get 0 pqplan put
     pqLayers 1 sub -1 0 {
         pqframes pqdepth get 0 get exch get

@@ -4557,3 +4557,33 @@ fn wet_rejects_nesting_past_its_frame_depth() {
         it.error_report(&e)
     );
 }
+
+/// Codex review of PR #138, round 4: the nesting guard incremented the
+/// depth and *then* signalled, so a caller catching the error with
+/// `stopped` was left with the counter stuck above the limit. The guard
+/// now rolls back before it signals.
+///
+/// Note the narrower scope: this covers the guard's *own* rejection,
+/// which is the case fully in pkwet's control. An error raised inside a
+/// wrapped procedure and caught still leaves enclosing invocations'
+/// depth unreleased -- see the header for why running the procedure
+/// under `stopped` and re-raising is not available here (pscat's
+/// top-level `stop` ends execution silently, turning a hard error into
+/// no error).
+#[test]
+fn wet_nesting_guard_rolls_back_the_depth_it_claimed() {
+    let mut it = fresh(300, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 5 srand \
+         { { newpath 60 100 moveto 240 100 lineto << /Width 12 >> pkribbon } \
+           << /Layers 1 >> pkwet } \
+         << /Layers 1 >> pkwet \
+         pqdepth",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(
+        it.operand_stack().last().expect("pqdepth").repr(),
+        "0",
+        "a completed nest must leave the depth counter where it found it"
+    );
+}

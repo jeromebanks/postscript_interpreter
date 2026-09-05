@@ -76,15 +76,25 @@ behaviour the ordinary tests exercised without noticing:
   its own `gsave`/`grestore`, so the restore was redundant as well as
   harmful, and is simply gone.
 - `pkwet` is the only preset here that re-enters caller code *in a loop*,
-  so a wrapped procedure that itself called `pkwet` overwrote the outer
-  call's `pqplan` and `pqproc`, and the outer loop resumed against the
-  inner one's plan — running 1 of its 4 passes instead of 4, verified by
-  reverting the fix. Prefix reservation cannot help, because the
-  clashing name belongs to `pkwet` itself; the loop now carries plan and
-  procedure on the *operand stack* and reads no `pq*` name at all. The
-  price is that the wrapped procedure must leave the operand stack as it
-  found it, which every preset here already does and `walkpath` already
-  demands.
+  and where its per-call state lives took three attempts. Plain names
+  meant a wrapped procedure that itself called `pkwet` overwrote the
+  outer call's plan mid-loop — running 1 of its 4 passes instead of 4,
+  verified by reverting. Moving the state onto the *operand stack* fixed
+  that but put it underneath the callee, so a stack-balanced procedure
+  containing `count 0 eq { ... } if` behaved differently under `pkwet`
+  than called directly, and one containing `clear` broke the loop —
+  contradicting the `/Soft 0` promise just as badly. What works is a
+  frame indexed by nesting depth: an inner call takes depth+1 and
+  restores the counter on the way out, and nothing of `pkwet`'s is on
+  the operand or dict stack while caller code runs. Depth is capped at
+  8, and the guard rolls the counter back before signalling so its own
+  rejection cannot poison later calls. An error raised *inside* a
+  wrapped procedure and then caught still leaves enclosing invocations'
+  depth unreleased: running the procedure under `stopped` and re-raising
+  was built and rejected, because pscat's top-level `stop` with no
+  enclosing `stopped` ends execution silently, turning a hard error into
+  none at all. Recorded in the header with a `/pqdepth 0 def` reset for
+  callers that catch and continue.
 - Whether a displacement draw happened was keyed off the resulting
   *magnitude* rather than the pass's position, so `/Spread 0` with
   several layers skipped every draw while any positive spread took one
