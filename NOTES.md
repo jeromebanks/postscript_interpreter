@@ -3,6 +3,58 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## `lib/paintkit.ps`: `pkbroad`, the broad flat brush (issue #115, 2026-09-05)
+
+Fourth child of epic #112. Adds `pkbroad`, with `/Width` `/Angle`
+`/Charge` `/Depletion` `/Grain` `/Edge` `/Jitter` `/Pitch`
+`/ColorJitter`. Scratch prefix `pe-`.
+
+**The differentiator is depletion.** Three presets already make a wide
+mark, so the design question was what makes this one its own tool. What
+separates a flat *brush* from a palette *knife* is that a brush holds
+paint in bristles and so runs out: it lays solid colour where it lands
+and goes drier as it travels, which is how a block-in is actually made.
+#111 deliberately left depletion out of `pktrowel` because a blade
+carries a smear, not a reservoir — so it was available, and it is the
+one thing none of `pkribbon`, `pknib` or `pktrowel` model.
+
+Implemented without per-stop speckle: each striation gets a fixed
+affinity, the charge falls as `Charge * (1 - Depletion*t)`, and a
+striation deposits while the charge exceeds its affinity. Striations
+therefore drop out one at a time, which is what makes the mark read as
+streaks *along the direction of travel* rather than noise.
+
+**Two naming decisions, both to avoid collisions this file has already
+been bitten by.** The controls are `/Charge` and `/Depletion`, not
+`/Load`: `/Load` already means a contact rate in `pkdry`/`pkfan` and
+deposit width in `pktrowel`, and a third meaning would be worse than a
+new word. And `/Angle` follows `pktrowel`'s reading (rotation relative
+to travel, constant along a curve) rather than `pknib`'s fixed world
+angle — adopting pknib's would have made this preset pknib with
+striations bolted on.
+
+**The name `pkflat` was already taken**, by `pkribbon`'s constant-width
+*pressure preset*. Defining a brush over it broke `pkribbon`,
+`pktrowel`, `pkoil` and `pkfan` simultaneously, since every one of them
+defaults `/Pressure` to `{ pkflat }` — and it surfaced as a `typecheck`
+inside `pkgetdef`, nowhere near the cause. Renamed to `pkbroad`, with a
+test asserting the three pressure presets are still procedures.
+
+**The prefix scan has to cover all of `lib/`, not just `paintkit.ps`.**
+`pl-` looked free in paintkit and is used by `graph.ps`, `scifi.ps` and
+`steampunk.ps`; the working prefix is `pe-`.
+
+**From rendering, not reasoning:** the first version's depletion came
+out as a staircase of hard vertical cutoffs. Each striation now tapers
+away over its last stretch — but only when it ends by running out, not
+when it ends because the stroke did, or `Depletion 0` would lose the
+brush's square end.
+
+**No fixed-draw-count claim**, unlike `pktrowel`'s and for the same
+reason as `pkfan`'s: the edge jitter is drawn per deposited point, so
+consumption depends on how much is laid down. An early draft of the
+header claimed otherwise and a test caught it.
+
 ## `lib/paintkit.ps`: `pkfan`, the fan brush (issue #114, 2026-09-04)
 
 Third child of epic #112. Adds `pkfan`, with `/Width` `/Bristles`

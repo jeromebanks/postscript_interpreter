@@ -4528,3 +4528,293 @@ fn fan_a_pressed_dab_opens_upward_rather_than_all_round() {
         "a pressed fan is a fan, not a full circle: above {above} below {below}"
     );
 }
+
+// --- pkbroad: the broad flat brush (issue #115) ----------------------
+//
+// Three presets here already make a wide mark, so most of these tests
+// are about the one thing that makes this its own tool: a brush runs
+// out of paint. `/Depletion` is that fade, and if it stopped working
+// pkbroad would be pkribbon with striations.
+
+const BROAD_PATH: &str = "newpath 50 100 moveto 350 106 lineto";
+
+fn broad(opts: &str) -> Interp {
+    let mut it = fresh(400, 200);
+    it.run_str(&format!(
+        "0 0 0 setrgbcolor 29 srand {BROAD_PATH} << {opts} >> pkbroad"
+    ))
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    it
+}
+
+/// Ink in a vertical slice, as a fraction of the band's height. The
+/// depletion fade is exactly a fall in this along the stroke.
+fn slice_ink(it: &Interp, x0: u32, x1: u32, h: u32) -> usize {
+    (x0..x1)
+        .map(|x| {
+            (0..h)
+                .filter(|&y| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+                .count()
+        })
+        .sum()
+}
+
+#[test]
+fn broad_lays_a_wide_striated_band() {
+    let it = broad("/Width 50 /Depletion 0");
+    assert!(
+        ink_count(&it) > 6000,
+        "a loaded block-in should be a solid wide band, got {}",
+        ink_count(&it)
+    );
+}
+
+/// The whole point of the tool: the mark is solid where the brush lands
+/// and progressively drier as it travels.
+#[test]
+fn broad_depletes_along_the_stroke() {
+    let it = broad("/Width 50 /Depletion 0.9");
+    let near = slice_ink(&it, 60, 130, 200);
+    let far = slice_ink(&it, 270, 340, 200);
+    assert!(
+        near > 0 && far < near / 2,
+        "the brush must run drier as it goes: near {near} far {far}"
+    );
+}
+
+/// ...and /Depletion 0 turns it off, giving the even block-in that is
+/// the other end of the tool's range.
+#[test]
+fn broad_depletion_zero_stays_even() {
+    let it = broad("/Width 50 /Depletion 0");
+    let near = slice_ink(&it, 60, 130, 200) as f64;
+    let far = slice_ink(&it, 270, 340, 200) as f64;
+    assert!(
+        (near - far).abs() < near * 0.15,
+        "Depletion 0 must not fade: near {near} far {far}"
+    );
+}
+
+/// /Charge is how much paint the brush started with, which is a
+/// different axis from how fast it runs out: a low charge skips from
+/// the very beginning.
+#[test]
+fn broad_charge_controls_how_much_lands_at_all() {
+    let full = slice_ink(&broad("/Width 50 /Charge 1 /Depletion 0"), 60, 130, 200);
+    let scant = slice_ink(&broad("/Width 50 /Charge 0.35 /Depletion 0"), 60, 130, 200);
+    assert!(
+        scant * 2 < full,
+        "a barely loaded brush should skip from the start: full {full} scant {scant}"
+    );
+}
+
+/// /Angle is pktrowel's reading -- brush rotation relative to travel,
+/// constant along a curve -- deliberately not pknib's fixed world
+/// angle. Footprint thickness therefore goes as its cosine.
+#[test]
+fn broad_angle_thins_the_footprint() {
+    let square = column_height(
+        &broad("/Width 50 /Angle 0 /Depletion 0 /Charge 1"),
+        200,
+        200,
+    );
+    let raked = column_height(
+        &broad("/Width 50 /Angle 75 /Depletion 0 /Charge 1"),
+        200,
+        200,
+    );
+    assert!(raked > 0, "a raked brush should still mark");
+    assert!(
+        raked * 3 / 2 < square,
+        "Angle must thin the footprint: square {square} raked {raked}"
+    );
+}
+
+#[test]
+fn broad_edge_roughens_the_sides() {
+    let crisp = pixels(&broad("/Width 50 /Edge 0 /Depletion 0"));
+    let rough = pixels(&broad("/Width 50 /Edge 1 /Depletion 0"));
+    assert_ne!(crisp, rough, "/Edge must perturb the band's sides");
+}
+
+#[test]
+fn broad_is_deterministic_under_a_seed() {
+    let run = || pixels(&broad("/Width 50 /Depletion 0.6 /Edge 0.4"));
+    assert_eq!(run(), run(), "pkbroad must be deterministic under a seed");
+}
+
+/// The charge is per *subpath*: three parallel strokes in one call are
+/// three brush loads, each fading independently. That is what an artist
+/// blocking in a sky does, and it follows from walkpath's `t` restarting
+/// per subpath -- worth pinning rather than leaving to be discovered.
+#[test]
+fn broad_each_subpath_gets_its_own_charge() {
+    let mut it = fresh(400, 240);
+    it.run_str(
+        "0 0 0 setrgbcolor 29 srand \
+         newpath 50 60 moveto 350 60 lineto \
+         50 180 moveto 350 180 lineto \
+         << /Width 40 /Depletion 0.9 >> pkbroad",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    // Both strokes must be solid at their own start and thin at their
+    // own end -- not one continuous fade across the pair.
+    for (lo, hi) in [(0u32, 120u32), (120, 240)] {
+        let near: usize = (60..120)
+            .map(|x| {
+                (lo..hi)
+                    .filter(|&y| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+                    .count()
+            })
+            .sum();
+        let far: usize = (280..340)
+            .map(|x| {
+                (lo..hi)
+                    .filter(|&y| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+                    .count()
+            })
+            .sum();
+        assert!(
+            near > 0 && far < near,
+            "each subpath should fade from its own start: rows {lo}..{hi} near {near} far {far}"
+        );
+    }
+}
+
+#[test]
+fn broad_empty_path_is_a_no_op() {
+    let mut it = fresh(120, 120);
+    it.run_str("0 0 0 setrgbcolor newpath << /Width 30 >> pkbroad")
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(ink_count(&it), 0, "an empty path should paint nothing");
+}
+
+#[test]
+fn broad_restores_the_callers_color() {
+    let mut it = fresh(200, 200);
+    it.run_str(
+        "0.2 0.4 0.8 setrgbcolor 9 srand newpath 40 100 moveto 160 100 lineto \
+         << /Width 24 /ColorJitter 0.4 >> pkbroad",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let (r, g, b) = it.gfx().rgb();
+    assert!(
+        (r - 0.2).abs() < 1e-6 && (g - 0.4).abs() < 1e-6 && (b - 0.8).abs() < 1e-6,
+        "pkbroad must leave the caller's color alone, got {r} {g} {b}"
+    );
+}
+
+/// `pkflat` was already taken -- it is pkribbon's constant-width
+/// *pressure* preset, and every preset here defaults `/Pressure` to
+/// `{ pkflat }`. Defining a brush over it broke pkribbon, pktrowel,
+/// pkoil and pkfan at once, silently, because the failure surfaced as a
+/// `typecheck` inside pkgetdef rather than anywhere near the cause.
+#[test]
+fn the_pressure_presets_are_not_shadowed_by_a_brush() {
+    let mut it = fresh(200, 200);
+    it.run_str("/pkflat load type /pktaper load type /pkbell load type")
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let st = it.operand_stack();
+    for (i, name) in ["pkbell", "pktaper", "pkflat"].iter().enumerate() {
+        assert_eq!(
+            st[st.len() - 1 - i].repr(),
+            "arraytype",
+            "{name} should still be a procedure"
+        );
+    }
+    // And the thing they are used for still works.
+    let mut it2 = fresh(200, 200);
+    it2.run_str(
+        "0 0 0 setrgbcolor 3 srand newpath 40 100 moveto 160 100 lineto \
+         << /Width 20 /Pressure { pkflat } >> pkribbon",
+    )
+    .unwrap_or_else(|e| panic!("{}", it2.error_report(&e)));
+    assert!(
+        ink_count(&it2) > 100,
+        "the default pressure preset should still paint"
+    );
+}
+
+#[test]
+fn broad_validation_and_safety() {
+    fn err(src: &str) -> String {
+        let mut it = fresh(100, 100);
+        let e = it.run_str(src).unwrap_err();
+        it.error_report(&e).to_string()
+    }
+    let p = "newpath 0 0 moveto 100 0 lineto";
+    for (opts, want) in [
+        ("/Width 0", "pkbroad-width-must-be-positive"),
+        ("/Width { 3 }", "pkbroad-width-must-not-be-a-procedure"),
+        ("/Angle 90", "pkbroad-angle-must-be-minus80-to-80"),
+        ("/Charge 1.5", "pkbroad-charge-must-be-0-to-1"),
+        ("/Depletion -1", "pkbroad-depletion-must-be-0-to-1"),
+        ("/Grain 0", "pkbroad-grain-must-be-1-to-40"),
+        ("/Grain 41", "pkbroad-grain-must-be-1-to-40"),
+        ("/Grain 2.5", "pkbroad-grain-must-be-1-to-40"),
+        ("/Edge 3", "pkbroad-edge-must-be-0-to-1"),
+        ("/Pitch 0", "pkbroad-pitch-must-be-positive"),
+        ("/ColorJitter 9", "pkbroad-colorjitter-must-be-0-to-1"),
+        ("/Jitter { 1 }", "pkbroad-jitter-must-not-be-a-procedure"),
+    ] {
+        let report = err(&format!("{p} << {opts} >> pkbroad"));
+        assert!(
+            report.contains(want),
+            "expected {want} for {opts}, got {report}"
+        );
+    }
+    // A whole-valued real is a reasonable thing to compute; it must work
+    // rather than typecheck later on `real array`.
+    let mut ok = fresh(120, 120);
+    ok.run_str("0 0 0 setrgbcolor 3 srand newpath 10 60 moveto 110 60 lineto << /Width 20 /Grain 6.0 >> pkbroad")
+        .unwrap_or_else(|e| panic!("/Grain 6.0 should work: {}", ok.error_report(&e)));
+}
+
+#[test]
+fn broad_deposit_budget_guard_rejects_grain_times_samples_over_the_limit() {
+    let mut it = fresh(100, 100);
+    let e = it
+        .run_str("newpath 0 0 moveto 400000 0 lineto << /Width 20 /Grain 40 /Pitch 0.5 >> pkbroad")
+        .unwrap_err();
+    assert!(
+        it.error_report(&e)
+            .contains("pkbroad-deposit-count-exceeds-safety-limit"),
+        "expected the deposit budget guard, got {}",
+        it.error_report(&e)
+    );
+    assert_eq!(
+        ink_count(&it),
+        0,
+        "a rejected budget must leave the canvas clean"
+    );
+}
+
+#[test]
+fn ghostscript_accepts_paintkit_broad() {
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let status = std::process::Command::new("gs")
+        .args([
+            "-dNOSAFER",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g620x600",
+            "-r72",
+            "-o/dev/null",
+            "examples/paintkit_broad_demo.ps",
+        ])
+        .status()
+        .expect("run gs");
+    assert!(
+        status.success(),
+        "gs rejected examples/paintkit_broad_demo.ps"
+    );
+}
