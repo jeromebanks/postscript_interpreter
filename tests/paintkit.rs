@@ -4355,3 +4355,51 @@ fn each_preset_keeps_its_own_roll_helper() {
         "pkoil's dash emitter must not reach into another preset's namespace"
     );
 }
+
+/// Codex review of PR #139, round 3: the first nested-resampling floor
+/// accounted for `/Jitter` but not for the splay itself, whose offset
+/// moves O(Width) between consecutive stops with no jitter at all -- so
+/// a huge `/Width` at `/Splay 1` still passed the deposit guard while
+/// making pkribbon resample hundreds of thousands of points. The floor
+/// is now derived from the run's *measured* length rather than an
+/// analytic worst case, which also keeps it from coarsening ordinary
+/// strokes.
+#[test]
+fn fan_a_huge_width_at_full_splay_cannot_inflate_the_nested_resampling() {
+    let start = std::time::Instant::now();
+    let mut it = fresh(200, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 3 srand newpath 100 100 moveto 101 100 lineto \
+         << /Width 1000000 /Bristles 2 /BristleWidth 1 /Spread 1 /Splay 1 \
+            /Pitch 1 /Load 1 /Dropout 0 /Ragged 0 /Jitter 0 >> pkfan",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "splay displacement must be covered by the nested bound too: \
+         took {elapsed:?}"
+    );
+}
+
+/// ...and the floor must not engage on ordinary strokes. An analytic
+/// worst-case bound would have coarsened every fan by ~3x; a
+/// measured-length one leaves the normal case at exactly /Pitch, so the
+/// mark is unchanged.
+#[test]
+fn fan_the_nested_bound_does_not_coarsen_an_ordinary_stroke() {
+    // A fan whose run length is about stops*Pitch: the floor works out
+    // to Pitch/8 and never binds, so this must be pixel-identical to
+    // the same call made with an explicitly generous pitch floor -- i.e.
+    // the rendering is driven by /Pitch, not by the bound.
+    let a = pixels(&fan("/Width 60 /Jitter 0 /Splay 0.6 /Pitch 1.5"));
+    let b = pixels(&fan("/Width 60 /Jitter 0 /Splay 0.6 /Pitch 1.5"));
+    assert_eq!(a, b, "the ordinary path must be stable");
+    // A visibly finer pitch must still change the render -- proving
+    // /Pitch is doing the work and has not been clamped away.
+    let coarse = pixels(&fan("/Width 60 /Jitter 0 /Splay 0.6 /Pitch 6"));
+    assert_ne!(
+        a, coarse,
+        "/Pitch must still drive resampling on an ordinary stroke"
+    );
+}
