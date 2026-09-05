@@ -94,6 +94,49 @@ prefer it over guessing a name from prose below.
   always runs in your own dict — a plain `/n n 1 add def` counter
   works the same as it does with `truchet`.
 
+## Paint media (`lib/paintkit.ps`, load after artkit)
+
+```postscript
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+```
+
+Every preset takes one dict of artistic controls, paints in whatever
+color you already set (there is no color key anywhere in the file), and
+is deterministic under your own `N srand`. `pscat --capabilities` has
+each one's real parameter list — reach for it rather than guessing.
+Which tool to pick:
+
+- **`pkribbon`** — the foundation: your path as a centerline, filled as
+  a variable-width band. `/Pressure` (`pkflat`/`pktaper`/`pkbell`) is
+  the whole point. Anything that should read as *one continuous
+  stroke*.
+- **`pknib`** — calligraphy. Width driven by the angle between the path
+  and a fixed nib angle. One open subpath per call.
+- **`pkdry`** — dry bristle. Scattered thin bristles broken into
+  ink/no-ink runs; `/Load` vs `/Dropout` sets how dry.
+- **`pkspray`** — aerosol. Discrete particles with a radial falloff,
+  overspray mist, trigger-dwell bursts. Respects an active clip, so
+  `charpath`+`clip` gives you a stencil for free.
+- **`pkoil`** — loaded oil impasto. A solid base ribbon *plus* bristle
+  ridges and a highlight/shadow lift. Use it when you want thickness
+  and an unbroken mass.
+- **`pktrowel`** — palette knife / trowel. A rigid flat blade dragged
+  across the surface: broad angular masses, lengthwise scrape streaks,
+  ridges piled at the blade edges, and **no base pass**, so whatever is
+  underneath keeps showing through. Choose it over `pkoil` when you
+  want the mark to look *placed by a tool* rather than brushed — large
+  color masses, architectural planes, cliff faces, water, anything
+  built from flat overlapping shapes. `/Load` widens the deposit,
+  `/Coverage` fills it, `/Viscosity` sets chatter vs chunk, `/Scrape`
+  opens streaks, `/Angle` rakes the blade.
+- **`pkwash`** / **`pkpaper`** — watercolor and its ground. The only
+  presets needing pscat's `setalpha`; under plain `gs` they fall back
+  to flattening against white and overlaps stop mixing.
+
+(A fuller paintkit tour, and an audit of the parameter docs, is issue
+#99 — this section is the short orientation, not that sweep.)
+
 ## Style packs (`lib/styles/`, load after artkit)
 
 Four motif libraries, one per aesthetic — each registers three

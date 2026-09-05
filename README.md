@@ -510,6 +510,38 @@ pass, heavy overspray, the falloff levels, a word sprayed through a
 charpath stencil, a star sprayed through an arbitrary-path stencil,
 and a tag mark with bursts pooled at both ends.
 
+`pktrowel` (issue #111) is the trowel / palette knife, and the one
+preset in the file that is deliberately **not** built on `pkribbon`.
+Every other preset here offsets a band around the path *normal*, which
+is what a tuft of bristles does; a palette knife holds its own angle
+independently of where it is going, so the deposit has to be swept
+along the *blade* direction instead — geometry `pkribbon` structurally
+can't express. The blade is divided into `/Lanes` bands across its
+length, each running its own contact chain, and each run of contact is
+filled as one strip. It lays **no solid base pass** — `pkoil` starts
+with a full-width ribbon and puts ridges on top of it, whereas a trowel
+deposits broken masses straight onto whatever is underneath, which is
+what makes the underlayer keep reading through however many strokes go
+over it.
+
+The four controls that all sound like "less paint" are separated onto
+genuinely different axes: `/Load` scales the deposit's *width* (a
+nearly empty blade lays a narrow band), `/Coverage` is the contact
+chain's steady state — holes *within* that width — `/Viscosity` is its
+*rate*, trading many short chattering runs for few long chunky ones,
+and `/Scrape` is static lengthwise thinning that narrows every lane and
+kills some outright, the bare tracks a nicked blade leaves. `/Angle`
+rakes the blade (footprint thickness goes as its cosine, so the guard
+stops at ±80° rather than a silently blank 90°), `/Drag` smears each
+run past where the blade lifted, and `/EdgeBuildup` piles the darker
+ridges a blade leaves at its two ends. Deterministic under the caller's
+own `srand`, with the random draws structurally fixed per lane and stop
+so turning one control doesn't re-roll another's texture; bounded by
+`Lanes * stops` against the same budget `pkoil` uses.
+`examples/paintkit_trowel_demo.ps` is the specimen sheet — including
+the same path set twice, once in `pktrowel` and once in `pkoil`, for
+the contrast.
+
 `pkwash` (issue #47) is the watercolor medium, and the one preset here
 that needs something from the interpreter rather than only from
 PostScript: it fills the current path as a *translucent* wash. Two new

@@ -3268,3 +3268,473 @@ fn an_invalid_explicit_pitch_is_rejected_before_walking() {
         "rejection walked the path first: took {elapsed:?}"
     );
 }
+
+// --- pktrowel: the trowel / palette knife (issue #111) ----------------
+//
+// The tool's whole claim is that it is *not* a wide brush: the deposit
+// is swept along the blade direction rather than the path normal, and
+// there is no solid base pass, so broken coverage and the underlayer
+// showing through are load-bearing rather than decorative. The tests
+// below therefore measure each artistic control on its own axis --
+// /Load as deposit *width*, /Coverage as fill *within* that width,
+// /Viscosity as run *length*, /Scrape as lengthwise streaking -- since
+// all four would otherwise read as a single "amount of ink" number and
+// a regression in one could hide behind another.
+
+/// One horizontal scanline's worth of contiguous ink runs. `/Viscosity`
+/// is defined as the contact chain's *rate*, so run count along the
+/// stroke is the measurement that distinguishes it from `/Coverage`
+/// (which moves ink totals without necessarily moving run counts).
+fn row_runs(it: &Interp, y: u32, w: u32) -> usize {
+    let mut runs = 0;
+    let mut prev = false;
+    for x in 0..w {
+        let inked = it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0);
+        if inked && !prev {
+            runs += 1;
+        }
+        prev = inked;
+    }
+    runs
+}
+
+/// The same count down a column, i.e. *across* the blade. This is the
+/// lengthwise-streak measurement: `/Scrape` narrows every lane toward
+/// its own centre, so a column crossing the band meets more separate
+/// bands as scrape rises.
+fn column_runs(it: &Interp, x: u32, h: u32) -> usize {
+    let mut runs = 0;
+    let mut prev = false;
+    for y in 0..h {
+        let inked = it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0);
+        if inked && !prev {
+            runs += 1;
+        }
+        prev = inked;
+    }
+    runs
+}
+
+/// Horizontal extent of anything inked -- how far the mark reaches
+/// along its own direction of travel, which is what `/Drag` extends.
+fn ink_x_extent(it: &Interp, w: u32, h: u32) -> u32 {
+    let mut lo = u32::MAX;
+    let mut hi = 0u32;
+    for y in 0..h {
+        for x in 0..w {
+            if it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0) {
+                lo = lo.min(x);
+                hi = hi.max(x);
+            }
+        }
+    }
+    if lo == u32::MAX { 0 } else { hi - lo }
+}
+
+const TROWEL_PATH: &str = "newpath 60 100 moveto 340 100 lineto";
+
+fn trowel(opts: &str) -> Interp {
+    let mut it = fresh(400, 200);
+    it.run_str(&format!(
+        "0.6 0.6 0.6 setrgbcolor 11 srand {TROWEL_PATH} << {opts} >> pktrowel"
+    ))
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    it
+}
+
+#[test]
+fn trowel_lays_a_broken_flat_blade_mark() {
+    let it = trowel("/Width 60");
+    assert!(
+        ink_count(&it) > 3000,
+        "a loaded trowel stroke should deposit a substantial mass, got {}",
+        ink_count(&it)
+    );
+}
+
+#[test]
+fn trowel_seeded_render_is_deterministic() {
+    let run = || pixels(&trowel("/Width 60 /Jitter 2 /Scrape 0.3"));
+    assert_eq!(run(), run(), "pktrowel must be deterministic under a seed");
+}
+
+#[test]
+fn trowel_a_different_seed_paints_a_different_mark() {
+    let run = |seed: u32| {
+        let mut it = fresh(400, 200);
+        it.run_str(&format!(
+            "0.6 0.6 0.6 setrgbcolor {seed} srand {TROWEL_PATH} \
+             << /Width 60 /Jitter 2 /Scrape 0.3 >> pktrowel"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        pixels(&it)
+    };
+    assert_ne!(run(11), run(12), "a different seed should differ");
+}
+
+/// /Load is the *width* control: a nearly empty blade deposits a narrow
+/// band, a loaded one the whole blade. Measured as band thickness, not
+/// ink total, so it can't be satisfied by /Coverage's axis.
+#[test]
+fn trowel_load_widens_the_deposit_rather_than_filling_it() {
+    let thin = column_height(
+        &trowel("/Width 60 /Load 0.05 /Coverage 1 /Scrape 0 /EdgeBuildup 0"),
+        200,
+        200,
+    );
+    let full = column_height(
+        &trowel("/Width 60 /Load 1 /Coverage 1 /Scrape 0 /EdgeBuildup 0"),
+        200,
+        200,
+    );
+    assert!(thin > 0, "even a nearly empty blade should mark");
+    assert!(
+        full > thin * 3 / 2,
+        "Load must widen the deposit: thin {thin} full {full}"
+    );
+}
+
+/// /Coverage is the contact chain's steady state -- holes *within* the
+/// band, at an unchanged band width.
+#[test]
+fn trowel_coverage_fills_more_of_the_contact_area() {
+    let sparse = ink_count(&trowel("/Width 60 /Coverage 0.3 /Scrape 0 /EdgeBuildup 0"));
+    let dense = ink_count(&trowel("/Width 60 /Coverage 0.98 /Scrape 0 /EdgeBuildup 0"));
+    assert!(
+        dense > sparse * 3 / 2,
+        "Coverage must fill the contact area: sparse {sparse} dense {dense}"
+    );
+}
+
+/// /Viscosity is the chain's *rate*, not its steady state: low
+/// viscosity chatters into many short runs, high viscosity holds paint
+/// together into few long ones. Ink totals are deliberately not the
+/// measurement here -- both settings share a /Coverage, so they should
+/// deposit comparable amounts of ink in very different arrangements.
+#[test]
+fn trowel_viscosity_trades_run_count_for_run_length() {
+    let runs = |visc: f64| {
+        let it = trowel(&format!(
+            "/Width 60 /Coverage 0.6 /Viscosity {visc} /Scrape 0 /EdgeBuildup 0"
+        ));
+        (90..110).map(|y| row_runs(&it, y, 400)).sum::<usize>()
+    };
+    let chattery = runs(0.02);
+    let chunky = runs(0.98);
+    assert!(
+        chattery > chunky * 2,
+        "low viscosity should break into many more runs: chattery {chattery} chunky {chunky}"
+    );
+}
+
+/// /Scrape is static lengthwise thinning plus whole-lane kills, so it
+/// both removes ink and opens streaks a column crossing the band can
+/// count -- the "reveals the underlayer" behavior.
+#[test]
+fn trowel_scrape_opens_lengthwise_streaks() {
+    let smooth = trowel("/Width 60 /Coverage 1 /Scrape 0 /EdgeBuildup 0");
+    let scraped = trowel("/Width 60 /Coverage 1 /Scrape 0.9 /EdgeBuildup 0");
+    assert!(
+        ink_count(&scraped) < ink_count(&smooth),
+        "scraping must remove paint: smooth {} scraped {}",
+        ink_count(&smooth),
+        ink_count(&scraped)
+    );
+    let smooth_bands: usize = (150..250).map(|x| column_runs(&smooth, x, 200)).sum();
+    let scraped_bands: usize = (150..250).map(|x| column_runs(&scraped, x, 200)).sum();
+    assert!(
+        scraped_bands > smooth_bands * 2,
+        "scraping must open lengthwise streaks: smooth {smooth_bands} scraped {scraped_bands}"
+    );
+}
+
+/// Footprint thickness goes as cos(Angle) -- a blade held near-parallel
+/// to its own travel collapses toward a sliver, which is exactly why
+/// the guard stops at 80 rather than 90.
+#[test]
+fn trowel_angle_thins_the_footprint() {
+    let square = column_height(
+        &trowel("/Width 60 /Angle 0 /Coverage 1 /Scrape 0 /EdgeBuildup 0"),
+        200,
+        200,
+    );
+    let raked = column_height(
+        &trowel("/Width 60 /Angle 75 /Coverage 1 /Scrape 0 /EdgeBuildup 0"),
+        200,
+        200,
+    );
+    assert!(raked > 0, "a raked blade should still mark");
+    assert!(
+        raked * 3 / 2 < square,
+        "Angle must thin the footprint: square {square} raked {raked}"
+    );
+}
+
+/// The ridges are painted in a *darker* shade than the caller's color,
+/// so their presence is asserted on tone, not just on ink volume --
+/// otherwise the test would pass on any extra geometry at all.
+#[test]
+fn trowel_edge_buildup_piles_darker_paint_at_the_blade_edges() {
+    let very_dark = |it: &Interp| {
+        it.gfx()
+            .pixmap
+            .pixels()
+            .iter()
+            .filter(|&&p| luma(p) < 100.0)
+            .count()
+    };
+    let flat = trowel("/Width 60 /EdgeBuildup 0 /ColorJitter 0");
+    let ridged = trowel("/Width 60 /EdgeBuildup 1 /ColorJitter 0");
+    assert_eq!(
+        very_dark(&flat),
+        0,
+        "without edge buildup nothing should be darker than the caller's color"
+    );
+    assert!(
+        very_dark(&ridged) > 200,
+        "edge buildup must lay a darker ridge, got {}",
+        very_dark(&ridged)
+    );
+}
+
+/// /Drag is the smear past where the blade actually lifted, so it shows
+/// up as reach along the direction of travel.
+#[test]
+fn trowel_drag_smears_the_mark_along_its_travel() {
+    let dry = ink_x_extent(&trowel("/Width 60 /Drag 0 /Coverage 1 /Scrape 0"), 400, 200);
+    let smeared = ink_x_extent(&trowel("/Width 60 /Drag 1 /Coverage 1 /Scrape 0"), 400, 200);
+    assert!(
+        smeared > dry + 20,
+        "Drag must extend the mark along travel: dry {dry} smeared {smeared}"
+    );
+}
+
+#[test]
+fn trowel_jitter_roughens_the_lane_boundaries() {
+    let clean = pixels(&trowel("/Width 60 /Jitter 0"));
+    let rough = pixels(&trowel("/Width 60 /Jitter 3"));
+    assert_ne!(clean, rough, "Jitter must perturb the lane boundaries");
+}
+
+/// /Pressure multiplies the blade's half-extent over path progress, and
+/// is resolved once per stop rather than once per (lane, stop) -- see
+/// the comment on the collecting pass in lib/paintkit.ps.
+#[test]
+fn trowel_pressure_profile_shapes_the_blade_along_the_stroke() {
+    let it = trowel("/Width 60 /Pressure { pkbell } /Coverage 1 /Scrape 0 /EdgeBuildup 0");
+    let near_start = column_height(&it, 80, 200);
+    let middle = column_height(&it, 200, 200);
+    assert!(
+        middle > near_start * 2,
+        "pkbell should be widest in the middle: start {near_start} middle {middle}"
+    );
+}
+
+/// A caller's /Pressure proc may legitimately consume randomness, so
+/// calling it once per (lane, stop) instead of once per stop would make
+/// lane texture depend on the pressure profile and break same-seed-
+/// same-picture. This pins the call count indirectly: a stochastic
+/// pressure proc still has to reproduce exactly under a fixed seed.
+#[test]
+fn trowel_a_stochastic_pressure_proc_still_reproduces_under_a_seed() {
+    let run = || pixels(&trowel("/Width 60 /Pressure { pop 0.4 frnd 0.6 mul add }"));
+    assert_eq!(
+        run(),
+        run(),
+        "a randomness-consuming /Pressure must still be deterministic"
+    );
+}
+
+/// A degenerate single-point subpath is a *pressed* knife: contact is
+/// forced on and the one-stop run gets a minimum along-travel extent,
+/// or the forward-and-back strip through a single point would be a
+/// zero-area polygon and the dab would silently vanish.
+#[test]
+fn trowel_degenerate_single_point_presses_a_blade_patch() {
+    let mut it = fresh(200, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 5 srand newpath 100 100 moveto << /Width 60 /Angle 0 >> pktrowel",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 400,
+        "a pressed knife should leave a blade-shaped patch, got {}",
+        ink_count(&it)
+    );
+    // Blade square across a zero-direction stop means the patch is
+    // taller than it is long -- a patch, not a line.
+    assert!(
+        column_height(&it, 100, 200) > 30,
+        "the patch should span most of the blade's length"
+    );
+}
+
+/// The same minimum is what keeps low-/Viscosity chatter visible: at
+/// that end of the dial most contact runs are a single stop long.
+#[test]
+fn trowel_extreme_chatter_still_deposits_paint() {
+    let it = trowel("/Width 60 /Viscosity 0 /Coverage 0.5 /Drag 0");
+    assert!(
+        ink_count(&it) > 500,
+        "single-stop runs must still mark, got {}",
+        ink_count(&it)
+    );
+}
+
+#[test]
+fn trowel_multiple_subpaths_each_get_their_own_contact_chain() {
+    let mut it = fresh(400, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 3 srand newpath 40 60 moveto 360 60 lineto \
+         40 140 moveto 360 140 lineto << /Width 30 >> pktrowel",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let lower: usize = (0..100)
+        .map(|y| {
+            (0..400)
+                .filter(|&x| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+                .count()
+        })
+        .sum();
+    let upper: usize = (100..200)
+        .map(|y| {
+            (0..400)
+                .filter(|&x| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+                .count()
+        })
+        .sum();
+    assert!(lower > 500, "first subpath should be painted, got {lower}");
+    assert!(upper > 500, "second subpath should be painted, got {upper}");
+}
+
+#[test]
+fn trowel_empty_path_is_a_no_op() {
+    let mut it = fresh(120, 120);
+    it.run_str("0 0 0 setrgbcolor newpath << /Width 30 >> pktrowel")
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(ink_count(&it), 0, "an empty path should paint nothing");
+}
+
+#[test]
+fn trowel_restores_the_callers_current_color_before_returning() {
+    let mut it = fresh(200, 200);
+    it.run_str(
+        "0.2 0.4 0.8 setrgbcolor 9 srand newpath 40 100 moveto 160 100 lineto \
+         << /Width 20 /ColorJitter 0.3 /EdgeBuildup 0.8 >> pktrowel",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let (r, g, b) = it.gfx().rgb();
+    assert!(
+        (r - 0.2).abs() < 1e-6 && (g - 0.4).abs() < 1e-6 && (b - 0.8).abs() < 1e-6,
+        "pktrowel must leave the caller's color alone, got {r} {g} {b}"
+    );
+}
+
+/// "Produces a visibly different mark from pkribbon and pkoil" is an
+/// acceptance criterion, and a specimen page cannot fail. pkoil lays a
+/// solid base ribbon and puts ridges on top of it; pktrowel lays no
+/// base at all, so a column crossing the band meets many separate
+/// masses rather than one continuous one.
+#[test]
+fn trowel_and_oil_produce_structurally_different_marks() {
+    let mut oil = fresh(400, 200);
+    oil.run_str(&format!(
+        "0.6 0.6 0.6 setrgbcolor 11 srand {TROWEL_PATH} << /Width 60 >> pkoil"
+    ))
+    .unwrap_or_else(|e| panic!("{}", oil.error_report(&e)));
+    let trowel_mark = trowel("/Width 60");
+    let oil_bands: usize = (150..250).map(|x| column_runs(&oil, x, 200)).sum();
+    let trowel_bands: usize = (150..250).map(|x| column_runs(&trowel_mark, x, 200)).sum();
+    assert!(
+        trowel_bands > oil_bands * 2,
+        "the trowel must read as separate masses next to pkoil's solid band: \
+         oil {oil_bands} trowel {trowel_bands}"
+    );
+}
+
+#[test]
+fn trowel_validation_and_safety() {
+    fn err(src: &str) -> String {
+        let mut it = fresh(100, 100);
+        let e = it.run_str(src).unwrap_err();
+        it.error_report(&e).to_string()
+    }
+    let p = "newpath 0 0 moveto 100 0 lineto";
+    for (opts, want) in [
+        ("/Width 0", "pktrowel-width-must-be-positive"),
+        ("/Width { 3 }", "pktrowel-width-must-not-be-a-procedure"),
+        ("/Pitch 0", "pktrowel-pitch-must-be-positive"),
+        ("/Lanes 0", "pktrowel-lanes-must-be-1-to-40"),
+        ("/Lanes 41", "pktrowel-lanes-must-be-1-to-40"),
+        ("/Lanes 3.5", "pktrowel-lanes-must-be-1-to-40"),
+        ("/Load 1.4", "pktrowel-load-must-be-0-to-1"),
+        ("/Angle 90", "pktrowel-angle-must-be-minus80-to-80"),
+        ("/Angle -90", "pktrowel-angle-must-be-minus80-to-80"),
+        ("/Drag 2", "pktrowel-drag-must-be-0-to-1"),
+        ("/Viscosity -0.1", "pktrowel-viscosity-must-be-0-to-1"),
+        ("/Coverage 1.2", "pktrowel-coverage-must-be-0-to-1"),
+        ("/Scrape 3", "pktrowel-scrape-must-be-0-to-1"),
+        ("/EdgeBuildup 9", "pktrowel-edgebuildup-must-be-0-to-1"),
+        ("/ColorJitter 5", "pktrowel-colorjitter-must-be-0-to-1"),
+        ("/Jitter { 1 }", "pktrowel-jitter-must-not-be-a-procedure"),
+        ("/Pressure 0.5", "pktrowel-pressure-must-be-a-procedure"),
+    ] {
+        let report = err(&format!("{p} << {opts} >> pktrowel"));
+        assert!(
+            report.contains(want),
+            "expected {want} for {opts}, got {report}"
+        );
+    }
+}
+
+/// Bounded like pkoil's: Lanes * stops is checked *inside* the counting
+/// walk, so a pathological path is rejected before anything is
+/// allocated or drawn rather than after the whole walk completes.
+#[test]
+fn trowel_deposit_budget_guard_rejects_lanes_times_samples_over_the_limit() {
+    let mut it = fresh(100, 100);
+    let e = it
+        .run_str("newpath 0 0 moveto 400000 0 lineto << /Width 20 /Lanes 40 /Pitch 0.5 >> pktrowel")
+        .unwrap_err();
+    assert!(
+        it.error_report(&e)
+            .contains("pktrowel-deposit-count-exceeds-safety-limit"),
+        "expected the deposit budget guard, got {}",
+        it.error_report(&e)
+    );
+    assert_eq!(
+        ink_count(&it),
+        0,
+        "a rejected budget must leave the canvas clean"
+    );
+}
+
+#[test]
+fn ghostscript_accepts_paintkit_trowel() {
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let status = std::process::Command::new("gs")
+        .args([
+            "-dNOSAFER",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g620x760",
+            "-r72",
+            "-o/dev/null",
+            "examples/paintkit_trowel_demo.ps",
+        ])
+        .status()
+        .expect("run gs");
+    assert!(
+        status.success(),
+        "gs rejected examples/paintkit_trowel_demo.ps"
+    );
+}

@@ -614,6 +614,30 @@ renders eight examples in both and compares block-downsampled output).
   `systemdict /other known /name exch def`, all on one line so the tag
   block stays directly above the `def` — or teach the scanner operator
   arities, which is a real change, not a tweak.
+- **`lib/paintkit.ps` presets each own a scratch prefix, and the
+  reason is not tidiness.** `pkribbon`'s body freely redefines every
+  `pk*` name on each call, so any preset that calls it (`pkdry`,
+  `pkspray`, `pkoil`) must keep its own state under a distinct prefix
+  or have it silently clobbered mid-stroke — hence `pb-`/`pz-`/`po-`,
+  and `pt-` for `pktrowel` (issue #111), which is the one preset that
+  calls `pkribbon` not at all. Pick a fresh prefix for anything new;
+  the file header keeps the list.
+- **Abutting filled polygons leave an anti-aliased hairline seam.**
+  Two shapes sharing an exact edge do not composite to a solid mass —
+  `pktrowel`'s blade lanes had to be given an 18% overlap or a
+  supposedly gapless blade rendered as a striped rectangle. Anything
+  that tiles fills to make one surface needs deliberate overlap, and
+  no unit test will tell you: this was found by looking at the PNG.
+- **A "collect stops, then draw runs" brush must not call the caller's
+  `/Pressure` proc inside its per-lane/per-bristle loop.** A caller's
+  proc is arbitrary code and may consume randomness (`{ frnd }` is a
+  legal pressure profile), so a call count that scales with lanes
+  couples texture to the pressure profile and breaks same-seed-same-
+  picture. Resolve it once per stop into the collected record
+  (`pktrowel`'s slot 6). The same discipline applies to every other
+  draw in such a loop: keep the *number* of random draws fixed by the
+  loop bounds alone, taking them whether or not they're used, or
+  turning one artistic control silently re-rolls another's texture.
 - tiny-skia `Transform::from_row(sx, ky, kx, sy, tx, ty)` matches the
   PS matrix order `[a b c d tx ty]` — `ops/matrix.rs` documents it;
   don't rediscover this the hard way.
