@@ -580,11 +580,37 @@ fn selftest_runs_alone() {
         // whole feature exists to close (Codex review, PR #136).
         vec!["--selftest", "lib/paintkit.ps", "--pstack-on-error"],
         vec!["--selftest", "lib/paintkit.ps", "--speed", "10"],
+        // Explicitly passed *defaults* count too: comparing each
+        // option against its default value accepted these silently
+        // (Codex review, PR #136).
+        vec!["--selftest", "lib/paintkit.ps", "--page", "612x792"],
+        vec!["--selftest", "lib/paintkit.ps", "--dpi", "72"],
+        vec!["--selftest", "lib/paintkit.ps", "--speed", "100"],
     ] {
         let (ok, _, err) = run(&extra, "");
         assert!(!ok, "expected a refusal for {extra:?}");
         assert!(err.contains("--selftest runs alone"), "{err}");
     }
+}
+
+#[test]
+fn selftest_list_runs_alone_too() {
+    // It returned before any mode-exclusion check, so
+    // `--selftest-list a.ps --selftest b.ps --png out.png` listed a.ps
+    // and silently ignored both the test and the output.
+    let (ok, _, err) = run(
+        &["--selftest-list", "lib/artkit.ps", "--png", "out.png"],
+        "",
+    );
+    assert!(!ok);
+    assert!(err.contains("--selftest-list runs alone"), "{err}");
+}
+
+#[test]
+fn selftest_list_prints_block_names() {
+    let (ok, out, err) = run(&["--selftest-list", "lib/artkit.ps"], "");
+    assert!(ok, "{err}");
+    assert!(out.contains("scatter-validates-its-option-dict"), "{out}");
 }
 
 #[test]

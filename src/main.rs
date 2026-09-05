@@ -48,6 +48,16 @@ struct Options {
     /// Print a file's `%%SelfTest` block names and exit — parser-backed
     /// discovery for `scripts/selftest.sh`.
     selftest_list: Option<String>,
+    /// Every option flag actually seen on the command line.
+    ///
+    /// The self-test modes run alone, and checking that by comparing
+    /// each option against its default silently accepted an explicitly
+    /// passed default (`--page 612x792`, `--dpi 72`) — accepted and
+    /// ignored, the same silent-no-op class this feature exists to
+    /// close (Codex review, round 7). Recording what was *supplied*
+    /// also means a flag added later is refused by default rather than
+    /// quietly ignored until someone notices.
+    seen_flags: Vec<String>,
     /// Reseed with each value in turn, once per sweep frame (issue
     /// #21): overrides every `srand` call transparently, so it works
     /// on found art unmodified.
@@ -63,6 +73,33 @@ struct Options {
     grid: Option<(u32, u32)>,
 }
 
+/// The self-test modes take a file of their own and produce no page,
+/// so pairing them with anything else would silently ignore one of the
+/// two. Checked against the flags actually *supplied* rather than
+/// against each option's resulting value, so an explicitly passed
+/// default is refused too (Codex review, round 7).
+fn runs_alone(mode: &str, options: &Options) -> Result<(), String> {
+    if options.file.is_some() {
+        return Err(format!(
+            "{mode} runs alone (no file argument or other mode flags)"
+        ));
+    }
+    let extra: Vec<&str> = options
+        .seen_flags
+        .iter()
+        .map(String::as_str)
+        .filter(|f| *f != mode)
+        .collect();
+    if extra.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{mode} runs alone (no file argument or other mode flags); got {}",
+            extra.join(" ")
+        ))
+    }
+}
+
 fn main() -> ExitCode {
     let options = match parse_args() {
         Ok(o) => o,
@@ -74,6 +111,10 @@ fn main() -> ExitCode {
     };
 
     if let Some(path) = &options.selftest_list {
+        if let Err(msg) = runs_alone("--selftest-list", &options) {
+            eprintln!("pscat: {msg}");
+            return ExitCode::FAILURE;
+        }
         // Deliberately quiet and exit-0 even for a file with no blocks:
         // this answers "which files have blocks", where none is a
         // legitimate answer. `--selftest` on an explicitly named file
@@ -93,33 +134,8 @@ fn main() -> ExitCode {
     }
 
     if let Some(path) = &options.selftest {
-        // Like --spool, this is a whole mode of its own: it builds its
-        // own interpreter per block and produces no page, so pairing it
-        // with a render request or another source would silently ignore
-        // one of the two. --page/--dpi are refused for exactly that
-        // reason and not because they'd be hard to honor: each block
-        // gets a fixed canvas it never reads back, so accepting them
-        // would mean quietly doing nothing with them.
-        if options.file.is_some()
-            || options.eval.is_some()
-            || options.headless
-            || options.interactive
-            || options.png.is_some()
-            || options.svg.is_some()
-            || options.pdf.is_some()
-            || options.lint
-            || options.spool.is_some()
-            || options.sweep_seed.is_some()
-            || options.sweep_param.is_some()
-            || options.contact_sheet.is_some()
-            || options.grid.is_some()
-            || options.page != gfx::DEFAULT_PAGE
-            || options.dpi != 72.0
-            || options.halftone
-            || options.pstack_on_error
-            || options.steps_per_frame != DEFAULT_STEPS_PER_FRAME
-        {
-            eprintln!("pscat: --selftest runs alone (no file argument or other mode flags)");
+        if let Err(msg) = runs_alone("--selftest", &options) {
+            eprintln!("pscat: {msg}");
             return ExitCode::FAILURE;
         }
         return run_selftest(std::path::Path::new(path));
@@ -1130,6 +1146,7 @@ fn parse_args() -> Result<Options, String> {
         lint_strict: false,
         selftest: None,
         selftest_list: None,
+        seen_flags: Vec::new(),
         sweep_seed: None,
         sweep_param: None,
         contact_sheet: None,
@@ -1137,6 +1154,9 @@ fn parse_args() -> Result<Options, String> {
     };
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
+        if arg.starts_with('-') && arg != "-" {
+            options.seen_flags.push(arg.clone());
+        }
         match arg.as_str() {
             "-h" | "--help" => {
                 print_usage();

@@ -21,7 +21,20 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
 cargo build --release --manifest-path "$ROOT/Cargo.toml" --quiet
-BIN="$ROOT/target/release/pscat"
+
+# Ask Cargo where it put the binary rather than assuming `$ROOT/target`:
+# with CARGO_TARGET_DIR or a `build.target-dir` in config.toml, the
+# build lands elsewhere and this would either fail outright or, worse,
+# run a *stale* binary and validate the libraries with an outdated
+# harness (Codex review, PR #136).
+TARGET_DIR=$(cargo metadata --format-version 1 --no-deps \
+    --manifest-path "$ROOT/Cargo.toml" 2>/dev/null \
+    | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
+BIN="${TARGET_DIR:-${CARGO_TARGET_DIR:-$ROOT/target}}/release/pscat"
+if [ ! -x "$BIN" ]; then
+    echo "selftest.sh: built pscat not found at $BIN" >&2
+    exit 1
+fi
 
 status=0
 

@@ -836,6 +836,57 @@ fn only_the_exact_end_marker_closes_a_block() {
 }
 
 #[test]
+fn a_library_that_quits_while_loading_is_a_setup_failure() {
+    // `quit` unwinds cleanly, so a library calling one loaded
+    // "successfully" while skipping every definition after it, and the
+    // block then reported all tests passed (Codex review, round 7).
+    let dir = Scratch::new("quit-loading");
+    let file = dir.path().join("quitlib.ps");
+    std::fs::write(
+        &file,
+        concat!(
+            "quit\n",
+            "%%SelfTest: would-pass-vacuously\n",
+            "%   true (trivially true) mustbe\n",
+            "%%EndSelfTest\n"
+        ),
+    )
+    .expect("write");
+    let out = selftest(&file);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{stderr}");
+    assert!(stderr.contains("`quit` while loading"), "{stderr}");
+}
+
+#[test]
+fn a_proc_that_fakes_userdict_cannot_misdirect_the_cleanup() {
+    // `bind` freezes operators, but `userdict` is a name bound to a
+    // dictionary, so a proc doing `1 dict begin /userdict 1 dict def`
+    // sent the cleanup to a fake one and failed a block that had
+    // actually raised the expected guard (Codex review, round 7). The
+    // harness reaches its storage as `//userdict` — immediate-name
+    // evaluation, resolved at scan time.
+    let dir = Scratch::new("fake-userdict");
+    let file = dir.path().join("fake.ps");
+    std::fs::write(
+        &file,
+        concat!(
+            "%%SelfTest: a-proc-that-fakes-userdict\n",
+            "%   { 1 dict begin /userdict 1 dict def undefinedname }\n",
+            "%   /undefinedname (probe) mustguard\n",
+            "%%EndSelfTest\n"
+        ),
+    )
+    .expect("write");
+    let out = selftest(&file);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
 fn a_malformed_block_fails_instead_of_being_skipped() {
     // A self-test that silently doesn't run reads as coverage that
     // isn't there — worse than no self-test at all.

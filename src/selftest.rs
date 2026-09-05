@@ -181,13 +181,20 @@ impl Report {
 /// `pscat_st_reset`'s first loop spin forever, hanging `--selftest`
 /// outright (Codex review, round 6). `bind` substitutes the operator
 /// objects at definition time, which no later definition can reach.
+///
+/// For the same reason the harness dictionary is reached as
+/// `//userdict` — immediate-name evaluation, which substitutes the
+/// actual dictionary at scan time. `bind` doesn't help there: it
+/// replaces operators, and `userdict` is a name bound to a dictionary,
+/// so a proc doing `1 dict begin /userdict 1 dict def` sent the
+/// cleanup to a fake one (Codex review, round 7).
 pub const PRELUDE: &str = r"
 % --- pscat --selftest prelude (injected; not part of any library) ---
 % The failure log. Its *entries* are a VM array and roll back under
 % `restore` like any other composite -- which is fine, because the
 % counters that decide pass/fail do not (see below), so a rolled-back
 % entry reports as an unreadable log rather than as a pass.
-userdict /pscat_st_fails 128 array put
+//userdict /pscat_st_fails 128 array put
 
 % The counters, held in a *string* rather than as dictionary entries,
 % because PostScript strings are exempt from `restore` (PLRM 3.7.3.2 --
@@ -202,11 +209,11 @@ userdict /pscat_st_fails 128 array put
 %   bytes 0-1  failures recorded      (big-endian, saturating at 65535)
 %   bytes 2-3  assertions run
 %   bytes 4-5  1 while an assertion is in flight, else 0
-userdict /pscat_st_ctr 8 string put
+//userdict /pscat_st_ctr 8 string put
 
 % offset -> n
 /pscat_st_ctrget {
-    userdict /pscat_st_ctr get exch
+    //userdict /pscat_st_ctr get exch
     2 copy get 256 mul
     3 1 roll 1 add get
     add
@@ -216,10 +223,10 @@ userdict /pscat_st_ctr 8 string put
 /pscat_st_ctrput {
     dup 65535 gt { pop 65535 } if
     2 copy 256 idiv
-    userdict /pscat_st_ctr get 3 1 roll put
+    //userdict /pscat_st_ctr get 3 1 roll put
     256 mod
     exch 1 add exch
-    userdict /pscat_st_ctr get 3 1 roll put
+    //userdict /pscat_st_ctr get 3 1 roll put
 } bind def
 
 % offset -> -   (add one, saturating)
@@ -240,7 +247,7 @@ userdict /pscat_st_ctr 8 string put
     4 array astore
     0 pscat_st_ctrget 128 lt
         {
-            userdict /pscat_st_fails get
+            //userdict /pscat_st_fails get
             0 pscat_st_ctrget
             3 -1 roll put
         }
@@ -287,9 +294,9 @@ userdict /pscat_st_ctr 8 string put
     % operand-depth check added alongside this, which is the point of
     % having it.
     count 1 sub
-    userdict exch /pscat_st_depth exch put
+    //userdict exch /pscat_st_depth exch put
     countdictstack
-    userdict exch /pscat_st_ddepth exch put
+    //userdict exch /pscat_st_ddepth exch put
     % One saved depth per harness, not a stack: an assertion whose proc
     % runs another assertion would overwrite the outer one's baseline,
     % and the outer cleanup would then restore to the wrong place. No
@@ -309,8 +316,8 @@ userdict /pscat_st_ctr 8 string put
 % doesn't touch the operand stack, whereas popping operands first would
 % be undone by nothing.
 /pscat_st_reset {
-    { countdictstack userdict /pscat_st_ddepth get le { exit } if end } loop
-    { count userdict /pscat_st_depth get le { exit } if pop } loop
+    { countdictstack //userdict /pscat_st_ddepth get le { exit } if end } loop
+    { count //userdict /pscat_st_depth get le { exit } if pop } loop
     4 0 pscat_st_ctrput
 } bind def
 
@@ -797,6 +804,14 @@ fn run_block(
             );
             return Err(setup_failure(interp, msg));
         }
+        // `quit` unwinds cleanly, so a library that calls one loads
+        // "successfully" while skipping every definition after it — and
+        // the next `run_source` clears the flag, so this has to be
+        // checked here rather than at the end (Codex review, round 7).
+        if interp.quit_requested() {
+            let msg = format!("prerequisite {name} called `quit` while loading");
+            return Err(setup_failure(interp, msg));
+        }
     }
     if let Err(e) = interp.run_source(under_test) {
         let msg = format!(
@@ -804,6 +819,10 @@ fn run_block(
             path.display(),
             interp.error_report(&e)
         );
+        return Err(setup_failure(interp, msg));
+    }
+    if interp.quit_requested() {
+        let msg = format!("{} called `quit` while loading", path.display());
         return Err(setup_failure(interp, msg));
     }
     // The prelude installs *last*, after every library, so nothing a
