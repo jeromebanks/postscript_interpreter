@@ -88,6 +88,53 @@ fn exit_outside_a_loop_is_invalidexit() {
     assert_eq!(eval_err("{exit} exec"), PsError::InvalidExit);
 }
 
+/// Issue #142. A `stop` that reaches the top level used to end
+/// execution silently, losing an error that was still pending in
+/// `$error`. That made the standard cleanup idiom
+/// `{ userproc } stopped { restore-my-state stop } if` unusable: a
+/// library wrapping a caller's procedure had to choose between leaking
+/// its own state and swallowing the failure outright.
+///
+/// All three cases were checked against Ghostscript directly, including
+/// the last one -- a plain control-flow `stop` after an earlier
+/// *handled* error reports that stale error there too.
+#[test]
+fn a_top_level_stop_reports_the_pending_error() {
+    // Re-raised after a catch: the original error, not silence.
+    assert_eq!(
+        eval_err("{ nosuchname } stopped { stop } if"),
+        PsError::Undefined("nosuchname".to_string())
+    );
+    // The payload survives, so `OffendingCommand` still names the cause.
+    assert_eq!(
+        eval_err("{ othername } stopped { stop } if"),
+        PsError::Undefined("othername".to_string())
+    );
+    // Cleanup between the catch and the re-raise still happens.
+    assert_eq!(
+        eval("/cleaned false def { nosuchname } stopped { /cleaned true def } if cleaned"),
+        ["true"]
+    );
+}
+
+/// ...but a `stop` with no error ever recorded stays silent, matching
+/// Ghostscript. Gating on `$error /newerror` is what separates the two,
+/// and without it every control-flow `stop` would become an error.
+#[test]
+fn a_top_level_stop_with_no_pending_error_is_silent() {
+    let mut it = Interp::new();
+    it.run_str("1 2 stop 99")
+        .expect("a bare stop with no pending error must not raise");
+    // It still ends the program: the 99 never runs.
+    assert_eq!(
+        it.operand_stack()
+            .iter()
+            .map(|o| o.repr())
+            .collect::<Vec<_>>(),
+        ["1", "2"]
+    );
+}
+
 #[test]
 fn def_and_dictionaries() {
     assert_eq!(eval("/x 5 def x"), ["5"]);

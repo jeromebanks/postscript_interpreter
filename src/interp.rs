@@ -184,6 +184,12 @@ pub struct Interp {
     /// The most recently executed name (interned id — resolving to
     /// text only happens at error time), for `OffendingCommand`.
     last_name: Option<u32>,
+    /// The error most recently caught by a `stopped`, kept so that a
+    /// `stop` which reaches the top level can report it the way
+    /// Ghostscript's outermost job wrapper does (issue #142). Held as
+    /// the original `PsError` rather than rebuilt from `$error`, which
+    /// only carries the bare name.
+    caught_error: Option<PsError>,
     /// The line most recently scanned directly from the main program
     /// source (issue #17) — `None` when no line is known, or the most
     /// recent scanning happened in a `run`-loaded file, eexec stream, or
@@ -276,6 +282,7 @@ impl Interp {
             save_stack: Vec::new(),
             quit_requested: false,
             last_name: None,
+            caught_error: None,
             last_line: None,
             rand_state: 1,
             seed_override: None,
@@ -400,9 +407,37 @@ impl Interp {
             return Err(e);
         }
         self.record_error(&e);
+        self.caught_error = Some(e);
         self.do_stop();
         self.push(Object::bool(true));
         Ok(())
+    }
+
+    /// The error a top-level `stop` should report, if any (issue #142).
+    ///
+    /// Gated on `$error /newerror`, which is what Ghostscript's outermost
+    /// job wrapper keys off — verified against it directly, including the
+    /// quirk that a `stop` used for plain control flow *after* an earlier
+    /// caught-and-handled error reports that stale error, while a `stop`
+    /// with no error ever recorded reports nothing at all.
+    pub(crate) fn top_level_stop_error(&mut self) -> Option<PsError> {
+        let newerror = match self.load("$error") {
+            Some(obj) => match &obj.value {
+                Value::Dict(d) => {
+                    matches!(
+                        d.borrow().get("newerror").map(|o| o.value.clone()),
+                        Some(Value::Boolean(true))
+                    )
+                }
+                _ => false,
+            },
+            None => false,
+        };
+        if newerror {
+            self.caught_error.clone()
+        } else {
+            None
+        }
     }
 
     fn record_error(&mut self, e: &PsError) {
