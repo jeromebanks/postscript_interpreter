@@ -4361,3 +4361,97 @@ fn wet_geometry_does_not_depend_on_the_procs_own_random_appetite() {
         "the pass plan must be fixed before the wrapped proc runs"
     );
 }
+
+/// Codex review of PR #138: pkwet ended by restoring the caller's color
+/// with `setrgbcolor`, which forces the graphics state into DeviceRGB
+/// and silently loses the caller's color space. Every pass already runs
+/// inside its own gsave/grestore, so the restore was redundant as well
+/// as harmful.
+#[test]
+fn wet_leaves_the_callers_color_space_alone() {
+    let space_after = |prelude: &str| {
+        let mut it = fresh(300, 200);
+        it.run_str(&format!(
+            "{prelude} 5 srand \
+             {{ newpath 60 100 moveto 240 100 lineto << /Width 20 >> pkribbon }} \
+             << /Soft 0.8 /Under [0.9 0.9 0.9] >> pkwet \
+             currentcolorspace"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        it.operand_stack().last().expect("currentcolorspace").repr()
+    };
+    assert_eq!(
+        space_after("0.35 setgray"),
+        "[/DeviceGray]",
+        "a DeviceGray caller must still be in DeviceGray after pkwet"
+    );
+    assert_eq!(
+        space_after("0.1 0.2 0.3 0.05 setcmykcolor"),
+        "[/DeviceCMYK]",
+        "a DeviceCMYK caller must still be in DeviceCMYK after pkwet"
+    );
+}
+
+/// Codex review of PR #138: pkwet is the only preset here that
+/// re-enters caller code in a loop, so a wrapped procedure that itself
+/// calls pkwet overwrote the outer call's `pqplan` and `pqproc`, and the
+/// outer loop resumed against the inner one's plan. Prefix reservation
+/// can't help, because the clashing name belongs to pkwet itself -- the
+/// loop now carries its state on the operand stack instead.
+#[test]
+fn wet_can_be_nested_inside_its_own_wrapped_procedure() {
+    let mut it = fresh(300, 220);
+    it.run_str(
+        "0 0 0 setrgbcolor 5 srand /inner 0 def /outer 0 def \
+         { /outer outer 1 add def \
+           { /inner inner 1 add def \
+             newpath 60 110 moveto 240 110 lineto << /Width 16 >> pkribbon } \
+           << /Layers 3 /Spread 6 /Under [0.9 0.9 0.9] >> pkwet } \
+         << /Layers 4 /Spread 14 /Under [0.9 0.9 0.9] >> pkwet \
+         outer inner",
+    )
+    .unwrap_or_else(|e| {
+        panic!(
+            "nested pkwet must not corrupt itself: {}",
+            it.error_report(&e)
+        )
+    });
+    let st = it.operand_stack();
+    let inner: i64 = st[st.len() - 1].repr().parse().expect("inner");
+    let outer: i64 = st[st.len() - 2].repr().parse().expect("outer");
+    assert_eq!(outer, 4, "the outer pkwet must run all 4 of its passes");
+    assert_eq!(inner, 12, "each outer pass must run all 3 inner passes");
+    assert!(ink_count(&it) > 500, "the nested mark should paint");
+}
+
+/// Codex review of PR #138: whether a displacement draw happens was
+/// keyed off the *magnitude* rather than the pass's position, so
+/// `/Spread 0` with several layers skipped every draw while any
+/// positive spread took one per non-core pass -- meaning turning
+/// /Spread alone re-rolled everything drawn afterwards, which is exactly
+/// what this preset's contract forbids. /Spread 0 is now on the same
+/// stream as any other spread.
+#[test]
+fn wet_zero_spread_stays_on_the_same_random_stream() {
+    let downstream_mark = |opts: &str| {
+        let mut it = fresh(400, 240);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 11 srand \
+             {{ newpath 60 140 moveto 340 140 lineto << /Width 24 >> pkribbon }} \
+             << /Layers 4 {opts} >> pkwet \
+             0 0 0 setrgbcolor newpath 20 frnd 340 mul add 20 moveto 0 12 rlineto \
+             6 setlinewidth stroke"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        (0..400)
+            .find(|&x| {
+                (205..225).any(|y| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+            })
+            .expect("marker drawn")
+    };
+    assert_eq!(
+        downstream_mark("/Spread 0"),
+        downstream_mark("/Spread 18"),
+        "/Spread must not change how much of the caller's stream pkwet consumes"
+    );
+}

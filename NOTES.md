@@ -67,6 +67,33 @@ to a plain call — pinned by
 has no outermost/core distinction and the obvious `i/(Layers-1)`
 divides by zero there; found by rendering, guarded, and pinned.
 
+**Codex review found three defects in the wrapper itself**, all in
+behaviour the ordinary tests exercised without noticing:
+
+- The trailing `setrgbcolor` that "restored" the caller's colour forced
+  the graphics state into DeviceRGB, losing the colour space of a caller
+  painting in DeviceGray or DeviceCMYK. Every pass already runs inside
+  its own `gsave`/`grestore`, so the restore was redundant as well as
+  harmful, and is simply gone.
+- `pkwet` is the only preset here that re-enters caller code *in a loop*,
+  so a wrapped procedure that itself called `pkwet` overwrote the outer
+  call's `pqplan` and `pqproc`, and the outer loop resumed against the
+  inner one's plan — running 1 of its 4 passes instead of 4, verified by
+  reverting the fix. Prefix reservation cannot help, because the
+  clashing name belongs to `pkwet` itself; the loop now carries plan and
+  procedure on the *operand stack* and reads no `pq*` name at all. The
+  price is that the wrapped procedure must leave the operand stack as it
+  found it, which every preset here already does and `walkpath` already
+  demands.
+- Whether a displacement draw happened was keyed off the resulting
+  *magnitude* rather than the pass's position, so `/Spread 0` with
+  several layers skipped every draw while any positive spread took one
+  per non-core pass. Turning `/Spread` alone therefore re-rolled the
+  wrapped brush and everything after it — precisely the contract this
+  preset documents and tests. The core pass is undisplaced by
+  definition, so keying off that instead keeps `/Soft 0` free while
+  putting every spread on one stream.
+
 **Deferred:** no `/Alpha` opt-in, on the evidence above — `pkwash`
 already exists where genuine translucency is wanted. `pkwash` itself is
 deliberately not wrappable, since it resets alpha and blend mode by

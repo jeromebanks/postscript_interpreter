@@ -2330,11 +2330,18 @@
         /pqmag pqf pqSpread mul def
         pqplan pqi
         [
-            % The displacement draw happens only when there is a
-            % displacement to make. That is what lets /Soft 0 leave the
-            % caller's random stream untouched, and so render
-            % byte-identically to calling the proc directly.
-            pqmag 0 gt {
+            % Whether a displacement draw happens is keyed off the pass's
+            % position in the stack, *not* off whether the displacement
+            % comes out non-zero. Keying it off the magnitude looked
+            % equivalent and wasn't: /Spread 0 with several layers would
+            % then skip every draw while any positive spread takes one
+            % per non-core pass, so turning /Spread alone re-rolled the
+            % wrapped brush and everything drawn after it -- exactly the
+            % contract this preset documents (Codex review). The core
+            % pass is never displaced by definition, so skipping its draw
+            % is a property of /Layers, which is allowed to change
+            % consumption, and is what keeps /Soft 0 free.
+            pqf 0 gt {
                 /pqang pqi 137.5 mul 40 pkjit add def
                 pqang cos pqmag mul  pqang sin pqmag mul
             } { 0 0 } ifelse
@@ -2345,15 +2352,31 @@
     % Outermost pass first, so each subsequent (less displaced, less
     % mixed) pass is laid over it and the caller's own color lands last,
     % exactly on the path.
+    %
+    % The plan and the procedure are carried on the *operand stack* for
+    % the duration, and the loop body reads no pq* name at all. It has
+    % to: this is the only preset here that re-enters caller code in a
+    % loop, so a wrapped procedure that itself calls pkwet -- softening
+    % an already-soft composite mark is a reasonable thing to write --
+    % would otherwise overwrite pqplan and pqproc mid-loop, and the outer
+    % call would resume against the inner one's plan (Codex review).
+    % Prefix reservation cannot help here, because the clashing name
+    % belongs to pkwet itself.
+    %
+    % This does require the wrapped procedure to leave the operand stack
+    % as it found it, which every preset in this file already does and
+    % walkpath already demands of its own callers.
+    pqplan /pqproc load
     pqLayers 1 sub -1 0 {
-        pqplan exch get /pqpass exch def
-        gsave
-            pqpass 0 get pqpass 1 get translate
-            pqpass 2 get pqpass 3 get pqpass 4 get setrgbcolor
-            pqproc
-        grestore
+        2 index exch get aload pop
+        gsave setrgbcolor translate dup exec grestore
     } for
-    pqbase aload pop setrgbcolor
+    pop pop
+    % No trailing setrgbcolor: every pass ran inside its own
+    % gsave/grestore, so the caller's color is already restored -- and
+    % restoring it *by hand* would force the graphics state into
+    % DeviceRGB, losing the caller's color space if they were painting in
+    % DeviceGray or DeviceCMYK (Codex review).
 } def
 
 % --- watercolor wash and paper ground (issue #47) ---------------------
