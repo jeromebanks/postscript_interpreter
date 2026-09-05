@@ -130,6 +130,14 @@ Which tool to pick:
   built from flat overlapping shapes. `/Load` widens the deposit,
   `/Coverage` fills it, `/Viscosity` sets chatter vs chunk, `/Scrape`
   opens streaks, `/Angle` rakes the blade.
+- **`pkfan`** — fan brush: foliage, evergreen branches, grasses, cloud
+  feathering. Bristles leave a flattened ferrule and *splay* apart along
+  the stroke (`/Splay`; at 0 it's `pkdry`'s parallel bristles). Many
+  fine bristles + high `/Load` = soft feathering; few + low `/Load` +
+  high `/Dropout` = separated bristles. `/Ragged` feathers the tips —
+  leave it on, or the mark reads as a comb. **A single-point subpath is
+  a pressed fan radiating about the point**: that's how you get foliage
+  clusters and shrubs, one dab each.
 - **`pkwash`** / **`pkpaper`** — watercolor and its ground. The only
   presets needing pscat's `setalpha`; under plain `gs` they fall back
   to flattening against white and overlaps stop mixing.

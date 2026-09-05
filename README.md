@@ -542,6 +542,35 @@ so turning one control doesn't re-roll another's texture; bounded by
 the same path set twice, once in `pktrowel` and once in `pkoil`, for
 the contrast.
 
+`pkfan` (issue #114) is the fan brush: foliage, evergreen branches,
+grasses, cloud feathering, soft texture. Its nearest relative is
+`pkdry`, and exactly one term separates them. `pkdry` holds each bristle
+at a *fixed* lateral offset, so its bristles run as parallel tracks; a
+fan brush's bristles leave a flattened ferrule and **splay** apart as
+the stroke travels, so each bristle's offset opens along the path. At
+`/Splay 0` `pkfan` reproduces parallel bristles exactly — the specimen
+sets the two side by side to make that the visible point.
+
+The opening has a floor: `/Splay 1` narrows the ferrule to a quarter of
+the tip's spread and never further. A version without it was rendered
+first, and every bristle coincided near the start, turning the stroke's
+first third into one opaque blob with a fan glued to the end. Real
+ferrules are flat and wide. The easing was chosen the same way — linear,
+`t^0.6` and `t^1.6` rendered side by side, with `t^0.6` the one that
+reads as bristles springing apart rather than a smeared wedge.
+
+The two mark families fall out of the same seeded contact chain `pkdry`
+uses: many fine bristles at high `/Load` give the soft feathered mark,
+few bristles at low `/Load` and high `/Dropout` give separated bristle
+marks. `/Ragged` varies each bristle's length so the tips feather —
+without it they all stop on one straight edge and the mark reads as a
+comb — and `/Flick` tapers toward the tip, applied only to the run that
+actually reaches it, so a bristle broken into four dashes doesn't become
+four tapered commas. A single-point subpath is a *pressed* fan radiating
+about the point, which is what makes foliage clusters;
+`examples/paintkit_fan_demo.ps` builds conifer limbs, a grass bank and
+shrub clusters out of exactly that.
+
 `pkwash` (issue #47) is the watercolor medium, and the one preset here
 that needs something from the interpreter rather than only from
 PostScript: it fills the current path as a *translucent* wash. Two new

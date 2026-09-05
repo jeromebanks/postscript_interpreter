@@ -2165,6 +2165,353 @@
     } if
 } def
 
+% --- fan brush (issue #114) -------------------------------------------
+% opts pkfan -
+%
+% A spread bundle of bristles: foliage, evergreen branches, grasses,
+% cloud feathering, soft texture.
+%
+% What makes it a fan rather than a wide brush -- and specifically what
+% distinguishes it from `pkdry`, its nearest relative here -- is one
+% term. pkdry holds each bristle at a *fixed* lateral offset, so its
+% bristles run as parallel tracks. A fan brush's bristles leave a
+% flattened ferrule and splay apart as the stroke travels, so each
+% bristle's offset *opens* along the path:
+%
+%   offset(bristle, t) = ubase * (Width/2) * Spread * open(t)
+%   open(t)            = ferrule + (1 - ferrule) * t^0.6
+%   ferrule            = 1 - Splay*0.75
+%
+% /Splay 0 leaves `open` flat at 1 and reproduces parallel bristles;
+% /Splay 1 narrows the start to a quarter of the tip's spread. It does
+% *not* narrow it to zero, and that floor is deliberate: a fan brush's
+% ferrule is flat and wide, its bristles never converge to a point, and
+% a version without the floor was rendered first -- every bristle
+% coincided near t=0 and the mark's first third came out as one opaque
+% blob with a fan glued to the end of it.
+%
+% The exponent likewise came from looking: linear, t^0.6 and t^1.6 were
+% rendered side by side, and t^0.6 -- opening quickly and then easing --
+% is the one that reads as bristles springing apart rather than as a
+% smeared wedge.
+%
+% The two mark families the tool has to cover fall out of the contact
+% chain, the same seeded two-state Markov pkdry uses: many thin
+% bristles at high /Load give the soft feathered mark, while fewer
+% bristles at low /Load and high /Dropout give the separated bristle
+% mark.
+%
+% /Ragged trims each bristle to its own length so the tips feather.
+% Without it every bristle stops at the same arc length and the mark
+% ends in a straight edge, which reads as a comb rather than foliage.
+%
+% /Flick tapers a bristle toward its tip. It is applied only to the run
+% that reaches the bristle's own trimmed end, never to every dash: a
+% bristle broken into four dashes by the contact chain -- exactly the
+% separated-bristle case above -- would otherwise become four tapered
+% commas instead of one flicked bristle.
+%
+% Progress `t` is per *subpath* (walkpath's contract), so each subpath
+% opens its own fan. That is the right behavior for foliage, where one
+% call places several flicks; it also means a closed subpath's fan is
+% discontinuous at the seam, since t jumps from 1 back to 0 there.
+%
+% A degenerate single-point subpath is a *pressed* fan: the bristles
+% radiate about the point instead of following a direction that does
+% not exist. Without that special case the dab collapses -- at t=0 every
+% bristle sits at `ferrule` times its offset, and at a high /Splay that
+% is nearly the centerline, so all of them land on top of each other.
+%
+% They radiate through a 140-degree arc opening toward +y, *not* through
+% a full circle: a fan brush pressed to the page leaves a fan, which is
+% the whole point of the tool, and a shrub or a grass clump opens
+% upward. (An earlier draft of this comment said "isotropically",
+% copying pkoil's language for its own degenerate case -- that was
+% wrong about this preset, and Codex review caught the doc contradicting
+% the code rather than the other way round.) To aim a pressed fan
+% somewhere else, rotate the space around it:
+%
+%   gsave  x y translate  -30 rotate  newpath 0 0 moveto
+%   << /Width 40 >> pkfan  grestore
+%
+% Determinism: the caller's own `N srand`, same doctrine as its
+% siblings. Note this preset deliberately makes *no* fixed-draw-count
+% claim of the kind pktrowel documents: it calls pkribbon once per
+% inked run, and pkribbon consumes randomness of its own, so /Load and
+% /Dropout necessarily change total consumption by changing how many
+% runs there are. pkdry has the same property.
+%
+% Safety: /Bristles is capped 1..60 and Bristles * stopCount is checked
+% against 150000 inside the counting walk, before any allocation --
+% pkdry's bound and pkdry's placement argument.
+%
+% Scratch prefix pf- (pkfan/pfrun/pfopen), distinct from pk-/pn-/pb-/
+% pz-/po-/pt-/pw-/pv- because pkfan calls pkribbon once per dash and
+% pkribbon's body redefines every pk*-prefixed name.
+
+% How many times a pressed ray may be resampled by pkribbon. A ray is a
+% straight segment, so this only has to be enough to carry /Flick's
+% taper smoothly.
+% @internal
+/pfraysamples 16 def
+
+% What one degenerate stop is charged against the safety budget. It is
+% deliberately larger than pfraysamples: a degenerate stop costs a whole
+% *nested pkribbon call* per bristle -- option parsing, its own two
+% walkpath passes, its own allocation -- on top of the samples, and that
+% call overhead is what dominates. Calibrated by measurement rather than
+% by counting samples: 100 degenerate subpaths at 60 bristles is 6000
+% rays and takes ~1.3s in release (~24s in the debug build tests run
+% under), which is not something an unattended render should do
+% silently, so the ceiling has to reject it -- 100*60*32 exceeds 150000.
+% A realistic foliage cluster of a dozen dabs at 13 bristles charges
+% under 5000 and is nowhere near it.
+% @internal
+/pfraycharge 32 def
+
+% rate pfroll -> bool
+% Its own copy rather than a call to pkdry's or pkoil's, per this
+% file's prefix discipline -- pkfan must not depend on a sibling
+% preset's scratch namespace staying put.
+% @internal
+/pfroll {
+    dup 1 ge { pop true } { dup 0 le { pop false } { frnd exch lt } ifelse } ifelse
+} def
+
+% t pfopen -> multiplier   (reads pfferrule)
+% @internal
+/pfopen {
+    dup 0 le { pop 0 } { 0.6 exp } ifelse
+    1 pfferrule sub mul pfferrule add
+} def
+
+% runstart runend islast pfrun -
+% Builds one contiguous inked run of the current bristle as a
+% centerline and hands it to pkribbon.
+% @internal
+/pfrun {
+    /pflast exch def /pfrend exch def /pfrstart exch def
+    /pflen 0 def
+    newpath
+    pfrstart 1 pfrend {
+        /pfri exch def
+        pfraw pfri get
+        dup 0 get /pfrx exch def
+        dup 1 get /pfry exch def
+        dup 2 get /pfra exch def
+        3 get pfopen /pfro exch def
+        /pfrd pfub pfhalf mul pfro mul pfJitter pkjit add def
+        /pfpx pfrx pfra 90 add cos pfrd mul add def
+        /pfpy pfry pfra 90 add sin pfrd mul add def
+        pfri pfrstart gt {
+            /pflen pflen
+                pfpx pfppx sub dup mul pfpy pfppy sub dup mul add sqrt
+            add def
+        } if
+        /pfppx pfpx def /pfppy pfpy def
+        pfpx pfpy pfri pfrstart eq { moveto } { lineto } ifelse
+    } for
+    % The centerline handed to pkribbon is *not* the source path: each
+    % sample is displaced sideways by the splay and by /Jitter before
+    % pkribbon resamples it, so its length is unrelated to the stop
+    % count the outer Bristles*stops budget guards. Two separate ways to
+    % inflate it were found in review -- a huge /Jitter, then a huge
+    % /Width at /Splay 1, where the offset moves O(Width) between
+    % consecutive stops with no jitter at all.
+    %
+    % Rather than bound the displacement analytically (which means
+    % assuming the worst case everywhere, and coarsens ordinary strokes
+    % where the splay barely moves between samples), measure the run
+    % that was actually built and floor the pitch so pkribbon takes at
+    % most 8 samples per source stop. For a normal run the length is
+    % about stops*Pitch, so the floor works out to Pitch/8 and never
+    % binds; it only engages on the pathological shapes.
+    /pfnpts pfrend pfrstart sub 1 add def
+    /pfrp pflen 8 pfnpts mul div def
+    pfrp pfPitch lt { /pfrp pfPitch def } if
+    << /Width pfrw /Pitch pfrp /StartCap /pointed /EndCap /pointed
+       /EndTaper pflast { pfFlick } { 0 } ifelse >> pkribbon
+} def
+
+% i pfray -   (the current bristle's ray of a *pressed* fan, at the
+% degenerate stop `i`)
+%
+% Emitted per bristle from inside the bristle loop rather than as a
+% whole-path special case, so that a path mixing ordinary subpaths with
+% bare `moveto`s gets a radiating dab for each of the latter. Checking
+% only whether the *entire* path was one stop missed exactly that
+% combination, and walkpath reports angle 0 for a degenerate stop, so
+% the generic branch laid those bristles out along one straight line
+% instead (Codex review).
+% @internal
+/pfray {
+    pfraw exch get dup 0 get /pfdx exch def 1 get /pfdy exch def
+    /pfda pfub 70 mul 90 add def
+    /pfdl pfhalf 1.15 mul 1 pfRagged frnd mul sub mul def
+    % The outer safety budget counts source-path stops, and a degenerate
+    % subpath contributes exactly one however fine /Pitch is -- so the
+    % ray's own resampling is the one place nested cost is *not* bounded
+    % by that budget, and `/Pitch 0.001` would sample a ray millions of
+    % times while passing the guard. The ray is a fixed length, so
+    % bounding its pitch from below bounds the work outright (Codex
+    % review).
+    /pfrp pfPitch dup pfdl pfraysamples div lt { pop pfdl pfraysamples div } if def
+    pfrp 0 le { /pfrp pfPitch def } if
+    newpath
+    pfdx pfdy moveto
+    pfdx pfda cos pfdl mul add  pfdy pfda sin pfdl mul add  lineto
+    << /Width pfrw /Pitch pfrp /StartCap /pointed /EndCap /pointed
+       /EndTaper pfFlick >> pkribbon
+} def
+
+% @kind: Procedure
+% @summary: A fan brush: a bundle of bristles that leaves a flattened ferrule and splays apart as the stroke travels, for foliage, evergreen branches, grasses and soft feathering. Distinct from pkdry, whose bristles stay parallel -- /Splay is the whole difference. Many thin bristles at high Load give a soft feathered mark; fewer at low Load give separated bristle marks. A single-point subpath is a pressed fan, its bristles radiating through a 140-degree arc opening toward +y; rotate the space around it to aim it elsewhere. Deterministic under the caller's own srand; bounded by Bristles * stops.
+% @example: newpath 40 120 moveto 100 150 160 160 210 145 curveto << /Width 60 /Splay 0.6 >> pkfan
+% @param: /Width Fan width at full spread; must be > 0 (default 30)
+% @param: /Bristles Bristle count; must be a whole number, hard safety cap 1..60 (default 24)
+% @param: /Spread 0..1 fraction of Width the bristles occupy once fully opened (default 0.9)
+% @param: /Splay 0..1 how much narrower the ferrule is than the tip; 0 is parallel bristles, 1 narrows the start to a quarter of the tip's spread and never further (default 0.6)
+% @param: /BristleWidth Base width of each bristle's own mark; must be > 0 (default Width*0.035)
+% @param: /WidthJitter 0..1 fraction of BristleWidth each bristle's width randomly varies by (default 0.35)
+% @param: /Load 0..1 resume-contact rate per one Width of travel (default 0.92)
+% @param: /Dropout 0..1 lose-contact rate per one Width of travel; raise it with a low Load for separated bristle marks (default 0.08)
+% @param: /Ragged 0..1 how much each bristle's length varies, so the tips feather instead of ending on one straight edge (default 0.25)
+% @param: /Flick 0..1 taper toward each bristle's tip, applied only to the run that reaches it (default 0.5)
+% @param: /Jitter Seeded lateral displacement of each bristle's trace (default 0)
+% @param: /Pitch walkpath sampling pitch for the shared centerline pass; must be > 0 (default BristleWidth*0.6, capped at 6)
+% @param: /ColorJitter 0..1 per-bristle color variation around the caller's current color (default 0.06)
+/pkfan {
+    /pfopts exch def
+    /pfWidth pfopts /Width 30 pkgetdef def
+    /pfWidth load xcheck { pkfan-width-must-not-be-a-procedure } if
+    pfWidth 0 le { pkfan-width-must-be-positive } if
+    /pfBristles pfopts /Bristles 24 pkgetdef def
+    /pfBristles load xcheck { pkfan-bristles-must-not-be-a-procedure } if
+    pfBristles 1 lt pfBristles 60 gt or pfBristles truncate pfBristles ne or
+        { pkfan-bristles-must-be-1-to-60 } if
+    /pfSpread pfopts /Spread 0.9 pkgetdef def
+    /pfSpread load xcheck { pkfan-spread-must-not-be-a-procedure } if
+    pfSpread 0 lt pfSpread 1 gt or { pkfan-spread-must-be-0-to-1 } if
+    /pfSplay pfopts /Splay 0.6 pkgetdef def
+    /pfSplay load xcheck { pkfan-splay-must-not-be-a-procedure } if
+    pfSplay 0 lt pfSplay 1 gt or { pkfan-splay-must-be-0-to-1 } if
+    /pfrwbase pfopts /BristleWidth pfWidth 0.035 mul pkgetdef def
+    /pfrwbase load xcheck { pkfan-bristlewidth-must-not-be-a-procedure } if
+    pfrwbase 0 le { pkfan-bristlewidth-must-be-positive } if
+    /pfWidthJitter pfopts /WidthJitter 0.35 pkgetdef def
+    /pfWidthJitter load xcheck { pkfan-widthjitter-must-not-be-a-procedure } if
+    pfWidthJitter 0 lt pfWidthJitter 1 gt or { pkfan-widthjitter-must-be-0-to-1 } if
+    /pfLoad pfopts /Load 0.92 pkgetdef def
+    /pfLoad load xcheck { pkfan-load-must-not-be-a-procedure } if
+    pfLoad 0 lt pfLoad 1 gt or { pkfan-load-must-be-0-to-1 } if
+    /pfDropout pfopts /Dropout 0.08 pkgetdef def
+    /pfDropout load xcheck { pkfan-dropout-must-not-be-a-procedure } if
+    pfDropout 0 lt pfDropout 1 gt or { pkfan-dropout-must-be-0-to-1 } if
+    /pfRagged pfopts /Ragged 0.25 pkgetdef def
+    /pfRagged load xcheck { pkfan-ragged-must-not-be-a-procedure } if
+    pfRagged 0 lt pfRagged 1 gt or { pkfan-ragged-must-be-0-to-1 } if
+    /pfFlick pfopts /Flick 0.5 pkgetdef def
+    /pfFlick load xcheck { pkfan-flick-must-not-be-a-procedure } if
+    pfFlick 0 lt pfFlick 1 gt or { pkfan-flick-must-be-0-to-1 } if
+    /pfJitter pfopts /Jitter 0 pkgetdef def
+    /pfJitter load xcheck { pkfan-jitter-must-not-be-a-procedure } if
+    /pfPitch pfopts /Pitch pfrwbase 0.6 mul dup 6 gt { pop 6 } if pkgetdef def
+    /pfPitch load xcheck { pkfan-pitch-must-not-be-a-procedure } if
+    pfPitch 0 le { pkfan-pitch-must-be-positive } if
+    /pfColorJitter pfopts /ColorJitter 0.06 pkgetdef def
+    /pfColorJitter load xcheck { pkfan-colorjitter-must-not-be-a-procedure } if
+    pfColorJitter 0 lt pfColorJitter 1 gt or { pkfan-colorjitter-must-be-0-to-1 } if
+    % Counting pass with the budget checked inside the walk, so a
+    % pathological path is rejected before any allocation (pkdry's
+    % placement argument).
+    % A degenerate subpath costs far more than one stop: it becomes one
+    % pkribbon call per bristle, each resampling a fixed-length ray up to
+    % pfraysamples times. Counting it as a single stop let a path batching
+    % many bare movetos run ~6 million nested samples while the counter
+    % saw a few thousand -- 100 such subpaths at 60 bristles took ~24s
+    % (Codex review). Charging it at its real relative cost is what makes
+    % the advertised ceiling mean what it says.
+    % pfcount is the *weighted* cost used for the budget; pfstops is the
+    % actual number of stops, which is what the record array is sized
+    % by. Conflating the two sized the array by the inflated cost and
+    % then read past the filled entries.
+    /pfcount 0 def
+    /pfstops 0 def
+    pfPitch { /pfcae exch def pop pop pop pop pop
+              /pfstops pfstops 1 add def
+              /pfcount pfcount
+                  pfcae 3 and 3 eq { pfraycharge } { 1 } ifelse
+              add def
+              pfBristles pfcount mul 150000 gt
+                  { pkfan-deposit-count-exceeds-safety-limit } if } walkpath
+    /pfn pfstops def
+    /pfraw pfn array def
+    /pfci 0 def
+    pfPitch { 6 array astore pfraw pfci 3 -1 roll put /pfci pfci 1 add def } walkpath
+    pfn 0 gt {
+        gsave
+        /pfbasecolor [ currentrgbcolor ] def
+        /pfferrule 1 pfSplay 0.75 mul sub def
+        /pfhalf pfWidth 0.5 mul pfSpread mul def
+        1 1 pfBristles {
+                /pfb exch def
+                /pfub pfb 0.5 sub pfBristles div 2 mul 1 sub def
+                /pfrw pfrwbase pfWidthJitter pfrwbase mul pkjit add def
+                pfrw pfrwbase 0.05 mul lt { /pfrw pfrwbase 0.05 mul def } if
+                % Each bristle keeps its own length, so the tips feather
+                % rather than stopping on one straight edge.
+                /pfstop 1 pfRagged frnd mul sub def
+                pfbasecolor 1 pfColorJitter pkjit add shade setrgbcolor
+                /pfstate pfLoad pfroll def
+                /pfrunning false def
+                /pfstart 0 def
+                0 1 pfn 1 sub {
+                    /pfi exch def
+                    /pfrec pfraw pfi get def
+                    /pfae pfrec 5 get def
+                    /pfin pfrec 3 get pfstop le def
+                    pfae 1 and 1 eq {
+                        % A new subpath opens its own fan.
+                        pfrunning { pfstart pfi 1 sub false pfrun /pfrunning false def } if
+                        /pfstate pfLoad pfroll def
+                    } {
+                        /pfstep pfrec 4 get pfWidth div def
+                        pfstate {
+                            pfDropout pfstep mul pfroll { /pfstate false def } if
+                        } {
+                            pfLoad pfstep mul pfroll { /pfstate true def } if
+                        } ifelse
+                    } ifelse
+                    pfae 3 and 3 eq {
+                        % A degenerate subpath (a bare moveto): a pressed
+                        % fan radiating about the point. It honors the
+                        % contact state like any other stop, so /Load 0
+                        % leaves no dab rather than a full one.
+                        pfstate pfin and { pfi pfray } if
+                    } {
+                        pfstate pfin and {
+                            pfrunning not { /pfstart pfi def /pfrunning true def } if
+                        } {
+                            pfrunning {
+                                % The flick belongs to the run that
+                                % actually reaches this bristle's end,
+                                % not to every dash along the way.
+                                pfstart pfi 1 sub pfin not pfstate and pfrun
+                                /pfrunning false def
+                            } if
+                        } ifelse
+                        pfae 2 and 2 eq {
+                            pfrunning { pfstart pfi true pfrun /pfrunning false def } if
+                        } if
+                    } ifelse
+                } for
+                pfrunning { pfstart pfn 1 sub true pfrun /pfrunning false def } if
+        } for
+        pfbasecolor aload pop setrgbcolor
+        grestore
+    } if
+} def
+
 % --- watercolor wash and paper ground (issue #47) ---------------------
 % opts pkwash -
 % x y w h opts pkpaper -

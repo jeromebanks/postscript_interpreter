@@ -3940,3 +3940,591 @@ fn trowel_viscosity_does_not_drag_coverage_along_with_it() {
         drift * 100.0
     );
 }
+
+// --- pkfan: the fan brush (issue #114) -------------------------------
+//
+// A fan brush is `pkdry` plus one term: the bristles leave a flattened
+// ferrule and *splay* apart as the stroke travels, instead of running
+// as parallel tracks. `/Splay` is therefore the property most of these
+// tests are about -- if it stopped working, pkfan would silently become
+// a pkdry reskin and every other assertion here would still pass.
+
+/// Width of the inked band in a single pixel column -- topmost inked
+/// row to bottommost. A fan's band grows from ferrule to tip; parallel
+/// bristles' does not.
+fn band_span(it: &Interp, x: u32, h: u32) -> u32 {
+    let rows: Vec<u32> = (0..h)
+        .filter(|&y| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+        .collect();
+    match (rows.first(), rows.last()) {
+        (Some(&a), Some(&b)) => b - a,
+        _ => 0,
+    }
+}
+
+const FAN_PATH: &str = "newpath 50 100 moveto 350 100 lineto";
+
+fn fan(opts: &str) -> Interp {
+    let mut it = fresh(400, 200);
+    it.run_str(&format!(
+        "0 0 0 setrgbcolor 31 srand {FAN_PATH} << {opts} >> pkfan"
+    ))
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    it
+}
+
+#[test]
+fn fan_lays_a_bundle_of_bristles() {
+    let it = fan("/Width 70");
+    assert!(
+        ink_count(&it) > 1500,
+        "a fan stroke should deposit a bundle of bristles, got {}",
+        ink_count(&it)
+    );
+}
+
+/// The defining property. At /Splay 0 the bristles are parallel, so the
+/// band is the same width at both ends; as /Splay rises the ferrule
+/// narrows while the tip stays put, so the band opens along the stroke.
+#[test]
+fn fan_splay_opens_the_bundle_along_the_stroke() {
+    let opening = |splay: f64| {
+        let it = fan(&format!(
+            "/Width 70 /Splay {splay} /Load 1 /Dropout 0 /Ragged 0 /Flick 0"
+        ));
+        let near = band_span(&it, 70, 200) as f64;
+        let far = band_span(&it, 330, 200) as f64;
+        (near, far)
+    };
+    let (pn, pf) = opening(0.0);
+    assert!(
+        (pn - pf).abs() < pf * 0.2,
+        "Splay 0 must keep the bristles parallel: near {pn} far {pf}"
+    );
+    let (sn, sf) = opening(1.0);
+    assert!(
+        sf > sn * 1.8,
+        "Splay 1 must open the bundle along the stroke: near {sn} far {sf}"
+    );
+}
+
+/// ...and the ferrule never collapses to a point, however high /Splay
+/// is. A version without that floor put every bristle on the centerline
+/// at t=0 and rendered the stroke's first third as one opaque blob.
+#[test]
+fn fan_ferrule_keeps_its_width_at_full_splay() {
+    let it = fan("/Width 70 /Splay 1 /Load 1 /Dropout 0 /Ragged 0 /Flick 0");
+    let near = band_span(&it, 60, 200);
+    let far = band_span(&it, 340, 200);
+    assert!(
+        near as f64 > far as f64 * 0.15,
+        "the ferrule should stay open, not collapse: near {near} far {far}"
+    );
+}
+
+/// The two mark families the acceptance criteria name. Measured as
+/// contiguous ink runs down a column crossing the stroke: a feathered
+/// mark is near-continuous, a separated one is many distinct bristles.
+#[test]
+fn fan_makes_both_feathered_and_separated_marks() {
+    let gaps = |opts: &str| {
+        let it = fan(opts);
+        (100..300).map(|x| column_runs(&it, x, 200)).sum::<usize>()
+    };
+    let feathered = gaps("/Width 70 /Bristles 48 /BristleWidth 1.4 /Load 0.99 /Dropout 0.01");
+    let separated = gaps("/Width 70 /Bristles 10 /BristleWidth 3 /Load 0.25 /Dropout 0.6");
+    assert!(
+        feathered > 0 && separated > 0,
+        "both settings should mark: feathered {feathered} separated {separated}"
+    );
+    assert!(
+        ink_count(&fan(
+            "/Width 70 /Bristles 48 /BristleWidth 1.4 /Load 0.99 /Dropout 0.01"
+        )) > ink_count(&fan(
+            "/Width 70 /Bristles 10 /BristleWidth 3 /Load 0.25 /Dropout 0.6"
+        )) * 2,
+        "a loaded feathered fan should carry far more paint than a separated one"
+    );
+}
+
+/// Without /Ragged every bristle stops at the same arc length and the
+/// mark ends on one straight edge, which reads as a comb. With it the
+/// tips feather, so the stroke's end is no longer a single column.
+#[test]
+fn fan_ragged_feathers_the_tips() {
+    let end_spread = |ragged: f64| {
+        let it = fan(&format!(
+            "/Width 70 /Ragged {ragged} /Load 1 /Dropout 0 /Flick 0 /Bristles 24"
+        ));
+        // How many columns near the end carry *some* but not all of the
+        // bristles: a straight edge has almost none.
+        let full = band_span(&it, 300, 200);
+        (300..380)
+            .filter(|&x| {
+                let s = band_span(&it, x, 200);
+                s > 0 && s < full
+            })
+            .count()
+    };
+    let square = end_spread(0.0);
+    let feathered = end_spread(0.8);
+    assert!(
+        feathered > square,
+        "Ragged must feather the tips: square {square} feathered {feathered}"
+    );
+}
+
+/// A degenerate single-point subpath is a *pressed* fan radiating about
+/// the point. Without that branch the dab collapses: at t=0 every
+/// bristle sits at the ferrule offset, which at a high /Splay is nearly
+/// the centerline, so they all land on top of each other.
+#[test]
+fn fan_single_point_presses_a_radiating_dab() {
+    let mut it = fresh(200, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 3 srand newpath 100 100 moveto \
+         << /Width 70 /Splay 1 /Bristles 16 >> pkfan",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 300,
+        "a pressed fan should leave a real mark, got {}",
+        ink_count(&it)
+    );
+    // It must radiate, not stack up in a line: ink spread across a wide
+    // band of columns, not concentrated in one.
+    let wide = (60..140).filter(|&x| band_span(&it, x, 200) > 0).count();
+    assert!(
+        wide > 40,
+        "the dab should radiate across the fan's width, got {wide} inked columns"
+    );
+}
+
+#[test]
+fn fan_is_deterministic_under_a_seed() {
+    let run = || pixels(&fan("/Width 70 /Jitter 1.5 /Ragged 0.5"));
+    assert_eq!(run(), run(), "pkfan must be deterministic under a seed");
+}
+
+#[test]
+fn fan_multiple_subpaths_each_open_their_own_fan() {
+    let mut it = fresh(400, 220);
+    it.run_str(
+        "0 0 0 setrgbcolor 3 srand newpath 40 60 moveto 360 60 lineto \
+         40 160 moveto 360 160 lineto << /Width 40 /Splay 1 >> pkfan",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    for (lo, hi) in [(0u32, 110u32), (110, 220)] {
+        let n: usize = (lo..hi)
+            .map(|y| {
+                (0..400)
+                    .filter(|&x| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+                    .count()
+            })
+            .sum();
+        assert!(n > 300, "subpath in rows {lo}..{hi} did not paint: {n}");
+    }
+}
+
+#[test]
+fn fan_empty_path_is_a_no_op() {
+    let mut it = fresh(120, 120);
+    it.run_str("0 0 0 setrgbcolor newpath << /Width 30 >> pkfan")
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(ink_count(&it), 0, "an empty path should paint nothing");
+}
+
+#[test]
+fn fan_restores_the_callers_color() {
+    let mut it = fresh(200, 200);
+    it.run_str(
+        "0.2 0.4 0.8 setrgbcolor 9 srand newpath 40 100 moveto 160 100 lineto \
+         << /Width 30 /ColorJitter 0.4 >> pkfan",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let (r, g, b) = it.gfx().rgb();
+    assert!(
+        (r - 0.2).abs() < 1e-6 && (g - 0.4).abs() < 1e-6 && (b - 0.8).abs() < 1e-6,
+        "pkfan must leave the caller's color alone, got {r} {g} {b}"
+    );
+}
+
+#[test]
+fn fan_validation_and_safety() {
+    fn err(src: &str) -> String {
+        let mut it = fresh(100, 100);
+        let e = it.run_str(src).unwrap_err();
+        it.error_report(&e).to_string()
+    }
+    let p = "newpath 0 0 moveto 100 0 lineto";
+    for (opts, want) in [
+        ("/Width 0", "pkfan-width-must-be-positive"),
+        ("/Width { 3 }", "pkfan-width-must-not-be-a-procedure"),
+        ("/Bristles 0", "pkfan-bristles-must-be-1-to-60"),
+        ("/Bristles 61", "pkfan-bristles-must-be-1-to-60"),
+        ("/Bristles 4.5", "pkfan-bristles-must-be-1-to-60"),
+        ("/Spread 1.4", "pkfan-spread-must-be-0-to-1"),
+        ("/Splay -0.2", "pkfan-splay-must-be-0-to-1"),
+        ("/Splay 3", "pkfan-splay-must-be-0-to-1"),
+        ("/BristleWidth 0", "pkfan-bristlewidth-must-be-positive"),
+        ("/WidthJitter 2", "pkfan-widthjitter-must-be-0-to-1"),
+        ("/Load 1.1", "pkfan-load-must-be-0-to-1"),
+        ("/Dropout -1", "pkfan-dropout-must-be-0-to-1"),
+        ("/Ragged 5", "pkfan-ragged-must-be-0-to-1"),
+        ("/Flick 5", "pkfan-flick-must-be-0-to-1"),
+        ("/Pitch 0", "pkfan-pitch-must-be-positive"),
+        ("/ColorJitter 9", "pkfan-colorjitter-must-be-0-to-1"),
+        ("/Jitter { 1 }", "pkfan-jitter-must-not-be-a-procedure"),
+    ] {
+        let report = err(&format!("{p} << {opts} >> pkfan"));
+        assert!(
+            report.contains(want),
+            "expected {want} for {opts}, got {report}"
+        );
+    }
+}
+
+/// Bounded like pkdry's: Bristles * stops is checked *inside* the
+/// counting walk, so a pathological path is rejected before anything is
+/// allocated or drawn.
+#[test]
+fn fan_deposit_budget_guard_rejects_bristles_times_samples_over_the_limit() {
+    let mut it = fresh(100, 100);
+    let e = it
+        .run_str("newpath 0 0 moveto 500000 0 lineto << /Width 20 /Bristles 60 /Pitch 0.5 >> pkfan")
+        .unwrap_err();
+    assert!(
+        it.error_report(&e)
+            .contains("pkfan-deposit-count-exceeds-safety-limit"),
+        "expected the deposit budget guard, got {}",
+        it.error_report(&e)
+    );
+    assert_eq!(
+        ink_count(&it),
+        0,
+        "a rejected budget must leave the canvas clean"
+    );
+}
+
+#[test]
+fn ghostscript_accepts_paintkit_fan() {
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let status = std::process::Command::new("gs")
+        .args([
+            "-dNOSAFER",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g620x700",
+            "-r72",
+            "-o/dev/null",
+            "examples/paintkit_fan_demo.ps",
+        ])
+        .status()
+        .expect("run gs");
+    assert!(
+        status.success(),
+        "gs rejected examples/paintkit_fan_demo.ps"
+    );
+}
+
+/// Codex review of PR #139: `/Load` was ignored for a pressed dab --
+/// `pfdab` emitted every bristle without consulting the contact state,
+/// so `<< /Load 0 >>` still painted a full fan. A dry brush pressed to
+/// the page leaves nothing.
+#[test]
+fn fan_pressed_dab_honors_load() {
+    let dab = |load: f64| {
+        let mut it = fresh(200, 200);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 3 srand newpath 100 100 moveto \
+             << /Width 70 /Bristles 20 /Load {load} /Dropout 0 >> pkfan"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        ink_count(&it)
+    };
+    assert_eq!(
+        dab(0.0),
+        0,
+        "an unloaded brush pressed to the page marks nothing"
+    );
+    assert!(dab(1.0) > 300, "a loaded brush pressed to the page marks");
+}
+
+/// Codex review of PR #139: the pressed-fan branch keyed off the
+/// *whole path* being one stop, so a path mixing an ordinary subpath
+/// with a bare `moveto` took the generic branch for the latter. walkpath
+/// reports angle 0 at a degenerate stop, so those bristles came out
+/// along one straight line instead of radiating.
+#[test]
+fn fan_a_degenerate_subpath_radiates_even_beside_a_normal_one() {
+    let mut it = fresh(400, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 3 srand \
+         newpath 40 40 moveto 200 40 lineto \
+         300 120 moveto \
+         << /Width 70 /Bristles 20 /Splay 1 /Load 1 /Dropout 0 >> pkfan",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    // The dab lives around x=300. A radiating fan spans many columns
+    // there; bristles collapsed onto one line span almost none.
+    let inked_cols = (255..350).filter(|&x| band_span(&it, x, 200) > 0).count();
+    assert!(
+        inked_cols > 40,
+        "the trailing bare moveto should radiate, not collapse to a line: \
+         {inked_cols} inked columns"
+    );
+}
+
+/// Codex review of PR #139: a degenerate subpath contributes exactly one
+/// stop to the outer safety walk however fine `/Pitch` is, so the ray's
+/// own resampling was the one nested cost that budget did not bound --
+/// `/Pitch 0.001` sampled a fixed-length ray millions of times while
+/// passing the guard. The ray's pitch is now floored relative to its own
+/// length. Asserted as a wall-clock bound, since the failure mode is a
+/// hang rather than a wrong pixel.
+#[test]
+fn fan_a_pressed_dab_cannot_be_made_unboundedly_expensive() {
+    let start = std::time::Instant::now();
+    let mut it = fresh(200, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 3 srand newpath 100 100 moveto \
+         << /Width 70 /Bristles 60 /Pitch 0.001 /Ragged 0 >> pkfan",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let elapsed = start.elapsed();
+    assert!(ink_count(&it) > 300, "the dab should still paint");
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "a fine /Pitch must not make a fixed-length ray unboundedly \
+         expensive: took {elapsed:?}"
+    );
+}
+
+/// Codex review of PR #139, round 2: `/Jitter` displaces each
+/// centerline sample *before* pkribbon resamples it, so consecutive
+/// samples can end up O(Jitter) apart while the outer `Bristles*stops`
+/// guard still counts only the original stops. Resampling that inflated
+/// path at the original pitch was nested work the budget did not bound.
+/// Same class as the pressed-ray case, and asserted the same way --
+/// wall clock, because the failure mode is a hang.
+#[test]
+fn fan_a_huge_jitter_cannot_inflate_the_nested_resampling() {
+    let start = std::time::Instant::now();
+    let mut it = fresh(200, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 3 srand newpath 100 100 moveto 101 100 lineto \
+         << /Width 20 /Bristles 1 /Pitch 1 /Jitter 10000 >> pkfan",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "a large /Jitter must not multiply the nested resampling without \
+         bound: took {elapsed:?}"
+    );
+}
+
+/// Codex review of PR #139, round 2: adding pkfan's `pfroll` initially
+/// rewrote pkoil's own transition calls to use it -- a file-wide rename
+/// that reached past the new preset. pkoil must stay entirely inside its
+/// declared `po-` namespace, or redefining one preset's helper silently
+/// changes another's marks.
+#[test]
+fn each_preset_keeps_its_own_roll_helper() {
+    let src = std::fs::read_to_string("lib/paintkit.ps").expect("read paintkit");
+    // Locate pkoil's section by its dash emitter and check the whole
+    // body of it refers only to poroll.
+    let start = src.find("/porad {").expect("porad present");
+    let end = src[start..].find("\n/pkoil ").expect("pkoil follows porad") + start;
+    let porad = &src[start..end];
+    assert!(
+        porad.contains("poroll"),
+        "pkoil's dash emitter should use poroll"
+    );
+    assert!(
+        !porad.contains("pfroll") && !porad.contains("ptroll"),
+        "pkoil's dash emitter must not reach into another preset's namespace"
+    );
+}
+
+/// Codex review of PR #139, round 3: the first nested-resampling floor
+/// accounted for `/Jitter` but not for the splay itself, whose offset
+/// moves O(Width) between consecutive stops with no jitter at all -- so
+/// a huge `/Width` at `/Splay 1` still passed the deposit guard while
+/// making pkribbon resample hundreds of thousands of points. The floor
+/// is now derived from the run's *measured* length rather than an
+/// analytic worst case, which also keeps it from coarsening ordinary
+/// strokes.
+#[test]
+fn fan_a_huge_width_at_full_splay_cannot_inflate_the_nested_resampling() {
+    let start = std::time::Instant::now();
+    let mut it = fresh(200, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 3 srand newpath 100 100 moveto 101 100 lineto \
+         << /Width 1000000 /Bristles 2 /BristleWidth 1 /Spread 1 /Splay 1 \
+            /Pitch 1 /Load 1 /Dropout 0 /Ragged 0 /Jitter 0 >> pkfan",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "splay displacement must be covered by the nested bound too: \
+         took {elapsed:?}"
+    );
+}
+
+/// ...and the floor must not engage on ordinary strokes. An analytic
+/// worst-case bound would have coarsened every fan by roughly 3x; a
+/// measured-length one leaves the normal case at exactly /Pitch.
+///
+/// Asserted on the effective pitch itself rather than on pixels (Codex
+/// review of PR #139, round 4: the first version of this test compared
+/// one render against an identical one, so it only retested fixed-seed
+/// determinism and would have passed even if the floor coarsened
+/// everything). `pfrun` leaves the pitch it actually handed pkribbon in
+/// `pfrp`, and `pfPitch` is what the caller asked for, so the two can be
+/// read back and compared directly.
+#[test]
+fn fan_the_nested_bound_engages_only_where_it_is_needed() {
+    let effective_vs_requested = |opts: &str| {
+        let mut it = fresh(400, 200);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 31 srand {FAN_PATH} << {opts} >> pkfan pfrp pfPitch"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        let st = it.operand_stack();
+        let requested: f64 = st[st.len() - 1].repr().parse().expect("pfPitch");
+        let effective: f64 = st[st.len() - 2].repr().parse().expect("pfrp");
+        (effective, requested)
+    };
+
+    // An ordinary fan: run length is about stops*Pitch, so the floor
+    // works out to Pitch/8 and must not bind at all.
+    let (eff, req) = effective_vs_requested("/Width 60 /Jitter 0 /Splay 0.6 /Pitch 1.5");
+    assert!(
+        (eff - req).abs() < 1e-9,
+        "the bound must not coarsen an ordinary stroke: \
+         effective {eff} vs requested {req}"
+    );
+
+    // A pathological one: the floor is exactly what stops pkribbon
+    // resampling a wildly displaced centerline at the original pitch.
+    let (peff, preq) = effective_vs_requested(
+        "/Width 1000000 /Bristles 2 /BristleWidth 1 /Spread 1 /Splay 1 \
+         /Pitch 1 /Load 1 /Dropout 0 /Ragged 0 /Jitter 0",
+    );
+    assert!(
+        peff > preq * 10.0,
+        "the bound must engage on a hugely displaced centerline: \
+         effective {peff} vs requested {preq}"
+    );
+}
+
+/// Codex review of PR #139, round 5 [P1]: a degenerate subpath becomes
+/// one pkribbon call per bristle, each resampling a ray, so counting it
+/// as a single stop let a path batching many bare movetos run millions
+/// of nested samples while the budget counter saw a few thousand. Each
+/// degenerate stop is now charged its real relative cost.
+#[test]
+fn fan_batched_pressed_dabs_are_charged_against_the_budget() {
+    // 100 degenerate subpaths at 60 bristles: ~24s of nested work before
+    // the fix, and the counter saw only 6000 of a 150000 ceiling.
+    let mut movetos = String::from("newpath");
+    for i in 0..100 {
+        movetos.push_str(&format!(" {} {} moveto closepath", 10 + i, 50 + (i % 7)));
+    }
+    let mut it = fresh(200, 200);
+    let start = std::time::Instant::now();
+    let res = it.run_str(&format!(
+        "0 0 0 setrgbcolor 3 srand {movetos} \
+         << /Width 40 /Bristles 60 /Load 1 /Dropout 0 >> pkfan"
+    ));
+    let elapsed = start.elapsed();
+    let e = res.expect_err("batched dabs at 60 bristles must exceed the budget");
+    assert!(
+        it.error_report(&e)
+            .contains("pkfan-deposit-count-exceeds-safety-limit"),
+        "expected the deposit budget guard, got {}",
+        it.error_report(&e)
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "the guard must reject before doing the work: took {elapsed:?}"
+    );
+    assert_eq!(
+        ink_count(&it),
+        0,
+        "a rejected budget must leave the canvas clean"
+    );
+}
+
+/// ...but a realistic foliage cluster -- the workload the pressed dab
+/// exists for -- must still be comfortably inside the budget. A safety
+/// limit that rejects the tool's own primary use case is a bug, so this
+/// pins the headroom rather than only the rejection.
+#[test]
+fn fan_a_realistic_foliage_cluster_stays_within_the_budget() {
+    let mut dabs = String::from("newpath");
+    for i in 0..12 {
+        dabs.push_str(&format!(
+            " {} {} moveto closepath",
+            30 + i * 12,
+            60 + (i % 3) * 20
+        ));
+    }
+    let mut it = fresh(240, 200);
+    it.run_str(&format!(
+        "0 0 0 setrgbcolor 3 srand {dabs} \
+         << /Width 44 /Bristles 13 /Ragged 0.5 >> pkfan"
+    ))
+    .unwrap_or_else(|e| {
+        panic!(
+            "a 12-dab foliage cluster should be allowed: {}",
+            it.error_report(&e)
+        )
+    });
+    assert!(ink_count(&it) > 500, "the cluster should paint");
+}
+
+/// Codex review of PR #139, round 5 [P2]: the header claimed the
+/// pressed fan radiates "isotropically", but the rays span roughly
+/// 20..160 degrees. The *code* is right -- a fan brush pressed to the
+/// page leaves a fan, and shrubs open upward -- so the documentation was
+/// corrected to match. This pins the actual contract so the two can't
+/// drift apart again.
+#[test]
+fn fan_a_pressed_dab_opens_upward_rather_than_all_round() {
+    let mut it = fresh(200, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 3 srand newpath 100 100 moveto \
+         << /Width 80 /Bristles 24 /Load 1 /Dropout 0 /Ragged 0 >> pkfan",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let inked_rows = |lo: u32, hi: u32| {
+        (lo..hi)
+            .map(|y| {
+                (0..200)
+                    .filter(|&x| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+                    .count()
+            })
+            .sum::<usize>()
+    };
+    // PostScript y=100 is pixel row 100; the fan opens toward +y, i.e.
+    // toward *lower* pixel rows.
+    let above = inked_rows(0, 99);
+    let below = inked_rows(101, 200);
+    assert!(above > 200, "the fan should open upward, got {above}");
+    assert!(
+        below * 4 < above,
+        "a pressed fan is a fan, not a full circle: above {above} below {below}"
+    );
+}

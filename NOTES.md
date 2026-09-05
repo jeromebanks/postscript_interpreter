@@ -3,6 +3,56 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## `lib/paintkit.ps`: `pkfan`, the fan brush (issue #114, 2026-09-04)
+
+Third child of epic #112. Adds `pkfan`, with `/Width` `/Bristles`
+`/Spread` `/Splay` `/BristleWidth` `/WidthJitter` `/Load` `/Dropout`
+`/Ragged` `/Flick` `/Jitter` `/Pitch` `/ColorJitter`. Scratch prefix
+`pf-`.
+
+**One term separates it from `pkdry`, and that was the design
+question.** `pkdry` holds each bristle at a fixed lateral offset —
+parallel tracks. A fan brush's bristles leave a flattened ferrule and
+splay apart as the stroke travels, so the offset is multiplied by an
+opening factor over path progress. `/Splay 0` reproduces `pkdry`'s
+parallel bristles exactly, which is the honest way to show that the
+splay is the whole difference; the specimen puts the two side by side
+rather than asserting it in prose, and
+`fan_splay_opens_the_bundle_along_the_stroke` measures the band's width
+at both ends.
+
+**Two things came from rendering before writing, not from reasoning.**
+A splay with no floor collapsed every bristle onto the centerline at
+t=0, so the stroke's first third was one opaque blob with a fan glued to
+the end — `/Splay 1` now narrows the ferrule to a quarter of the tip's
+spread and no further, which is also physically right (a ferrule is
+flat and wide). And the opening easing was picked by rendering linear,
+`t^0.6` and `t^1.6` together: `t^0.6` reads as bristles springing apart,
+the others as a smeared wedge. Both are pinned by tests.
+
+**Two failure modes caught in review before they were written.**
+`/Flick` implemented as `pkribbon`'s `/EndTaper` on every dash would
+turn a bristle broken into four dashes — exactly the separated-bristle
+case the criteria require — into four tapered commas; it is applied only
+to the run that reaches the bristle's own trimmed end. And the
+single-point dab would have collapsed for the same reason the
+no-floor splay did, so it radiates isotropically instead, the branch
+`pkoil` already uses for its own degenerate case.
+
+**Deliberately no fixed-draw-count claim**, unlike `pktrowel`'s: `pkfan`
+calls `pkribbon` once per inked run and `pkribbon` consumes randomness
+of its own, so `/Load` and `/Dropout` necessarily change total
+consumption by changing how many runs there are. `pkdry` has the same
+property. Determinism under a fixed seed is claimed and tested; stream
+invariance is not, because it would not be true.
+
+**Bounded** by `Bristles * stops` against 150000 checked inside the
+counting walk, `/Bristles` capped 1..60 — `pkdry`'s bound and placement.
+
+**Deferred:** bristles are straight offsets rather than bowed curves;
+`/Splay` plus `/Jitter` was enough to read as a fan, and curvature would
+have meant a second geometric term for a marginal gain.
+
 ## `lib/paintkit.ps`: `pktrowel`, trowel / palette-knife strokes (issue #111, 2026-09-04)
 
 First child of epic #112 (wet-on-wet landscape capabilities). Adds
