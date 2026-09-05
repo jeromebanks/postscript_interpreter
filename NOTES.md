@@ -6,8 +6,10 @@ was built, tradeoffs made, what's explicitly deferred.
 ## `lib/paintkit.ps`: `pkbroad`, the broad flat brush (issue #115, 2026-09-05)
 
 Fourth child of epic #112. Adds `pkbroad`, with `/Width` `/Angle`
-`/Charge` `/Depletion` `/Grain` `/Edge` `/Jitter` `/Pitch`
-`/ColorJitter`. Scratch prefix `pe-`.
+`/Charge` `/Depletion` `/Grain` `/Edge` `/Pitch` `/ColorJitter`.
+Scratch prefix `pm-`. (Both of those took a correction under review —
+a ninth parameter that did nothing, and two earlier prefixes that were
+already in use elsewhere; see below.)
 
 **The differentiator is depletion.** Three presets already make a wide
 mark, so the design question was what makes this one its own tool. What
@@ -75,6 +77,31 @@ in ten files including `pagekit.ps`. Nothing collided by exact name, but
 that is one `peWidth`-vs-`peW` away from the `pkflat` incident, so the
 scan now covers every `/name` under `lib/`, not just line-start
 definitions in `paintkit.ps`.
+
+**A later Codex round found two more, both in the depletion machinery
+that is the preset's whole reason to exist.** The run-out taper scaled
+each striation's *absolute* offsets from the band centerline, which
+translates it inward as it fades rather than narrowing it in place —
+outer striations swept diagonally across their neighbours, and the
+demo's `Depletion 1` panel came out as a chevron converging on the
+centerline instead of parallel streaks thinning out. It now tapers
+around each striation's own center (`pmtaper`). And a subpath shorter
+than `/Pitch` gets exactly two stops, loaded then dry, so every
+striation's run collapsed to a single sample and `pmemit`'s
+`end > start` guard threw all of them away: a fully charged brush
+painted nothing at all. A one-sample run now presses the same footprint
+the degenerate case does, which also fixed that footprint's own shape —
+it was hard-coded along `+x`, making it a sheared parallelogram at
+nonzero `/Angle` rather than a rotated rectangle.
+
+Worth recording how those two were pinned, since an earlier round of
+this same PR shipped a test that compared a render to itself. The taper
+fix is asserted on `pmtaper` directly — the invariant is exactly "the
+tapered midpoint is still the striation's own center," which a render
+shows only indirectly — and both tests were mutation-checked against
+the pre-fix code before being kept: the short-stroke one reports
+`got 0`, and the taper one reports a midpoint of `0.1125` against a
+center of `0.75`.
 
 ## `lib/paintkit.ps`: `pkfan`, the fan brush (issue #114, 2026-09-04)
 

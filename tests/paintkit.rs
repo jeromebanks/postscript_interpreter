@@ -4936,3 +4936,65 @@ fn broad_a_pressed_footprint_honors_the_charge() {
     .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
     assert_eq!(ink_count(&it), 0, "an unloaded brush stamps nothing");
 }
+
+/// Codex review of PR #140 [P1]: the run-out taper has to narrow a
+/// striation around *its own* center, not scale its offsets from the
+/// band centerline. Scaling the absolute offsets translates the whole
+/// striation inward as it fades, so an outer one sweeps diagonally
+/// across its neighbours -- visible in the demo as the depleted end
+/// collapsing into a chevron pointing at the centerline.
+///
+/// Read off `pmtaper` directly rather than from pixels: the invariant is
+/// exactly "the tapered midpoint is still the striation's own center,"
+/// and a render can only show that indirectly.
+#[test]
+fn broad_the_run_out_taper_narrows_in_place() {
+    let mut it = fresh(100, 100);
+    // An outer striation: center 0.75, spanning 0.5..1.0 of the band.
+    // pmei/pmstart/pmspan put it at the very end of its run, where the
+    // taper is deepest and the defect is largest.
+    it.run_str(
+        "/pmnc 0.75 def /pmran true def /pmstart 0 def /pmspan 10 def \
+         /pmei 10 def 0.5 pmtaper 1.0 pmtaper",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let vals: Vec<f64> = it
+        .operand_stack()
+        .iter()
+        .map(|o| o.repr().parse().expect("pmtaper should push numbers"))
+        .collect();
+    assert_eq!(vals.len(), 2, "pmtaper should push one value per boundary");
+    let (inner, outer) = (vals[0], vals[1]);
+    let mid = (inner + outer) / 2.0;
+    assert!(
+        (mid - 0.75).abs() < 1e-6,
+        "a tapered striation must stay centered on 0.75, got {mid} \
+         (boundaries {inner}..{outer}) -- it is sliding toward the \
+         band centerline instead of thinning in place"
+    );
+    assert!(
+        outer - inner < 0.5,
+        "the taper must actually narrow the striation, got a span of {}",
+        outer - inner
+    );
+}
+
+/// Codex review of PR #140 [P2]: a subpath shorter than /Pitch gets two
+/// stops -- a loaded one at the start and a dry one at the end -- so
+/// every striation's run collapsed to a single sample, and `pmemit`'s
+/// `end > start` guard discarded all of them. A fully charged brush
+/// painted nothing at all.
+#[test]
+fn broad_a_stroke_shorter_than_the_pitch_still_paints() {
+    let mut it = fresh(120, 120);
+    it.run_str(
+        "0 0 0 setrgbcolor 1 srand newpath 50 50 moveto 53 50 lineto \
+         << /Width 40 /Charge 1 /Depletion 1 >> pkbroad",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(
+        ink_count(&it) > 50,
+        "a fully loaded brush must leave a mark on a short stroke, got {}",
+        ink_count(&it)
+    );
+}

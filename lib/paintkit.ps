@@ -2638,10 +2638,16 @@
 /pmstamp {
     /pmsnb exch def /pmsna exch def /pmsi exch def
     /pmslen pmPitch 0.5 mul def
-    % walkpath reports angle 0 at a degenerate stop, so the footprint's
-    % long axis lands along +x; /Angle still rotates the band, since pmpt
-    % applies it.
-    /pmsdx pmslen def /pmsdy 0 def
+    % The footprint's long axis is the stop's own travel direction
+    % turned by /Angle -- the same rotation pmpt applies across the
+    % band. walkpath reports angle 0 at a degenerate stop, so there this
+    % reduces to /Angle alone; hard-coding the extent along +x instead
+    % (as this did) left the footprint a sheared parallelogram at
+    % nonzero /Angle rather than the rotated rectangle a flat brush
+    % actually presses.
+    /pmsang pmraw pmsi get 2 get pmAngle add def
+    /pmsdx pmslen pmsang cos mul def
+    /pmsdy pmslen pmsang sin mul def
     pmsi pmsna pmhalf mul pmpt /pmsay exch def /pmsax exch def
     pmsi pmsnb pmhalf mul pmpt /pmsby exch def /pmsbx exch def
     newpath
@@ -2670,15 +2676,41 @@
         newpath
         pmstart 1 pmend {
             /pmei exch def
-            pmei pmnav pmhalf mul pmtap mul pmEdge pmedge mul pkjit add pmpt
+            pmei pmnav pmtaper pmhalf mul pmEdge pmedge mul pkjit add pmpt
             pmei pmstart eq { moveto } { lineto } ifelse
         } for
         pmend -1 pmstart {
             /pmei exch def
-            pmei pmnbv pmhalf mul pmtap mul pmEdge pmedge mul pkjit add pmpt lineto
+            pmei pmnbv pmtaper pmhalf mul pmEdge pmedge mul pkjit add pmpt lineto
         } for
         closepath fill
-    } if
+    } {
+        % A run one sample long has no strip -- a strip needs two stops
+        % to have any area -- but it is a real deposit and has to leave a
+        % real mark. The common case is a subpath shorter than /Pitch: a
+        % fully loaded brush deposits at the start stop and is dry at the
+        % end one, so every striation's run collapses to a single sample
+        % and `pkbroad` painted nothing at all (Codex review of PR #140).
+        % It also catches any striation whose affinity happens to fall
+        % between two consecutive stops' charges, which was silently
+        % dropping that striation mid-band. Press the same footprint the
+        % degenerate case uses; pmstamp now takes its long axis from the
+        % stop, so an ordinary stop stamps along its own direction of
+        % travel rather than along +x.
+        pmstart pmnav pmnbv pmstamp
+    } ifelse
+} def
+
+% v pmtaper -> tapered   (narrows a boundary toward the striation center)
+%
+% The taper has to shrink the striation around *its own* center pmnc,
+% not scale its absolute offset from the band centerline: multiplying
+% both boundaries by pmtap translates the whole striation inward, so an
+% outer one sweeps diagonally across its neighbors as it fades instead
+% of thinning in place (Codex review of PR #140).
+% @internal
+/pmtaper {
+    pmnc sub pmtap mul pmnc add
 } def
 
 % -> multiplier   (reads pmi/pmstart/pmspan/pmran; the run-end taper)
