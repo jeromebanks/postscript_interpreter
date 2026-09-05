@@ -1,0 +1,109 @@
+%!PS-Adobe-3.0
+%%Title: Paintkit — the broad flat brush (issue #115)
+%%BoundingBox: 0 0 620 600
+%%EndComments
+
+% Specimen for paintkit's pkbroad (lib/paintkit.ps): the block-in tool.
+%
+% Three presets here already make a wide mark, so the first row is the
+% argument for this one existing at all: the same path in pkbroad,
+% pktrowel and pkribbon. What none of the others model is that a brush
+% *runs out* — a loaded flat brush lays solid colour where it touches
+% down and goes progressively drier as it travels, which is how a
+% block-in is actually made.
+%
+% Row 2 sweeps /Depletion, which is that fade, and /Charge, which is how
+% much paint the brush started with. Row 3 is the tool's own geometry:
+% angle, edge, striation count. Row 4 is what it is for — a sky band and
+% a water/reflection band.
+%
+% Note the name: `pkflat` was already taken, by pkribbon's constant-width
+% *pressure preset*. Defining a brush over it silently broke every
+% preset whose /Pressure default is { pkflat }.
+
+%   pscat --page 620x600 examples/paintkit_broad_demo.ps --png broad.png
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+
+29 srand
+
+1 1 1 setrgbcolor clippath fill
+
+/dmlabel {
+    /dmllabel exch def /dmly exch def /dmlx exch def
+    gsave
+        0.45 0.45 0.45 setrgbcolor
+        /Helvetica findfont 10 scalefont setfont
+        dmlx dmly moveto dmllabel show
+    grestore
+} def
+
+/bar {                                     % x y -   (a shared stroke)
+    /bry exch def /brx exch def
+    newpath brx bry moveto brx 250 add bry 6 add lineto
+} def
+
+/tide pal 2 get aload pop setrgbcolor
+
+% --- row 1: why this is not one of the three that already exist --------
+20 570 (pkbroad -- a brush: solid where it lands, drier as it goes) dmlabel
+20 530 bar << /Width 44 /Depletion 0.35 >> pkbroad
+
+320 570 (pktrowel -- a blade: scraped, streaked, no fade) dmlabel
+320 530 bar << /Width 44 >> pktrowel
+
+20 490 (pkribbon -- a band: no tool character at all) dmlabel
+20 450 bar << /Width 44 >> pkribbon
+
+320 490 (pknib -- a pen: width follows a fixed world angle) dmlabel
+320 450 bar << /Width 44 /Angle 30 >> pknib
+
+% --- row 2: the fade, which is the whole idea --------------------------
+/ember pal 2 get aload pop setrgbcolor
+20 410 (Depletion 0 -- even, fully loaded; square ends) dmlabel
+20 370 bar << /Width 44 /Depletion 0 >> pkbroad
+
+320 410 (Depletion 0.6 -- the default fade) dmlabel
+320 370 bar << /Width 44 /Depletion 0.6 >> pkbroad
+
+20 330 (Depletion 1 -- runs right out) dmlabel
+20 290 bar << /Width 44 /Depletion 1 >> pkbroad
+
+320 330 (Charge 0.45 -- barely loaded, so it skips from the start) dmlabel
+320 290 bar << /Width 44 /Charge 0.45 /Depletion 0.4 >> pkbroad
+
+% --- row 3: the brush's own geometry -----------------------------------
+/stone pal 3 get aload pop setrgbcolor
+20 250 (Angle 55 -- brush turned; thickness goes as its cosine) dmlabel
+20 210 bar << /Width 44 /Angle 55 >> pkbroad
+
+320 250 (Edge 0.9 -- crisp flat-brush sides roughened) dmlabel
+320 210 bar << /Width 44 /Edge 0.9 >> pkbroad
+
+20 170 (Grain 40 fine, Grain 4 coarse) dmlabel
+20 138 bar << /Width 22 /Grain 40 /Depletion 0.7 >> pkbroad
+320 138 bar << /Width 22 /Grain 4 /Depletion 0.7 >> pkbroad
+
+% --- row 4: what it is for ---------------------------------------------
+20 106 (a sky band and a water band -- each stroke is its own brush load) dmlabel
+
+gsave
+newpath 20 0 moveto 600 0 lineto 600 96 lineto 20 96 lineto closepath clip
+% sky: broad even strokes, laid down wet
+0.52 0.63 0.80 setrgbcolor
+50 9 96 {
+    /sy exch def
+    newpath 14 sy moveto 606 sy 2 add lineto
+    << /Width 14 /Charge 0.98 /Depletion 0.25 /Grain 9 >> pkbroad
+} for
+% water: the same brush run much drier, so it breaks into a reflection
+0.24 0.36 0.46 setrgbcolor
+2 8 46 {
+    /wy exch def
+    newpath 14 wy moveto 606 wy 3 add lineto
+    << /Width 11 /Charge 0.9 /Depletion 0.9 /Grain 8 >> pkbroad
+} for
+grestore
+
+showpage

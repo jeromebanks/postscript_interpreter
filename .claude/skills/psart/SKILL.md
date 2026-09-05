@@ -138,6 +138,13 @@ Which tool to pick:
   leave it on, or the mark reads as a comb. **A single-point subpath is
   a pressed fan radiating about the point**: that's how you get foliage
   clusters and shrubs, one dab each.
+- **`pkbroad`** — broad flat brush, the block-in tool: sky and water
+  bands, reflections, broad masses. Its trick is that the brush **runs
+  out** — `/Depletion` fades the mark from solid to broken along the
+  stroke, `/Charge` is how loaded it started. `/Depletion 0` gives an
+  even block-in. Reach for it over `pktrowel` when you want a brushed
+  mass rather than a scraped one, and over `pkribbon` whenever the mark
+  should look applied rather than drawn.
 - **`pkwash`** / **`pkpaper`** — watercolor and its ground. The only
   presets needing pscat's `setalpha`; under plain `gs` they fall back
   to flattening against white and overlaps stop mixing.

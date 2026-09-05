@@ -3,6 +3,129 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## `lib/paintkit.ps`: `pkbroad`, the broad flat brush (issue #115, 2026-09-05)
+
+Fourth child of epic #112. Adds `pkbroad`, with `/Width` `/Angle`
+`/Charge` `/Depletion` `/Grain` `/Edge` `/Pitch` `/ColorJitter`.
+Scratch prefix `pm-`. (Both of those took a correction under review —
+a ninth parameter that did nothing, and two earlier prefixes that were
+already in use elsewhere; see below.)
+
+**The differentiator is depletion.** Three presets already make a wide
+mark, so the design question was what makes this one its own tool. What
+separates a flat *brush* from a palette *knife* is that a brush holds
+paint in bristles and so runs out: it lays solid colour where it lands
+and goes drier as it travels, which is how a block-in is actually made.
+#111 deliberately left depletion out of `pktrowel` because a blade
+carries a smear, not a reservoir — so it was available, and it is the
+one thing none of `pkribbon`, `pknib` or `pktrowel` model.
+
+Implemented without per-stop speckle: each striation gets a fixed
+affinity, the charge falls as `Charge * (1 - Depletion*t)`, and a
+striation deposits while the charge exceeds its affinity. Striations
+therefore drop out one at a time, which is what makes the mark read as
+streaks *along the direction of travel* rather than noise.
+
+**Two naming decisions, both to avoid collisions this file has already
+been bitten by.** The controls are `/Charge` and `/Depletion`, not
+`/Load`: `/Load` already means a contact rate in `pkdry`/`pkfan` and
+deposit width in `pktrowel`, and a third meaning would be worse than a
+new word. And `/Angle` follows `pktrowel`'s reading (rotation relative
+to travel, constant along a curve) rather than `pknib`'s fixed world
+angle — adopting pknib's would have made this preset pknib with
+striations bolted on.
+
+**The name `pkflat` was already taken**, by `pkribbon`'s constant-width
+*pressure preset*. Defining a brush over it broke `pkribbon`,
+`pktrowel`, `pkoil` and `pkfan` simultaneously, since every one of them
+defaults `/Pressure` to `{ pkflat }` — and it surfaced as a `typecheck`
+inside `pkgetdef`, nowhere near the cause. Renamed to `pkbroad`, with a
+test asserting the three pressure presets are still procedures.
+
+**The prefix scan has to cover all of `lib/`, not just `paintkit.ps`.**
+`pl-` looked free in paintkit and is used by `graph.ps`, `scifi.ps` and
+`steampunk.ps`; the working prefix is `pe-`.
+
+**From rendering, not reasoning:** the first version's depletion came
+out as a staircase of hard vertical cutoffs. Each striation now tapers
+away over its last stretch — but only when it ends by running out, not
+when it ends because the stroke did, or `Depletion 0` would lose the
+brush's square end.
+
+**No fixed-draw-count claim**, unlike `pktrowel`'s and for the same
+reason as `pkfan`'s: the edge jitter is drawn per deposited point, so
+consumption depends on how much is laid down. An early draft of the
+header claimed otherwise and a test caught it.
+
+**Review found a parameter that did nothing.** `/Jitter` was parsed,
+validated and advertised in `pscat --capabilities`, and read nowhere in
+the body — verified by identical PNG checksums at 0, 8 and 60. It
+shipped because its only test asserted that it *rejected a procedure*:
+validation coverage is not effect coverage. `/Edge` already applies
+`pkjit` to every striation boundary, which is exactly what `/Jitter`
+claimed to do, so the duplicate was deleted rather than a second knob
+added. The structural guard against the class is
+`broad_every_documented_parameter_changes_the_render`, which walks the
+advertised list and fails on any parameter that does not move a pixel,
+plus a companion asserting the catalog advertises exactly that list.
+
+Two more from the same review: a degenerate subpath drew *nothing*,
+while every other wide preset here leaves a mark — a flat brush set down
+and lifted now stamps its own footprint, honouring the charge like any
+other stop. And the prefix ended up `pm-`: `pe-` turned out to be used
+in ten files including `pagekit.ps`. Nothing collided by exact name, but
+that is one `peWidth`-vs-`peW` away from the `pkflat` incident, so the
+scan now covers every `/name` under `lib/`, not just line-start
+definitions in `paintkit.ps`.
+
+**A later Codex round found two more, both in the depletion machinery
+that is the preset's whole reason to exist.** The run-out taper scaled
+each striation's *absolute* offsets from the band centerline, which
+translates it inward as it fades rather than narrowing it in place —
+outer striations swept diagonally across their neighbours, and the
+demo's `Depletion 1` panel came out as a chevron converging on the
+centerline instead of parallel streaks thinning out. It now tapers
+around each striation's own center (`pmtaper`). And a subpath shorter
+than `/Pitch` gets exactly two stops, loaded then dry, so every
+striation's run collapsed to a single sample and `pmemit`'s
+`end > start` guard threw all of them away: a fully charged brush
+painted nothing at all. A one-sample run now presses the same footprint
+the degenerate case does, which also fixed that footprint's own shape —
+it was hard-coded along `+x`, making it a sheared parallelogram at
+nonzero `/Angle` rather than a rotated rectangle.
+
+**A further round found two more, both about the random stream rather
+than about geometry.** The striation affinities were drawn inside the
+same loop that emits geometry, and `pmemit` calls `pkjit` once per
+boundary point — so the number of points a striation deposited, which
+is exactly what `/Charge` and `/Depletion` control, shifted the stream
+for every later striation. Turning either knob therefore re-rolled the
+band into a *different* mark rather than re-shaping the same one, which
+is the behavior this preset advertises: at seed 3 with `/Grain 2`, the
+second striation's affinity moved from 0.316 to 0.517 for no reason but
+raising `/Charge` from 0.4 to 0.8. Affinities and per-striation colors
+are now drawn up front, the way `pkwet` plans all its passes before
+running any. What that fixes is *which lanes deposit and what color
+they are*; the per-point edge jitter still runs off the shared stream,
+which is re-shaping, and is the same variable consumption the header
+already declines to make a fixed-draw-count claim about.
+
+And `frnd` really can return exactly 1.0 — seed 51463 does — so the
+strict `charge > affinity` test rejected a striation of affinity 1.0 at
+`/Charge 1`, documented as fully loaded: a one-striation brush at full
+charge painted nothing. `pmwets` now clamps both ends the way `ptroll`
+and `pfroll` already did, which is the second time this file has been
+bitten by a probability comparison that looked obviously right.
+
+Worth recording how those two were pinned, since an earlier round of
+this same PR shipped a test that compared a render to itself. The taper
+fix is asserted on `pmtaper` directly — the invariant is exactly "the
+tapered midpoint is still the striation's own center," which a render
+shows only indirectly — and both tests were mutation-checked against
+the pre-fix code before being kept: the short-stroke one reports
+`got 0`, and the taper one reports a midpoint of `0.1125` against a
+center of `0.75`.
+
 ## `lib/paintkit.ps`: `pkfan`, the fan brush (issue #114, 2026-09-04)
 
 Third child of epic #112. Adds `pkfan`, with `/Width` `/Bristles`

@@ -2512,6 +2512,364 @@
     } if
 } def
 
+% --- broad flat brush (issue #115) ------------------------------------
+% opts pkbroad -
+%
+% The block-in tool: sky and water bands, reflections, broad masses.
+%
+% Three presets in this file already make a wide mark, so the first
+% question was what makes this one its own tool rather than a preset of
+% one of them.
+%
+%   pkribbon   a band of variable width, but a *geometric* one -- no
+%              tool character at all
+%   pknib      width driven by the angle between the path and a fixed
+%              nib angle: a calligraphic pmn, which swells and narrows
+%              as a curve turns
+%   pktrowel   a rigid blade: hard scraped edges, lengthwise streaks,
+%              no base pass, paint pushed into ridges
+%
+% What separates a flat *brush* from a palette *knife* is that a brush
+% holds its paint in bristles, and so **runs out**. A loaded flat brush
+% lays solid colour where it touches down and goes progressively drier
+% as it travels; that fading is how a block-in is actually made, and it
+% is the thing none of the three above model. Issue #111 deliberately
+% left depletion out of pktrowel for this reason -- a blade carries a
+% smear of paint, not a reservoir.
+%
+% So depletion is the whole idea here. The band is divided into /Grain
+% striations across its width, and each striation is given its own fixed
+% affinity for the surface. The brush's charge falls along the stroke:
+%
+%     charge(t) = Charge * (1 - Depletion*t)
+%
+% and a striation deposits for as long as the charge stays above its own
+% affinity. Striations therefore drop out one by one as the stroke
+% travels, in a seeded but fixed order, and the band thins from solid to
+% broken without any per-stop speckle -- which is what makes the marks
+% read as *streaks along the direction of travel* rather than as noise.
+% A striation whose affinity is above /Charge from the outset never
+% deposits at all, so a low /Charge gives the skipping, gappy mark of a
+% brush that was barely loaded.
+%
+% /Depletion 0 turns the fade off entirely and gives an even, fully
+% loaded block-in -- the flat side of the tool's range.
+%
+% Deliberately *not* named /Load. This file already uses /Load for two
+% different things (a contact rate in pkdry and pkfan, deposit width in
+% pktrowel), and a third meaning in a fourth preset would be actively
+% misleading. /Charge is what a brush is charged with; /Depletion is how
+% fast it runs out.
+%
+% /Angle follows **pktrowel's** reading, not pknib's: it rotates the
+% brush relative to the direction of travel, so it stays constant along
+% a curve. pknib's /Angle is a fixed angle in world space, which is what
+% makes a pmn stroke swell and narrow as it turns -- correct for a pmn,
+% wrong here, and adopting it would make this preset pknib with
+% striations bolted on. Footprint thickness goes as cos(Angle), so the
+% range is capped at +-80 for the same reason pktrowel's is.
+%
+% Edges are crisp by default, which is the other half of "flat brush":
+% the outermost striations sit exactly at +-Width/2 and the band has
+% straight parallel sides and square ends. /Edge roughens them when a
+% less mechanical mark is wanted.
+%
+% The charge is per *subpath*, not per call: walkpath's `t` restarts at
+% each subpath, so three parallel strokes in one call are three brush
+% loads, each fading independently. That is what an artist blocking in a
+% sky actually does, and `broad_each_subpath_gets_its_own_charge` pins it
+% rather than leaving it to be discovered.
+%
+% Determinism: the caller's own `N srand`. Each striation's affinity and
+% colour draws are taken per striation, whether or not it ends up
+% depositing, so those alone do not shift when /Charge or /Depletion
+% change. But the edge jitter is drawn per *deposited point*, so total
+% consumption does depend on how much gets laid down -- this preset
+% deliberately makes no fixed-draw-count claim of the kind pktrowel
+% documents, for the same reason pkfan doesn't. Reproducibility under a
+% fixed seed is claimed and tested; stream invariance is not, because it
+% would not be true.
+%
+% Safety: /Grain is capped 1..40 and Grain * stopCount is checked
+% against 120000 inside the counting walk, pktrowel's bound and
+% placement.
+%
+% /Jitter is deliberately absent. An earlier version parsed, validated
+% and advertised it, and never read it -- a catalogued no-op that
+% shipped because its only test asserted it rejected a *procedure*.
+% /Edge already applies pkjit to every striation boundary, which is
+% exactly what /Jitter claimed to do, so the fix was to delete the
+% duplicate rather than add a second knob for one effect.
+% `broad_every_documented_parameter_changes_the_render` now walks the
+% advertised list and fails on any parameter that does not move a pixel.
+%
+% Scratch prefix pm-, chosen after scanning *every* file under lib/ for
+% any /name usage rather than just this one. pl- looked free in
+% paintkit.ps and is used by graph.ps, scifi.ps and steampunk.ps; the
+% next candidate, pe-, is used in ten files including pagekit.ps (peW,
+% peX, peTitle...). Nothing collided by exact name there, but "no exact
+% collision today" is one peWidth-vs-peW away from the pkflat incident,
+% so pm- -- which has no /name usage anywhere under lib/ -- is the one
+% to keep.
+
+% i u pmpt -> x y   (brush-space to device space at stop i)
+% @internal
+/pmpt {
+    /pmpu exch def
+    pmraw exch get
+    dup 0 get /pmpx exch def
+    dup 1 get /pmpy exch def
+    2 get /pmpa exch def
+    /pmpb pmpa 90 add pmAngle add def
+    pmpx pmpb cos pmpu mul add
+    pmpy pmpb sin pmpu mul add
+} def
+
+% i na nb pmstamp -   (the brush's footprint, pressed at a single stop)
+%
+% A degenerate subpath -- a bare `moveto`, or a `moveto closepath` --
+% gives walkpath exactly one stop, and a strip needs two stops to have
+% any area, so pkbroad drew nothing at all there while pkribbon,
+% pktrowel and pkfan all leave a mark (review of PR #140). A flat brush
+% set down and lifted stamps its own footprint, so that is what this is:
+% the full band width, half a pitch either side of the point, square
+% ended like the brush itself.
+% @internal
+/pmstamp {
+    /pmsnb exch def /pmsna exch def /pmsi exch def
+    /pmslen pmPitch 0.5 mul def
+    % The footprint's long axis is the stop's own travel direction
+    % turned by /Angle -- the same rotation pmpt applies across the
+    % band. walkpath reports angle 0 at a degenerate stop, so there this
+    % reduces to /Angle alone; hard-coding the extent along +x instead
+    % (as this did) left the footprint a sheared parallelogram at
+    % nonzero /Angle rather than the rotated rectangle a flat brush
+    % actually presses.
+    /pmsang pmraw pmsi get 2 get pmAngle add def
+    /pmsdx pmslen pmsang cos mul def
+    /pmsdy pmslen pmsang sin mul def
+    pmsi pmsna pmhalf mul pmpt /pmsay exch def /pmsax exch def
+    pmsi pmsnb pmhalf mul pmpt /pmsby exch def /pmsbx exch def
+    newpath
+    pmsax pmsdx sub pmsay pmsdy sub moveto
+    pmsax pmsdx add pmsay pmsdy add lineto
+    pmsbx pmsdx add pmsby pmsdy add lineto
+    pmsbx pmsdx sub pmsby pmsdy sub lineto
+    closepath fill
+} def
+
+% start end na nb ranout pmemit -   (one striation run, as a filled strip)
+%
+% `ranout` says whether this run ended because the charge fell below the
+% striation's affinity, as opposed to simply reaching the end of the
+% subpath. Only the former is tapered: a striation that ran out of paint
+% thins away over its last stretch, while one still carrying paint when
+% the stroke stops must keep the brush's square end. Without that
+% distinction the depletion fade came out as a staircase of hard
+% vertical cutoffs -- seen in the first render, not predicted.
+% @internal
+/pmemit {
+    /pmran exch def
+    /pmnbv exch def /pmnav exch def /pmend exch def /pmstart exch def
+    pmend pmstart gt {
+        /pmspan pmend pmstart sub def
+        newpath
+        pmstart 1 pmend {
+            /pmei exch def
+            pmei pmnav pmtaper pmhalf mul pmEdge pmedge mul pkjit add pmpt
+            pmei pmstart eq { moveto } { lineto } ifelse
+        } for
+        pmend -1 pmstart {
+            /pmei exch def
+            pmei pmnbv pmtaper pmhalf mul pmEdge pmedge mul pkjit add pmpt lineto
+        } for
+        closepath fill
+    } {
+        % A run one sample long has no strip -- a strip needs two stops
+        % to have any area -- but it is a real deposit and has to leave a
+        % real mark. The common case is a subpath shorter than /Pitch: a
+        % fully loaded brush deposits at the start stop and is dry at the
+        % end one, so every striation's run collapses to a single sample
+        % and `pkbroad` painted nothing at all (Codex review of PR #140).
+        % It also catches any striation whose affinity happens to fall
+        % between two consecutive stops' charges, which was silently
+        % dropping that striation mid-band. Press the same footprint the
+        % degenerate case uses; pmstamp now takes its long axis from the
+        % stop, so an ordinary stop stamps along its own direction of
+        % travel rather than along +x.
+        pmstart pmnav pmnbv pmstamp
+    } ifelse
+} def
+
+% charge affinity pmwets -> bool   (does this striation deposit here?)
+%
+% Clamped at both ends rather than compared directly, following ptroll
+% and pfroll above. `frnd` really can return exactly 1.0 -- seed 51463
+% does -- so a plain `charge gt affinity` rejected a striation of
+% affinity 1.0 at /Charge 1, and a full-charge single-striation brush
+% painted nothing at all (Codex review of PR #140). /Charge 1 is
+% documented as fully loaded, so it means certain contact; /Charge 0
+% means none, which the strict comparison already gave.
+% @internal
+/pmwets {
+    exch dup 1 ge
+        { pop pop true }
+        { dup 0 le { pop pop false } { lt } ifelse }
+    ifelse
+} def
+
+% v pmtaper -> tapered   (narrows a boundary toward the striation center)
+%
+% The taper has to shrink the striation around *its own* center pmnc,
+% not scale its absolute offset from the band centerline: multiplying
+% both boundaries by pmtap translates the whole striation inward, so an
+% outer one sweeps diagonally across its neighbors as it fades instead
+% of thinning in place (Codex review of PR #140).
+% @internal
+/pmtaper {
+    pmnc sub pmtap mul pmnc add
+} def
+
+% -> multiplier   (reads pmi/pmstart/pmspan/pmran; the run-end taper)
+% Written as its own proc so pmemit's two point loops can't drift apart.
+% @internal
+/pmtap {
+    pmran pmspan 0 gt and {
+        pmei pmstart sub pmspan div
+        dup 0.78 gt
+            { 0.78 sub 0.22 div 0.85 mul 1 exch sub }
+            { pop 1 }
+        ifelse
+    } { 1 } ifelse
+} def
+
+% @kind: Procedure
+% @summary: A broad flat brush for block-ins, sky and water bands, reflections and broad masses. What separates it from pktrowel's blade and pknib's pmn is that a brush runs out of paint: the band is divided into striations that drop out one by one as the charge falls along the stroke, so the mark fades from solid to broken along its own direction. Crisp parallel edges and square ends by default. Deterministic under the caller's own srand; bounded by Grain * stops.
+% @example: newpath 40 120 moveto 300 130 lineto << /Width 46 /Charge 0.95 /Depletion 0.6 >> pkbroad
+% @param: /Width Band width; must be > 0 (default 40)
+% @param: /Angle Brush rotation in degrees relative to the direction of travel, -80..80; constant along a curve, unlike pknib's fixed world angle (default 0)
+% @param: /Charge 0..1 how much paint the brush is loaded with; striations whose affinity exceeds it never deposit, so a low charge skips and gaps (default 0.95)
+% @param: /Depletion 0..1 how fast the charge runs out along each subpath; 0 is an even fully loaded block-in (default 0.5)
+% @param: /Grain Striations across the band; must be a whole number, hard safety cap 1..40 (default 14)
+% @param: /Edge 0..1 roughness of the band's long edges; 0 is a crisp flat-brush edge (default 0.15)
+% @param: /Pitch walkpath sampling pitch for the shared centerline pass; must be > 0 (default Width*0.3, capped at 4)
+% @param: /ColorJitter 0..1 per-striation color variation around the caller's current color (default 0.05)
+/pkbroad {
+    /pmopts exch def
+    /pmWidth pmopts /Width 40 pkgetdef def
+    /pmWidth load xcheck { pkbroad-width-must-not-be-a-procedure } if
+    pmWidth 0 le { pkbroad-width-must-be-positive } if
+    /pmAngle pmopts /Angle 0 pkgetdef def
+    /pmAngle load xcheck { pkbroad-angle-must-not-be-a-procedure } if
+    pmAngle -80 lt pmAngle 80 gt or { pkbroad-angle-must-be-minus80-to-80 } if
+    /pmCharge pmopts /Charge 0.95 pkgetdef def
+    /pmCharge load xcheck { pkbroad-charge-must-not-be-a-procedure } if
+    pmCharge 0 lt pmCharge 1 gt or { pkbroad-charge-must-be-0-to-1 } if
+    /pmDepletion pmopts /Depletion 0.5 pkgetdef def
+    /pmDepletion load xcheck { pkbroad-depletion-must-not-be-a-procedure } if
+    pmDepletion 0 lt pmDepletion 1 gt or { pkbroad-depletion-must-be-0-to-1 } if
+    /pmGrain pmopts /Grain 14 pkgetdef def
+    /pmGrain load xcheck { pkbroad-grain-must-not-be-a-procedure } if
+    pmGrain 1 lt pmGrain 40 gt or pmGrain truncate pmGrain ne or
+        { pkbroad-grain-must-be-1-to-40 } if
+    /pmGrain pmGrain cvi def
+    /pmEdge pmopts /Edge 0.15 pkgetdef def
+    /pmEdge load xcheck { pkbroad-edge-must-not-be-a-procedure } if
+    pmEdge 0 lt pmEdge 1 gt or { pkbroad-edge-must-be-0-to-1 } if
+    /pmPitch pmopts /Pitch pmWidth 0.3 mul dup 4 gt { pop 4 } if pkgetdef def
+    /pmPitch load xcheck { pkbroad-pitch-must-not-be-a-procedure } if
+    pmPitch 0 le { pkbroad-pitch-must-be-positive } if
+    /pmColorJitter pmopts /ColorJitter 0.05 pkgetdef def
+    /pmColorJitter load xcheck { pkbroad-colorjitter-must-not-be-a-procedure } if
+    pmColorJitter 0 lt pmColorJitter 1 gt or { pkbroad-colorjitter-must-be-0-to-1 } if
+    /pmcount 0 def
+    pmPitch { pop pop pop pop pop pop /pmcount pmcount 1 add def
+              pmGrain pmcount mul 120000 gt
+                  { pkbroad-deposit-count-exceeds-safety-limit } if } walkpath
+    /pmn pmcount def
+    /pmraw pmn array def
+    /pmci 0 def
+    pmPitch { 6 array astore pmraw pmci 3 -1 roll put /pmci pmci 1 add def } walkpath
+    pmn 0 gt {
+        gsave
+        /pmbase [ currentrgbcolor ] def
+        /pmhalf pmWidth 0.5 mul def
+        /pmedge pmWidth 0.06 mul def
+        % Draw every striation's affinity and color *before* any
+        % geometry, the way pkwet plans all its passes before running
+        % any, and for the same reason. pmemit calls pkjit once per
+        % boundary point -- unconditionally, even at /Edge 0, to keep
+        % the stream fixed -- so with the two interleaved, the number of
+        % points a striation deposits shifts the stream for the next
+        % one. How many points it deposits is exactly what /Charge and
+        % /Depletion control, so turning either re-rolled the rest of
+        % the band into a *different* mark rather than re-shaping the
+        % same one: at seed 3, /Grain 2 /Depletion 0, the second
+        % striation's affinity moved from 0.316 to 0.517 for no reason
+        % but raising /Charge from 0.4 to 0.8 (Codex review of PR #140).
+        %
+        % What this fixes is which lanes deposit and what color they
+        % are. The per-point edge jitter still runs off the shared
+        % stream, so a striation's edge noise can shift with how much
+        % was laid down before it -- the same variable consumption the
+        % header already declines to make a fixed-draw-count claim
+        % about, and re-shaping rather than re-rolling.
+        pmGrain array /pmaffs exch def
+        pmGrain array /pmcjs exch def
+        0 1 pmGrain 1 sub {
+            /pmg exch def
+            pmaffs pmg frnd put
+            pmcjs pmg pmColorJitter pkjit put
+        } for
+        1 1 pmGrain {
+            /pmg exch def
+            /pmaff pmaffs pmg 1 sub get def
+            /pmcj pmcjs pmg 1 sub get def
+            pmbase 1 pmcj add shade setrgbcolor
+            % The striations abut, so they need the same overlap
+            % pktrowel's lanes do, or every boundary leaves an
+            % anti-aliased hairline (see that preset's own note).
+            /pmna pmg 1 sub pmGrain div 2 mul 1 sub def
+            /pmnb pmg pmGrain div 2 mul 1 sub def
+            /pmnc pmna pmnb add 0.5 mul def
+            /pmna pmnc pmna pmnc sub 1.15 mul add def
+            /pmnb pmnc pmnb pmnc sub 1.15 mul add def
+            pmna -1 lt { /pmna -1 def } if
+            pmnb 1 gt { /pmnb 1 def } if
+            /pmrun false def
+            /pmstart 0 def
+            0 1 pmn 1 sub {
+                /pmi exch def
+                /pmrec pmraw pmi get def
+                /pmae pmrec 5 get def
+                pmae 1 and 1 eq {
+                    pmrun { pmstart pmi 1 sub pmna pmnb false pmemit /pmrun false def } if
+                } if
+                /pmch pmCharge 1 pmDepletion pmrec 3 get mul sub mul def
+                pmch pmaff pmwets {
+                    pmrun not { /pmstart pmi def /pmrun true def } if
+                } {
+                    pmrun { pmstart pmi 1 sub pmna pmnb true pmemit /pmrun false def } if
+                } ifelse
+                pmae 3 and 3 eq {
+                    % A degenerate subpath: press the footprint rather
+                    % than trying to draw a zero-area strip through one
+                    % stop. It honors the charge like any other stop.
+                    pmch pmaff pmwets { pmi pmna pmnb pmstamp } if
+                    /pmrun false def
+                } {
+                    pmae 2 and 2 eq {
+                        pmrun { pmstart pmi pmna pmnb false pmemit /pmrun false def } if
+                    } if
+                } ifelse
+            } for
+            pmrun { pmstart pmn 1 sub pmna pmnb false pmemit /pmrun false def } if
+        } for
+        pmbase aload pop setrgbcolor
+        grestore
+    } if
+} def
+
 % --- watercolor wash and paper ground (issue #47) ---------------------
 % opts pkwash -
 % x y w h opts pkpaper -
