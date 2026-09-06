@@ -64,9 +64,16 @@ is capped 1..6, which is the only bound `pkwet` adds — total work is up
 to 6× the wrapped proc's own cost including its deposit budget, the
 same shape of nested-cost gap `pkdry` documents (#79). `/Soft 0` takes
 no random draw of its own (the displacement draw happens only when
-there is a displacement to make), which is what makes it byte-identical
-to a plain call — pinned by
-`wet_soft_zero_is_identical_to_calling_the_proc`. A single-layer call
+there is a displacement to make), which is what makes it lay the same
+marks as a plain call — pinned by
+`wet_soft_zero_is_identical_to_calling_the_proc`. "Byte-identical",
+which this said first, was stronger than any /Soft delivers: every pass
+runs in its own gsave and its own `stopped`, so the procedure's
+leftover graphics state and current path are discarded and an `exit`
+cannot cross out. Both wrappers are load-bearing — the gsave displaces
+a pass and pays itself back when one is abandoned, the `stopped` keeps
+a caught error from leaking it — so the fix was to narrow the claim,
+not to drop the wrapper. A single-layer call
 has no outermost/core distinction and the obvious `i/(Layers-1)`
 divides by zero there; found by rendering, guarded, and pinned.
 
@@ -135,6 +142,35 @@ behaviour the ordinary tests exercised without noticing:
   `stop` runs, the caller's cleanup and the `stop` itself have
   overwritten it, so `OffendingCommand` named `stop` rather than the
   `div` that actually failed.
+- **Two more from a blind review round, both about claims outrunning
+  the code.** The `/Soft 0` promise was written as "byte-identical to
+  calling the proc directly", which is stronger than pkwet delivers at
+  any `/Soft`: every pass runs in its own `gsave`, so the procedure's
+  leftover graphics state and *current path* are discarded — measured
+  at 640 ink pixels for `{ newpath ... lineto } exec stroke` against 0
+  for the same procedure through `pkwet`, and a `setrgbcolor` inside
+  the procedure likewise does not outlive it. Both wrappers are
+  load-bearing (the gsave displaces a pass and pays itself back when
+  one is abandoned; the `stopped` keeps a caught error from leaking
+  it), so the fix was to narrow the claim in all four places it
+  appeared, not to drop the wrapper. The existing test only covered
+  `pkdry`, a self-contained proc that leaves nothing behind, so it
+  never exercised the part that was false.
+
+  And `pkwet`'s depth counter could be poisoned to the point of
+  bricking the preset. `def` writes to the *current* dict, and
+  `stopped` does not restore the dict stack, so a wrapped procedure
+  that raised with a dict still `begin`-ned had the decrement land in
+  that dict while userdict's counter stayed high; eight of those and
+  every later top-level call dies with `pkwet-nesting-too-deep` —
+  precisely what the nesting guard's comment claimed could not happen.
+  The counter and the frame array are now reached through `userdict`
+  explicitly. Naming those three helpers cost a round of its own:
+  `/pqf` was already the pass-fraction variable inside `pkwet`, so the
+  first attempt turned it into a number and broke every call with a
+  `typecheck` — the `pkflat` incident again, at smaller scale, and the
+  same lesson about scanning before naming.
+
 - **`exit` took three attempts, and the one that shipped is the one
   that adds no mechanism.** The pass loop is a `for`, so while the
   wrapped procedure runs it is the nearest enclosing loop — an `exit`

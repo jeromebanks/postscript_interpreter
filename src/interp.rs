@@ -437,8 +437,19 @@ impl Interp {
     /// reason: by the time `stop` runs, the caller's cleanup and the
     /// `stop` itself have overwritten it, so `error_report` would name
     /// `stop` as the offending command rather than the `div` or `add`
-    /// that actually failed.
-    pub(crate) fn top_level_stop_error(&mut self) -> Option<PsError> {
+    /// that actually failed. That write is why this takes `&mut self`
+    /// and is named `take_` — it is only reached once `do_stop` has
+    /// already drained the execution stack, so nothing but the report
+    /// that immediately follows can observe it.
+    ///
+    /// `last_line` is deliberately *not* restored alongside it, so the
+    /// report pairs the original operator with the `stop`'s own line.
+    /// `$error` has nowhere to keep a line number, and the only other
+    /// source is a Rust-side cache — which is exactly what a `restore`
+    /// desynchronizes, the bug this method's `$error`-first design
+    /// exists to avoid. A slightly wrong line beats a confidently wrong
+    /// error (review of PR #138).
+    pub(crate) fn take_top_level_stop_error(&mut self) -> Option<PsError> {
         let (newerror, errorname, command) = match self.load("$error") {
             Some(obj) => match &obj.value {
                 Value::Dict(d) => {

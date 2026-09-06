@@ -588,8 +588,11 @@ beneath:
 Being a wrapper rather than a `/Wet` key bolted onto each preset means
 one implementation serves every stroke family in the file, and anything
 added later. `/Soft` is the only knob that matters — it supplies `/Layers`
-and `/Spread` — and at `/Soft 0` it is byte-identical to calling the
-procedure directly, random stream included.
+and `/Spread` — and at `/Soft 0` it marks the page exactly as calling the
+procedure directly would, random stream included. Every pass runs inside
+its own `gsave` and its own `stopped`, both of which the multi-pass case
+needs, so a path or graphics state the procedure leaves *behind* does not
+survive the call, and a `stopped` context is an `exit` boundary.
 
 There is deliberately **no alpha** in it. The obvious implementation is
 a translucent pass, and it was built and rendered before being

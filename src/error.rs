@@ -108,6 +108,35 @@ impl PsError {
 mod tests {
     use super::PsError;
 
+    /// A sample of every variant, written as an exhaustive `match` so
+    /// that adding a `PsError` variant fails to *compile* until it is
+    /// listed here. A hand-written array would silently omit it, and
+    /// `from_name`'s `_ => None` would then make a top-level `stop` go
+    /// quiet for that error kind — the exact regression the round-trip
+    /// test below exists to prevent (review of PR #138).
+    fn sample_of(e: &PsError) -> PsError {
+        match e {
+            PsError::StackUnderflow => PsError::StackUnderflow,
+            PsError::ExecStackOverflow => PsError::ExecStackOverflow,
+            PsError::Typecheck => PsError::Typecheck,
+            PsError::Rangecheck => PsError::Rangecheck,
+            PsError::Undefined(n) => PsError::Undefined(n.clone()),
+            PsError::UndefinedResult => PsError::UndefinedResult,
+            PsError::UnmatchedMark => PsError::UnmatchedMark,
+            PsError::NoCurrentPoint => PsError::NoCurrentPoint,
+            PsError::InvalidExit => PsError::InvalidExit,
+            PsError::DictStackUnderflow => PsError::DictStackUnderflow,
+            PsError::InvalidFont => PsError::InvalidFont,
+            PsError::InvalidFileAccess => PsError::InvalidFileAccess,
+            PsError::UndefinedFilename => PsError::UndefinedFilename,
+            PsError::Syntax(d) => PsError::Syntax(d.clone()),
+            PsError::Limitcheck => PsError::Limitcheck,
+            PsError::Io => PsError::Io,
+            PsError::InvalidRestore => PsError::InvalidRestore,
+            PsError::UndefinedResource => PsError::UndefinedResource,
+        }
+    }
+
     /// Every variant must survive the round trip, or a `stop` re-raise
     /// would silently drop an error kind (issue #142).
     #[test]
@@ -132,6 +161,9 @@ mod tests {
             PsError::InvalidRestore,
             PsError::UndefinedResource,
         ] {
+            // Routing through the exhaustive match is what ties this
+            // list to the enum: a new variant stops it compiling.
+            let e = sample_of(&e);
             let command = match &e {
                 PsError::Undefined(n) => Some(n.clone()),
                 _ => None,

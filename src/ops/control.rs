@@ -101,7 +101,7 @@ fn stop(it: &mut Interp) -> Result<(), PsError> {
     // a caller's procedure had to choose between leaking its own state
     // and swallowing the failure. `lib/paintkit.ps`'s `pkwet` hit
     // exactly that.
-    match it.top_level_stop_error() {
+    match it.take_top_level_stop_error() {
         Some(e) => Err(e),
         None => Ok(()),
     }

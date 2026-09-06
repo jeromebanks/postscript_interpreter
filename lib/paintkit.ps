@@ -2595,14 +2595,33 @@
 % core: a single-layer call has no such span, so at /Layers 1 there is
 % only the core pass, sitting exactly on the path, and /Spread has
 % nothing to act on and is inert. That is why /Soft 0 (which resolves to
-% Layers 1) is byte-identical to a plain call whatever /Spread says.
+% Layers 1) lays the same marks as a plain call whatever /Spread says.
 %
 % /Soft is the one knob that matters: it supplies /Layers and /Spread,
 % and every other key is a refinement. At /Soft 0 pkwet draws a single
 % pass, at the caller's exact colour, with no displacement and without
-% touching the random stream — byte-identical to calling the proc
-% directly, which `wet_soft_zero_is_identical_to_calling_the_proc`
-% pins.
+% touching the random stream, so it *marks the page* exactly as calling
+% the proc directly would -- pinned by
+% `wet_soft_zero_is_identical_to_calling_the_proc`.
+%
+% That is a claim about the marks, and it used to be written as
+% "byte-identical to calling the proc directly", which is stronger than
+% pkwet delivers at any /Soft including 0 (review of PR #138). Every
+% pass runs inside its own gsave and its own `stopped`, and both are
+% required -- the gsave is what displaces a pass and what pays itself
+% back when a pass is abandoned; the `stopped` is what keeps a caught
+% error from leaking that gsave and pkwet's own depth counter. Two
+% consequences a caller can see, at every /Soft:
+%
+%   * The graphics state the procedure leaves behind is discarded --
+%     including the current path. `{ newpath ... lineto } pkwet stroke`
+%     strokes nothing (measured: 640 ink pixels direct, 0 through
+%     pkwet), and a `setrgbcolor` inside the procedure does not outlive
+%     it. Marks the procedure *makes* are on the page and stay there;
+%     state it hands back does not. A mark-drawing procedure is the
+%     documented input, and those paint rather than hand a path out.
+%   * A `stopped` context is an `exit` boundary, per the PLRM. See the
+%     pass loop for what that means and why it is the honest choice.
 %
 % Revealing a *textured* underlayer still works, and does not need
 % translucency: reach for a broken brush. A pkdry or pktrowel mark at
@@ -2706,10 +2725,28 @@
 % @internal
 /pqdepth 0 def
 
+% pkwet's counter and frames are reached through userdict explicitly,
+% never by a bare name. `def` writes to the *current* dict, and
+% `stopped` does not restore the dict stack -- so a wrapped procedure
+% that raises with a dict still `begin`-ned had this procedure's
+% decrement land in that dict while userdict's counter stayed high.
+% Eight of those and every later top-level call dies with
+% pkwet-nesting-too-deep, which is exactly the poisoning the guard
+% below claims cannot happen (review of PR #138).
+% -> depth
+% @internal
+/pqdnow { userdict /pqdepth get } def
+% depth pqdset -
+% @internal
+/pqdset { userdict /pqdepth 3 -1 roll put } def
+% -> frame   (this invocation's [plan procedure] pair)
+% @internal
+/pqmyframe { userdict /pqframes get pqdnow get } def
+
 % @kind: Procedure
 % @summary: Runs a mark-drawing procedure several times, each pass displaced further and mixed further toward a declared backdrop color, so the mark's core stays solid while its edge grades away into the layer beneath. The wet-on-wet softener for skies, clouds, mist and distant forms; works with every stroke preset in this file. The procedure must build its own path: a path constructed before the call cannot be displaced, because PostScript paths are in device space once built, so every pass would land on the same geometry and nothing would soften. Pair it with a broken or particulate brush (pkspray, pkdry, pktrowel at low Coverage) -- a solid brush keeps its own hard silhouette and only gains a halo. Uses no alpha, so unlike pkwash it needs no Ghostscript fallback.
 % @example: { newpath 40 120 moveto 260 150 lineto << /Width 40 >> pkribbon } << /Soft 0.7 /Under [0.62 0.72 0.86] >> pkwet
-% @param: /Soft 0..1 master softness; supplies the defaults for Layers and Spread. 0 is a single undisplaced pass identical to calling the proc directly (default 0.6)
+% @param: /Soft 0..1 master softness; supplies the defaults for Layers and Spread. 0 is a single undisplaced pass that marks the page exactly as calling the proc directly would, random stream included; the procedure still runs inside a gsave, so a path or graphics state it leaves behind does not survive the call (default 0.6)
 % @param: /Under [r g b] the color already on the canvas that this mark settles into; the outermost pass is nearly this color (default [1 1 1])
 % @param: /Pickup 0..1 how far the outermost pass mixes toward Under; lower keeps the mark's own color out to its edge (default 0.85)
 % @param: /Layers Passes to draw, outermost first; must be a whole number, hard cap 1..6 (default 1 + round(Soft*5))
@@ -2749,14 +2786,14 @@
             { pkwet-under-components-must-be-numbers } if
         dup 0 lt exch 1 gt or { pkwet-under-components-must-be-0-to-1 } if
     } for
-    /pqdepth pqdepth 1 add def
+    pqdnow 1 add pqdset
     % Roll the depth back *before* signalling. A caller that catches this
     % with `stopped` would otherwise be left with pqdepth stuck above the
     % limit, so one rejected nested call would poison every later
     % top-level pkwet until the library was reloaded (Codex review).
-    pqdepth 8 gt { /pqdepth pqdepth 1 sub def pkwet-nesting-too-deep } if
-    pqframes pqdepth 2 array put
-    pqframes pqdepth get 1 /pqproc load put
+    pqdnow 8 gt { pqdnow 1 sub pqdset pkwet-nesting-too-deep } if
+    userdict /pqframes get pqdnow 2 array put
+    pqmyframe 1 /pqproc load put
     /pqbase [ currentrgbcolor ] def
     % Plan every pass before running any of them, so that none of pkwet's
     % own randomness is interleaved with the wrapped proc's -- otherwise
@@ -2814,7 +2851,7 @@
     % mark is a reasonable thing to write -- without the inner call
     % overwriting the outer one's plan mid-loop. See the header for why
     % neither plain names nor the operand stack works here.
-    pqframes pqdepth get 0 pqplan put
+    pqmyframe 0 pqplan put
     % Each pass runs under `stopped`, which is what makes this wrapper
     % safe to abandon. Three separate review findings were all the same
     % missing unwind-protect: a caught error leaked one graphics-state
@@ -2853,21 +2890,21 @@
     % silently, which is what this did originally, is the one behavior
     % that would not be.
     pqLayers 1 sub -1 0 {
-        pqframes pqdepth get 0 get exch get
+        pqmyframe 0 get exch get
         gsave
             dup length 2 gt
                 { aload pop setrgbcolor translate }
                 { aload pop translate }
             ifelse
-            { pqframes pqdepth get 1 get exec } stopped
+            { pqmyframe 1 get exec } stopped
         {
             grestore
-            /pqdepth pqdepth 1 sub def
+            pqdnow 1 sub pqdset
             stop
         } if
         grestore
     } for
-    /pqdepth pqdepth 1 sub def
+    pqdnow 1 sub pqdset
     % No trailing setrgbcolor: every pass ran inside its own
     % gsave/grestore, so the caller's color is already restored -- and
     % restoring it *by hand* would force the graphics state into

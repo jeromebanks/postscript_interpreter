@@ -5283,22 +5283,94 @@ fn wet_a_caught_error_restores_the_graphics_state() {
 /// `stop` while errorname still reads `/invalidexit`, and the heuristic
 /// turned that deliberate `stop` into an exit of the caller's loop --
 /// reporting `false` to their `stopped` (Codex review, round 4).
+/// The boundary applies at *every* `/Soft`, `0` included -- the pass
+/// wrapper is unconditional. An earlier revision of this test dropped
+/// the `/Soft 0` case, and `/Soft 0` is exactly where the claim of
+/// equivalence to a direct call makes the difference easiest to miss.
 #[test]
 fn wet_blocks_a_callers_exit_loudly_rather_than_swallowing_it() {
-    let mut it = fresh(120, 60);
-    let e = it
-        .run_str(
-            "0 0 0 setrgbcolor 5 srand /n 0 def \
-             0 1 4 { pop \
-               { newpath 10 10 moveto 100 10 lineto << /Width 5 >> pkribbon exit } \
-               << /Soft 0.8 >> pkwet \
-               /n n 1 add def } for",
-        )
-        .unwrap_err();
+    for opts in ["/Soft 0", "/Soft 0.8 /Layers 4"] {
+        let mut it = fresh(120, 60);
+        let e = it
+            .run_str(&format!(
+                "0 0 0 setrgbcolor 5 srand /n 0 def \
+                 0 1 4 {{ pop \
+                   {{ newpath 10 10 moveto 100 10 lineto << /Width 5 >> pkribbon exit }} \
+                   << {opts} >> pkwet \
+                   /n n 1 add def }} for"
+            ))
+            .unwrap_err();
+        assert!(
+            it.error_report(&e).contains("invalidexit"),
+            "<< {opts} >>: an exit across pkwet's stopped boundary must raise \
+             invalidexit, got {}",
+            it.error_report(&e)
+        );
+    }
+}
+
+/// What `/Soft 0` does and does not promise. It marks the page exactly
+/// as a direct call would -- that is what
+/// `wet_soft_zero_is_identical_to_calling_the_proc` pins. It does *not*
+/// hand back the procedure's leftover graphics state, because every
+/// pass runs in its own gsave, and the docs used to say "byte-identical"
+/// which is stronger than that (review of PR #138).
+#[test]
+fn wet_does_not_hand_back_the_procedures_graphics_state() {
+    // The current path is graphics state too, so a proc that builds a
+    // path and leaves it for the caller to stroke gets nothing back.
+    let ink = |src: &str| {
+        let mut it = fresh(200, 120);
+        it.run_str(src)
+            .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        ink_count(&it)
+    };
+    let build = "{ newpath 20 60 moveto 180 60 lineto }";
+    let direct = ink(&format!(
+        "0 0 0 setrgbcolor 3 setlinewidth {build} exec stroke"
+    ));
+    let wrapped = ink(&format!(
+        "0 0 0 setrgbcolor 3 setlinewidth {build} << /Soft 0 >> pkwet stroke"
+    ));
+    assert!(direct > 100, "the direct call should stroke a line");
+    assert_eq!(
+        wrapped, 0,
+        "pkwet runs each pass in a gsave, so a path left behind does not \
+         survive -- direct {direct}, wrapped {wrapped}"
+    );
+
+    // ...and neither does a color the procedure sets.
+    let mut it = fresh(60, 60);
+    it.run_str("0 1 0 setrgbcolor { 1 0 0 setrgbcolor } << /Soft 0 >> pkwet")
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let (r, g, b) = it.gfx().rgb();
     assert!(
-        it.error_report(&e).contains("invalidexit"),
-        "an exit across pkwet's stopped boundary must raise invalidexit, got {}",
-        it.error_report(&e)
+        (r - 0.0).abs() < 1e-6 && (g - 1.0).abs() < 1e-6 && (b - 0.0).abs() < 1e-6,
+        "the caller's color should survive the call, got {r} {g} {b}"
+    );
+}
+
+/// `def` writes to the *current* dict and `stopped` does not restore the
+/// dict stack, so a wrapped procedure that raised with a dict still
+/// `begin`-ned had pkwet's decrement land in that dict while userdict's
+/// counter stayed high. Eight of those and every later top-level call
+/// dies with `pkwet-nesting-too-deep` -- exactly the poisoning the
+/// nesting guard claims cannot happen (review of PR #138).
+#[test]
+fn wet_survives_a_proc_that_raises_with_a_dict_still_open() {
+    let mut it = fresh(120, 60);
+    it.run_str(
+        "0 0 0 setrgbcolor 5 srand \
+         { { 5 dict begin nosuchname } << /Layers 2 >> pkwet } stopped pop \
+         countdictstack 3 eq { end } if \
+         userdict /pqdepth get",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(
+        it.operand_stack().last().expect("pqdepth").repr(),
+        "0",
+        "the depth counter must come back even when the procedure left a \
+         dict open, or eight of these brick pkwet"
     );
 }
 
