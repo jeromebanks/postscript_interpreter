@@ -165,11 +165,17 @@ behaviour the ordinary tests exercised without noticing:
   every later top-level call dies with `pkwet-nesting-too-deep` —
   precisely what the nesting guard's comment claimed could not happen.
   The counter and the frame array are now reached through `userdict`
-  explicitly. Naming those three helpers cost a round of its own:
-  `/pqf` was already the pass-fraction variable inside `pkwet`, so the
-  first attempt turned it into a number and broke every call with a
+  explicitly. Naming those three helpers went wrong first: `/pqf` was
+  already the pass-fraction variable inside `pkwet`, so the first
+  attempt turned it into a number and broke every call with a
   `typecheck` — the `pkflat` incident again, at smaller scale, and the
-  same lesson about scanning before naming.
+  same lesson about scanning before naming. Worth noting *what* caught
+  it, since it was not review: the very next render failed loudly, in
+  the same commit. The self-documenting-error convention plus a demo
+  that gets re-rendered after every change is what makes a name
+  collision cheap here; the `pkflat` one was expensive precisely
+  because it surfaced as a `typecheck` inside `pkgetdef`, nowhere near
+  the cause.
 
 - **`exit` took three attempts, and the one that shipped is the one
   that adds no mechanism.** The pass loop is a `for`, so while the
