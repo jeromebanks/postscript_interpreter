@@ -571,6 +571,33 @@ about the point, which is what makes foliage clusters;
 `examples/paintkit_fan_demo.ps` builds conifer limbs, a grass bank and
 shrub clusters out of exactly that.
 
+`pkbroad` (issue #115) is the broad flat brush — the block-in tool for
+sky and water bands, reflections and broad masses. Three presets here
+already make a wide mark, so what earns it a place is that a brush
+**runs out**: a loaded flat brush lays solid colour where it touches
+down and goes progressively drier as it travels. `pkribbon` is a
+geometric band with no tool character, `pknib` is a pen whose width
+follows a fixed world angle, and `pktrowel` is a blade carrying a smear
+rather than a reservoir — issue #111 left depletion out of it
+deliberately for exactly this reason.
+
+The band is divided into `/Grain` striations, each given a fixed
+affinity for the surface, and the charge falls along the stroke as
+`Charge * (1 - Depletion*t)`. A striation deposits while the charge
+stays above its own affinity, so striations drop out one by one and the
+band thins from solid to broken *along its own direction* — streaks,
+not speckle. `/Depletion 0` turns the fade off for an even block-in; a
+low `/Charge` skips from the start, the mark of a barely loaded brush.
+Each striation's end tapers away when it runs out but keeps the brush's
+square end when the stroke simply stops.
+
+The controls are called `/Charge` and `/Depletion` rather than `/Load`
+on purpose: this file already uses `/Load` for a contact rate in
+`pkdry`/`pkfan` and for deposit width in `pktrowel`, and a third meaning
+would be actively misleading. `/Angle` follows `pktrowel`'s reading —
+brush rotation relative to travel, constant along a curve — not
+`pknib`'s fixed world angle.
+
 `pkwash` (issue #47) is the watercolor medium, and the one preset here
 that needs something from the interpreter rather than only from
 PostScript: it fills the current path as a *translucent* wash. Two new
