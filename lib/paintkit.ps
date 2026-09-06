@@ -2625,19 +2625,31 @@
     pmpy pmpb sin pmpu mul add
 } def
 
-% i na nb pmstamp -   (the brush's footprint, pressed at a single stop)
+% i na nb back fwd pmstamp -   (the brush's footprint at a single stop)
 %
 % A degenerate subpath -- a bare `moveto`, or a `moveto closepath` --
 % gives walkpath exactly one stop, and a strip needs two stops to have
 % any area, so pkbroad drew nothing at all there while pkribbon,
 % pktrowel and pkfan all leave a mark (review of PR #140). A flat brush
 % set down and lifted stamps its own footprint, so that is what this is:
-% the full band width, half a pitch either side of the point, square
-% ended like the brush itself.
+% the full band width, square ended like the brush itself.
+%
+% `back` and `fwd` are how far the footprint reaches either side of the
+% stop along the direction of travel, and they are separate because the
+% two callers want different shapes. A degenerate stop has no travel at
+% all, so the brush is simply set down: half a pitch each way. A run
+% that is one sample long *does* have a direction -- the paint went on
+% from that stop forwards -- so it takes back 0 and reaches forward only
+% as far as the stroke actually travels. Passing the degenerate shape
+% for both put a short stroke's mark in the wrong place entirely: a 3pt
+% stroke at x 50..53 inked x 48..51, starting before the stroke began
+% and never reaching its end, and since /Pitch is user-supplied the
+% error is unbounded -- /Pitch 200 on a 30pt path inked 200pt of band
+% starting 50pt early (review of PR #140).
 % @internal
 /pmstamp {
+    /pmsfwd exch def /pmsback exch def
     /pmsnb exch def /pmsna exch def /pmsi exch def
-    /pmslen pmPitch 0.5 mul def
     % The footprint's long axis is the stop's own travel direction
     % turned by /Angle -- the same rotation pmpt applies across the
     % band. walkpath reports angle 0 at a degenerate stop, so there this
@@ -2646,16 +2658,35 @@
     % nonzero /Angle rather than the rotated rectangle a flat brush
     % actually presses.
     /pmsang pmraw pmsi get 2 get pmAngle add def
-    /pmsdx pmslen pmsang cos mul def
-    /pmsdy pmslen pmsang sin mul def
+    /pmscos pmsang cos def
+    /pmssin pmsang sin def
     pmsi pmsna pmhalf mul pmpt /pmsay exch def /pmsax exch def
     pmsi pmsnb pmhalf mul pmpt /pmsby exch def /pmsbx exch def
     newpath
-    pmsax pmsdx sub pmsay pmsdy sub moveto
-    pmsax pmsdx add pmsay pmsdy add lineto
-    pmsbx pmsdx add pmsby pmsdy add lineto
-    pmsbx pmsdx sub pmsby pmsdy sub lineto
+    pmsax pmsback pmscos mul sub  pmsay pmsback pmssin mul sub moveto
+    pmsax pmsfwd  pmscos mul add  pmsay pmsfwd  pmssin mul add lineto
+    pmsbx pmsfwd  pmscos mul add  pmsby pmsfwd  pmssin mul add lineto
+    pmsbx pmsback pmscos mul sub  pmsby pmsback pmssin mul sub lineto
     closepath fill
+} def
+
+% i pmgap -> length   (how far the stroke travels on from stop i)
+%
+% walkpath reports each stop's `sp`, the arc-length from the previous
+% stop, so the gap *after* stop i is the next stop's sp -- provided
+% there is a next stop and it is not the start of a new subpath. At the
+% last stop of a subpath there is nothing ahead, so the brush's own
+% half-pitch footprint is the honest fallback.
+% @internal
+/pmgap {
+    dup 1 add pmn lt {
+        1 add pmraw exch get
+        dup 5 get 1 and 1 eq
+            { pop pmPitch 0.5 mul }
+            { 4 get }
+        ifelse
+    } { pop pmPitch 0.5 mul } ifelse
+    dup 0 le { pop pmPitch 0.5 mul } if
 } def
 
 % start end na nb ranout pmemit -   (one striation run, as a filled strip)
@@ -2693,11 +2724,11 @@
         % and `pkbroad` painted nothing at all (Codex review of PR #140).
         % It also catches any striation whose affinity happens to fall
         % between two consecutive stops' charges, which was silently
-        % dropping that striation mid-band. Press the same footprint the
-        % degenerate case uses; pmstamp now takes its long axis from the
-        % stop, so an ordinary stop stamps along its own direction of
-        % travel rather than along +x.
-        pmstart pmnav pmnbv pmstamp
+        % dropping that striation mid-band. The footprint starts *at*
+        % the stop and reaches forward only as far as the stroke
+        % actually travels -- unlike the degenerate case, a one-sample
+        % run knows which way the brush was going.
+        pmstart pmnav pmnbv 0 pmstart pmgap pmstamp
     } ifelse
 } def
 
@@ -2730,7 +2761,7 @@
     pmnc sub pmtap mul pmnc add
 } def
 
-% -> multiplier   (reads pmi/pmstart/pmspan/pmran; the run-end taper)
+% -> multiplier   (reads pmei/pmstart/pmspan/pmran; the run-end taper)
 % Written as its own proc so pmemit's two point loops can't drift apart.
 % @internal
 /pmtap {
@@ -2744,14 +2775,14 @@
 } def
 
 % @kind: Procedure
-% @summary: A broad flat brush for block-ins, sky and water bands, reflections and broad masses. What separates it from pktrowel's blade and pknib's pmn is that a brush runs out of paint: the band is divided into striations that drop out one by one as the charge falls along the stroke, so the mark fades from solid to broken along its own direction. Crisp parallel edges and square ends by default. Deterministic under the caller's own srand; bounded by Grain * stops.
+% @summary: A broad flat brush for block-ins, sky and water bands, reflections and broad masses. What separates it from pktrowel's blade and pknib's pmn is that a brush runs out of paint: the band is divided into striations that drop out one by one as the charge falls along the stroke, so the mark fades from solid to broken along its own direction. Square ends, and parallel edges that are crisp at /Edge 0 -- the default /Edge 0.15 roughens them by about a pixel. Deterministic under the caller's own srand; bounded by Grain * stops.
 % @example: newpath 40 120 moveto 300 130 lineto << /Width 46 /Charge 0.95 /Depletion 0.6 >> pkbroad
 % @param: /Width Band width; must be > 0 (default 40)
 % @param: /Angle Brush rotation in degrees relative to the direction of travel, -80..80; constant along a curve, unlike pknib's fixed world angle (default 0)
 % @param: /Charge 0..1 how much paint the brush is loaded with; striations whose affinity exceeds it never deposit, so a low charge skips and gaps (default 0.95)
 % @param: /Depletion 0..1 how fast the charge runs out along each subpath; 0 is an even fully loaded block-in (default 0.5)
 % @param: /Grain Striations across the band; must be a whole number, hard safety cap 1..40 (default 14)
-% @param: /Edge 0..1 roughness of the band's long edges; 0 is a crisp flat-brush edge (default 0.15)
+% @param: /Edge 0..1 roughness applied to every striation boundary, not only the band's outer sides -- so above about 0.3 it also breaks holes through the band's interior (8% of interior pixels at 0.9); 0 is a crisp flat-brush edge (default 0.15)
 % @param: /Pitch walkpath sampling pitch for the shared centerline pass; must be > 0 (default Width*0.3, capped at 4)
 % @param: /ColorJitter 0..1 per-striation color variation around the caller's current color (default 0.05)
 /pkbroad {
@@ -2832,8 +2863,35 @@
             /pmna pmg 1 sub pmGrain div 2 mul 1 sub def
             /pmnb pmg pmGrain div 2 mul 1 sub def
             /pmnc pmna pmnb add 0.5 mul def
-            /pmna pmnc pmna pmnc sub 1.15 mul add def
-            /pmnb pmnc pmnb pmnc sub 1.15 mul add def
+            % 15% of a lane, but never less than 0.2pt of actual
+            % overlap. The fraction alone is sub-pixel once the lanes
+            % get thin -- at /Width 60 /Grain 40 it is 0.11pt, and a
+            % nominally solid band read 75% coverage on alternating
+            % rows, which is exactly the hairline this exists to
+            % prevent (review of PR #140). The floor sits just below
+            % the default's own overlap (0.21pt at /Width 40
+            % /Grain 14), so it only ever raises a lane too thin to
+            % tile cleanly and leaves every coarser band exactly as it
+            % was.
+            %
+            % It bounds the hairline rather than removing it outright at
+            % the extreme: /Width 60 /Grain 40 measures max luma 64 of
+            % 255 inside the band before this, 16 after. Closing it
+            % completely needs about 0.45pt, which is more overlap than
+            % the *default* lane has, so every ordinary band would have
+            % been re-tuned to fix the thinnest one -- and since
+            % adjacent striations carry different /ColorJitter colours,
+            % widening the overlap changes how the whole preset reads.
+            % Not worth it for 6% lightness on one row at maximum
+            % /Grain.
+            /pmlane pmhalf pmGrain div def
+            /pmover 0.15 def
+            pmlane 0 gt {
+                0.2 pmlane div dup pmover gt { /pmover exch def } { pop } ifelse
+            } if
+            pmover 1 gt { /pmover 1 def } if
+            /pmna pmnc pmna pmnc sub 1 pmover add mul add def
+            /pmnb pmnc pmnb pmnc sub 1 pmover add mul add def
             pmna -1 lt { /pmna -1 def } if
             pmnb 1 gt { /pmnb 1 def } if
             /pmrun false def
@@ -2855,7 +2913,8 @@
                     % A degenerate subpath: press the footprint rather
                     % than trying to draw a zero-area strip through one
                     % stop. It honors the charge like any other stop.
-                    pmch pmaff pmwets { pmi pmna pmnb pmstamp } if
+                    pmch pmaff pmwets
+                        { pmi pmna pmnb pmPitch 0.5 mul dup pmstamp } if
                     /pmrun false def
                 } {
                     pmae 2 and 2 eq {

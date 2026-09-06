@@ -117,6 +117,48 @@ charge painted nothing. `pmwets` now clamps both ends the way `ptroll`
 and `pfroll` already did, which is the second time this file has been
 bitten by a probability comparison that looked obviously right.
 
+**A blind review round found the placement bug the earlier fix left
+behind, and two tests that did not test what they claimed.** The
+one-sample footprint reused `pmstamp` verbatim, and `pmstamp` centres
+itself on its stop — right for a bare `moveto`, which has no direction
+of travel, wrong for a run that does. A 3pt stroke at x 50..53 inked
+x 48..51: starting before the stroke and never reaching its end. Since
+`/Pitch` is user-supplied and validated only as positive, the error is
+unbounded — `/Pitch 200` on a 30pt path inked x 0..149. `pmstamp` now
+takes separate back and forward extents, and a one-sample run reaches
+forward only as far as the stroke actually travels (`pmgap`, read off
+the next stop's `sp`). The test that was supposed to cover this
+asserted only `ink_count > 50`, so it passed on a mark in the wrong
+place.
+
+Two more of the same shape, both found by mutation rather than by
+reading. Deleting *both* `pmtaper` calls from `pmemit` left all 22
+tests green while the specimen moved by 8552 pixels — the test pinned
+the helper's arithmetic and never that anything called it. And the
+affinity probe read `pmaffs` but not `pmcjs`, so moving the colour
+draw back onto the drawing stream also passed; worse, the obvious fix
+of adding `pmcjs` to the probe *still* passed, because with the draw
+removed the array holds nulls in both runs and two runs of nulls
+compare equal. It needed an assertion that the values are numbers at
+all. The lesson is narrower than "mutation-test everything": a probe
+that reads internal state has to check the state was *written*, not
+just that two reads agree.
+
+Also from that round: `/Edge`'s catalog text claimed it roughened "the
+band's long edges" when it applies to every striation boundary and
+punches holes through the interior above about 0.3 (8% of interior
+pixels at 0.9); `@summary` said "crisp by default" when `/Edge`
+defaults to 0.15; and the 1.15 lane overlap is a fraction of a lane, so
+it goes sub-pixel as lanes thin — a nominally solid band at `/Grain 40`
+read 75% coverage on alternating rows, the exact hairline the overlap
+exists to prevent. There is now a 0.2pt floor under it, which takes
+that band from max luma 64 to 16 and leaves every coarser one
+untouched. Closing it outright needs ~0.45pt, more overlap than the
+*default* lane has — so fixing the thinnest case would have re-tuned
+how every ordinary band reads, since adjacent striations carry
+different `/ColorJitter` colours. Bounded and documented rather than
+paid for at that price.
+
 Worth recording how those two were pinned, since an earlier round of
 this same PR shipped a test that compared a render to itself. The taper
 fix is asserted on `pmtaper` directly — the invariant is exactly "the

@@ -3317,6 +3317,23 @@ fn column_runs(it: &Interp, x: u32, h: u32) -> usize {
 
 /// Horizontal extent of anything inked -- how far the mark reaches
 /// along its own direction of travel, which is what `/Drag` extends.
+/// Leftmost and rightmost inked column, or None if nothing was drawn.
+/// `ink_x_extent` gives only the width, which cannot tell a mark in the
+/// right place from one the same size beside it.
+fn ink_x_bounds(it: &Interp, w: u32, h: u32) -> Option<(u32, u32)> {
+    let mut lo = u32::MAX;
+    let mut hi = 0u32;
+    for y in 0..h {
+        for x in 0..w {
+            if it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0) {
+                lo = lo.min(x);
+                hi = hi.max(x);
+            }
+        }
+    }
+    if lo == u32::MAX { None } else { Some((lo, hi)) }
+}
+
 fn ink_x_extent(it: &Interp, w: u32, h: u32) -> u32 {
     let mut lo = u32::MAX;
     let mut hi = 0u32;
@@ -5021,7 +5038,7 @@ fn broad_charge_does_not_reroll_the_striations() {
         it.run_str(&format!(
             "0 0 0 setrgbcolor 3 srand newpath 50 100 moveto 350 106 lineto \
              << /Width 50 /Grain 6 /Depletion 0 /Charge {charge} >> pkbroad \
-             pmaffs aload pop"
+             pmaffs aload pop pmcjs aload pop"
         ))
         .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
         it.operand_stack()
@@ -5030,7 +5047,25 @@ fn broad_charge_does_not_reroll_the_striations() {
             .collect::<Vec<_>>()
     };
     let low = affinity("0.4");
-    assert_eq!(low.len(), 6, "one affinity per striation");
+    assert_eq!(
+        low.len(),
+        12,
+        "six affinities and six per-striation colors -- the documented claim \
+         is about which lanes deposit *and what color they are*, and an \
+         affinity-only probe passed with the color draw moved back onto \
+         the drawing stream (review of PR #140)"
+    );
+    // Equality alone is not enough for the colors: if the color draw is
+    // moved back onto the drawing stream, `pmcjs` is simply never
+    // written, and two runs of six nulls compare equal. Require real
+    // numbers, so "planned up front" is what is actually asserted.
+    for (i, v) in low.iter().enumerate() {
+        assert!(
+            v.parse::<f64>().is_ok(),
+            "slot {i} of the plan is {v:?}, not a number -- the per-striation \
+             values must be drawn before any geometry, not left unwritten"
+        );
+    }
     for charge in ["0.8", "1", "0.05"] {
         assert_eq!(
             affinity(charge),
@@ -5045,7 +5080,7 @@ fn broad_charge_does_not_reroll_the_striations() {
         it.run_str(&format!(
             "0 0 0 setrgbcolor 3 srand newpath 50 100 moveto 350 106 lineto \
              << /Width 50 /Grain 6 /Depletion {depletion} /Charge 0.4 >> pkbroad \
-             pmaffs aload pop"
+             pmaffs aload pop pmcjs aload pop"
         ))
         .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
         let got: Vec<String> = it
@@ -5060,6 +5095,38 @@ fn broad_charge_does_not_reroll_the_striations() {
     }
 }
 
+/// The taper's *use*, in pixels. Pinning only the helper's arithmetic
+/// (below) let both `pmtaper` calls be deleted from `pmemit` with every
+/// broad_ test still green, while the specimen changed by 8552 pixels
+/// and the "staircase of hard vertical cutoffs" the taper exists to
+/// remove came back (review of PR #140).
+///
+/// One striation, fully depleting: near the end of its run the band must
+/// be measurably thinner than mid-run. Untapered it keeps full width and
+/// stops dead.
+#[test]
+fn broad_the_run_out_taper_is_actually_applied() {
+    let mut it = fresh(400, 200);
+    it.run_str(
+        "0 0 0 setrgbcolor 29 srand newpath 40 100 moveto 360 100 lineto \
+         << /Width 60 /Grain 1 /Charge 1 /Depletion 1 /Edge 0 /ColorJitter 0 >> pkbroad",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let (x0, x1) = ink_x_bounds(&it, 400, 200).expect("the stroke must ink");
+    let mid = x0 + (x1 - x0) / 2;
+    let late = x0 + (x1 - x0) * 9 / 10;
+    let (h_mid, h_late) = (column_height(&it, mid, 200), column_height(&it, late, 200));
+    assert!(
+        h_mid > 0 && h_late > 0,
+        "both sample columns must be inside the mark: mid {h_mid} late {h_late}"
+    );
+    assert!(
+        (h_late as f64) < (h_mid as f64) * 0.8,
+        "a striation that ran out must thin away over its last stretch, not \
+         stop at full width: height {h_mid} at mid-run, {h_late} at 90%"
+    );
+}
+
 /// Codex review of PR #140 [P1]: the run-out taper has to narrow a
 /// striation around *its own* center, not scale its offsets from the
 /// band centerline. Scaling the absolute offsets translates the whole
@@ -5070,6 +5137,10 @@ fn broad_charge_does_not_reroll_the_striations() {
 /// Read off `pmtaper` directly rather than from pixels: the invariant is
 /// exactly "the tapered midpoint is still the striation's own center,"
 /// and a render can only show that indirectly.
+///
+/// That precision is also this test's limit, which is why
+/// `broad_the_run_out_taper_is_actually_applied` sits beside it: pinning
+/// the helper's arithmetic said nothing about `pmemit` still calling it.
 #[test]
 fn broad_the_run_out_taper_narrows_in_place() {
     let mut it = fresh(100, 100);
@@ -5119,5 +5190,36 @@ fn broad_a_stroke_shorter_than_the_pitch_still_paints() {
         ink_count(&it) > 50,
         "a fully loaded brush must leave a mark on a short stroke, got {}",
         ink_count(&it)
+    );
+    // ...and it must leave it *where the stroke is*. Asserting only
+    // that ink exists passed on a mark 2pt to the left of the stroke,
+    // which is what reusing the degenerate footprint did: that one is
+    // centred on its stop, correct for a bare `moveto` and wrong for a
+    // run that knows which way the brush was travelling (review of
+    // PR #140).
+    let (x0, x1) = ink_x_bounds(&it, 120, 120).expect("the short stroke must ink");
+    assert!(
+        x0 >= 49 && x1 <= 54,
+        "the mark must sit on the 50..53 stroke, got x {x0}..{x1}"
+    );
+}
+
+/// The same placement bug is unbounded through `/Pitch`, which is
+/// user-supplied and validated only as positive: the footprint was a
+/// full pitch long, so `/Pitch 200` on a 30pt path inked 200pt of band
+/// starting 50pt before the stroke.
+#[test]
+fn broad_a_short_stroke_does_not_scale_its_mark_with_pitch() {
+    let mut it = fresh(300, 300);
+    it.run_str(
+        "0 0 0 setrgbcolor 1 srand newpath 50 150 moveto 80 150 lineto \
+         << /Width 20 /Pitch 200 /Charge 1 /Depletion 1 >> pkbroad",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let (x0, x1) = ink_x_bounds(&it, 300, 300).expect("must ink");
+    assert!(
+        x0 >= 49 && x1 <= 81,
+        "a large /Pitch must not stretch the mark past its own stroke \
+         (50..80), got x {x0}..{x1}"
     );
 }
