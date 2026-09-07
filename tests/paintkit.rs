@@ -5397,8 +5397,7 @@ fn dashes_in(it: &Interp, x0: u32, x1: u32, y0: u32, y1: u32) -> usize {
     let mut runs = 0;
     let mut prev = false;
     for x in x0..x1 {
-        let inked = (y0..y1)
-            .any(|y| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0));
+        let inked = (y0..y1).any(|y| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0));
         if inked && !prev {
             runs += 1;
         }
@@ -5509,8 +5508,12 @@ fn liner_a_wavered_line_keeps_its_thickness() {
 #[test]
 fn liner_depletion_breaks_the_tail() {
     let it = liner("/Width 5 /Taper 0 /Depletion 1 /Waver 0");
-    let near = (50..140).filter(|&x| column_height(&it, x, 200) > 0).count();
-    let far = (260..350).filter(|&x| column_height(&it, x, 200) > 0).count();
+    let near = (50..140)
+        .filter(|&x| column_height(&it, x, 200) > 0)
+        .count();
+    let far = (260..350)
+        .filter(|&x| column_height(&it, x, 200) > 0)
+        .count();
     assert!(
         near > 70 && far * 2 < near,
         "the brush must run out as it travels: near {near} far {far}"
@@ -5524,8 +5527,12 @@ fn liner_depletion_breaks_the_tail() {
 #[test]
 fn liner_depletion_zero_never_runs_out() {
     let it = liner("/Width 5 /Taper 0 /Depletion 0 /Waver 0");
-    let near = (50..140).filter(|&x| column_height(&it, x, 200) > 0).count();
-    let far = (260..350).filter(|&x| column_height(&it, x, 200) > 0).count();
+    let near = (50..140)
+        .filter(|&x| column_height(&it, x, 200) > 0)
+        .count();
+    let far = (260..350)
+        .filter(|&x| column_height(&it, x, 200) > 0)
+        .count();
     assert!(
         far * 10 > near * 9,
         "/Depletion 0 must carry paint the whole way: near {near} far {far}"
@@ -5538,7 +5545,9 @@ fn liner_depletion_zero_never_runs_out() {
 fn liner_charge_controls_how_much_lands_at_all() {
     let covered = |opts: &str| {
         let it = liner(opts);
-        (50..140).filter(|&x| column_height(&it, x, 200) > 0).count()
+        (50..140)
+            .filter(|&x| column_height(&it, x, 200) > 0)
+            .count()
     };
     let full = covered("/Width 5 /Taper 0 /Depletion 0 /Charge 1 /Waver 0");
     // 0.12 rather than something mid-range: coverage responds fastest in
@@ -5570,7 +5579,10 @@ fn liner_full_charge_is_certain_contact() {
         let gaps = (50..350)
             .filter(|&x| column_height(&it, x, 200) == 0)
             .count();
-        assert_eq!(gaps, 0, "/Charge 1 must not skip (seed {seed}): {gaps} gaps");
+        assert_eq!(
+            gaps, 0,
+            "/Charge 1 must not skip (seed {seed}): {gaps} gaps"
+        );
     }
 }
 
@@ -5634,8 +5646,7 @@ fn liner_each_subpath_gets_its_own_charge() {
         let seg = |x0: u32, x1: u32| {
             (x0..x1)
                 .filter(|&x| {
-                    (lo..hi)
-                        .any(|y| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+                    (lo..hi).any(|y| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
                 })
                 .count()
         };
@@ -5695,10 +5706,8 @@ fn liner_a_pressed_dot_lands_on_every_seed_but_needs_paint() {
         assert!(ink_count(&it) > 20, "the dab must land (seed {seed})");
     }
     let mut dry = fresh(80, 80);
-    dry.run_str(
-        "0 0 0 setrgbcolor 17 srand newpath 40 40 moveto << /Width 8 /Charge 0 >> pkliner",
-    )
-    .unwrap_or_else(|e| panic!("{}", dry.error_report(&e)));
+    dry.run_str("0 0 0 setrgbcolor 17 srand newpath 40 40 moveto << /Width 8 /Charge 0 >> pkliner")
+        .unwrap_or_else(|e| panic!("{}", dry.error_report(&e)));
     assert_eq!(ink_count(&dry), 0, "no paint means no dab");
 }
 
@@ -5718,7 +5727,10 @@ fn liner_a_stroke_shorter_than_the_pitch_still_paints() {
          << /Width 6 /Waver 0 /Charge 1 /Depletion 1 >> pkliner",
     )
     .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
-    assert!(ink_count(&it) > 10, "a short stroke must still leave a mark");
+    assert!(
+        ink_count(&it) > 10,
+        "a short stroke must still leave a mark"
+    );
     let (x0, x1) = ink_x_bounds(&it, 120, 120).expect("must ink");
     assert!(
         x0 >= 49 && x1 <= 55,
