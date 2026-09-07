@@ -3236,27 +3236,21 @@
     pqcy pqsdi get pqsny pqsw mul add
 } def
 
-% i pqgap -> length   (how far the stroke travels on from stop i)
-%
-% walkpath reports each stop's `sp` as the arc length from the *previous*
-% stop, so the travel after stop i is the next stop's sp -- provided
-% there is a next stop in the same subpath. Same shape as pkbroad's
-% pmgap, and the same fallback where there isn't.
-% @internal
-/pqgap {
-    dup pqhi lt
-        { 1 add pqraw exch get 4 get }
-        { pop pqPitch 0.5 mul }
-    ifelse
-    dup 0 le { pop pqPitch 0.5 mul } if
-} def
-
 % start end pqemit -   (one wet run, as a filled ribbon)
 % @internal
 /pqemit {
     /pqrend exch def /pqrstart exch def
     /pqrspan pqrend pqrstart sub def
-    pqrspan 0 gt {
+    % Geometric span, not index span. walkpath emits a guaranteed final
+    % stop for every subpath, so a subpath whose length is an exact
+    % multiple of /Pitch ends with *two* stops at the same coordinates.
+    % A run consisting only of those has two distinct indexes and no
+    % extent at all, and the ribbon branch filled a zero-area polygon:
+    % the deposit vanished silently. Seed 21 on a 300pt line at /Pitch
+    % 100 painted nothing whatsoever (Codex review of PR #143, round 2).
+    pqrspan 0 gt
+    pqarc pqrend get pqarc pqrstart get sub 0 gt
+    and {
         newpath
         pqrstart 1 pqrend {
             /pqei exch def
@@ -3269,50 +3263,84 @@
         } for
         closepath fill
     } {
-        % A run one sample long has no ribbon -- a ribbon needs two stops
-        % to have any area -- but it is a real deposit and has to leave a
-        % real mark. The common case is a whole subpath shorter than
-        % /Pitch, which is most of a twig or a grass stem: two stops, and
-        % every wet run between them collapses. pkbroad drew nothing at
-        % all in exactly this case until PR #140's review.
+        % A run with no extent has no ribbon -- a ribbon needs two
+        % separated stops to have any area -- but it is a real deposit
+        % and has to leave a real mark. The common case is a whole
+        % subpath shorter than /Pitch, which is most of a twig or a grass
+        % stem. pkbroad drew nothing at all in exactly this case until
+        % PR #140's review.
         %
-        % Unlike a degenerate stop, this one knows which way the brush
-        % was going, so the mark starts *at* the stop and reaches only as
-        % far as the stroke actually travels. Centring a half-pitch
-        % footprint on it instead would put the mark before the stroke
-        % began, by an amount /Pitch makes unbounded.
-        pqrstart pqnrm /pqmny exch def /pqmnx exch def
-        /pqmw pqrstart pqrunw def
-        /pqmang pqraw pqrstart get 2 get def
-        % Which way the deposit reaches depends on where in the subpath
-        % it sits. Everywhere but the last stop there is travel ahead, so
-        % the mark goes forward. At the *last* stop there is none, and
-        % reaching forward by half a pitch put the mark entirely outside
-        % the path the caller drew -- unbounded, since /Pitch is
-        % user-supplied and only checked as positive: a line ending at
-        % x=370 at /Pitch 100 inked x=370..419 and nothing else (Codex
-        % review of PR #143). The paint got there from behind, so that is
-        % the direction a lone endpoint deposit occupies.
-        pqrstart pqhi eq pqhi pqlo gt and {
-            /pqmb pqraw pqrstart get 4 get def
-            pqmb 0 le { /pqmb pqPitch 0.5 mul def } if
-            /pqmf 0 def
+        % What the mark occupies is the travel either side of the stop,
+        % taken from the *displaced* centerline: the next stop that is
+        % actually somewhere else, or failing that the previous one.
+        % Three separate defects come from getting this wrong, all
+        % measured rather than reasoned about:
+        %
+        %   - Extending by half a pitch at a subpath's last stop put the
+        %     whole mark outside the path -- x=370..419 on a line ending
+        %     at 370 at /Pitch 100 (round 1).
+        %   - Extending along the stop's own *reported* angle, which at a
+        %     corner is the direction the brush arrived from, by the
+        %     distance to the next stop, which lies along the direction it
+        %     leaves in, shot 100pt past the corner of a 40,40 -> 140,40
+        %     -> 140,140 path (round 2).
+        %   - Taking the direction from pqraw at all ignores the waver,
+        %     so an isolated dash sat across the displaced line rather
+        %     than along it.
+        %
+        % Skipping stops that are in the same place, rather than taking
+        % the immediate neighbour, is what makes the duplicate-endpoint
+        % case above resolve to real geometry instead of a zero-length
+        % direction.
+        /pqmok false def
+        /pqmj pqrstart 1 add def
+        {
+            pqmj pqhi gt { exit } if
+            pqarc pqmj get pqarc pqrstart get gt { /pqmok true def exit } if
+            /pqmj pqmj 1 add def
+        } loop
+        pqmok {
+            /pqmxa pqcx pqrstart get def /pqmya pqcy pqrstart get def
+            /pqmxb pqcx pqmj get def    /pqmyb pqcy pqmj get def
         } {
-            /pqmb 0 def
-            /pqmf pqrstart pqgap def
+            /pqmk pqrstart 1 sub def
+            {
+                pqmk pqlo lt { exit } if
+                pqarc pqmk get pqarc pqrstart get lt
+                    { /pqmok true def exit } if
+                /pqmk pqmk 1 sub def
+            } loop
+            pqmok {
+                /pqmxa pqcx pqmk get def /pqmya pqcy pqmk get def
+                /pqmxb pqcx pqrstart get def /pqmyb pqcy pqrstart get def
+            } if
         } ifelse
-        /pqmcs pqmang cos def
-        /pqmsn pqmang sin def
-        /pqmxa pqcx pqrstart get pqmb pqmcs mul sub def
-        /pqmya pqcy pqrstart get pqmb pqmsn mul sub def
-        /pqmxb pqcx pqrstart get pqmf pqmcs mul add def
-        /pqmyb pqcy pqrstart get pqmf pqmsn mul add def
-        newpath
-        pqmxa pqmnx pqmw mul add pqmya pqmny pqmw mul add moveto
-        pqmxb pqmnx pqmw mul add pqmyb pqmny pqmw mul add lineto
-        pqmxb pqmnx pqmw mul sub pqmyb pqmny pqmw mul sub lineto
-        pqmxa pqmnx pqmw mul sub pqmya pqmny pqmw mul sub lineto
-        closepath fill
+        /pqmw pqrstart pqrunw def
+        pqmok {
+            /pqmdx pqmxb pqmxa sub def
+            /pqmdy pqmyb pqmya sub def
+            /pqmlen pqmdx dup mul pqmdy dup mul add sqrt def
+        } { /pqmlen 0 def } ifelse
+        pqmlen 0 gt {
+            /pqmnx pqmdy neg pqmlen div def
+            /pqmny pqmdx pqmlen div def
+            newpath
+            pqmxa pqmnx pqmw mul add pqmya pqmny pqmw mul add moveto
+            pqmxb pqmnx pqmw mul add pqmyb pqmny pqmw mul add lineto
+            pqmxb pqmnx pqmw mul sub pqmyb pqmny pqmw mul sub lineto
+            pqmxa pqmnx pqmw mul sub pqmya pqmny pqmw mul sub lineto
+            closepath fill
+        } {
+            % A subpath that goes nowhere at all (every stop in one
+            % place) has no direction to occupy, so the brush is simply
+            % set down -- bounded by the tip's own width, never by
+            % /Pitch, which is where every unbounded case above came
+            % from.
+            pqmw 0 gt {
+                newpath
+                pqcx pqrstart get pqcy pqrstart get pqmw 0 360 arc fill
+            } if
+        } ifelse
     } ifelse
 } def
 

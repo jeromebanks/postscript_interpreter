@@ -6013,3 +6013,51 @@ fn liner_a_deposit_at_the_last_stop_stays_inside_the_path() {
         }
     }
 }
+
+/// An isolated deposit occupies the travel either side of its stop, and
+/// that travel comes from the *displaced* centerline -- not from the
+/// stop's own reported angle, which at a corner is the direction the
+/// brush arrived from. Extending that by the distance to the next stop,
+/// which lies along the direction it leaves in, shot the mark 100pt past
+/// the corner: this path's maximum x is 140 and it inked through 242
+/// (Codex review of PR #143, round 2).
+#[test]
+fn liner_an_isolated_deposit_follows_the_outgoing_path() {
+    let mut it = fresh(400, 300);
+    it.run_str(
+        "0 0 0 setrgbcolor 3 srand newpath 40 40 moveto 140 40 lineto 140 140 lineto \
+         << /Width 8 /Pitch 100 /Charge 0.2 /Waver 0 /Taper 0 >> pkliner",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let (x0, x1) = ink_x_bounds(&it, 400, 300).expect("the corner deposit must mark");
+    assert!(
+        x0 >= 35 && x1 <= 145,
+        "the mark must stay on the path (x 40..140, plus half a width), got {x0}..{x1}"
+    );
+}
+
+/// walkpath emits a guaranteed final stop for every subpath, so a
+/// subpath whose length is an exact multiple of /Pitch ends with two
+/// stops at the *same* coordinates. A run made only of those has two
+/// distinct indexes and no extent, and filling it as a ribbon produced a
+/// zero-area polygon -- the deposit vanished with no error. Seeds 20 and
+/// 29 here painted nothing at all before the emit branch started asking
+/// about geometric span rather than index span; 11, 50 and 56 lost one
+/// deposit of two (Codex review of PR #143, round 2).
+#[test]
+fn liner_a_deposit_on_a_duplicated_endpoint_is_not_lost() {
+    for seed in [20, 29] {
+        let mut it = fresh(500, 200);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor {seed} srand newpath 40 100 moveto 340 100 lineto \
+             << /Width 8 /Pitch 100 /Charge 0.2 /Waver 0 /Taper 0 >> pkliner"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        assert!(
+            ink_count(&it) > 400,
+            "seed {seed}: a deposit landing on the duplicated endpoint \
+             must still paint, got {}",
+            ink_count(&it)
+        );
+    }
+}
