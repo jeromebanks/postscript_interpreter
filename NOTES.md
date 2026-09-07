@@ -366,6 +366,18 @@ half-charged brush still mostly touches — which is right), and
 failure* in the parameter sweep, where black paint made `/ColorJitter
 0.05` and `0.9` render identically.
 
+**Review of the branch added a fifth rendering finding.** A run's
+lift-on/lift-off taper is a fraction of the run, so a short run took the
+full lift at *both* ends at once and came out at a quarter of its width
+and under. The lift is now scaled by the run's own length — a brief touch
+of a wet tip has no room to thin. Swept 30 seeds x 3 widths at coarse
+pitches to size it before pinning a threshold: the median mark gains 7%
+of its ink back and the worst 50%. Worth recording what it is *not*: no
+dash was vanishing, since a run of three or more stops still reaches full
+width in its middle, so the dash count is identical either way. The
+first, coarser measurements said "no change at all" and only a per-case
+sweep showed the effect — the metric was wrong, not the finding.
+
 **Two bugs the sibling PRs had already paid for**, avoided by reading
 their reviews first: a one-sample run (any subpath shorter than `/Pitch`
 — which most twigs and grass stems are) needs its own emission case with

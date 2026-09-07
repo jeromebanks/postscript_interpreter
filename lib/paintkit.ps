@@ -3195,11 +3195,27 @@
     pqraw pqri get 3 get pqhw
     pqrspan 0 gt {
         /pqrf pqri pqrstart sub pqrspan div def
+        % ...but a *brief* touch has no room to thin, so how deeply the
+        % lift is applied scales with how long the run actually is. The
+        % ramps are fractions of the run, so without this a short run
+        % takes the full lift at both of its ends at once and renders at
+        % a quarter of its width and under. Measured across 30 seeds and
+        % three widths at coarse pitches: the median mark loses 7% of its
+        % ink and the worst a third of it. Nothing vanishes either way --
+        % a run of three or more stops still reaches full width in its
+        % middle, so the dash *count* is unchanged; what was wrong is how
+        % much paint a brief touch leaves. Six stops is where the
+        % fractional ramps have room to read as a taper at all.
+        /pqrdep pqrspan 6 div dup 1 gt { pop 1 } if def
         pqrton {
-            pqrf 0.3 lt { 0.25 0.75 pqrf 0.3 div mul add mul } if
+            pqrf 0.3 lt
+                { 0.25 0.75 pqrf 0.3 div mul add
+                  1 sub pqrdep mul 1 add mul } if
         } if
         pqrtoff {
-            pqrf 0.7 gt { 1 pqrf 0.7 sub 0.3 div 0.85 mul sub mul } if
+            pqrf 0.7 gt
+                { 1 pqrf 0.7 sub 0.3 div 0.85 mul sub
+                  1 sub pqrdep mul 1 add mul } if
         } if
     } if
 } def
@@ -3362,7 +3378,13 @@
         /pqcy pqn array def
         /pqarc pqn array def
         /pqKnots 64 def
-        /pqKnotSpan pqWidth 5 mul def
+        % Floored: the tooth is a property of the paper, and below half a
+        % point there is nothing left for a tip to catch on. It also
+        % keeps the knot coordinate pqaff hands to `cvi` bounded by twice
+        % the path length (itself bounded by the deposit budget) rather
+        % than by 1/Width, which /Width 1e-9 sends past the integer range
+        % `cvi` is defined over.
+        /pqKnotSpan pqWidth 5 mul dup 0.5 lt { pop 0.5 } if def
         /pqknots pqKnots array def
         /pqLam1 pqWidth 26 mul def
         /pqLam2 pqWidth 9 mul def
