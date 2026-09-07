@@ -5223,3 +5223,559 @@ fn broad_a_short_stroke_does_not_scale_its_mark_with_pitch() {
          (50..80), got x {x0}..{x1}"
     );
 }
+
+// --- pkliner: the liner / detail brush (issue #116) -------------------
+//
+// The tool is defined by three things nothing else in the file does
+// together: the line leaves the centerline it was drawn from, it whips
+// from full width to a point, and it breaks into shortening dashes as
+// the paint runs out. Most of what follows is about keeping those three
+// separable -- /Taper is width only, /Charge and /Depletion are coverage
+// only -- because that separation is the whole artist-facing story.
+
+const LINER_PATH: &str = "newpath 40 100 moveto 360 100 lineto";
+
+fn liner(opts: &str) -> Interp {
+    let mut it = fresh(400, 200);
+    it.run_str(&format!(
+        "0 0 0 setrgbcolor 17 srand {LINER_PATH} << {opts} >> pkliner"
+    ))
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    it
+}
+
+/// Inked rows in one column, as a set of y values -- the vertical extent
+/// of the mark where it crosses x, which is what /Waver moves and
+/// /Taper shrinks.
+fn inked_rows_at(it: &Interp, x: u32, h: u32) -> Vec<u32> {
+    (0..h)
+        .filter(|&y| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+        .collect()
+}
+
+/// Separate inked segments along x within a band of rows: how many
+/// dashes the line has been broken into there.
+fn dashes_in(it: &Interp, x0: u32, x1: u32, y0: u32, y1: u32) -> usize {
+    let mut runs = 0;
+    let mut prev = false;
+    for x in x0..x1 {
+        let inked = (y0..y1)
+            .any(|y| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0));
+        if inked && !prev {
+            runs += 1;
+        }
+        prev = inked;
+    }
+    runs
+}
+
+fn region_pixels(it: &Interp, x0: u32, x1: u32, y0: u32, y1: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let p = it.gfx().pixmap.pixel(x, y).expect("in bounds");
+            out.extend_from_slice(&[p.red(), p.green(), p.blue(), p.alpha()]);
+        }
+    }
+    out
+}
+
+#[test]
+fn liner_draws_a_thin_line() {
+    let it = liner("/Taper 0 /Depletion 0 /Waver 0");
+    assert!(ink_count(&it) > 300, "the liner must mark at all");
+    // A liner is a *fine* brush: the default 2.4pt line has to stay a
+    // couple of pixels tall, not quietly render as a band.
+    let tall = (60..340)
+        .map(|x| column_height(&it, x, 200))
+        .max()
+        .expect("columns");
+    assert!(tall <= 5, "a 2.4pt liner line should be thin, got {tall}px");
+}
+
+/// The lift: full width where the stroke starts, a point where it ends.
+#[test]
+fn liner_taper_narrows_toward_the_end() {
+    let it = liner("/Width 9 /Taper 0.9 /Depletion 0 /Waver 0");
+    let near = column_height(&it, 60, 200);
+    let far = column_height(&it, 340, 200);
+    assert!(
+        near >= 8 && far * 2 < near,
+        "the line must whip toward a point: near {near} far {far}"
+    );
+}
+
+#[test]
+fn liner_taper_zero_keeps_one_width() {
+    let it = liner("/Width 9 /Taper 0 /Depletion 0 /Waver 0");
+    let near = column_height(&it, 60, 200) as i32;
+    let far = column_height(&it, 340, 200) as i32;
+    assert!(
+        (near - far).abs() <= 1,
+        "/Taper 0 must not narrow: near {near} far {far}"
+    );
+}
+
+/// The capability nothing else in this file has: the mark leaves the
+/// centerline the caller drew. `pkribbon`'s /Jitter roughens the
+/// ribbon's own edges around the path; `pkdry`'s bristles ride at fixed
+/// parallel offsets from it. Neither *wanders*.
+#[test]
+fn liner_waver_leaves_the_ruled_centerline() {
+    // The path is y=100 in user space, which is row 100 of a 200-tall
+    // page. How far the ink strays from that row is the waver.
+    let stray = |opts: &str| {
+        let it = liner(opts);
+        (60..340)
+            .flat_map(|x| inked_rows_at(&it, x, 200))
+            .map(|y| (y as i32 - 100).abs())
+            .max()
+            .expect("ink")
+    };
+    let ruled = stray("/Width 4 /Taper 0 /Depletion 0 /Waver 0");
+    let wandered = stray("/Width 4 /Taper 0 /Depletion 0 /Waver 4");
+    assert!(
+        ruled <= 3,
+        "/Waver 0 must be a mechanically straight line, strayed {ruled}px"
+    );
+    assert!(
+        wandered > ruled + 5,
+        "/Waver must take the line off the drawn path: ruled {ruled} wandered {wandered}"
+    );
+}
+
+/// The ribbon's normals come from the *displaced* centerline, not from
+/// each stop's own reported angle. The difference is measurable rather
+/// than cosmetic: offsetting a wandering line along the original
+/// tangent's normal gives a band of constant *vertical* extent, whose
+/// perpendicular thickness is therefore Width*cos(slope) -- pinched
+/// wherever the waver turns. Total ink is the discriminator, since a
+/// pinched band's ink stays equal to the straight line's (the extra arc
+/// length is exactly cancelled by the thinning) while a correctly
+/// offset one grows with the arc length it actually travels.
+#[test]
+fn liner_a_wavered_line_keeps_its_thickness() {
+    let ink = |opts: &str| ink_count(&liner(opts)) as f64;
+    let straight = ink("/Width 6 /Taper 0 /Depletion 0 /Waver 0");
+    let wavy = ink("/Width 6 /Taper 0 /Depletion 0 /Waver 10");
+    assert!(
+        wavy > straight * 1.03,
+        "a wandering line travels further and must lay down more paint, \
+         not the same amount thinner: straight {straight} wavy {wavy}"
+    );
+}
+
+/// The reservoir: coverage falls along the stroke and the line breaks
+/// into dashes, which is what running out of paint looks like on a mark
+/// one bristle wide.
+#[test]
+fn liner_depletion_breaks_the_tail() {
+    let it = liner("/Width 5 /Taper 0 /Depletion 1 /Waver 0");
+    let near = (50..140).filter(|&x| column_height(&it, x, 200) > 0).count();
+    let far = (260..350).filter(|&x| column_height(&it, x, 200) > 0).count();
+    assert!(
+        near > 70 && far * 2 < near,
+        "the brush must run out as it travels: near {near} far {far}"
+    );
+    assert!(
+        dashes_in(&it, 180, 360, 90, 112) > 1,
+        "a depleting liner should break into dashes, not just stop"
+    );
+}
+
+#[test]
+fn liner_depletion_zero_never_runs_out() {
+    let it = liner("/Width 5 /Taper 0 /Depletion 0 /Waver 0");
+    let near = (50..140).filter(|&x| column_height(&it, x, 200) > 0).count();
+    let far = (260..350).filter(|&x| column_height(&it, x, 200) > 0).count();
+    assert!(
+        far * 10 > near * 9,
+        "/Depletion 0 must carry paint the whole way: near {near} far {far}"
+    );
+}
+
+/// /Charge is a different axis from /Depletion: how much the brush
+/// started with, so a low one skips from the very beginning.
+#[test]
+fn liner_charge_controls_how_much_lands_at_all() {
+    let covered = |opts: &str| {
+        let it = liner(opts);
+        (50..140).filter(|&x| column_height(&it, x, 200) > 0).count()
+    };
+    let full = covered("/Width 5 /Taper 0 /Depletion 0 /Charge 1 /Waver 0");
+    // 0.12 rather than something mid-range: coverage responds fastest in
+    // the lower part of /Charge, because the tooth pool is squared (the
+    // library header says why) and so has its median near 0.25. A
+    // half-charged brush is documented as still mostly touching, and
+    // measuring here is what put that sentence in the docs.
+    let scant = covered("/Width 5 /Taper 0 /Depletion 0 /Charge 0.12 /Waver 0");
+    assert!(
+        scant * 2 < full,
+        "a barely loaded liner should skip from the start: full {full} scant {scant}"
+    );
+}
+
+/// `frnd` really returns exactly 1.0 for some seeds, so a strict
+/// `charge gt affinity` would make a *fully loaded* brush skip wherever
+/// the tooth peaks. /Charge 1 is documented as fully loaded, so it means
+/// certain contact -- checked across seeds, since one seed proves
+/// nothing about a rare draw.
+#[test]
+fn liner_full_charge_is_certain_contact() {
+    for seed in [1, 7, 51463, 90210] {
+        let mut it = fresh(400, 200);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor {seed} srand {LINER_PATH} \
+             << /Width 5 /Taper 0 /Charge 1 /Depletion 0 /Waver 0 >> pkliner"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        let gaps = (50..350)
+            .filter(|&x| column_height(&it, x, 200) == 0)
+            .count();
+        assert_eq!(gaps, 0, "/Charge 1 must not skip (seed {seed}): {gaps} gaps");
+    }
+}
+
+#[test]
+fn liner_is_deterministic_under_a_seed() {
+    let run = || pixels(&liner("/Width 4 /Depletion 0.7 /Waver 2"));
+    assert_eq!(run(), run(), "pkliner must be deterministic under a seed");
+}
+
+/// The contract the header claims and none of the other seeded presets
+/// here can: the number of random draws per subpath is fixed, so turning
+/// any knob re-*shapes* this mark rather than re-rolling everything
+/// downstream of it. Measured with the downstream-marker technique
+/// #111/#140 use -- a second, unrelated mark drawn after the call, whose
+/// own randomness comes off the same stream.
+#[test]
+fn liner_turning_the_knobs_does_not_reroll_the_stroke() {
+    let marker = |opts: &str| {
+        let mut it = fresh(420, 200);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 17 srand \
+             newpath 20 150 moveto 190 150 lineto << {opts} >> pkliner \
+             newpath 230 60 moveto 400 60 lineto << /Width 12 >> pkdry"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        region_pixels(&it, 210, 420, 0, 200)
+    };
+    let baseline = marker("/Width 4");
+    for opts in [
+        "/Width 9",
+        "/Width 4 /Taper 0.2",
+        "/Width 4 /Charge 0.4",
+        "/Width 4 /Depletion 1",
+        "/Width 4 /Waver 5",
+        "/Width 4 /ColorJitter 0.5",
+        "/Width 4 /Pitch 2.5",
+    ] {
+        assert_eq!(
+            marker(opts),
+            baseline,
+            "{opts} shifted the random stream: everything drawn after a \
+             pkliner call would move as a side effect of retuning it"
+        );
+    }
+}
+
+/// Each subpath is its own dip of the brush -- its own charge, its own
+/// waver, its own tint -- which is what drawing a spray of branches in
+/// one call has to mean.
+#[test]
+fn liner_each_subpath_gets_its_own_charge() {
+    let mut it = fresh(400, 240);
+    it.run_str(
+        "0 0 0 setrgbcolor 17 srand \
+         newpath 40 60 moveto 360 60 lineto \
+         40 180 moveto 360 180 lineto \
+         << /Width 5 /Taper 0 /Depletion 1 /Waver 0 >> pkliner",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    for (lo, hi) in [(0u32, 120u32), (120, 240)] {
+        let seg = |x0: u32, x1: u32| {
+            (x0..x1)
+                .filter(|&x| {
+                    (lo..hi)
+                        .any(|y| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+                })
+                .count()
+        };
+        // The claim is "its own charge", and the sharp form of that is
+        // that the *second* stroke starts as solid as the first: were
+        // the charge shared across the call, it would start already
+        // spent. So the near window is asserted to be unbroken, not
+        // merely denser than the far one -- a coverage *ratio* between
+        // two windows is a much weaker statement here, since each
+        // subpath draws its own tooth pool and a low spot in one of them
+        // legitimately leaves a dash alive in the last tenth of a stroke
+        // whose charge is nearly gone.
+        let near = seg(45, 75);
+        let far = seg(325, 355);
+        assert!(
+            near >= 29,
+            "each subpath must start fully loaded: rows {lo}..{hi} near {near}"
+        );
+        assert!(
+            (far as f64) < near as f64 * 0.8,
+            "...and run out within itself: rows {lo}..{hi} near {near} far {far}"
+        );
+    }
+}
+
+/// The detail end of the tool: one dab per `moveto`.
+#[test]
+fn liner_a_pressed_dot_lands_at_the_moveto() {
+    let mut it = fresh(120, 120);
+    it.run_str("0 0 0 setrgbcolor 17 srand newpath 60 60 moveto << /Width 10 >> pkliner")
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let (x0, x1) = ink_x_bounds(&it, 120, 120).expect("the pressed tip must mark");
+    assert!(
+        x0 >= 54 && x1 <= 66,
+        "the dot must sit on its moveto, got x {x0}..{x1}"
+    );
+    let h = column_height(&it, 60, 120);
+    assert!(
+        (8..=12).contains(&h),
+        "a pressed dot should be about Width across, got {h}px"
+    );
+}
+
+/// ...and unlike `pkbroad`'s pressed footprint it does not consult the
+/// tooth: a pressed tip makes contact by pressure, and a detail dab that
+/// randomly fails to land is a bad primitive. Only having no paint at
+/// all stops it.
+#[test]
+fn liner_a_pressed_dot_lands_on_every_seed_but_needs_paint() {
+    for seed in [1, 2, 3, 51463, 90210] {
+        let mut it = fresh(80, 80);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor {seed} srand newpath 40 40 moveto \
+             << /Width 8 /Charge 0.05 >> pkliner"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        assert!(ink_count(&it) > 20, "the dab must land (seed {seed})");
+    }
+    let mut dry = fresh(80, 80);
+    dry.run_str(
+        "0 0 0 setrgbcolor 17 srand newpath 40 40 moveto << /Width 8 /Charge 0 >> pkliner",
+    )
+    .unwrap_or_else(|e| panic!("{}", dry.error_report(&e)));
+    assert_eq!(ink_count(&dry), 0, "no paint means no dab");
+}
+
+/// A subpath shorter than /Pitch gives two stops, so every wet run
+/// between them collapses to a single sample and there is no ribbon to
+/// fill. `pkbroad` painted nothing at all in this case until PR #140's
+/// review, and a liner hits it constantly -- twigs and grass stems are
+/// mostly shorter than a pitch.
+#[test]
+fn liner_a_stroke_shorter_than_the_pitch_still_paints() {
+    let mut it = fresh(120, 120);
+    it.run_str(
+        // /Waver 0: this is a test about *where* the mark lands, and a
+        // wavered stroke legitimately tilts its end cap out past the
+        // stroke's own x range by the half width.
+        "0 0 0 setrgbcolor 17 srand newpath 50 60 moveto 53 60 lineto \
+         << /Width 6 /Waver 0 /Charge 1 /Depletion 1 >> pkliner",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert!(ink_count(&it) > 10, "a short stroke must still leave a mark");
+    let (x0, x1) = ink_x_bounds(&it, 120, 120).expect("must ink");
+    assert!(
+        x0 >= 49 && x1 <= 55,
+        "the mark must sit on the 50..53 stroke, got x {x0}..{x1}"
+    );
+}
+
+/// ...and the same placement is unbounded through /Pitch, which the
+/// caller supplies and which is validated only as positive.
+#[test]
+fn liner_a_short_stroke_does_not_scale_its_mark_with_pitch() {
+    let mut it = fresh(300, 300);
+    it.run_str(
+        "0 0 0 setrgbcolor 17 srand newpath 50 150 moveto 80 150 lineto \
+         << /Width 5 /Waver 0 /Pitch 200 /Charge 1 /Depletion 1 >> pkliner",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let (x0, x1) = ink_x_bounds(&it, 300, 300).expect("must ink");
+    assert!(
+        x0 >= 49 && x1 <= 81,
+        "a large /Pitch must not stretch the mark past its own stroke \
+         (50..80), got x {x0}..{x1}"
+    );
+}
+
+#[test]
+fn liner_empty_path_is_a_no_op() {
+    let mut it = fresh(120, 120);
+    it.run_str("0 0 0 setrgbcolor newpath << /Width 4 >> pkliner")
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(ink_count(&it), 0, "an empty path should paint nothing");
+}
+
+#[test]
+fn liner_restores_the_callers_color() {
+    let mut it = fresh(200, 200);
+    it.run_str(
+        "0.2 0.4 0.8 setrgbcolor 9 srand newpath 40 100 moveto 160 100 lineto \
+         << /Width 4 /ColorJitter 0.5 >> pkliner",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let (r, g, b) = it.gfx().rgb();
+    assert!(
+        (r - 0.2).abs() < 1e-6 && (g - 0.4).abs() < 1e-6 && (b - 0.8).abs() < 1e-6,
+        "pkliner must leave the caller's color alone, got {r} {g} {b}"
+    );
+}
+
+#[test]
+fn liner_validation_and_safety() {
+    fn err(src: &str) -> String {
+        let mut it = fresh(100, 100);
+        let e = it.run_str(src).unwrap_err();
+        it.error_report(&e).to_string()
+    }
+    let p = "newpath 0 0 moveto 100 0 lineto";
+    for (opts, want) in [
+        ("/Width 0", "pkliner-width-must-be-positive"),
+        ("/Width { 3 }", "pkliner-width-must-not-be-a-procedure"),
+        ("/Taper 1.5", "pkliner-taper-must-be-0-to-1"),
+        ("/Taper { 1 }", "pkliner-taper-must-not-be-a-procedure"),
+        ("/Charge 1.5", "pkliner-charge-must-be-0-to-1"),
+        ("/Depletion -1", "pkliner-depletion-must-be-0-to-1"),
+        ("/Waver -1", "pkliner-waver-must-be-0-to-10"),
+        ("/Waver 11", "pkliner-waver-must-be-0-to-10"),
+        ("/Pitch 0", "pkliner-pitch-must-be-positive"),
+        ("/ColorJitter 9", "pkliner-colorjitter-must-be-0-to-1"),
+    ] {
+        let report = err(&format!("{p} << {opts} >> pkliner"));
+        assert!(
+            report.contains(want),
+            "expected {want} for {opts}, got {report}"
+        );
+    }
+}
+
+#[test]
+fn liner_deposit_budget_guard_rejects_a_path_with_too_many_samples() {
+    let mut it = fresh(100, 100);
+    let e = it
+        .run_str("newpath 0 0 moveto 400000 0 lineto << /Width 4 /Pitch 0.5 >> pkliner")
+        .unwrap_err();
+    assert!(
+        it.error_report(&e)
+            .contains("pkliner-deposit-count-exceeds-safety-limit"),
+        "expected the deposit budget guard, got {}",
+        it.error_report(&e)
+    );
+    assert_eq!(
+        ink_count(&it),
+        0,
+        "a rejected budget must leave the canvas clean"
+    );
+}
+
+/// Every parameter the catalog advertises must measurably change the
+/// render -- `pkbroad`'s structural guard against the /Jitter incident,
+/// where a parameter was parsed, validated and advertised while being
+/// read nowhere. The baseline path is long enough that /Charge and
+/// /Depletion are genuinely in play; on a short one both ends would come
+/// back fully inked and the test would pass vacuously.
+#[test]
+fn liner_every_documented_parameter_changes_the_render() {
+    // Painted in a mid tone, not the black the other tests use: artkit's
+    // `shade` moves toward black below 1 and toward white above it, so
+    // *black* paint cannot show a negative tint at all, and this seed's
+    // first tint draw is negative. On black, /ColorJitter 0.05 and 0.9
+    // render identically -- which is a real property of the parameter
+    // (now documented), not a no-op, and a sweep that can't tell the two
+    // apart would have to be silenced rather than believed.
+    let tinted = |opts: &str| {
+        let mut it = fresh(400, 200);
+        it.run_str(&format!(
+            "0.35 0.42 0.58 setrgbcolor 17 srand {LINER_PATH} << {opts} >> pkliner"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        pixels(&it)
+    };
+    let baseline = tinted("/Width 5");
+    for (param, value) in [
+        ("Width", "12"),
+        ("Taper", "0"),
+        ("Charge", "0.3"),
+        ("Depletion", "1"),
+        ("Waver", "6"),
+        ("Pitch", "2.5"),
+        ("ColorJitter", "0.9"),
+    ] {
+        let varied = tinted(&format!("/Width 5 /{param} {value}"));
+        assert_ne!(
+            varied, baseline,
+            "/{param} {value} produced an identical render -- it is a no-op"
+        );
+    }
+}
+
+/// ...and the catalog must not advertise anything beyond that list.
+#[test]
+fn liner_advertises_exactly_the_parameters_it_implements() {
+    let src = std::fs::read_to_string("lib/paintkit.ps").expect("read paintkit");
+    let start = src
+        .find("% @example: newpath 60 40 moveto 92 150 118 214 150 300 curveto")
+        .expect("pkliner tags");
+    let end = src[start..].find("\n/pkliner ").expect("pkliner def") + start;
+    let mut advertised: Vec<String> = src[start..end]
+        .lines()
+        .filter_map(|l| l.strip_prefix("% @param: /"))
+        .map(|l| l.split_whitespace().next().unwrap_or("").to_string())
+        .collect();
+    advertised.sort();
+    let mut expected = vec![
+        "Charge",
+        "ColorJitter",
+        "Depletion",
+        "Pitch",
+        "Taper",
+        "Waver",
+        "Width",
+    ];
+    expected.sort();
+    assert_eq!(
+        advertised, expected,
+        "pkliner's advertised parameters drifted from the tested set"
+    );
+}
+
+/// Acceptance, not pixel parity: seeded `rand` diverges under gs, so the
+/// claim is that the specimen runs there, which is what the issue's
+/// portability criterion asks for.
+#[test]
+fn ghostscript_accepts_paintkit_liner() {
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let status = std::process::Command::new("gs")
+        .args([
+            "-dNOSAFER",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g620x600",
+            "-r72",
+            "-o/dev/null",
+            "examples/paintkit_liner_demo.ps",
+        ])
+        .status()
+        .expect("run gs");
+    assert!(
+        status.success(),
+        "gs rejected examples/paintkit_liner_demo.ps"
+    );
+}

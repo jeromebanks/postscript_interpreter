@@ -2929,6 +2929,511 @@
     } if
 } def
 
+% --- liner / detail brush (issue #116) --------------------------------
+% opts pkliner -
+%
+% The fine-detail tool: bare branches, trunks, grass stems, rigging,
+% shoreline accents, whiskers -- the marks made last, over everything
+% else, with the tip of a long soft brush.
+%
+% The issue asks for the complement of `pknib`, and that is the whole
+% design brief: `pknib` is a *rigid* nib whose width is a function of the
+% angle between the path and a fixed world angle, while a liner (a
+% rigger) is a long, soft, heavily loaded brush drawn with its tip. What
+% falls out of that difference:
+%
+%   flexible   a loaded soft tip does not track the intended line. It
+%              wanders off it, and more so the finer and faster the
+%              stroke gets.
+%   loaded     it carries far more paint than its width suggests, and
+%              when that runs out the line does not stop cleanly -- it
+%              breaks into shorter and shorter dashes.
+%   tip-drawn  width comes from how much of the tip is in contact, so
+%              the natural mark starts full and whips to a point.
+%
+% The first of those is a capability nothing else in this file has.
+% Every preset here varies width or coverage *around* the path the caller
+% drew -- `pkribbon`'s /Jitter perturbs the ribbon's own edges, `pkdry`'s
+% bristles ride at fixed parallel offsets -- but none of them leaves it.
+% For a wide mark that hardly matters; for a 2pt tapered line it is the
+% whole difference between a painted branch and a ruled one, because at
+% that width the centerline *is* the mark. So `pkliner` displaces the
+% centerline itself, and `liner_waver_leaves_the_ruled_centerline` pins
+% that it does.
+%
+% Which is also why this is not `pkribbon` with a taper preset, and not
+% built on `pkribbon` at all. `pkribbon`'s /Pressure is a function of the
+% subpath's own `t`, so the tapered mark it makes is exact, mechanical
+% and centred on the drawn path; and the dry break-up here has to run
+% *across* the gaps it makes, which one `pkribbon` call per dash cannot
+% do -- each call would restart the taper at every gap, so a branch would
+% read as a row of identical commas rather than one thinning line.
+%
+% Two fades, deliberately independent:
+%
+%   /Taper       geometry. The artist lifting the brush. Width only.
+%   /Charge      paint. The reservoir. Coverage only, never width.
+%   /Depletion
+%
+% A drier brush does lay a slightly thinner line, so coupling them would
+% be defensible physically -- but it would make the two inseparable both
+% in the tests and in the artist's hands, and "thinner" and "broken" are
+% the two things this tool is steered by. /Taper 1 whips to a true point;
+% /Taper 0 is a constant-width line. /Depletion 0 never runs out.
+%
+% /Charge and /Depletion mean exactly what they mean in `pkbroad`, and
+% for the reason that preset's header gives: this file already uses /Load
+% for a contact rate (pkdry, pkfan) and for deposit width (pktrowel), and
+% one paint-reservoir vocabulary across the file beats a fourth meaning.
+% What differs is what running out *looks like* on a mark one bristle
+% wide: `pkbroad` drops striations out across its band, while here there
+% is no band to thin, so the line breaks along its own length instead.
+%
+% The break-up is a seeded "tooth" -- how well the surface catches a
+% passing tip -- sampled from a fixed pool of 64 knots laid down at
+% *absolute* spacing (a multiple of /Width) and interpolated smoothly, so
+% the line deposits wherever charge(t) still exceeds the tooth beneath
+% it. Smooth, so the mark breaks into runs and gaps that lengthen as the
+% charge falls, rather than into per-stop speckle. Absolute rather than
+% per-stroke spacing because break-up scale is a property of the paper
+% and the brush, not of how long the stroke happens to be: knots spread
+% over each subpath would give a 300pt trunk 19pt teeth and a 20pt twig
+% 1.2pt teeth -- the whole drawing self-similar, and the twigs' gaps
+% sub-pixel.
+%
+% Determinism: the caller's own `N srand`. Because the pool is fixed and
+% emission consumes no randomness at all, the draw count per subpath is
+% exactly constant -- 3 waver phases + 1 tint + 64 knots -- so turning
+% /Charge, /Depletion, /Taper or /Waver re-*shapes* the same mark instead
+% of re-rolling it into a different one. None of the other seeded presets
+% here can make that claim (`pkbroad` and `pkfan` both explicitly
+% decline it), so it is worth having, and `liner_turning_the_knobs_does_
+% not_reroll_the_stroke` pins it. It is also fragile in one specific
+% direction: it holds *only* while nothing in emission draws. A future
+% /Edge-style per-point knob would silently make it false, which is
+% exactly how `pkbroad`'s /Charge came to re-roll its striations.
+%
+% Two properties of these knobs worth stating rather than leaving to be
+% discovered, both found by measuring rather than by reasoning:
+%
+%   /Charge responds fastest in the lower half of its range. The tooth
+%   pool is squared, so its median sits near 0.25 and a half-charged
+%   brush still covers about three quarters of the stroke -- which is
+%   the right behaviour (a half-loaded brush does still mostly touch),
+%   but it means the skipping, gappy marks live below about 0.3.
+%
+%   /ColorJitter cannot show a negative tint on pure black paint. It
+%   shades through artkit's `shade`, which multiplies toward black below
+%   1 and interpolates toward white above it, so black paint moves only
+%   when the draw comes out positive. Shared with pkbroad and pkdry,
+%   which jitter the same way.
+%
+% /Waver is in multiples of /Width, and its cap (0..10) is far past where
+% the mark still reads as the caller's path -- deliberately, the way
+% `pkribbon` documents /Jitter past Width/2. Past about 2 the line is
+% somewhere in the neighbourhood of the path rather than on it; the
+% defaults sit near 0.8, which at /Width 2.4 is a couple of points of
+% wander over a whole stroke. The amplitude grows toward the end of the
+% stroke, since it is the thin whipping tip that wanders, not the loaded
+% base -- rendered flat first, and a constant-amplitude waver reads as a
+% wobbly *rope*, not a brush.
+%
+% The ribbon's normals are finite-differenced from the *displaced*
+% centerline, not taken from each stop's own reported angle: once the
+% waver has turned the line, the source path's tangent is the wrong one,
+% and using it pinches the band on the outside of every wander.
+%
+% A degenerate single-point subpath presses the tip: a filled dot of
+% diameter Width. That is the detail end of the tool -- specks, stamens,
+% distant birds, sparkle on water -- one dab per `moveto`. Unlike
+% `pkbroad`'s pressed footprint it does *not* consult the tooth, only
+% whether there is any paint at all (/Charge 0): a pressed tip makes
+% contact by pressure, not by the surface catching a moving tip, and a
+% detail dab that randomly fails to land is a bad primitive.
+%
+% Safety: the stop count is checked inside the counting walk against
+% 120000, `pkbroad`'s bound and placement. Total work is O(stops) -- one
+% filled polygon per wet run, and runs are bounded by stops.
+%
+% Scratch prefix pq-, chosen the way `pkbroad`'s pm- was: scanned every
+% .ps file under lib/, examples/, gallery/, site/ and tests/ for any
+% /name usage, not just this file. pq- has none anywhere.
+
+% s pqaff -> affinity   (the surface's tooth at arc length s)
+%
+% Value noise: the knot pool read at absolute spacing and smoothstepped
+% between knots, wrapping by index. The wrap makes the tooth repeat every
+% pqKnots*pqKnotSpan (about 900pt at the default width, longer than a
+% page), which is far enough that no stroke sees it twice.
+% @internal
+/pqaff {
+    /pqas exch def
+    /pqau pqas pqKnotSpan div def
+    /pqak pqau truncate cvi def
+    /pqaf pqau pqak sub def
+    /pqa0 pqknots pqak pqKnots mod get def
+    /pqa1 pqknots pqak 1 add pqKnots mod get def
+    % f*f*(3-2f): a linear ramp between knots leaves a visible kink at
+    % every knot where the line's coverage changes slope, which reads as
+    % regular beading along a long stroke.
+    /pqaf pqaf dup mul 3 pqaf 2 mul sub mul def
+    pqa0 pqa1 pqa0 sub pqaf mul add
+} def
+
+% charge affinity pqwets -> bool   (is the tip depositing here?)
+%
+% Clamped at both ends rather than compared directly, exactly as
+% pkbroad's pmwets is and for the same measured reason: `frnd` really can
+% return 1.0, so a plain `charge gt affinity` makes a fully loaded liner
+% skip wherever the tooth happens to peak. /Charge 1 is documented as
+% fully loaded, so it means certain contact.
+% @internal
+/pqwets {
+    exch dup 1 ge
+        { pop pop true }
+        { dup 0 le { pop pop false } { lt } ifelse }
+    ifelse
+} def
+
+% t pqhw -> half width   (the artist's lift, before any run-end taper)
+% @internal
+/pqhw {
+    /pqht exch def
+    pqWidth 0.5 mul 1 pqTaper pqht 1.25 exp mul sub mul
+    dup 0 lt { pop 0 } if
+} def
+
+% s t pqoff -> lateral offset   (how far the tip has wandered)
+%
+% Three sines rather than one: a single wavelength reads as a sine wave,
+% which is a mechanical shape of its own, and two still read as a regular
+% beat over a long stroke. The long one is the arm's drift, the short one
+% the tip's tremor. The amplitude term grows toward the tip -- see the
+% header.
+% @internal
+/pqoff {
+    /pqot exch def /pqos exch def
+    pqWaver 0 eq
+        { 0 }
+        {
+            /pqoamp pqWaver pqWidth mul 0.35 0.65 pqot mul add mul def
+            0.58 pqos 360 mul pqLam1 div pqPh1 add sin mul
+            0.30 pqos 360 mul pqLam2 div pqPh2 add sin mul
+            0.12 pqos 360 mul pqLam3 div pqPh3 add sin mul
+            add add pqoamp mul
+        }
+    ifelse
+} def
+
+% i pqnrm -> nx ny   (unit normal of the displaced centerline at stop i)
+%
+% Finite-differenced from the neighbouring *displaced* stops, clamped to
+% the current subpath (pqlo/pqhi) so a subpath boundary can't difference
+% across a `moveto` jump. Where the neighbourhood is degenerate -- two
+% coincident stops -- the source stop's own reported angle is the only
+% direction information there is, so it stands in.
+% @internal
+/pqnrm {
+    /pqni exch def
+    /pqna pqni 1 sub def pqna pqlo lt { /pqna pqlo def } if
+    /pqnb pqni 1 add def pqnb pqhi gt { /pqnb pqhi def } if
+    /pqndx pqcx pqnb get pqcx pqna get sub def
+    /pqndy pqcy pqnb get pqcy pqna get sub def
+    /pqnl pqndx dup mul pqndy dup mul add sqrt def
+    pqnl 0 gt
+        { pqndy neg pqnl div  pqndx pqnl div }
+        { pqraw pqni get 2 get 90 add dup cos exch sin }
+    ifelse
+} def
+
+% i pqrunw -> half width   (the lift, plus this run's own lift-on/off)
+%
+% A run that begins or ends mid-stroke is the tip lifting on or off the
+% surface, so it thins over its own first/last third; a run that simply
+% starts where the subpath starts, or ends where it ends, keeps the
+% stroke's own width there. Without that, a broken tail came out as a row
+% of blunt dashes with square ends -- seen in the first render.
+% @internal
+/pqrunw {
+    /pqri exch def
+    pqraw pqri get 3 get pqhw
+    pqrspan 0 gt {
+        /pqrf pqri pqrstart sub pqrspan div def
+        pqrton {
+            pqrf 0.3 lt { 0.25 0.75 pqrf 0.3 div mul add mul } if
+        } if
+        pqrtoff {
+            pqrf 0.7 gt { 1 pqrf 0.7 sub 0.3 div 0.85 mul sub mul } if
+        } if
+    } if
+} def
+
+% i side pqside -> x y   (a boundary point of the ribbon at stop i)
+%
+% pqsdi, not pqsi: the caller's own run loop uses pqsi for the stop it is
+% examining, and this proc runs inside that loop. Nothing reads pqsi
+% after the emit today, so the clash would be invisible until someone
+% moved one line -- which is how this file's prefix collisions have gone
+% before (see pkflat in pkbroad's notes).
+% @internal
+/pqside {
+    /pqsdd exch def /pqsdi exch def
+    pqsdi pqnrm /pqsny exch def /pqsnx exch def
+    /pqsw pqsdi pqrunw pqsdd mul def
+    pqcx pqsdi get pqsnx pqsw mul add
+    pqcy pqsdi get pqsny pqsw mul add
+} def
+
+% i pqgap -> length   (how far the stroke travels on from stop i)
+%
+% walkpath reports each stop's `sp` as the arc length from the *previous*
+% stop, so the travel after stop i is the next stop's sp -- provided
+% there is a next stop in the same subpath. Same shape as pkbroad's
+% pmgap, and the same fallback where there isn't.
+% @internal
+/pqgap {
+    dup pqhi lt
+        { 1 add pqraw exch get 4 get }
+        { pop pqPitch 0.5 mul }
+    ifelse
+    dup 0 le { pop pqPitch 0.5 mul } if
+} def
+
+% start end pqemit -   (one wet run, as a filled ribbon)
+% @internal
+/pqemit {
+    /pqrend exch def /pqrstart exch def
+    /pqrspan pqrend pqrstart sub def
+    pqrspan 0 gt {
+        newpath
+        pqrstart 1 pqrend {
+            /pqei exch def
+            pqei 1 pqside
+            pqei pqrstart eq { moveto } { lineto } ifelse
+        } for
+        pqrend -1 pqrstart {
+            /pqei exch def
+            pqei -1 pqside lineto
+        } for
+        closepath fill
+    } {
+        % A run one sample long has no ribbon -- a ribbon needs two stops
+        % to have any area -- but it is a real deposit and has to leave a
+        % real mark. The common case is a whole subpath shorter than
+        % /Pitch, which is most of a twig or a grass stem: two stops, and
+        % every wet run between them collapses. pkbroad drew nothing at
+        % all in exactly this case until PR #140's review.
+        %
+        % Unlike a degenerate stop, this one knows which way the brush
+        % was going, so the mark starts *at* the stop and reaches forward
+        % only as far as the stroke actually travels. Centring a
+        % half-pitch footprint on it instead would start the mark before
+        % the stroke began, by an amount /Pitch makes unbounded.
+        pqrstart pqnrm /pqmny exch def /pqmnx exch def
+        /pqmw pqrstart pqrunw def
+        /pqmang pqraw pqrstart get 2 get def
+        /pqmf pqrstart pqgap def
+        /pqmdx pqmang cos pqmf mul def
+        /pqmdy pqmang sin pqmf mul def
+        /pqmx pqcx pqrstart get def
+        /pqmy pqcy pqrstart get def
+        newpath
+        pqmx pqmnx pqmw mul add pqmy pqmny pqmw mul add moveto
+        pqmx pqmdx add pqmnx pqmw mul add
+        pqmy pqmdy add pqmny pqmw mul add lineto
+        pqmx pqmdx add pqmnx pqmw mul sub
+        pqmy pqmdy add pqmny pqmw mul sub lineto
+        pqmx pqmnx pqmw mul sub pqmy pqmny pqmw mul sub lineto
+        closepath fill
+    } ifelse
+} def
+
+% start end lifton liftoff pqrun -   (emit one run with its end shapes)
+% @internal
+/pqrun {
+    /pqrtoff exch def /pqrton exch def
+    pqemit
+} def
+
+% @kind: Procedure
+% @summary: A liner/detail brush: the long soft tip that draws branches, trunks, grass stems and other fine marks. The complement of pknib's rigid nib -- a flexible loaded brush, so the line wanders off the drawn centerline (no other preset here leaves it), whips from full width to a point, and breaks into shortening dashes as the paint runs out. A single-point subpath presses a detail dot. Deterministic under the caller's own srand, with a fixed number of draws per subpath.
+% @example: newpath 60 40 moveto 92 150 118 214 150 300 curveto << /Width 3 /Taper 0.9 /Waver 1.2 >> pkliner
+% @param: /Width Width at the loaded end of the stroke, and the diameter of a pressed dot; must be > 0 (default 2.4)
+% @param: /Taper 0..1 how far the line narrows toward the end of each subpath -- the artist's lift, width only; 1 whips to a true point, 0 is constant width (default 0.85)
+% @param: /Charge 0..1 how much paint the brush is loaded with -- coverage only, never width; pkbroad's meaning (default 0.95)
+% @param: /Depletion 0..1 how fast the charge runs out along each subpath; 0 never runs out (default 0.35)
+% @param: /Waver Lateral wander of the loaded tip, in multiples of Width, 0..10; grows toward the tip; 0 is a mechanically straight line, and past about 2 the mark reads as near the caller's path rather than on it (default 0.8)
+% @param: /Pitch walkpath sampling pitch for the centerline pass; must be > 0 (default Width*0.8, capped at 3 and floored at 0.5)
+% @param: /ColorJitter 0..1 one small tint shift per subpath -- one dip of the brush is one tint (default 0.05)
+/pkliner {
+    /pqopts exch def
+    /pqWidth pqopts /Width 2.4 pkgetdef def
+    /pqWidth load xcheck { pkliner-width-must-not-be-a-procedure } if
+    pqWidth 0 le { pkliner-width-must-be-positive } if
+    /pqTaper pqopts /Taper 0.85 pkgetdef def
+    /pqTaper load xcheck { pkliner-taper-must-not-be-a-procedure } if
+    pqTaper 0 lt pqTaper 1 gt or { pkliner-taper-must-be-0-to-1 } if
+    /pqCharge pqopts /Charge 0.95 pkgetdef def
+    /pqCharge load xcheck { pkliner-charge-must-not-be-a-procedure } if
+    pqCharge 0 lt pqCharge 1 gt or { pkliner-charge-must-be-0-to-1 } if
+    /pqDepletion pqopts /Depletion 0.35 pkgetdef def
+    /pqDepletion load xcheck { pkliner-depletion-must-not-be-a-procedure } if
+    pqDepletion 0 lt pqDepletion 1 gt or
+        { pkliner-depletion-must-be-0-to-1 } if
+    /pqWaver pqopts /Waver 0.8 pkgetdef def
+    /pqWaver load xcheck { pkliner-waver-must-not-be-a-procedure } if
+    pqWaver 0 lt pqWaver 10 gt or { pkliner-waver-must-be-0-to-10 } if
+    % Floored as well as capped, unlike the siblings' pitch defaults: a
+    % liner is a *thin* brush, so Width*0.8 alone would sample a hair
+    % stroke at a fifth of a point and multiply a long path's stop count
+    % up toward the safety budget for a finer centerline than anything
+    % 2pt wide can show.
+    /pqPitch
+        pqopts /Pitch
+        pqWidth 0.8 mul dup 3 gt { pop 3 } if dup 0.5 lt { pop 0.5 } if
+        pkgetdef
+    def
+    /pqPitch load xcheck { pkliner-pitch-must-not-be-a-procedure } if
+    pqPitch 0 le { pkliner-pitch-must-be-positive } if
+    /pqColorJitter pqopts /ColorJitter 0.05 pkgetdef def
+    /pqColorJitter load xcheck
+        { pkliner-colorjitter-must-not-be-a-procedure } if
+    pqColorJitter 0 lt pqColorJitter 1 gt or
+        { pkliner-colorjitter-must-be-0-to-1 } if
+
+    % Two walkpath passes over the centerline -- count (checking the
+    % budget on every stop, before any drawing starts), then collect --
+    % the same shape pkdry, pktrowel and pkbroad use.
+    /pqcount 0 def
+    pqPitch {
+        pop pop pop pop pop pop
+        /pqcount pqcount 1 add def
+        pqcount 120000 gt
+            { pkliner-deposit-count-exceeds-safety-limit } if
+    } walkpath
+    /pqn pqcount def
+    /pqraw pqn array def
+    /pqci 0 def
+    pqPitch {
+        6 array astore pqraw pqci 3 -1 roll put
+        /pqci pqci 1 add def
+    } walkpath
+
+    pqn 0 gt {
+        gsave
+        /pqbase [ currentrgbcolor ] def
+        /pqcx pqn array def
+        /pqcy pqn array def
+        /pqarc pqn array def
+        /pqKnots 64 def
+        /pqKnotSpan pqWidth 5 mul def
+        /pqknots pqKnots array def
+        /pqLam1 pqWidth 26 mul def
+        /pqLam2 pqWidth 9 mul def
+        /pqLam3 pqWidth 3.5 mul def
+        /pqi 0 def
+        {
+            pqi pqn ge { exit } if
+            % This subpath runs pqlo..pqhi. walkpath flags the last stop
+            % of every subpath (bit 2), and a degenerate one carries both
+            % bits, so the scan terminates on either.
+            /pqlo pqi def
+            /pqhi pqlo def
+            {
+                pqraw pqhi get 5 get 2 and 2 eq { exit } if
+                pqhi pqn 1 sub ge { exit } if
+                /pqhi pqhi 1 add def
+            } loop
+
+            % The whole plan for this subpath is drawn before any of its
+            % geometry is computed, and nothing below draws again. That
+            % is what makes the per-subpath draw count fixed -- see the
+            % header -- so /Charge and /Depletion re-shape this mark
+            % rather than re-rolling the next one.
+            /pqPh1 frnd 360 mul def
+            /pqPh2 frnd 360 mul def
+            /pqPh3 frnd 360 mul def
+            /pqtint pqColorJitter pkjit def
+            % Squared, not uniform: the tooth is what the surface does to
+            % a passing tip, and a surface is mostly smooth with
+            % occasional high spots. Rendered flat first -- a uniform
+            % pool put gaps along the whole length of a *fully charged*
+            % line, since a twelfth of it sat above /Charge 0.95 from the
+            % outset, which is the mark of a nearly empty brush, not a
+            % full one. Squaring leaves the loaded end near-continuous
+            % and still hands the depleting end plenty to catch on.
+            0 1 pqKnots 1 sub { pqknots exch frnd dup mul put } for
+
+            % Arc length within the subpath, then the displaced
+            % centerline. Both are needed before any normal can be taken,
+            % since the normals are differenced from the displaced points
+            % rather than from the source path's own angles.
+            pqarc pqlo 0 put
+            pqlo 1 add 1 pqhi {
+                /pqai exch def
+                pqarc pqai pqarc pqai 1 sub get pqraw pqai get 4 get add put
+            } for
+            pqlo 1 pqhi {
+                /pqpi exch def
+                /pqprec pqraw pqpi get def
+                /pqpn pqprec 2 get 90 add def
+                pqarc pqpi get pqprec 3 get pqoff /pqpo exch def
+                pqcx pqpi pqprec 0 get pqpn cos pqpo mul add put
+                pqcy pqpi pqprec 1 get pqpn sin pqpo mul add put
+            } for
+
+            pqbase 1 pqtint add shade setrgbcolor
+
+            pqraw pqlo get 5 get 3 and 3 eq {
+                % A pressed tip: the dot lands on any charge at all --
+                % contact is by pressure here, not by the surface
+                % catching a moving tip (see the header).
+                pqCharge 0 gt {
+                    newpath
+                    pqcx pqlo get pqcy pqlo get
+                    pqraw pqlo get 3 get pqhw
+                    0 360 arc fill
+                } if
+            } {
+                /pqwet false def
+                /pqstart pqlo def
+                pqlo 1 pqhi {
+                    /pqsi exch def
+                    /pqch
+                        pqCharge
+                        1 pqDepletion pqraw pqsi get 3 get mul sub mul
+                    def
+                    pqch pqarc pqsi get pqaff pqwets {
+                        pqwet not {
+                            /pqstart pqsi def /pqwet true def
+                        } if
+                    } {
+                        pqwet {
+                            % Ended by running dry: the tip lifts off, so
+                            % this run's tail thins. It lifted *on* only
+                            % if it didn't start where the stroke did.
+                            pqstart pqsi 1 sub
+                            pqstart pqlo ne true pqrun
+                            /pqwet false def
+                        } if
+                    } ifelse
+                } for
+                pqwet {
+                    % Still carrying paint when the stroke ended: the
+                    % stroke's own end, so no lift-off taper on top of
+                    % the /Taper the whole line already has.
+                    pqstart pqhi pqstart pqlo ne false pqrun
+                    /pqwet false def
+                } if
+            } ifelse
+
+            /pqi pqhi 1 add def
+        } loop
+        pqbase aload pop setrgbcolor
+        grestore
+    } if
+} def
+
 % --- watercolor wash and paper ground (issue #47) ---------------------
 % opts pkwash -
 % x y w h opts pkpaper -
