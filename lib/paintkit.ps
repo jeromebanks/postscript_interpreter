@@ -3277,25 +3277,41 @@
         % all in exactly this case until PR #140's review.
         %
         % Unlike a degenerate stop, this one knows which way the brush
-        % was going, so the mark starts *at* the stop and reaches forward
-        % only as far as the stroke actually travels. Centring a
-        % half-pitch footprint on it instead would start the mark before
-        % the stroke began, by an amount /Pitch makes unbounded.
+        % was going, so the mark starts *at* the stop and reaches only as
+        % far as the stroke actually travels. Centring a half-pitch
+        % footprint on it instead would put the mark before the stroke
+        % began, by an amount /Pitch makes unbounded.
         pqrstart pqnrm /pqmny exch def /pqmnx exch def
         /pqmw pqrstart pqrunw def
         /pqmang pqraw pqrstart get 2 get def
-        /pqmf pqrstart pqgap def
-        /pqmdx pqmang cos pqmf mul def
-        /pqmdy pqmang sin pqmf mul def
-        /pqmx pqcx pqrstart get def
-        /pqmy pqcy pqrstart get def
+        % Which way the deposit reaches depends on where in the subpath
+        % it sits. Everywhere but the last stop there is travel ahead, so
+        % the mark goes forward. At the *last* stop there is none, and
+        % reaching forward by half a pitch put the mark entirely outside
+        % the path the caller drew -- unbounded, since /Pitch is
+        % user-supplied and only checked as positive: a line ending at
+        % x=370 at /Pitch 100 inked x=370..419 and nothing else (Codex
+        % review of PR #143). The paint got there from behind, so that is
+        % the direction a lone endpoint deposit occupies.
+        pqrstart pqhi eq pqhi pqlo gt and {
+            /pqmb pqraw pqrstart get 4 get def
+            pqmb 0 le { /pqmb pqPitch 0.5 mul def } if
+            /pqmf 0 def
+        } {
+            /pqmb 0 def
+            /pqmf pqrstart pqgap def
+        } ifelse
+        /pqmcs pqmang cos def
+        /pqmsn pqmang sin def
+        /pqmxa pqcx pqrstart get pqmb pqmcs mul sub def
+        /pqmya pqcy pqrstart get pqmb pqmsn mul sub def
+        /pqmxb pqcx pqrstart get pqmf pqmcs mul add def
+        /pqmyb pqcy pqrstart get pqmf pqmsn mul add def
         newpath
-        pqmx pqmnx pqmw mul add pqmy pqmny pqmw mul add moveto
-        pqmx pqmdx add pqmnx pqmw mul add
-        pqmy pqmdy add pqmny pqmw mul add lineto
-        pqmx pqmdx add pqmnx pqmw mul sub
-        pqmy pqmdy add pqmny pqmw mul sub lineto
-        pqmx pqmnx pqmw mul sub pqmy pqmny pqmw mul sub lineto
+        pqmxa pqmnx pqmw mul add pqmya pqmny pqmw mul add moveto
+        pqmxb pqmnx pqmw mul add pqmyb pqmny pqmw mul add lineto
+        pqmxb pqmnx pqmw mul sub pqmyb pqmny pqmw mul sub lineto
+        pqmxa pqmnx pqmw mul sub pqmya pqmny pqmw mul sub lineto
         closepath fill
     } ifelse
 } def
@@ -3435,7 +3451,18 @@
                 /pqpi exch def
                 /pqprec pqraw pqpi get def
                 /pqpn pqprec 2 get 90 add def
-                pqarc pqpi get pqprec 3 get pqoff /pqpo exch def
+                % A degenerate stop is a *pressed* tip, and a press has no
+                % direction of travel to wander along -- the waver models
+                % a moving tip. Displacing it anyway moved the dab off the
+                % `moveto` the caller asked for, by up to Waver*Width:
+                % /Width 10 /Waver 10 put a dot asked for at y=80 at
+                % y=97 (Codex review of PR #143), against this preset's
+                % own documented promise. Costs no randomness either way,
+                % since pqoff draws nothing.
+                pqprec 5 get 3 and 3 eq
+                    { 0 }
+                    { pqarc pqpi get pqprec 3 get pqoff }
+                ifelse /pqpo exch def
                 pqcx pqpi pqprec 0 get pqpn cos pqpo mul add put
                 pqcy pqpi pqprec 1 get pqpn sin pqpo mul add put
             } for

@@ -5958,3 +5958,58 @@ fn liner_a_brief_touch_keeps_its_width() {
          ends at once, got {ink} (457 without the run-length scaling)"
     );
 }
+
+/// A pressed tip has no direction of travel, so there is nothing for it
+/// to wander along -- and the preset promises the dab lands on its
+/// `moveto`. Displacing it anyway moved a dot asked for at y=80 to y=97
+/// at `/Width 10 /Waver 10` (Codex review of PR #143). The default waver
+/// is small enough that the original test's tolerance hid this.
+#[test]
+fn liner_a_pressed_dot_ignores_the_waver() {
+    for waver in ["0", "0.8", "10"] {
+        let mut it = fresh(160, 160);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 17 srand newpath 80 80 moveto \
+             << /Width 10 /Waver {waver} >> pkliner"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        let rows: Vec<u32> = (0..160)
+            .filter(|&y| {
+                (0..160).any(|x| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+            })
+            .collect();
+        let (lo, hi) = (
+            *rows.first().expect("the dab must land"),
+            *rows.last().unwrap(),
+        );
+        let mid = (lo + hi) / 2;
+        assert!(
+            (79..=81).contains(&mid),
+            "/Waver {waver} moved the dab off its moveto: rows {lo}..{hi}"
+        );
+    }
+}
+
+/// A lone deposit at a subpath's *last* stop has no travel ahead of it,
+/// and reaching forward by half a pitch put the whole mark outside the
+/// path -- a line ending at x=370 at `/Pitch 100` inked x=370..419 and
+/// nothing else (Codex review of PR #143). Unbounded, since `/Pitch` is
+/// the caller's and validated only as positive. The paint arrived from
+/// behind, so that is the direction the mark occupies.
+#[test]
+fn liner_a_deposit_at_the_last_stop_stays_inside_the_path() {
+    for seed in 1..=12 {
+        let mut it = fresh(500, 200);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor {seed} srand newpath 40 100 moveto 370 100 lineto \
+             << /Width 8 /Waver 0 /Taper 0 /Charge 0.5 /Depletion 0 /Pitch 100 >> pkliner"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        if let Some((x0, x1)) = ink_x_bounds(&it, 500, 200) {
+            assert!(
+                x0 >= 39 && x1 <= 371,
+                "seed {seed} inked x {x0}..{x1}, outside the 40..370 path"
+            );
+        }
+    }
+}
