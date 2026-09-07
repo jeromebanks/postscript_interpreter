@@ -5791,3 +5791,32 @@ fn ghostscript_accepts_paintkit_liner() {
         "gs rejected examples/paintkit_liner_demo.ps"
     );
 }
+
+/// A run's lift-on/lift-off taper is a fraction of the run, so a *short*
+/// run gets the full lift at both of its ends at once and renders at a
+/// quarter of its width and under. Nothing about a brief touch of a wet
+/// tip says it should thin at all -- it has no room to -- so the lift is
+/// scaled by how long the run actually is.
+///
+/// Pinned as total ink at a coarse pitch, which is where runs are short
+/// in *stops*: this case measures 683 with the scaling and 457 without.
+/// Swept across 30 seeds x 3 widths before choosing it -- the median
+/// case moves 7% and the worst 50%, so a threshold between the two is a
+/// real gap rather than one seed's luck. Not measurable as a *vanishing*
+/// dash: the count of dashes is the same either way, since a run of
+/// three or more stops still reaches full width in its middle.
+#[test]
+fn liner_a_brief_touch_keeps_its_width() {
+    let mut it = fresh(400, 200);
+    it.run_str(&format!(
+        "0 0 0 setrgbcolor 5 srand {LINER_PATH} \
+         << /Width 9 /Taper 0 /Waver 0 /Charge 0.45 /Depletion 0 /Pitch 22 >> pkliner"
+    ))
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let ink = ink_count(&it);
+    assert!(
+        ink > 600,
+        "short runs must keep their width rather than thinning at both \
+         ends at once, got {ink} (457 without the run-length scaling)"
+    );
+}
