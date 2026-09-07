@@ -145,6 +145,15 @@ Which tool to pick:
   even block-in. Reach for it over `pktrowel` when you want a brushed
   mass rather than a scraped one, and over `pkribbon` whenever the mark
   should look applied rather than drawn.
+- **`pkliner`** — liner/detail brush: branches, trunks, grass stems,
+  rigging, whiskers, shoreline accents. The fine marks you make *last*.
+  Unlike every other preset here it **leaves the centerline you drew**
+  (`/Waver`), which is what stops a branch reading as a ruled line;
+  `/Taper` whips it from full width to a point, and `/Charge` +
+  `/Depletion` break the tail into shortening dashes. A **single-point
+  subpath is a pressed dot** — that's your speck, stamen, distant bird,
+  sparkle on water. Reach for it over `pknib` whenever the mark should
+  look painted rather than penned.
 - **`pkwash`** / **`pkpaper`** — watercolor and its ground. The only
   presets needing pscat's `setalpha`; under plain `gs` they fall back
   to flattening against white and overlaps stop mixing.

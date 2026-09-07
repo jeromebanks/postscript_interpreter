@@ -3,6 +3,99 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## `lib/paintkit.ps`: `pkliner`, the liner/detail brush (issue #116, 2026-09-07)
+
+Fifth child of epic #112. Adds `pkliner`, with `/Width` `/Taper`
+`/Charge` `/Depletion` `/Waver` `/Pitch` `/ColorJitter`. Scratch prefix
+`pq-`, scanned across every `.ps` under `lib/`, `examples/`, `gallery/`,
+`site/` and `tests/` — the wider scan `pkbroad`'s own notes say is
+required.
+
+**The differentiator is that the line leaves the centerline.** The issue
+asks for the complement of `pknib` — a flexible loaded brush against a
+rigid calligraphic nib — and that is the whole design. A liner is a long
+soft tip carrying far more paint than its width suggests, so it wanders
+off the intended line, whips to a point, and breaks up when the paint
+runs out. The wander is a capability nothing else in the file has: every
+other preset varies width or coverage *around* the drawn path
+(`pkribbon`'s `/Jitter` on the ribbon's own edges, `pkdry`'s bristles at
+fixed parallel offsets), and none of them leaves it. At 2pt the
+centerline *is* the mark.
+
+That is also why it is not `pkribbon` with a taper preset, and not built
+on `pkribbon` at all: `pkribbon`'s taper is exact, mechanical and centred
+on the drawn path, and the dry break-up here has to run *across* the gaps
+it makes — one `pkribbon` call per dash restarts the taper at every gap,
+so a branch would read as a row of identical commas.
+
+**Two fades, kept independent.** `/Taper` is the artist's lift (width
+only); `/Charge` and `/Depletion` are the paint (coverage only).
+Coupling them is defensible physically — a drier brush does lay a
+thinner line — and was rejected because "thinner" and "broken" are the
+two things the tool is steered by, and coupling makes them inseparable
+in the tests and in the artist's hands. `/Charge` and `/Depletion` carry
+`pkbroad`'s meanings exactly; what differs is what running out *looks
+like* on a mark one bristle wide.
+
+**Break-up spacing is absolute, not per-stroke.** A fixed pool of 64
+seeded "tooth" knots is laid down at a multiple of `/Width` and
+smoothstepped between. The first draft spread a fixed count over each
+subpath, which the advisor pass flagged: that gives a 300pt trunk 19pt
+teeth and a 20pt twig 1.2pt teeth, so the whole drawing comes out
+self-similar and the twigs' gaps go sub-pixel.
+
+**The one contract the siblings decline.** Because the pool is fixed and
+emission consumes no randomness, the draw count per subpath is exactly
+constant — so turning any knob re-shapes this mark rather than
+re-rolling everything drawn after it. `pkbroad` and `pkfan` both
+explicitly decline this claim. It holds *only* while nothing in emission
+draws, which is exactly how `pkbroad`'s `/Charge` came to re-roll its
+striations, so the header says so and a downstream-marker test pins it.
+
+**Four things came from rendering, not reasoning.** A uniform tooth pool
+put gaps along the whole length of a *fully charged* line, so the pool is
+squared. A constant-amplitude waver read as a wobbly rope rather than a
+brush, so the amplitude grows toward the whipping tip. One sine reads as
+a sine, so there are three at different scales. And a broken tail came
+out as a row of blunt dashes until each run learned to thin where it
+lifts on and off the surface.
+
+**Measured, then documented rather than tuned away:** `/Charge` responds
+fastest below about 0.3 (the squared pool's median sits near 0.25, so a
+half-charged brush still mostly touches — which is right), and
+`/ColorJitter` cannot show a negative tint on pure black, since artkit's
+`shade` only moves black toward white. The second surfaced as a *test
+failure* in the parameter sweep, where black paint made `/ColorJitter
+0.05` and `0.9` render identically.
+
+**Review of the branch added a fifth rendering finding.** A run's
+lift-on/lift-off taper is a fraction of the run, so a short run took the
+full lift at *both* ends at once and came out at a quarter of its width
+and under. The lift is now scaled by the run's own length — a brief touch
+of a wet tip has no room to thin. Swept 30 seeds x 3 widths at coarse
+pitches to size it before pinning a threshold: the median mark gains 7%
+of its ink back and the worst 50%. Worth recording what it is *not*: no
+dash was vanishing, since a run of three or more stops still reaches full
+width in its middle, so the dash count is identical either way. The
+first, coarser measurements said "no change at all" and only a per-case
+sweep showed the effect — the metric was wrong, not the finding.
+
+**Two bugs the sibling PRs had already paid for**, avoided by reading
+their reviews first: a one-sample run (any subpath shorter than `/Pitch`
+— which most twigs and grass stems are) needs its own emission case with
+a forward-only footprint, and contact has to be clamped at both ends
+because `frnd` really returns 1.0. The normals are finite-differenced
+from the *displaced* centerline for a third, found here: offsetting a
+wandering line along the source tangent's normal pinches the band
+wherever the waver turns, and the test catches it through total ink,
+since a pinched band's ink stays equal to a straight line's.
+
+`examples/paintkit_liner_demo.ps` is the specimen: the argument against
+`pknib`/`pkribbon`, the parameter sweeps, and a bare tree, grass bank,
+shoreline and detail spray built entirely out of `pkliner` calls.
+Verified under Ghostscript 10.07.1 (acceptance, not pixel parity —
+seeded `rand` diverges there as it does for every seeded preset here).
+
 ## `lib/paintkit.ps`: `pkbroad`, the broad flat brush (issue #115, 2026-09-05)
 
 Fourth child of epic #112. Adds `pkbroad`, with `/Width` `/Angle`
