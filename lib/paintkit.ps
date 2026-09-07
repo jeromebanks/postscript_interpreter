@@ -29,6 +29,13 @@
 % height map or fluid simulation. See its own header, after `pkspray`'s,
 % for full docs.
 %
+% `pkliner` (issue #116) is the fine-detail end of the same family: a
+% long soft loaded tip for branches, trunks, grass stems and other thin
+% organic marks, and the complement of `pknib`'s rigid nib. It is the one
+% preset here that displaces the *centerline* rather than varying width
+% or coverage around it. See its own header, after `pkbroad`'s, for full
+% docs.
+%
 % `pkspray` (issue #44) is not built on `pkribbon` -- spray is discrete
 % particle deposition, not an offset band -- but it shares the same
 % walkpath-driven shape: seeded particles scattered around each sampled
@@ -100,6 +107,8 @@
 % po- (pkoil/dispatch, porad, poroll) -- issue #45, see below; also
 % deliberately distinct, same reasoning — pkoil calls pkribbon once per
 % bristle dash and pkribbon's own body redefines every pk*-prefixed name.
+% pq- (pkliner/dispatch, pqaff, pqoff, pqnrm, pqside, pqemit) -- issue
+% #116, see below.
 
 % - [bool0 bool1 ...]   (one flag per subpath, in path order: was it
 % closed with an explicit closepath?)
