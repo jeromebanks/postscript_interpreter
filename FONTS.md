@@ -471,3 +471,18 @@ Tests: `tests/type3.rs`'s switch-direction tests (both directions, plus
 the mid-codepoint-switch case above) and
 `tests/catalog.rs::kshow_font_switch_into_unicode_catalog_font_recombines_utf8_bytes`
 (the same fix for bundled-TrueType Unicode-mode faces, not just Type 3).
+
+## Post-roadmap addendum — display lettering from catalog faces (issue #144)
+
+`lib/lettering.ps` renders text as geometry (`charpath`) filled and clipped
+with a multicolor interior. Two limits to know: `charpath` on a **Type 3**
+face does not capture painted glyph outlines, so only outline faces
+(builtins and `fonts/catalog/` TrueType/OpenType) work; and `findfont`
+answers `/Helvetica` for any name it cannot find, so the library checks
+the resolved `/FontName` against the request and raises
+`lettering-font-not-found` instead of quietly substituting. Catalog faces
+exist only in pscat's own loader — Ghostscript silently substitutes
+Courier for them (observed: `/PermanentMarker findfont /FontName get`
+gives `/Courier`) — so the library rejects both known fallbacks
+(`/Helvetica` in pscat, `/Courier` in gs) unless requested, and a
+catalog-face render is a pscat render.

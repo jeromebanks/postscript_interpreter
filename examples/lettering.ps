@@ -1,0 +1,60 @@
+%!PS-Adobe-3.0
+%%Title: Keepin' It Real — a specimen sheet for lettering.ps
+%%BoundingBox: 0 0 900 900
+%%EndComments
+
+% Specimen for the psychedelic display-lettering library (issue #144,
+% lib/lettering.ps): the same word, "Real", at headline size.
+%
+%   left column   four treatments of one face (/PermanentMarker, the
+%                 library default): solid baseline, color transition,
+%                 color patches, mottled/worn interior
+%   right column  the mottled treatment under three seeds (only the
+%                 texture moves -- metrics and outline stay put), then
+%                 the same word in a mixed-case slab face (so the
+%                 counters of the lowercase e and a get tested) and
+%                 the /acid palette
+%
+% Run from the repo root:
+%
+%   pscat --page 900x900 examples/lettering.ps
+%
+% Every panel is plain paths + clip, so the SVG and PDF exports stay
+% vector; only the transition panel's gradient is approximated in PDF
+% (see lib/lettering.ps's header for the full table).
+
+(lib/artkit.ps) run
+(lib/styles/psychedelic.ps) run
+(lib/lettering.ps) run
+
+/label { % (s) x y -
+  gsave /Helvetica findfont 12 scalefont setfont 0.35 setgray
+  moveto show grestore
+} def
+
+0.97 0.95 0.9 setrgbcolor clippath fill
+0.1 setgray /Helvetica-Bold findfont 26 scalefont setfont
+40 862 moveto (Keepin' It Real) show
+/Helvetica findfont 12 scalefont setfont 0.35 setgray
+40 842 moveto (lib/lettering.ps: charpath outline + clip, seeded multicolor interior, dark contour) show
+
+/Sz 165 def
+/Tr [/solid /transition /patches /mottled] def
+/Nm [(solid baseline) (color transition) (color patches) (mottled / worn)] def
+0 1 3 { /i exch def
+  /y 690 i 200 mul sub def
+  (Real) 235 y << /Size Sz /Treatment Tr i get /Seed 7 >> psyletter
+  Nm i get 40 y 34 sub label
+} for
+
+% right column: the same mottled word under three seeds, then another
+% face and palette
+/Sd [(mottled, /Seed 1) (mottled, /Seed 2) (mottled, /Seed 3)] def
+0 1 2 { /i exch def
+  /y 690 i 200 mul sub def
+  (Real) 670 y << /Size 140 /Treatment /mottled /Seed i 1 add /Wear 0.7 >> psyletter
+  Sd i get 500 y 34 sub label
+} for
+(Real) 670 90 << /Font /AlfaSlabOne /Size 130 /Palette /acid
+                  /Treatment /mottled /Seed 4 >> psyletter
+(/Font /AlfaSlabOne, /Palette /acid) 500 50 label

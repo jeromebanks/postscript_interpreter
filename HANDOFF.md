@@ -315,6 +315,16 @@ uses "scratch" as a term of art for private working state throughout
 every sibling library's own docs, and five review rounds' worth of
 auto-execution and unguarded-numeric-conversion hazards a caller-
 supplied value could trigger before its type was checked).
+Also done: issue #144, psychedelic display lettering — `lib/lettering.ps`
+(`@requires: (lib/artkit.ps) run`, tag-migrated): `psyletter` draws an
+outline face's `charpath` with a clipped multicolor interior
+(`/Treatment` `/solid` `/transition` `/patches` `/mottled`) under a dark
+contour; `psyletterpath` is the geometry alone. Default face
+`/PermanentMarker`; a missing face raises `lettering-font-not-found`
+rather than `findfont`'s silent Helvetica. `examples/lettering.ps` is
+the specimen, with a site card (NOTES.md's entry has the vector-vs-raster
+table and the gs caveats). First slice of the shirt remake; composition
+and print assets are follow-up issues.
 Also done: issue #52, woodcut/linocut/engraving mark presets — a
 tenth sibling, `lib/printkit.ps`, composing `hatchkit.ps`'s `hatch`,
 `artkit.ps`'s `scatter`, and (optionally, `/Paper true`)

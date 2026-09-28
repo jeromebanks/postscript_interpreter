@@ -717,6 +717,26 @@ plus a sixth demonstrating that exact-edge clip.
 0 0 200 200 screct << /Density 0.4 /Scale [0.4 1.4] /Seed 3 >> grain
 ```
 
+A display-type sibling, `lib/lettering.ps` (issue #144), turns an
+installed outline face into large "groovy" lettering: `psyletter`
+takes `(text) x y << options >>` and draws the glyph outlines
+(`charpath`) filled with a multicolor interior clipped to the letters --
+`/Treatment` `/solid`, `/transition` (a `shfill` gradient), `/patches`
+(seeded irregular color pools), or `/mottled` (patches plus worn
+flecks) -- under a dark contour. `/Font` (default `/PermanentMarker`),
+`/Size` or `/Width`, `/Align`, `/Palette` (an artkit palette name or an
+array of `[r g b]`), `/Seed`, `/Wear`, `/Outline`, `/OutlineWidth` are
+the controls. A seed changes only the texture, never metrics or
+placement; a missing face is an error (`lettering-font-not-found`), not
+a silent Helvetica. `psyletterpath` exposes just the geometry.
+`examples/lettering.ps` is the specimen.
+
+```postscript
+(lib/artkit.ps) run
+(lib/lettering.ps) run
+(Real) 306 300 << /Size 220 /Treatment /mottled /Seed 7 >> psyletter
+```
+
 A tenth sibling, `lib/printkit.ps` (issue #52), composes `hatch`,
 `scatter`, and (optionally) `grain` into three printmaking presets --
 `woodcut`, `linocut`, `engraving` -- over a shared options dict

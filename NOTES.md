@@ -3,6 +3,72 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## `lib/lettering.ps`: psychedelic display lettering (issue #144, 2026-09-28)
+
+First slice of the "Keepin' it Real" shirt remake. One new sibling
+library (`@requires: (lib/artkit.ps) run`, tag-migrated from the start,
+scratch prefix `lt-`) with `psyletter` (draw) and `psyletterpath` (just
+the geometry). No Rust changes: `charpath` + `clip` + ordinary fills
+already did everything asked.
+
+**Font choice.** Rendered `Real` in Bangers, Bungee, AlfaSlabOne,
+AbrilFatface, Pacifico, PermanentMarker, Creepster and Rye. Default is
+`/PermanentMarker`: bold, rounded, visibly hand-cut edges (Pacifico is
+rounded but too thin to carry a contour, the slabs are too regular).
+It is all-caps, so "Real" reads as REAL (a documented judgment call).
+The catalog has no mixed-case face that is also rounded *and* irregular
+-- Pacifico and AlfaSlabOne are mixed-case but respectively too thin
+and too regular -- so a custom or distorted face is a candidate
+follow-up if the shirt's exact lowercase letterforms matter; the
+specimen shows `/AlfaSlabOne` for the lowercase counters. No custom
+Type 3 face was built here. `charpath` on a
+Type 3 face does not capture painted outlines (FONTS.md), so only
+outline faces work.
+
+**Never substitutes a face.** `findfont` answers /Helvetica for any
+unknown name (probed: `/NoSuchFace findfont /FontName get` -> Helvetica),
+so `ltfontcheck` compares the resolved `/FontName` to the request (or
+`<request>-Regular`) and raises `lettering-font-not-found`. A resolved
+name that differs from the request but is not Helvetica is accepted as
+an alias (e.g. `/Palatino-Roman`).
+
+**Determinism.** Font scale, width, origin and the glyph bbox are
+computed before any random draw; the texture stream is seeded with
+`/Seed` and the caller's `rand` state restored on the way out (the same
+`rrand`/`srand` idiom `scatter` uses). tests/lettering.rs pins:
+identical inputs -> identical pixels; a different seed changes pixels
+but not the ink silhouette or the path bbox; every treatment's ink stays
+inside the solid treatment's silhouette; caller color/font/rand stream
+are untouched.
+
+**What stays vector (verified against `--svg`/`--pdf`).** Solid,
+patches, mottled and the contour are paths + a clip: SVG `<clipPath>`,
+PDF `W n`, no `<image>` anywhere. `/transition` uses `shfill`: a native
+`<linearGradient>` in SVG, the flat average-color approximation in PDF
+(the existing `shfill` PDF limitation), smooth only in PNG. Only the PNG
+is a raster by nature.
+
+**Ghostscript.** Geometry, clip, contour and the gradient match pscat
+on a builtin face (`/Times-Bold`; compared by eye on a
+`gs -sDEVICE=png16m` render, and pinned durably by
+`ghostscript_accepts_lettering_on_a_builtin_face`, which skips when gs
+is absent). Two differences, both observed: gs has no catalog faces and
+silently substitutes **Courier** (`/PermanentMarker findfont /FontName
+get` -> `/Courier`, plus a stderr warning), so the guard rejects both
+fallbacks it knows -- pscat's `/Helvetica` and gs's `/Courier` -- unless
+that is what was requested (`ghostscript_refuses_a_catalog_face_...`);
+under gs only builtin faces work. And gs's `rand` stream differs, so
+patch/fleck *positions* differ from pscat's for the same seed (each
+interpreter is deterministic on its own).
+
+**Tuning that came from looking.** The first defaults (contour 4.5% of
+size, patches 0.14-0.36 x size) closed the counters of the R and A and
+gave three huge patches; now 3% and 0.08-0.21 x size, 26 patches.
+
+**Deferred.** Expressive composition and print assets are separate
+issues per #144. `/transition` is a single diagonal ramp; no per-letter
+palette rotation yet.
+
 ## `lib/paintkit.ps`: `pkbroad`, the broad flat brush (issue #115, 2026-09-05)
 
 Fourth child of epic #112. Adds `pkbroad`, with `/Width` `/Angle`
