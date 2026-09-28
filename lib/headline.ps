@@ -219,11 +219,11 @@
   0 1 hlss length 1 sub {
     /hlsi exch def
     hlss hlsi get 10 eq {
-      hlss hlst hlsi hlst sub getinterval
+      hlss hlst hlsi hlst sub getinterval dup length string copy
       /hlst hlsi 1 add def
     } if
   } for
-  hlss hlst hlss length hlst sub getinterval
+  hlss hlst hlss length hlst sub getinterval dup length string copy
   ]
 } def
 
@@ -473,6 +473,9 @@
   } if
   hlo /Text known not { headline-run-needs-text } if
   hlo /Text get dup type /stringtype ne { headline-text-must-be-a-string } if
+  % Snapshot: the layout must keep describing what it measured even if
+  % the caller later mutates its own string.
+  dup length string copy
   /hltext exch def
   /hllines hltext hlsplit def
   hlo /Font /Helvetica-Bold hlgd

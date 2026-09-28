@@ -643,3 +643,25 @@ fn a_fit_landing_on_min_size_still_fails_clearly() {
         "headline-fit-below-minimum-size"
     );
 }
+
+#[test]
+fn mutating_the_source_text_after_layout_does_not_change_what_is_drawn() {
+    let render = |mutate: bool| {
+        let mut it = with_lib(400, 200);
+        it.run_str("1 setgray clippath fill 0 setgray /src (iiii) 4 string copy def")
+            .expect("bg");
+        it.run_str("/lay [ 0 0 400 200 ] [ << /Text src /Size 60 /At [ 20 60 ] >> ] hllayout def")
+            .expect("layout");
+        if mutate {
+            it.run_str("src 0 (WWWW) putinterval").expect("mutate");
+        }
+        it.run_str("lay hldraw").expect("draw");
+        it.gfx()
+            .pixmap
+            .pixels()
+            .iter()
+            .map(|p| p.red())
+            .collect::<Vec<u8>>()
+    };
+    assert_eq!(render(false), render(true));
+}
