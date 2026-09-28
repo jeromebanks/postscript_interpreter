@@ -1,0 +1,280 @@
+%!PS-Adobe-3.0
+%%Title: lettering.ps — psychedelic display lettering from outline text
+%%Creator: pscat — issue #144
+%%EndComments
+% @requires: (lib/artkit.ps) run
+
+% Large, groovy display lettering: an installed outline face turned
+% into geometry with `charpath`, filled with a multicolor "worn print"
+% interior, and wrapped in a dark contour. The visual target is an
+% oversized, rounded, irregular word on a print graphic — red, green
+% and blue patches that bleed into each other, a little scuffed.
+%
+%   (lib/artkit.ps) run (lib/lettering.ps) run
+%   (Real) 306 300 << /Size 220 /Treatment /mottled /Seed 7 >> psyletter
+%
+% Everything is ordinary vector drawing: the glyph outline is the clip
+% for the interior and then the path for the contour, so the colors
+% cannot leave the letters. The face must be an *outline* face
+% (any `fonts/catalog` TrueType/OpenType face, or a builtin) — a
+% Type 3 face's `charpath` does not capture painted glyph outlines
+% (FONTS.md), so it is not usable here.
+%
+% Layering, bottom to top:
+%   1. clip to the glyph outlines (`charpath` + `clip`)
+%   2. base color fill, then the treatment (transition / patches /
+%      mottled wear), all clipped to the glyphs
+%   3. grestore, then stroke the same outlines with the dark contour
+% The contour is centered on the glyph edge, so half of it eats into
+% the letter. Keep /OutlineWidth modest (default 3% of the size) or
+% the counters of small letters (a, e) close up.
+%
+% Determinism: all placement metrics (font scale, width, origin, path)
+% come from the font alone and are computed before any random draw.
+% /Seed only reseeds the texture stream, and the caller's own `rand`
+% state is restored on the way out, so changing the seed changes the
+% patches and specks and nothing else — same text metrics, same
+% outline, same position. Identical inputs render identically.
+%
+% Missing faces are an error, never a silent substitute: `findfont`
+% quietly answers /Helvetica for an unknown name, which would ship the
+% wrong lettering without a word, so /Font is verified against the
+% resolved font's own /FontName and `lettering-font-not-found` is raised
+% on a mismatch.
+%
+% Which effects survive which output (all verified against pscat's
+% own SVG/PDF/PNG output; see NOTES.md, issue #144):
+%   /solid /patches /mottled   pure paths + clip: vector in SVG and PDF
+%                              (SVG <clipPath>, PDF `W n`), never rasterized
+%   /transition                uses `shfill`: a native <linearGradient> in
+%                              SVG; a flat average-color approximation in
+%                              the PDF export; smooth only in PNG
+%   the contour                a plain stroke: vector everywhere
+% Only the PNG is a raster by nature; nothing here rasterizes SVG/PDF.
+%
+% Scratch prefix: lt- (a fresh dict per call holds every working name).
+
+% --- helpers -----------------------------------------------------------
+
+% key default ltget -> value      (reads the current call's ltopts)
+% @internal
+/ltget {
+  exch dup ltopts exch known { ltopts exch get exch pop } { pop } ifelse
+} def
+
+% val errproc ltnum -> val        (errproc runs, self-documenting, if not a number)
+% @internal
+/ltnum {
+  exch dup type dup /integertype eq exch /realtype eq or
+  { exch pop } { pop exec } ifelse
+} def
+
+% val errproc ltrgb -> val        (errproc runs unless val is [r g b] numbers)
+% @internal
+/ltrgb {
+  exch dup type /arraytype eq { dup length 3 eq } { false } ifelse
+  { dup true exch { type dup /integertype eq exch /realtype eq or and } forall }
+  { false } ifelse
+  { exch pop } { pop exec } ifelse
+} def
+
+% Verify /Font really resolved, then leave the scaled font set.
+% (str) ltfontcheck -
+% @internal
+/ltfontcheck {
+  /ltreq exch def
+  /ltfd ltreq cvn findfont def
+  /ltgot ltfd /FontName get 96 string cvs def
+  /ltgotreg ltreq length 8 add string dup 0 ltreq putinterval
+    dup ltreq length (-Regular) putinterval def
+  ltgot ltreq eq ltgot ltgotreg eq or
+  ltgot (Helvetica) ne or not { lettering-font-not-found } if
+} def
+
+% Resolve options, pick and scale the font, and compute the origin.
+% Draws nothing and consumes no random numbers.
+% @internal
+/ltprep {
+  /Font /PermanentMarker ltget
+  dup type /nametype eq { 96 string cvs } {
+    dup type /stringtype ne { lettering-font-must-be-a-name } if
+  } ifelse
+  ltfontcheck
+  /ltsize /Size 160 ltget { lettering-size-must-be-a-number } ltnum def
+  ltsize 0 le { lettering-size-must-be-positive } if
+  ltfd ltsize scalefont setfont
+  ltopts /Width known {
+    /ltwant /Width 0 ltget { lettering-width-must-be-a-number } ltnum def
+    ltwant 0 le { lettering-width-must-be-positive } if
+    lttext stringwidth pop dup 0.001 gt {
+      ltwant exch div ltsize mul /ltsize exch def
+      ltfd ltsize scalefont setfont
+    } { pop } ifelse
+  } if
+  /ltw lttext stringwidth pop def
+  /Align /center ltget /ltalign exch def
+  ltalign /center eq { /ltx0 ltx ltw 2 div sub def }
+  { ltalign /left eq { /ltx0 ltx def }
+    { ltalign /right eq { /ltx0 ltx ltw sub def }
+      { lettering-align-must-be-left-center-or-right } ifelse } ifelse } ifelse
+} def
+
+% Add the text outline to the current path at (ltx0, lty).
+% @internal
+/ltaddpath { ltx0 lty moveto lttext ltfor charpath } def
+
+% -> the palette as an array of [r g b], validated
+% @internal
+/ltpalette {
+  /Palette [[0.86 0.12 0.16] [0.13 0.62 0.28] [0.13 0.32 0.78]] ltget
+  dup type /nametype eq {
+    dup Palettes exch known { Palettes exch get } { lettering-unknown-palette } ifelse
+  } if
+  dup type /arraytype ne { lettering-palette-must-be-an-array } if
+  dup length 0 eq { lettering-palette-must-not-be-empty } if
+  dup { { lettering-palette-entries-must-be-rgb } ltrgb pop } forall
+} def
+
+% i ltcol -      set the color for palette index i (wraps)
+% @internal
+/ltcol { ltpal length mod ltpal exch get aload pop setrgbcolor } def
+
+% -> random palette index
+% @internal
+/ltpick { frnd ltpal length mul cvi ltpal length 1 sub 2 copy gt { exch } if pop } def
+
+% One irregular blob: cx cy r ltblob -   (adds a closed path)
+% 24 vertices, radii jittered then smoothed once, so an edge reads as a
+% lumpy pool of ink rather than a polygon. Always 25 random draws.
+% @internal
+/ltblob {
+  /ltbr exch def /ltbcy exch def /ltbcx exch def
+  /ltbrad 24 array def
+  0 1 23 { ltbrad exch 0.68 frnd 0.7 mul add put } for
+  /ltbsm 24 array def
+  0 1 23 { /ltbi exch def
+    ltbsm ltbi
+    ltbrad ltbi 23 add 24 mod get 0.25 mul
+    ltbrad ltbi get 0.5 mul add
+    ltbrad ltbi 1 add 24 mod get 0.25 mul add put } for
+  frnd 15 mul /ltba0 exch def
+  0 1 23 { /ltbi exch def
+    ltba0 ltbi 15 mul add dup cos ltbr mul ltbsm ltbi get mul ltbcx add
+    exch sin ltbr mul ltbsm ltbi get mul ltbcy add
+    ltbi 0 eq { moveto } { lineto } ifelse } for
+  closepath
+} def
+
+% Patches of the palette colors over a base fill.
+% @internal
+/ltpatches {
+  /Patches 26 ltget { lettering-patches-must-be-a-number } ltnum cvi
+  0 max 400 min /ltnpat exch def
+  ltnpat { newpath
+    ltbx0 frnd ltbw mul add ltby0 frnd ltbh mul add
+    ltsize 0.08 mul frnd ltsize 0.13 mul mul add ltblob
+    ltpick ltcol fill } repeat
+} def
+
+% Worn flecks: a light "paper showing through" speck or a dark ink
+% speck. Count scales with glyph-box area and /Wear.
+% @internal
+/ltwear {
+  /Wear 0.5 ltget { lettering-wear-must-be-a-number } ltnum
+  0 max 1 min /ltwv exch def
+  ltwv ltbw ltbh mul mul 120 div cvi 4000 min /ltnspk exch def
+  ltnspk { newpath
+    ltbx0 frnd ltbw mul add ltby0 frnd ltbh mul add
+    ltsize 0.004 mul frnd ltsize 0.012 mul mul add
+    0 360 arc closepath
+    frnd 0.6 lt { ltwearc aload pop } { ltoutc aload pop } ifelse setrgbcolor
+    fill } repeat
+} def
+
+% --- public ------------------------------------------------------------
+
+% (text) x y opts psyletterpath -
+% @kind: Procedure
+% @summary: Add the outline of `text` in a catalog/builtin outline face to the current path, positioned and scaled exactly as psyletter would — the reusable geometry half of psyletter, for callers who want to fill, clip or stroke it themselves. Leaves the scaled font set in the current graphics state, so wrap it in gsave/grestore. Errors (never substitutes) on a missing face.
+% @example: gsave (Real) 306 300 << /Font /PermanentMarker /Size 220 >> psyletterpath fill grestore
+% @param: /Font name of an installed outline face; missing faces raise lettering-font-not-found (default /PermanentMarker)
+% @param: /Size num > 0 font size in points (default 160)
+% @param: /Width num > 0 fit the text to exactly this width; overrides /Size
+% @param: /Align /left|/center|/right which side of x the text is anchored to (default /center)
+/psyletterpath {
+  dup type /dicttype ne { lettering-opts-must-be-a-dict } if
+  40 dict begin
+  /ltopts exch def /lty exch def /ltx exch def /lttext exch def
+  lttext type /stringtype ne { lettering-text-must-be-a-string } if
+  /ltfor true def
+  ltprep
+  ltaddpath
+  end
+} def
+
+% (text) x y opts psyletter -
+% @kind: Procedure
+% @summary: Draw large psychedelic display lettering: `text` in an outline face, filled with a multicolor interior (solid, transition, patches, or mottled/worn) clipped to the glyphs and wrapped in a dark contour. Seeded and deterministic; the seed changes only texture, never metrics or placement. Draws inside its own gsave/grestore, so the caller's graphics state (colors, font, path) is untouched.
+% @example: (Real) 306 300 << /Size 220 /Treatment /mottled /Seed 7 >> psyletter
+% @param: /Font name of an installed outline face; missing faces raise lettering-font-not-found (default /PermanentMarker)
+% @param: /Size num > 0 font size in points (default 160)
+% @param: /Width num > 0 fit the text to exactly this width; overrides /Size
+% @param: /Align /left|/center|/right which side of x the text is anchored to (default /center)
+% @param: /Treatment /solid|/transition|/patches|/mottled interior look (default /mottled)
+% @param: /Palette name-or-array artkit palette name, or an array of [r g b]; the interior colors (default red, green, blue)
+% @param: /Seed num integer seed for the texture only (default 1)
+% @param: /Patches num count of color patches for /patches and /mottled (default 26)
+% @param: /Wear num 0..1 density of worn flecks for /mottled (default 0.5)
+% @param: /WearColor [r g b] the "paper showing through" fleck color (default a warm cream)
+% @param: /Outline [r g b] contour color (default near-black)
+% @param: /OutlineWidth num contour width as a fraction of the size; 0 omits the contour (default 0.03)
+/psyletter {
+  dup type /dicttype ne { lettering-opts-must-be-a-dict } if
+  40 dict begin
+  /ltopts exch def /lty exch def /ltx exch def /lttext exch def
+  lttext type /stringtype ne { lettering-text-must-be-a-string } if
+  gsave
+  % --- metrics: font, size, origin, glyph box. No random draws yet. ---
+  /ltfor false def
+  ltprep
+  /ltpal ltpalette def
+  /Treatment /mottled ltget /lttreat exch def
+  lttreat /solid eq lttreat /transition eq or lttreat /patches eq or
+  lttreat /mottled eq or not { lettering-treatment-must-be-solid-transition-patches-or-mottled } if
+  /ltoutc /Outline [0.06 0.05 0.08] ltget { lettering-outline-must-be-an-rgb-array } ltrgb def
+  /ltwearc /WearColor [0.96 0.92 0.82] ltget { lettering-wearcolor-must-be-an-rgb-array } ltrgb def
+  /ltow /OutlineWidth 0.03 ltget { lettering-outlinewidth-must-be-a-number } ltnum
+    0 max ltsize mul def
+  /Seed 1 ltget { lettering-seed-must-be-a-number } ltnum
+  dup abs 2147483647 gt { lettering-seed-out-of-range } if /ltseed exch def
+  newpath ltaddpath pathbbox
+  /ltby1 exch def /ltbx1 exch def /ltby0 exch def /ltbx0 exch def
+  /ltbw ltbx1 ltbx0 sub def /ltbh ltby1 ltby0 sub def
+  ltbw 0 le ltbh 0 le or { lettering-text-has-no-outline } if
+  % --- texture: clipped to the glyphs ---
+  gsave
+    clip newpath
+    0 ltcol
+    ltbx0 ltby0 ltbw ltbh rectfill
+    lttreat /transition eq ltpal length 1 gt and {
+      ltbx0 ltby1 ltbx1 ltby0 ltpal axialsh shfill
+    } if
+    lttreat /patches eq lttreat /mottled eq or {
+      /ltsaved rrand def
+      ltseed cvi srand
+      ltpatches
+      lttreat /mottled eq { ltwear } if
+      ltsaved srand
+    } if
+  grestore
+  % --- contour ---
+  ltow 0 gt {
+    newpath
+    /ltfor true def ltaddpath
+    ltoutc aload pop setrgbcolor
+    ltow setlinewidth 1 setlinejoin 1 setlinecap
+    stroke
+  } if
+  grestore
+  end
+} def
