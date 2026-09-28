@@ -78,7 +78,12 @@
 %                    earlier run) or [name i j] (glyphs [i,j) of one).
 %                    Default: every earlier run. [] disables the check.
 %   /Draw proc       (text) x y size -> draws one line with the run's
-%                    font already set (default: moveto show). Hand this
+%                    font already set (default: moveto show). It must
+%                    consume its four operands and leave nothing on the
+%                    stack (hldraw runs under save/restore so that a
+%                    failing proc cannot leak graphics state; the same
+%                    restore also rolls back its VM side effects, e.g.
+%                    values it stores into older dicts). Hand this
 %                    to another renderer (e.g. lettering.ps) at will --
 %                    but note that renderer's own geometry is invisible
 %                    to the checks here: pass psyletter the same /Font
@@ -504,6 +509,11 @@
   {
     2 { /hlmsz hlsz def hlmeasure /hlsz hlsize def } repeat
     /hlsz hlsz 0.9999 mul def
+    % A fit landing on /MinSize is already at the limit; the margin
+    % must not slip it under unannounced.
+    hlo /MinSize known {
+      hlsz hlo /MinSize get le { headline-fit-below-minimum-size } if
+    } if
   } if
   % Final ink is measured at exactly the size that will be drawn.
   /hlmsz hlsz def hlmeasure
@@ -586,8 +596,8 @@
   count hdbase sub dup 0 gt { { pop } repeat } { pop } ifelse
   hdname /undefined eq { hdcmdbox 0 get } { /stop } ifelse
   countdictstack hdbdepth sub
-  hdin { grestore } if
-  grestore
+  % restore (not grestore) so gsaves a failed /Draw proc leaked go too.
+  hdsv restore
   { end } repeat
   end
   cvx exec
@@ -596,12 +606,11 @@
 % placed hldrawrun -
 % @internal
 /hldrawrun {
-  gsave
   12 dict begin
   /hdp exch def
+  save /hdsv exch def
   /hdbdepth countdictstack def
   /hdbase count def
-  /hdin false def
   {
     hdp /FontDict get hdp /Size get scalefont setfont
     0 1 hdp /Lines get length 1 sub {
@@ -609,11 +618,11 @@
       hdp /Lines get hdk get
       hdp /LineOrigins get hdk get aload pop
       hdp /Size get
-      gsave /hdin true def hdp /Draw get exec grestore /hdin false def
+      gsave hdp /Draw get exec grestore
     } for
   } stopped { hdunwind } if
+  hdsv restore
   end
-  grestore
 } def
 
 % --- public ------------------------------------------------------------

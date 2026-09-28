@@ -427,20 +427,23 @@ fn explicit_line_breaks_justify_and_stack() {
 
 #[test]
 fn a_custom_draw_proc_receives_text_position_and_size() {
-    let got = stack_of(
-        "[ 0 0 400 300 ] [ << /Text (Real) /Size 50 /At [ 20 100 ] /Draw { 4 array astore } >> ]
-         hllayout hldraw",
-    );
-    assert_eq!(got.len(), 1, "one line, one array: {got:?}");
-    // The default anchor is the *ink's* left edge, so the pen origin
-    // sits one left side-bearing left of x=20 (the y stays on the baseline).
-    let parts: Vec<&str> = got[0]
-        .trim_matches(|c| c == '[' || c == ']')
-        .rsplitn(3, ' ')
-        .collect();
-    assert_eq!(parts[0], "50", "{got:?}");
-    assert_eq!(parts[1], "100.0", "{got:?}");
-    assert!(got[0].starts_with("[(Real) 1"), "{got:?}");
+    // /Draw must consume its four operands and leave nothing (hldraw
+    // runs under save/restore so a failing proc cannot leak graphics
+    // state), so the proc paints a size x size square at (x, y).
+    let mut it = with_lib(400, 300);
+    it.run_str("1 setgray clippath fill 0 setgray").expect("bg");
+    it.run_str(
+        "[ 0 0 400 300 ] [ << /Text (Real) /Size 50 /At [ 20 100 ]
+           /Draw { 4 dict begin /s exch def /y exch def /x exch def pop
+                   x y s s rectfill end } >> ] hllayout hldraw",
+    )
+    .expect("draw");
+    let px = it.gfx().pixmap.pixels().to_vec();
+    let dark = |x: usize, y_up: usize| px[(300 - 1 - y_up) * 400 + x].red() < 128;
+    // The pen origin is one left side-bearing left of the ink edge at
+    // x=20, so the square starts just under 20 and spans 50 points.
+    assert!(dark(30, 110) && dark(60, 140));
+    assert!(!dark(5, 110) && !dark(30, 160));
 }
 
 #[test]
@@ -596,4 +599,47 @@ fn top_level_validation_failures_restore_the_operand_stack() {
         let got: Vec<String> = it.operand_stack().iter().map(|o| o.repr()).collect();
         assert_eq!(got, ["42", "(kept)"], "{src}");
     }
+}
+
+#[test]
+fn a_draw_proc_that_leaks_a_gsave_and_fails_is_fully_unwound() {
+    let mut it = with_lib(400, 200);
+    it.run_str("0.5 setgray").expect("setup");
+    let r = it.run_str(
+        "[ 0 0 300 200 ] [ << /Text (Real) /Size 50 /At [ 10 10 ]
+            /Draw { pop pop pop gsave 0.1 setgray boom-in-draw } >> ] hllayout hldraw",
+    );
+    assert!(r.is_err());
+    it.run_str("clear 0.9 setgray grestore currentgray").ok();
+    let g: f64 = it.operand_stack().last().unwrap().repr().parse().unwrap();
+    assert!(
+        (g - 0.9).abs() < 1e-6,
+        "a leaked gsave was restored into: {g}"
+    );
+}
+
+#[test]
+fn a_fit_landing_on_min_size_still_fails_clearly() {
+    assert_eq!(
+        err_of(
+            "[ 0 0 900 900 ] [ << /Text (Real) /Font /Helvetica-Bold /FitWidth 200
+               /MinSize 1000 /At [ 10 10 ] >> ] hllayout"
+        ),
+        "headline-fit-below-minimum-size"
+    );
+    // A fit whose size sits at MinSize (after the safety margin) fails
+    // rather than returning a size under the declared minimum.
+    let size = nums(
+        "[ 0 0 900 900 ] [ << /Name /r /Text (Real) /Font /Helvetica-Bold /FitWidth 100 /At [ 10 10 ] >> ]
+         hllayout /Names get /r get /Size get",
+    )[0];
+    assert!(size > 0.0);
+    let min = size * 1.00005;
+    assert_eq!(
+        err_of(&format!(
+            "[ 0 0 900 900 ] [ << /Text (Real) /Font /Helvetica-Bold /FitWidth 100
+               /MinSize {min} /At [ 10 10 ] >> ] hllayout"
+        )),
+        "headline-fit-below-minimum-size"
+    );
 }
