@@ -403,3 +403,30 @@ fn ghostscript_refuses_a_catalog_face_instead_of_substituting_courier() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("guarded"), "gs stdout: {stdout}");
 }
+
+#[test]
+fn a_caught_error_unwinds_font_dict_stack_operands_and_path() {
+    // Codex review of PR #148: a `stopped`-caught validation error used
+    // to skip the final grestore/end, leaving the callee's font current
+    // and an extra dict open.
+    for call in [
+        "(Real) 100 100 << /Font /Times-Bold /Align /bad >> psyletter",
+        "(Real) 100 100 << /Font /Times-Bold /Treatment /bad >> psyletter",
+        "(Real) 100 100 << /Font /Times-Bold /Patches (x) >> psyletter",
+        "(Real) 100 100 << /Font /Times-Bold /Align /bad >> psyletterpath",
+        "(Real) 100 100 << /Font /Times-Bold /Width (x) >> psyletterpath",
+    ] {
+        let after = stack_of(&format!(
+            "/Courier findfont 9 scalefont setfont newpath 5 5 moveto \
+             countdictstack {{ {call} }} stopped \
+             countdictstack currentfont /FontName get 20 string cvs currentpoint"
+        ));
+        // dict depth before/after must match, error caught, Courier
+        // still current, and the caller's path untouched.
+        assert_eq!(after[0], after[2], "{call}: dict stack");
+        assert_eq!(after[1], "true", "{call}: caught");
+        assert_eq!(after[3], "(Courier)", "{call}: font");
+        assert_eq!(&after[4..], ["5.0", "5.0"], "{call}: path");
+        assert_eq!(after.len(), 6, "{call}: operand stack debris");
+    }
+}

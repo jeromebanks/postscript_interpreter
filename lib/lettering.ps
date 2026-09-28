@@ -112,22 +112,46 @@
   ltfontcheck
   /ltsize /Size 160 ltget { lettering-size-must-be-a-number } ltnum def
   ltsize 0 le { lettering-size-must-be-positive } if
-  ltfd ltsize scalefont setfont
+  % Every remaining option error is raised before setfont, so a caught
+  % failure has not yet changed the caller's font.
   ltopts /Width known {
     /ltwant /Width 0 ltget { lettering-width-must-be-a-number } ltnum def
     ltwant 0 le { lettering-width-must-be-positive } if
+  } if
+  /Align /center ltget dup type /nametype ne { lettering-align-must-be-a-name } if
+  /ltalign exch def
+  ltalign /center eq ltalign /left eq or ltalign /right eq or not
+    { lettering-align-must-be-left-center-or-right } if
+  ltfd ltsize scalefont setfont
+  ltopts /Width known {
     lttext stringwidth pop dup 0.001 gt {
       ltwant exch div ltsize mul /ltsize exch def
       ltfd ltsize scalefont setfont
     } { pop } ifelse
   } if
   /ltw lttext stringwidth pop def
-  /Align /center ltget dup type /nametype ne { lettering-align-must-be-a-name } if
-  /ltalign exch def
-  ltalign /center eq { /ltx0 ltx ltw 2 div sub def }
-  { ltalign /left eq { /ltx0 ltx def }
-    { ltalign /right eq { /ltx0 ltx ltw sub def }
-      { lettering-align-must-be-left-center-or-right } ifelse } ifelse } ifelse
+  ltalign /center eq { /ltx0 ltx ltw 2 div sub def } { /ltx0 ltx def } ifelse
+  ltalign /right eq { /ltx0 ltx ltw sub def } if
+} def
+
+% Called from a `stopped` handler with the failed call's scratch dict
+% still open: drop operands left mid-procedure back to the depth the
+% call started at, optionally grestore, close the scratch dict, then
+% re-raise. A self-documenting `undefined` error is re-raised by
+% re-executing its name (so the caller sees the same error, not a bare
+% `stop`); anything else falls back to `stop`.
+% grestore? ltunwind -
+% @internal
+/ltunwind {
+  /ltug exch def
+  % The offending command is an executable name: keep it in a box (a
+  % bare `def` reference to it would run it right here, mid-unwind).
+  $error /command get 1 array astore /ltecmdbox exch def
+  $error /errorname get /ltename exch def
+  count ltbase sub dup 0 gt { { pop } repeat } { pop } ifelse
+  ltename /undefined eq { ltecmdbox 0 get } { /stop } ifelse
+  ltug { grestore } if end
+  cvx exec
 } def
 
 % Add the text outline to the current path at (ltx0, lty).
@@ -198,53 +222,9 @@
     fill } repeat
 } def
 
-% --- public ------------------------------------------------------------
-
-% (text) x y opts psyletterpath -
-% @kind: Procedure
-% @summary: Add the outline of `text` in a catalog/builtin outline face to the current path, positioned and scaled exactly as psyletter would — the reusable geometry half of psyletter, for callers who want to fill, clip or stroke it themselves. Leaves the scaled font set in the current graphics state, so wrap it in gsave/grestore. Errors (never substitutes) on a missing face.
-% @example: gsave (Real) 306 300 << /Font /PermanentMarker /Size 220 >> psyletterpath fill grestore
-% @param: /Font name of an installed outline face; missing faces raise lettering-font-not-found (default /PermanentMarker)
-% @param: /Size num > 0 font size in points (default 160)
-% @param: /Width num > 0 fit the text to exactly this width; overrides /Size
-% @param: /Align /left|/center|/right which side of x the text is anchored to (default /center)
-/psyletterpath {
-  dup type /dicttype ne { lettering-opts-must-be-a-dict } if
-  3 index type /stringtype ne { lettering-text-must-be-a-string } if
-  2 index ltisnum not { lettering-x-must-be-a-number } if
-  1 index ltisnum not { lettering-y-must-be-a-number } if
-  40 dict begin
-  /ltopts exch def /lty exch def /ltx exch def /lttext exch def
-  /ltfor true def
-  ltprep
-  ltaddpath
-  end
-} def
-
-% (text) x y opts psyletter -
-% @kind: Procedure
-% @summary: Draw large psychedelic display lettering: `text` in an outline face, filled with a multicolor interior (solid, transition, patches, or mottled/worn) clipped to the glyphs and wrapped in a dark contour. Seeded and deterministic; the seed changes only texture, never metrics or placement. Draws inside its own gsave/grestore, so the caller's graphics state (colors, font, path) is untouched.
-% @example: (Real) 306 300 << /Size 220 /Treatment /mottled /Seed 7 >> psyletter
-% @param: /Font name of an installed outline face; missing faces raise lettering-font-not-found (default /PermanentMarker)
-% @param: /Size num > 0 font size in points (default 160)
-% @param: /Width num > 0 fit the text to exactly this width; overrides /Size
-% @param: /Align /left|/center|/right which side of x the text is anchored to (default /center)
-% @param: /Treatment /solid|/transition|/patches|/mottled interior look (default /mottled)
-% @param: /Palette name-or-array artkit palette name, or an array of [r g b]; the interior colors (default red, green, blue)
-% @param: /Seed num integer seed for the texture only (default 1)
-% @param: /Patches num count of color patches for /patches and /mottled (default scales with the glyph box: about 26 for one word like Real)
-% @param: /Wear num 0..1 density of worn flecks for /mottled (default 0.5)
-% @param: /WearColor [r g b] the "paper showing through" fleck color (default a warm cream)
-% @param: /Outline [r g b] contour color (default near-black)
-% @param: /OutlineWidth num contour width as a fraction of the size; 0 omits the contour (default 0.03)
-/psyletter {
-  dup type /dicttype ne { lettering-opts-must-be-a-dict } if
-  3 index type /stringtype ne { lettering-text-must-be-a-string } if
-  2 index ltisnum not { lettering-x-must-be-a-number } if
-  1 index ltisnum not { lettering-y-must-be-a-number } if
-  40 dict begin
-  /ltopts exch def /lty exch def /ltx exch def /lttext exch def
-  gsave
+% The body of psyletter, run inside its gsave and scratch dict.
+% @internal
+/ltdraw {
   % --- metrics: font, size, origin, glyph box. No random draws yet. ---
   /ltfor false def
   ltprep
@@ -295,6 +275,55 @@
     ltow setlinewidth 1 setlinejoin 1 setlinecap
     stroke
   } if
+} def
+
+% --- public ------------------------------------------------------------
+
+% (text) x y opts psyletterpath -
+% @kind: Procedure
+% @summary: Add the outline of `text` in a catalog/builtin outline face to the current path, positioned and scaled exactly as psyletter would — the reusable geometry half of psyletter, for callers who want to fill, clip or stroke it themselves. Leaves the scaled font set in the current graphics state, so wrap it in gsave/grestore. Errors (never substitutes) on a missing face.
+% @example: gsave (Real) 306 300 << /Font /PermanentMarker /Size 220 >> psyletterpath fill grestore
+% @param: /Font name of an installed outline face; missing faces raise lettering-font-not-found (default /PermanentMarker)
+% @param: /Size num > 0 font size in points (default 160)
+% @param: /Width num > 0 fit the text to exactly this width; overrides /Size
+% @param: /Align /left|/center|/right which side of x the text is anchored to (default /center)
+/psyletterpath {
+  dup type /dicttype ne { lettering-opts-must-be-a-dict } if
+  3 index type /stringtype ne { lettering-text-must-be-a-string } if
+  2 index ltisnum not { lettering-x-must-be-a-number } if
+  1 index ltisnum not { lettering-y-must-be-a-number } if
+  count 4 sub 40 dict begin
+  /ltbase exch def /ltopts exch def /lty exch def /ltx exch def /lttext exch def
+  /ltfor true def
+  { ltprep ltaddpath } stopped { false ltunwind } if
+  end
+} def
+
+% (text) x y opts psyletter -
+% @kind: Procedure
+% @summary: Draw large psychedelic display lettering: `text` in an outline face, filled with a multicolor interior (solid, transition, patches, or mottled/worn) clipped to the glyphs and wrapped in a dark contour. Seeded and deterministic; the seed changes only texture, never metrics or placement. Draws inside its own gsave/grestore, so the caller's graphics state (colors, font, path) is untouched.
+% @example: (Real) 306 300 << /Size 220 /Treatment /mottled /Seed 7 >> psyletter
+% @param: /Font name of an installed outline face; missing faces raise lettering-font-not-found (default /PermanentMarker)
+% @param: /Size num > 0 font size in points (default 160)
+% @param: /Width num > 0 fit the text to exactly this width; overrides /Size
+% @param: /Align /left|/center|/right which side of x the text is anchored to (default /center)
+% @param: /Treatment /solid|/transition|/patches|/mottled interior look (default /mottled)
+% @param: /Palette name-or-array artkit palette name, or an array of [r g b]; the interior colors (default red, green, blue)
+% @param: /Seed num integer seed for the texture only (default 1)
+% @param: /Patches num count of color patches for /patches and /mottled (default scales with the glyph box: about 26 for one word like Real)
+% @param: /Wear num 0..1 density of worn flecks for /mottled (default 0.5)
+% @param: /WearColor [r g b] the "paper showing through" fleck color (default a warm cream)
+% @param: /Outline [r g b] contour color (default near-black)
+% @param: /OutlineWidth num contour width as a fraction of the size; 0 omits the contour (default 0.03)
+/psyletter {
+  dup type /dicttype ne { lettering-opts-must-be-a-dict } if
+  3 index type /stringtype ne { lettering-text-must-be-a-string } if
+  2 index ltisnum not { lettering-x-must-be-a-number } if
+  1 index ltisnum not { lettering-y-must-be-a-number } if
+  count 4 sub 40 dict begin
+  /ltbase exch def /ltopts exch def /lty exch def /ltx exch def /lttext exch def
+  gsave
+  { ltdraw } stopped { true ltunwind } if
   grestore
   end
 } def
