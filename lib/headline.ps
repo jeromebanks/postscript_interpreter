@@ -277,11 +277,13 @@
 
 % --- measuring one run --------------------------------------------------
 
+% Measures at size hlmsz (flattening tolerance does not scale, so a
+% measurement is only exact at the size that will be drawn).
 % Sets hlU (ink at size 1, [x0 y0 x1 y1], first baseline at y=0) and
 % hlLineX (per-line justify offsets at size 1) for hllines/hlfd.
 % @internal
 /hlmeasure {
-  hlfd 100 scalefont setfont
+  hlfd hlmsz scalefont setfont
   /hlw 0 def
   hllines { stringwidth pop dup hlw gt { /hlw exch def } { pop } ifelse } forall
   /hlLineX hllines length array def
@@ -291,9 +293,9 @@
     hllines hlk get stringwidth pop /hladv exch def
     hljust /left eq { 0 } { hljust /center eq { hlw hladv sub 2 div } { hlw hladv sub } ifelse } ifelse
     /hlx exch def
-    hlLineX hlk hlx 100 div put
+    hlLineX hlk hlx hlmsz div put
     hllines hlk get hlink? {
-      hlx hlk hlleading mul 100 mul neg hlshift /hlb exch def
+      hlx hlk hlleading mul hlmsz mul neg hlshift /hlb exch def
       hlU null eq { /hlU hlb def } {
         /hlU [
           hlU 0 get hlb 0 get 2 copy gt { exch } if pop
@@ -305,7 +307,7 @@
     } if
   } for
   hlU null eq { headline-text-has-no-ink } if
-  /hlU hlU 0.01 hlscale def
+  /hlU hlU 1 hlmsz div hlscale def
 } def
 
 % placed i j hlpchars -> [x0 y0 x1 y1]
@@ -492,8 +494,19 @@
   dup xcheck { headline-anchor-must-be-h-v } if
   dup length 2 ne { headline-anchor-must-be-h-v } if
   /hlanc exch def
-  hlmeasure
+  /hlmsz 100 def hlmeasure
   /hlsz hlsize def
+  % Fit options: the 100pt measurement only estimates the ink at the
+  % final size, so re-measure at the chosen size and refine twice, then
+  % back off 0.01% so the converged fit never lands a hair over its box.
+  [ /FitWidth /FitHeight /FitBox /FitRegion ] { hlo exch known } forall
+  3 { or } repeat
+  {
+    2 { /hlmsz hlsz def hlmeasure /hlsz hlsize def } repeat
+    /hlsz hlsz 0.9999 mul def
+  } if
+  % Final ink is measured at exactly the size that will be drawn.
+  /hlmsz hlsz def hlmeasure
   hlanc 0 get hlU 0 get hlsz mul hlU 2 get hlsz mul hlU 0 get hlsz mul hlresolve /hlax exch def
   hlanc 1 get hlU 1 get hlsz mul hlU 3 get hlsz mul 0 hlresolve /hlay exch def
   hlatpoint
@@ -538,6 +551,12 @@
 % region runs -> layout
 % @internal
 /hlbody {
+  % Stack-only checks first (naming an executable operand and then
+  % referencing it would run it); inside hlcall so a failure also
+  % restores the caller's operand stack.
+  1 index { headline-region-must-be-x0-y0-x1-y1 } hlrect pop
+  dup type /arraytype ne { headline-runs-must-be-an-array } if
+  dup xcheck { headline-runs-must-be-an-array } if
   /hlruns exch def /hlregion exch def
   hlregion 2 get hlregion 0 get le hlregion 3 get hlregion 1 get le or
     { headline-region-must-have-positive-size } if
@@ -620,12 +639,7 @@
 % @param: /Anchor [h v] which point of the run's own ink box sits on /At (default [/left /baseline]: left ink edge on the first baseline)
 % @param: /Offset [dx dy] points added to the resolved /At
 % @param: /Avoid array names or [name i j] glyph ranges this run's ink must clear by /Clearance (default every earlier run)
-/hllayout {
-  1 index { headline-region-must-be-x0-y0-x1-y1 } hlrect pop
-  dup type /arraytype ne { headline-runs-must-be-an-array } if
-  dup xcheck { headline-runs-must-be-an-array } if
-  2 { hlbody } hlcall
-} def
+/hllayout { 2 { hlbody } hlcall } def
 
 % layout hldraw -
 % @kind: Procedure

@@ -565,3 +565,35 @@ fn draw_proc_errors_and_bad_char_offsets_do_not_leak_state() {
         it.run_str("clear").ok();
     }
 }
+
+#[test]
+fn fitted_ink_is_measured_at_the_drawn_size() {
+    // Curved outlines flatten to a fixed tolerance, so bounds measured
+    // at 100pt do not scale exactly: the reported box must still be
+    // what a fresh measurement at the chosen size gives, and inside
+    // the requested width.
+    let v = nums(
+        "[ 0 0 700 700 ] [ << /Name /o /Text (o) /Font /PermanentMarker
+            /FitWidth 600 /At [ 20 20 ] >> ] hllayout
+         /Names get /o get /Size get
+         /PermanentMarker findfont exch scalefont setfont (o) hlink",
+    );
+    let (mx0, mx1) = (v[0], v[2]);
+    let w = mx1 - mx0;
+    assert!(w <= 600.0 + 1e-6 && w > 599.0, "measured width {w}");
+}
+
+#[test]
+fn top_level_validation_failures_restore_the_operand_stack() {
+    let mut it = with_lib(400, 200);
+    it.run_str("42 (kept)").expect("setup");
+    for src in [
+        "[ 0 0 9 9 ] { boom } hllayout",
+        "{ boom } [ ] hllayout",
+        "[ 0 0 9 ] [ ] hllayout",
+    ] {
+        assert!(it.run_str(src).is_err(), "{src}");
+        let got: Vec<String> = it.operand_stack().iter().map(|o| o.repr()).collect();
+        assert_eq!(got, ["42", "(kept)"], "{src}");
+    }
+}
