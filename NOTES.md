@@ -3,6 +3,60 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## `lib/headline.ps`: composition helpers for headline + supporting type (issue #145, 2026-09-28)
+
+Second slice of the shirt remake. One new sibling library
+(`@requires: (lib/artkit.ps) run`, tag-migrated, scratch prefix `hl-`,
+no Rust changes): `hllayout` measures and places one dominant run and
+any number of supporting runs, `hldraw` draws them, `hlrunink`/
+`hlcharink`/`hlink` expose the measured geometry. The caller still
+picks every artistic position; the library makes it reproducible.
+
+**Measured boxes are ink, not advance** (documented in the file
+header). Two `pathbbox` hazards were found empirically and are avoided
+by walking the flattened path with `pathforall`: (1) on curves
+`pathbbox` includes Bezier control points (`Real` 100pt: 0.98 wide and
+0.24 tall too large), and (2) `charpath` leaves a trailing `moveto` at
+the pen's *advance* point that `pathbbox` counts, so the right edge of
+the box was the advance rather than the ink (found because the drawn
+`l` was 5px narrower than its box) and an apostrophe reported a bottom
+of 0. Regression tests pin both (`tests/headline.rs`), and a pixel test
+checks that all rendered ink is inside the boxes and touches every
+edge.
+
+**Why glyph ranges are the central primitive.** A whole-string box
+cannot express the shirt: `I'm` / `Keepin' it` tuck against the
+x-height of `ea`, while the R and the `l` rise to the same height on
+either side (`eal` as one group would put the small text above the
+`l`). So a run can be anchored to, and told to avoid, the ink of glyphs
+`[i,j)` of an earlier one-line run (`/Chars [i j]`, `/Avoid [[name i j]]`).
+Ranges use `stringwidth` of the prefix, so no kerning -- consistent
+with `show`.
+
+**Fail, don't overflow.** Every run's ink must stay in its region
+(`headline-run-outside-region`), clear `/Avoid` by `/Clearance`
+(`headline-runs-collide`), and fitted sizes below `/MinSize` raise
+`headline-fit-below-minimum-size`. Defaults are deliberately strict:
+with no `/Avoid`, a run must clear *every* earlier run's whole box, and
+`[]` opts out. Fit options (`/FitWidth /FitHeight /FitBox /FitRegion`)
+recompute when the text or face changes; `/SizeOf [name ratio]` keeps
+supporting type proportional. Missing faces error
+(`headline-font-not-found`, also when `findfont` itself raises), Type 3
+faces error (no outlines).
+
+**Judgment calls.** Collision is by axis-aligned ink box (conservative
+for diagonal shapes -- `/Avoid` on a glyph range is the escape hatch).
+The default anchor is the ink's left edge on the baseline, not the pen
+origin, so a caller aligns what they see. `/Draw` is a per-line proc
+(`(text) x y size`) so #144's `psyletter` can render the final shirt
+without this file depending on it. All operands are type-checked
+before being named (an executable operand is never executed).
+
+**Deferred.** No rotation/skew, no kerning, no auto-arrangement, no
+per-glyph vertical offsets (the "R rising" is a property of the face),
+no hyphenation/wrapping (explicit `\n` breaks only). The final shirt
+composition using #144's treatment is a follow-up.
+
 ## `lib/lettering.ps`: psychedelic display lettering (issue #144, 2026-09-28)
 
 First slice of the "Keepin' it Real" shirt remake. One new sibling

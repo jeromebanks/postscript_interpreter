@@ -1,0 +1,99 @@
+%!PS-Adobe-3.0
+%%Title: Keepin' It Real — a specimen sheet for headline.ps
+%%BoundingBox: 0 0 900 900
+%%EndComments
+
+% Specimen for the headline composition helpers (issue #145,
+% lib/headline.ps): one dominant word, smaller phrases tucked around it.
+%
+%   top panel     the shirt front: small `I'm` over `Keepin' it`, both
+%                 tucked against the lowercase `ea` so the capital R
+%                 rises up the left side of the composition; `Real`
+%                 is sized to fill its region
+%   bottom panel  a substantially different phrase -- a different word,
+%                 face, and a multi-line, right-justified phrase -- on
+%                 the same API, with a phrase set *below* the baseline
+%                 so the `y` descender is accounted for
+%
+% Every position is anchored to *measured ink*, not to a guessed
+% coordinate. Grey rectangles are the measured ink boxes, drawn from
+% the layout itself (hlrunink / hlcharink), so the figure is also the
+% proof that the numbers and the glyphs agree.
+%
+% Run from the repo root:
+%
+%   pscat --page 900x900 examples/headline.ps
+
+(lib/artkit.ps) run
+(lib/headline.ps) run
+
+0.97 0.95 0.9 setrgbcolor clippath fill
+
+% Draw a thin box around the measured ink [x0 y0 x1 y1].
+/inkbox { % x0 y0 x1 y1
+  gsave 0.85 0.2 0.2 setrgbcolor 0.6 setlinewidth [ 3 3 ] 0 setdash
+  /ib3 exch def /ib2 exch def /ib1 exch def /ib0 exch def
+  ib0 ib1 moveto ib2 ib1 lineto ib2 ib3 lineto ib0 ib3 lineto closepath stroke
+  grestore
+} def
+
+/panel { % [x0 y0 x1 y1] -- outline of a layout region
+  gsave 0.7 setgray 1 setlinewidth aload pop
+  /pn3 exch def /pn2 exch def /pn1 exch def /pn0 exch def
+  pn0 pn1 pn2 pn0 sub pn3 pn1 sub rectstroke grestore
+} def
+
+% ---- panel 1: the shirt front ------------------------------------------
+/R1 [ 40 470 860 880 ] def
+R1 panel
+/front R1 [
+  % Dominant: `Real` fills the region's width; the capital rises above eal.
+  << /Name /real /Text (Real) /Font /AlfaSlabOne
+     /FitBox [ 780 300 ] /At [ 60 490 ] >>
+  % Supporting: tucked against the x-height of `ea` (glyphs 1..3, not the
+  % `l`, whose ascender is as tall as the R) and standing clear of the
+  % R, the ea and the l by 10pt.
+  << /Name /keep /Text (Keepin' it) /Font /Helvetica-Bold
+     /SizeOf [ /real 0.17 ]
+     /At << /To /real /Chars [ 1 3 ] /H 0 /V 1 >>
+     /Anchor [ /left /bottom ] /Offset [ 8 18 ]
+     /Avoid [ [ /real 0 1 ] [ /real 1 3 ] [ /real 3 4 ] ] /Clearance 10 >>
+  << /Name /im /Text (I'm) /Font /Helvetica-Bold
+     /SizeOf [ /keep 0.75 ]
+     /At << /To /keep /H 0 /V 1 >>
+     /Anchor [ /left /bottom ] /Offset [ 0 12 ]
+     /Avoid [ /keep [ /real 0 1 ] [ /real 1 3 ] [ /real 3 4 ] ] /Clearance 10 >>
+] hllayout def
+0.1 setgray front hldraw
+front /real hlrunink inkbox
+front /keep hlrunink inkbox
+front /im hlrunink inkbox
+front /real 0 1 hlcharink inkbox
+front /real 1 3 hlcharink inkbox
+front /real 3 4 hlcharink inkbox
+
+% ---- panel 2: reuse with a very different phrase ------------------------
+/R2 [ 40 40 860 440 ] def
+R2 panel
+/second R2 [
+  << /Name /big /Text (Tuesday) /Font /AlfaSlabOne
+     /FitBox [ 780 250 ] /At [ 60 170 ] >>
+  % Two lines with an explicit break, standing above the word's tallest ink
+  % (whichever of the T or the d that is).
+  << /Name /pre /Text (at the usual\nplace, again) /Font /PermanentMarker
+     /SizeOf [ /big 0.14 ] /Justify /left /Leading 1.05
+     /At << /To /big /H 0.3 /V 1 >>
+     /Anchor [ /left /bottom ] /Offset [ 0 16 ]
+     /Avoid [ /big ] /Clearance 8 >>
+  % Set below the baseline, right-aligned to the word's ink: the descender
+  % of the `y` is part of the ink box it has to clear.
+  << /Name /post /Text (or so they say) /Font /Helvetica-Oblique
+     /SizeOf [ /big 0.16 ]
+     /At << /To /big /H 1 /V 0 >>
+     /Anchor [ /right /top ] /Offset [ 0 -14 ]
+     /Avoid [ /big ] /Clearance 6 >>
+] hllayout def
+0.1 setgray second hldraw
+second /big hlrunink inkbox
+second /pre hlrunink inkbox
+second /post hlrunink inkbox
