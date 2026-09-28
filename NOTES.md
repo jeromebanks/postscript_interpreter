@@ -15,9 +15,13 @@ already did everything asked.
 AbrilFatface, Pacifico, PermanentMarker, Creepster and Rye. Default is
 `/PermanentMarker`: bold, rounded, visibly hand-cut edges (Pacifico is
 rounded but too thin to carry a contour, the slabs are too regular).
-It is all-caps, so "Real" reads as REAL; callers wanting mixed case
-pass `/Font /AlfaSlabOne` or another face. No custom Type 3 face was
-needed -- glyph geometry was not the missing piece. `charpath` on a
+It is all-caps, so "Real" reads as REAL (a documented judgment call).
+The catalog has no mixed-case face that is also rounded *and* irregular
+-- Pacifico and AlfaSlabOne are mixed-case but respectively too thin
+and too regular -- so a custom or distorted face is a candidate
+follow-up if the shirt's exact lowercase letterforms matter; the
+specimen shows `/AlfaSlabOne` for the lowercase counters. No custom
+Type 3 face was built here. `charpath` on a
 Type 3 face does not capture painted outlines (FONTS.md), so only
 outline faces work.
 
@@ -46,12 +50,16 @@ is a raster by nature.
 
 **Ghostscript.** Geometry, clip, contour and the gradient match pscat
 on a builtin face (`/Times-Bold`; compared by eye on a
-`gs -sDEVICE=png16m` render). Two documented differences: gs has no
-catalog faces (`/PermanentMarker` is substituted with Courier there,
-with gs's own warning; the guard was not verified against that
-substitution, so don't rely on it under gs),
-and gs's `rand` stream differs, so patch/fleck *positions* differ from
-pscat's for the same seed (each interpreter is deterministic on its own).
+`gs -sDEVICE=png16m` render, and pinned durably by
+`ghostscript_accepts_lettering_on_a_builtin_face`, which skips when gs
+is absent). Two differences, both observed: gs has no catalog faces and
+silently substitutes **Courier** (`/PermanentMarker findfont /FontName
+get` -> `/Courier`, plus a stderr warning), so the guard rejects both
+fallbacks it knows -- pscat's `/Helvetica` and gs's `/Courier` -- unless
+that is what was requested (`ghostscript_refuses_a_catalog_face_...`);
+under gs only builtin faces work. And gs's `rand` stream differs, so
+patch/fleck *positions* differ from pscat's for the same seed (each
+interpreter is deterministic on its own).
 
 **Tuning that came from looking.** The first defaults (contour 4.5% of
 size, patches 0.14-0.36 x size) closed the counters of the R and A and

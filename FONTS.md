@@ -481,5 +481,8 @@ face does not capture painted glyph outlines, so only outline faces
 answers `/Helvetica` for any name it cannot find, so the library checks
 the resolved `/FontName` against the request and raises
 `lettering-font-not-found` instead of quietly substituting. Catalog faces
-exist only in pscat's own loader — Ghostscript substitutes Courier for
-them — so a catalog-face render is a pscat render.
+exist only in pscat's own loader — Ghostscript silently substitutes
+Courier for them (observed: `/PermanentMarker findfont /FontName get`
+gives `/Courier`) — so the library rejects both known fallbacks
+(`/Helvetica` in pscat, `/Courier` in gs) unless requested, and a
+catalog-face render is a pscat render.

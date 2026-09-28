@@ -135,6 +135,117 @@ fn missing_font_is_an_error_not_a_substitution() {
 }
 
 #[test]
+fn near_miss_and_suffixed_missing_faces_also_error() {
+    for f in ["NoSuchFace-Bold", "Helvetica-Nope", "Times-Nope"] {
+        assert_eq!(
+            lettering_err(&format!("(Real) 1 1 << /Font /{f} >> psyletter")),
+            "lettering-font-not-found",
+            "{f}"
+        );
+    }
+}
+
+#[test]
+fn type3_faces_are_rejected_with_their_own_error() {
+    let mut it = with_lib(400, 200);
+    let font = std::fs::read("lib/fonts/neon.ps").expect("neon present");
+    it.run_source(&font).expect("neon loads");
+    match it
+        .run_str("(Real) 1 1 << /Font /Neon >> psyletter")
+        .unwrap_err()
+    {
+        PsError::Undefined(name) => assert_eq!(name, "lettering-type3-faces-have-no-outlines"),
+        other => panic!("expected a self-documenting error, got {other}"),
+    }
+}
+
+#[test]
+fn executable_operands_are_never_executed() {
+    // Each of these would run `boom` (undefined -> "boom") if the
+    // library referenced the operand before checking its type.
+    for (src, want) in [
+        (
+            "{ boom } 1 1 << >> psyletter",
+            "lettering-text-must-be-a-string",
+        ),
+        (
+            "(Real) { boom } 1 << >> psyletter",
+            "lettering-x-must-be-a-number",
+        ),
+        (
+            "(Real) 1 { boom } << >> psyletter",
+            "lettering-y-must-be-a-number",
+        ),
+        (
+            "(Real) 1 1 << /Treatment { boom } >> psyletter",
+            "lettering-treatment-must-be-a-name",
+        ),
+        (
+            "(Real) 1 1 << /Align { boom } >> psyletter",
+            "lettering-align-must-be-a-name",
+        ),
+        (
+            "(Real) 1 1 << /Outline { 1 0 0 } >> psyletter",
+            "lettering-outline-must-be-an-rgb-array",
+        ),
+        (
+            "(Real) 1 1 << /Palette { boom } >> psyletter",
+            "lettering-palette-must-be-an-array",
+        ),
+        (
+            "(Real) 1 1 << /Size { boom } >> psyletter",
+            "lettering-size-must-be-a-number",
+        ),
+        (
+            "(Real) 1 1 << /Patches { boom } >> psyletter",
+            "lettering-patches-must-be-a-number",
+        ),
+    ] {
+        assert_eq!(lettering_err(src), want, "{src}");
+    }
+}
+
+#[test]
+fn bad_patches_or_wear_do_not_disturb_the_callers_state() {
+    // Validation happens before the reseed and before any gsave, so a
+    // failed call leaves the caller's rand stream where it was.
+    let mut it = with_lib(400, 200);
+    it.run_str("42 srand").expect("seed");
+    let err = it
+        .run_str("(Real) 100 100 << /Treatment /mottled /Patches (x) >> psyletter")
+        .unwrap_err();
+    assert!(matches!(err, PsError::Undefined(_)));
+    let mut clean = with_lib(400, 200);
+    clean.run_str("42 srand").expect("seed");
+    let next = |i: &mut Interp| {
+        i.run_str("rand").expect("rand");
+        i.operand_stack().last().map(|o| o.repr())
+    };
+    assert_eq!(next(&mut it), next(&mut clean));
+}
+
+#[test]
+fn long_text_gets_proportionally_more_patches() {
+    let count = |text: &str| {
+        let mut it = with_lib(900, 200);
+        run(&mut it, "1 setgray clippath fill");
+        run(
+            &mut it,
+            &format!("({text}) 450 60 << /Size 100 /Treatment /patches /Seed 2 >> psyletter"),
+        );
+        it.gfx()
+            .pixmap
+            .pixels()
+            .iter()
+            .filter(|p| p.green() > 120 && p.red() < 60)
+            .count()
+    };
+    // A wider string must not come back mostly base red: it still
+    // shows green, in proportion.
+    assert!(count("Real Real Real") > count("Real"));
+}
+
+#[test]
 fn catalog_face_name_and_stem_both_resolve() {
     for f in ["Bungee", "Bungee-Regular", "Helvetica"] {
         let mut it = with_lib(400, 200);
@@ -211,4 +322,84 @@ fn leaves_stack_state_and_caller_random_stream_alone() {
     let drawn = after("(Real) 200 60 << /Seed 9 /Treatment /mottled >> psyletter");
     assert_eq!(plain, drawn, "colour, font and the caller's rand stream");
     assert_eq!(plain.len(), 5, "rgb + font name + rand");
+}
+
+/// Ghostscript compatibility for the portable primitives: the same
+/// clip/fill/stroke/`shfill` path with a builtin face (catalog faces
+/// only exist in pscat's own loader -- gs would substitute Courier, and
+/// the library refuses that, see `missing_font_...` above).
+#[test]
+fn ghostscript_accepts_lettering_on_a_builtin_face() {
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let prog = "(lib/artkit.ps) run (lib/lettering.ps) run\n\
+        [/solid /transition /patches /mottled] { /t exch def\n\
+        (Real) 300 300 << /Font /Times-Bold /Size 120 /Treatment t /Seed 7 >> psyletter\n\
+        } forall showpage\n";
+    let dir = std::env::temp_dir().join(format!("lettering-gs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("tmpdir");
+    let ps = dir.join("lettering_gs.ps");
+    std::fs::write(&ps, prog).expect("write");
+    let out = std::process::Command::new("gs")
+        .args([
+            "-dNOSAFER",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g600x600",
+            "-r72",
+            "-o/dev/null",
+        ])
+        .arg(&ps)
+        .output()
+        .expect("run gs");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "gs rejected lettering: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn ghostscript_refuses_a_catalog_face_instead_of_substituting_courier() {
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("lettering-gsf-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("tmpdir");
+    let ps = dir.join("lettering_gsf.ps");
+    std::fs::write(
+        &ps,
+        "(lib/artkit.ps) run (lib/lettering.ps) run\n\
+         { (Real) 100 100 << /Font /PermanentMarker >> psyletter } stopped\n\
+         { (guarded) = } { (drew-with-substitute) = } ifelse\n",
+    )
+    .expect("write");
+    let out = std::process::Command::new("gs")
+        .args([
+            "-dNOSAFER",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=nullpage",
+        ])
+        .arg(&ps)
+        .output()
+        .expect("run gs");
+    let _ = std::fs::remove_dir_all(&dir);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("guarded"), "gs stdout: {stdout}");
 }

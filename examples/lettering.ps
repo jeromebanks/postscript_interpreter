@@ -11,7 +11,9 @@
 %                 color patches, mottled/worn interior
 %   right column  the mottled treatment under three seeds (only the
 %                 texture moves -- metrics and outline stay put), then
-%                 the same word in another catalog face and palette
+%                 the same word in a mixed-case slab face (so the
+%                 counters of the lowercase e and a get tested) and
+%                 the /acid palette
 %
 % Run from the repo root:
 %
@@ -53,6 +55,6 @@
   (Real) 670 y << /Size 140 /Treatment /mottled /Seed i 1 add /Wear 0.7 >> psyletter
   Sd i get 500 y 34 sub label
 } for
-(Real) 670 90 << /Font /Bungee /Size 110 /Palette /acid
+(Real) 670 90 << /Font /AlfaSlabOne /Size 130 /Palette /acid
                   /Treatment /mottled /Seed 4 >> psyletter
-(/Font /Bungee, /Palette /acid) 500 50 label
+(/Font /AlfaSlabOne, /Palette /acid) 500 50 label

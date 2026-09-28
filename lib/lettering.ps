@@ -40,7 +40,8 @@
 % quietly answers /Helvetica for an unknown name, which would ship the
 % wrong lettering without a word, so /Font is verified against the
 % resolved font's own /FontName and `lettering-font-not-found` is raised
-% on a mismatch.
+% on a mismatch. Ghostscript's own fallback (Courier) is rejected the
+% same way, so under gs only builtin faces work; catalog faces are pscat's.
 %
 % Which effects survive which output (all verified against pscat's
 % own SVG/PDF/PNG output; see NOTES.md, issue #144):
@@ -55,6 +56,10 @@
 % Scratch prefix: lt- (a fresh dict per call holds every working name).
 
 % --- helpers -----------------------------------------------------------
+
+% v ltisnum -> bool             (stack-only, never names the value)
+% @internal
+/ltisnum { type dup /integertype eq exch /realtype eq or } def
 
 % key default ltget -> value      (reads the current call's ltopts)
 % @internal
@@ -72,23 +77,28 @@
 % val errproc ltrgb -> val        (errproc runs unless val is [r g b] numbers)
 % @internal
 /ltrgb {
-  exch dup type /arraytype eq { dup length 3 eq } { false } ifelse
+  exch dup type /arraytype eq { dup xcheck not { dup length 3 eq } { false } ifelse } { false } ifelse
   { dup true exch { type dup /integertype eq exch /realtype eq or and } forall }
   { false } ifelse
   { exch pop } { pop exec } ifelse
 } def
 
-% Verify /Font really resolved, then leave the scaled font set.
+% Verify /Font really resolved, then leave findfont's dict in ltfd.
+% Two fallbacks are known: pscat answers /Helvetica for any unknown
+% name, Ghostscript answers /Courier (with a stderr warning). Both are
+% rejected unless they are what was actually asked for; any *other*
+% resolved name is taken as a legitimate alias (/Palatino-Roman).
 % (str) ltfontcheck -
 % @internal
 /ltfontcheck {
   /ltreq exch def
   /ltfd ltreq cvn findfont def
+  ltfd /FontType get 3 eq { lettering-type3-faces-have-no-outlines } if
   /ltgot ltfd /FontName get 96 string cvs def
   /ltgotreg ltreq length 8 add string dup 0 ltreq putinterval
     dup ltreq length (-Regular) putinterval def
   ltgot ltreq eq ltgot ltgotreg eq or
-  ltgot (Helvetica) ne or not { lettering-font-not-found } if
+  ltgot (Helvetica) ne ltgot (Courier) ne and or not { lettering-font-not-found } if
 } def
 
 % Resolve options, pick and scale the font, and compute the origin.
@@ -112,7 +122,8 @@
     } { pop } ifelse
   } if
   /ltw lttext stringwidth pop def
-  /Align /center ltget /ltalign exch def
+  /Align /center ltget dup type /nametype ne { lettering-align-must-be-a-name } if
+  /ltalign exch def
   ltalign /center eq { /ltx0 ltx ltw 2 div sub def }
   { ltalign /left eq { /ltx0 ltx def }
     { ltalign /right eq { /ltx0 ltx ltw sub def }
@@ -131,6 +142,7 @@
     dup Palettes exch known { Palettes exch get } { lettering-unknown-palette } ifelse
   } if
   dup type /arraytype ne { lettering-palette-must-be-an-array } if
+  dup xcheck { lettering-palette-must-be-an-array } if
   dup length 0 eq { lettering-palette-must-not-be-empty } if
   dup { { lettering-palette-entries-must-be-rgb } ltrgb pop } forall
 } def
@@ -168,8 +180,6 @@
 % Patches of the palette colors over a base fill.
 % @internal
 /ltpatches {
-  /Patches 26 ltget { lettering-patches-must-be-a-number } ltnum cvi
-  0 max 400 min /ltnpat exch def
   ltnpat { newpath
     ltbx0 frnd ltbw mul add ltby0 frnd ltbh mul add
     ltsize 0.08 mul frnd ltsize 0.13 mul mul add ltblob
@@ -180,9 +190,6 @@
 % speck. Count scales with glyph-box area and /Wear.
 % @internal
 /ltwear {
-  /Wear 0.5 ltget { lettering-wear-must-be-a-number } ltnum
-  0 max 1 min /ltwv exch def
-  ltwv ltbw ltbh mul mul 120 div cvi 4000 min /ltnspk exch def
   ltnspk { newpath
     ltbx0 frnd ltbw mul add ltby0 frnd ltbh mul add
     ltsize 0.004 mul frnd ltsize 0.012 mul mul add
@@ -203,9 +210,11 @@
 % @param: /Align /left|/center|/right which side of x the text is anchored to (default /center)
 /psyletterpath {
   dup type /dicttype ne { lettering-opts-must-be-a-dict } if
+  3 index type /stringtype ne { lettering-text-must-be-a-string } if
+  2 index ltisnum not { lettering-x-must-be-a-number } if
+  1 index ltisnum not { lettering-y-must-be-a-number } if
   40 dict begin
   /ltopts exch def /lty exch def /ltx exch def /lttext exch def
-  lttext type /stringtype ne { lettering-text-must-be-a-string } if
   /ltfor true def
   ltprep
   ltaddpath
@@ -223,22 +232,25 @@
 % @param: /Treatment /solid|/transition|/patches|/mottled interior look (default /mottled)
 % @param: /Palette name-or-array artkit palette name, or an array of [r g b]; the interior colors (default red, green, blue)
 % @param: /Seed num integer seed for the texture only (default 1)
-% @param: /Patches num count of color patches for /patches and /mottled (default 26)
+% @param: /Patches num count of color patches for /patches and /mottled (default scales with the glyph box: about 26 for one word like Real)
 % @param: /Wear num 0..1 density of worn flecks for /mottled (default 0.5)
 % @param: /WearColor [r g b] the "paper showing through" fleck color (default a warm cream)
 % @param: /Outline [r g b] contour color (default near-black)
 % @param: /OutlineWidth num contour width as a fraction of the size; 0 omits the contour (default 0.03)
 /psyletter {
   dup type /dicttype ne { lettering-opts-must-be-a-dict } if
+  3 index type /stringtype ne { lettering-text-must-be-a-string } if
+  2 index ltisnum not { lettering-x-must-be-a-number } if
+  1 index ltisnum not { lettering-y-must-be-a-number } if
   40 dict begin
   /ltopts exch def /lty exch def /ltx exch def /lttext exch def
-  lttext type /stringtype ne { lettering-text-must-be-a-string } if
   gsave
   % --- metrics: font, size, origin, glyph box. No random draws yet. ---
   /ltfor false def
   ltprep
   /ltpal ltpalette def
-  /Treatment /mottled ltget /lttreat exch def
+  /Treatment /mottled ltget dup type /nametype ne { lettering-treatment-must-be-a-name } if
+  /lttreat exch def
   lttreat /solid eq lttreat /transition eq or lttreat /patches eq or
   lttreat /mottled eq or not { lettering-treatment-must-be-solid-transition-patches-or-mottled } if
   /ltoutc /Outline [0.06 0.05 0.08] ltget { lettering-outline-must-be-an-rgb-array } ltrgb def
@@ -251,6 +263,14 @@
   /ltby1 exch def /ltbx1 exch def /ltby0 exch def /ltbx0 exch def
   /ltbw ltbx1 ltbx0 sub def /ltbh ltby1 ltby0 sub def
   ltbw 0 le ltbh 0 le or { lettering-text-has-no-outline } if
+  % Patch count scales with the glyph box (about 26 for one word like
+  % "Real"), so a longer string is not mostly base color. Validated here,
+  % before the reseed, so a bad value cannot leave the caller's rand
+  % stream or graphics state disturbed.
+  /Patches ltbw ltbh mul ltsize dup mul div 16 mul cvi ltget
+    { lettering-patches-must-be-a-number } ltnum cvi 0 max 400 min /ltnpat exch def
+  /Wear 0.5 ltget { lettering-wear-must-be-a-number } ltnum
+    0 max 1 min ltbw mul ltbh mul 120 div cvi 4000 min /ltnspk exch def
   % --- texture: clipped to the glyphs ---
   gsave
     clip newpath
