@@ -314,7 +314,8 @@
 /hlpchars {
   % Stack-only checks first: naming an executable operand and then
   % referencing it would run it.
-  1 index hlisnum 1 index hlisnum and not { headline-chars-must-be-numbers } if
+  1 index type /integertype eq 1 index type /integertype eq and
+    not { headline-chars-must-be-integers } if
   /hlcj exch def /hlci exch def /hlcp exch def
   hlcp /Lines get length 1 ne { headline-chars-need-a-single-line-run } if
   /hlctext hlcp /Lines get 0 get def
@@ -408,6 +409,7 @@
   } if
   hlo /MaxSize known {
     hlo /MaxSize get { headline-maxsize-must-be-a-number } hlnum
+    dup 0 le { headline-maxsize-must-be-positive } if
     2 copy gt { exch } if pop
   } if
   hlo /MinSize known {
@@ -556,20 +558,41 @@
   hlfl /Names get hlfn get
 } def
 
+% Called from a `stopped` handler in hldrawrun: unwind what a failed
+% /Draw proc (or hldrawrun itself) left open, then re-raise.
+% @internal
+/hdunwind {
+  $error /command get 1 array astore /hdcmdbox exch def
+  $error /errorname get /hdname exch def
+  count hdbase sub dup 0 gt { { pop } repeat } { pop } ifelse
+  hdname /undefined eq { hdcmdbox 0 get } { /stop } ifelse
+  countdictstack hdbdepth sub
+  hdin { grestore } if
+  grestore
+  { end } repeat
+  end
+  cvx exec
+} def
+
 % placed hldrawrun -
 % @internal
 /hldrawrun {
   gsave
-  8 dict begin
+  12 dict begin
   /hdp exch def
-  hdp /FontDict get hdp /Size get scalefont setfont
-  0 1 hdp /Lines get length 1 sub {
-    /hdk exch def
-    hdp /Lines get hdk get
-    hdp /LineOrigins get hdk get aload pop
-    hdp /Size get
-    gsave hdp /Draw get exec grestore
-  } for
+  /hdbdepth countdictstack def
+  /hdbase count def
+  /hdin false def
+  {
+    hdp /FontDict get hdp /Size get scalefont setfont
+    0 1 hdp /Lines get length 1 sub {
+      /hdk exch def
+      hdp /Lines get hdk get
+      hdp /LineOrigins get hdk get aload pop
+      hdp /Size get
+      gsave /hdin true def hdp /Draw get exec grestore /hdin false def
+    } for
+  } stopped { hdunwind } if
   end
   grestore
 } def

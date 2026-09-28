@@ -535,3 +535,33 @@ fn documented_examples_run_and_capabilities_lists_the_api() {
         );
     }
 }
+
+#[test]
+fn draw_proc_errors_and_bad_char_offsets_do_not_leak_state() {
+    let mut it = with_lib(900, 900);
+    it.run_str(&format!(
+        "/Times-Roman findfont 17 scalefont setfont newpath 5 5 moveto 9 9 lineto
+         {FRONT} countdictstack"
+    ))
+    .expect("setup");
+    let depth = it.operand_stack().last().unwrap().repr();
+    for src in [
+        "front /keep 0.5 1 hlcharink",
+        "front /keep 1 2.5 hlcharink",
+        "[ 0 0 99 99 ] [ << /Text (x) /Size 9 /At [ 1 1 ] /MaxSize -5 >> ] hllayout",
+        "[ 0 0 300 200 ] [ << /Text (Real) /Size 50 /At [ 10 10 ]
+            /Draw { pop pop pop boom-in-draw } >> ] hllayout hldraw",
+    ] {
+        assert!(it.run_str(src).is_err(), "{src}");
+        it.run_str(
+            "clear countdictstack currentfont /FontName get 96 string cvs
+             newpath 5 5 moveto 9 9 lineto pathbbox",
+        )
+        .ok();
+        let got: Vec<String> = it.operand_stack().iter().map(|o| o.repr()).collect();
+        assert_eq!(got[0], depth, "{src}: dict depth changed");
+        assert_eq!(got[1], "(Times-Roman)", "{src}");
+        assert_eq!(&got[2..], ["5.0", "5.0", "9.0", "9.0"], "{src}");
+        it.run_str("clear").ok();
+    }
+}
