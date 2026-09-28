@@ -442,3 +442,96 @@ fn a_custom_draw_proc_receives_text_position_and_size() {
     assert_eq!(parts[1], "100.0", "{got:?}");
     assert!(got[0].starts_with("[(Real) 1"), "{got:?}");
 }
+
+#[test]
+fn an_error_inside_a_nested_gsave_restores_font_dicts_and_path() {
+    let mut it = with_lib(900, 900);
+    it.run_str(&format!(
+        "/Times-Roman findfont 17 scalefont setfont newpath 5 5 moveto 9 9 lineto
+         {FRONT} countdictstack"
+    ))
+    .expect("setup");
+    let depth = it.operand_stack().last().unwrap().repr();
+    // Index 7 of "Keepin' it" is the space: no ink, raised from inside
+    // hlpchars's own gsave.
+    let r = it.run_str("front /keep 7 8 hlcharink");
+    assert!(r.is_err());
+    it.run_str(
+        "clear countdictstack currentfont /FontName get 96 string cvs
+         newpath 5 5 moveto 9 9 lineto pathbbox",
+    )
+    .ok();
+    // Font, dict depth and the caller's path survived the failure.
+    let got: Vec<String> = it.operand_stack().iter().map(|o| o.repr()).collect();
+    assert_eq!(got[0], depth, "dict stack depth changed: {got:?}");
+    assert_eq!(got[1], "(Times-Roman)");
+    assert_eq!(&got[2..], ["5.0", "5.0", "9.0", "9.0"], "{got:?}");
+}
+
+/// Swap the face and lengthen the phrases: every variant must either
+/// stay inside its region and clear its /Avoid, or raise a named
+/// headline-* error -- never silently overflow.
+#[test]
+fn changing_face_or_phrase_recomputes_or_fails_clearly() {
+    let variant = |real_font: &str, keep: &str| {
+        format!(
+            "/front [ 40 470 860 880 ] [
+               << /Name /real /Text (Real) /Font /{real_font} /FitBox [ 780 300 ] /At [ 60 490 ] >>
+               << /Name /keep /Text ({keep}) /Font /Helvetica-Bold /SizeOf [ /real 0.17 ]
+                  /At << /To /real /Chars [ 1 3 ] /H 0 /V 1 >>
+                  /Anchor [ /left /bottom ] /Offset [ 8 18 ]
+                  /Avoid [ [ /real 0 1 ] [ /real 1 3 ] [ /real 3 4 ] ] /Clearance 10 >>
+             ] hllayout def
+             front /real hlrunink front /keep hlrunink"
+        )
+    };
+    let mut ok = 0;
+    let mut failed = 0;
+    for font in ["AlfaSlabOne", "PermanentMarker"] {
+        for keep in ["Keepin' it", "Keepin' it, all the way real"] {
+            let mut it = with_lib(900, 900);
+            match it.run_str(&variant(font, keep)) {
+                Ok(()) => {
+                    let v: Vec<f64> = it
+                        .operand_stack()
+                        .iter()
+                        .map(|o| o.repr().parse().expect("number"))
+                        .collect();
+                    for b in v.chunks(4) {
+                        assert!(
+                            b[0] >= 39.99 && b[1] >= 469.99 && b[2] <= 860.01 && b[3] <= 880.01,
+                            "{font}/{keep}: {b:?} left the region"
+                        );
+                    }
+                    ok += 1;
+                }
+                Err(PsError::Undefined(name)) => {
+                    assert!(name.starts_with("headline-"), "{font}/{keep}: {name}");
+                    failed += 1;
+                }
+                Err(other) => panic!("{font}/{keep}: unexpected {other}"),
+            }
+        }
+    }
+    assert_eq!(ok + failed, 4);
+    assert!(ok >= 1, "the base case must lay out");
+}
+
+#[test]
+fn documented_examples_run_and_capabilities_lists_the_api() {
+    let src = std::fs::read_to_string("README.md").expect("README");
+    let start = src
+        .find("(lib/headline.ps) run\n[ 40 40 860 400 ]")
+        .expect("snippet");
+    let snippet = &src[start..src[start..].find("```").map(|e| start + e).unwrap()];
+    let mut it = with_lib(900, 900);
+    it.run_str(snippet)
+        .unwrap_or_else(|e| panic!("README snippet failed: {}", it.error_report(&e)));
+    let caps = pscat::capabilities::payload_json().to_string();
+    for name in ["hllayout", "hldraw", "hlrunink", "hlcharink", "hlink"] {
+        assert!(
+            caps.contains(&format!("\"{name}\"")),
+            "{name} missing from --capabilities"
+        );
+    }
+}

@@ -79,7 +79,15 @@
 %                    Default: every earlier run. [] disables the check.
 %   /Draw proc       (text) x y size -> draws one line with the run's
 %                    font already set (default: moveto show). Hand this
-%                    to another renderer (e.g. lettering.ps) at will.
+%                    to another renderer (e.g. lettering.ps) at will --
+%                    but note that renderer's own geometry is invisible
+%                    to the checks here: pass psyletter the same /Font
+%                    and /Size, /Align /left, and add the contour's half
+%                    width (about 1.5% of the size) to /Clearance and
+%                    the region margin.
+%   Indices in /Chars [i j] and /Avoid [name i j] are BYTE offsets into
+%   the string; for multi-byte text (UTF-8) keep them on character
+%   boundaries.
 %
 % Failures are named errors (self-documenting undefined names, like the
 % rest of this repo) raised *before* anything is drawn and with the
@@ -170,7 +178,9 @@
   8 dict begin
   /hlkx0 1000000 def /hlky0 1000000 def /hlkx1 -1000000 def /hlky1 -1000000 def
   /hlkpend false def
-  gsave newpath 0 0 moveto false charpath flattenpath
+  gsave newpath 0 0 moveto
+  { false charpath } stopped { grestore end headline-a-font-must-be-set } if
+  flattenpath
   { /hlkpy exch def /hlkpx exch def /hlkpend true def }
   { hlkpend { hlkpx hlkpy hlkacc /hlkpend false def } if hlkacc }
   { pop pop pop pop pop pop }
@@ -241,7 +251,11 @@
   $error /errorname get /hlename exch def
   count hlbase sub dup 0 gt { { pop } repeat } { pop } ifelse
   hlename /undefined eq { hlecmdbox 0 get } { /stop } ifelse
-  grestore end
+  % Pop every dict a failed helper left open (not just ours), then ours.
+  countdictstack hlbdepth sub
+  grestore
+  { end } repeat
+  end
   cvx exec
 } def
 
@@ -254,6 +268,7 @@
   exch count 2 sub 1 index sub
   80 dict begin
   /hlbase exch def pop
+  /hlbdepth countdictstack def
   /hlproc exch def
   gsave
   { hlproc } stopped { hlunwind } if
@@ -307,8 +322,9 @@
   gsave
     hlcp /FontDict get hlcp /Size get scalefont setfont
     hlctext 0 hlci getinterval stringwidth pop /hlcpre exch def
-    hlctext hlci hlcj hlci sub getinterval hlink? not { headline-chars-have-no-ink } if
+    hlctext hlci hlcj hlci sub getinterval hlink?
   grestore
+  not { headline-chars-have-no-ink } if
   hlcp /Origin get aload pop /hlcoy exch def hlcpre add hlcoy hlshift
 } def
 
@@ -577,7 +593,7 @@
 % @param: /Text string the run's text; a newline forces a line break
 % @param: /Font name installed outline face (default /Helvetica-Bold); a missing face raises headline-font-not-found
 % @param: /Size num points; or exactly one of /FitWidth, /FitHeight, /FitBox [w h], /FitRegion true, /SizeOf [name ratio]
-% @param: /At [x y] or << /To name /H f /V f /Chars [i j] >> the point the anchor lands on, absolute or in an earlier run's ink box
+% @param: /At [x y] or << /To name /H f /V f /Chars [i j] >> (byte offsets) the point the anchor lands on, absolute or in an earlier run's ink box
 % @param: /Anchor [h v] which point of the run's own ink box sits on /At (default [/left /baseline]: left ink edge on the first baseline)
 % @param: /Offset [dx dy] points added to the resolved /At
 % @param: /Avoid array names or [name i j] glyph ranges this run's ink must clear by /Clearance (default every earlier run)
