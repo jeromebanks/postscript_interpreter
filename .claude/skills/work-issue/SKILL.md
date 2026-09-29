@@ -755,7 +755,7 @@ this path, so the `jq` mechanics above don't apply. Note in both
 comments that this was a same-family fallback *and why* (the actual
 error text and what you tried; see the stale-Codex-broker Pitfall
 before concluding Codex is really unavailable). The issue comment uses
-the same per-finding format as above (verbatim report + disposition
+the same per-finding format as above, headed `## Fallback review, round <R>` (verbatim report + disposition
 table). Same rule as above: fix or explicitly disposition everything it
 raises, commit and push before any re-review, before continuing.
 
@@ -779,7 +779,8 @@ via whichever path ran), decide merge eligibility from the policy:
 `Closes #<N>` closes the issue the instant it merges, so the
 wrap-up has to already be there — a comment added afterwards lands on a
 closed ticket nobody is watching. Write it from what actually happened,
-not from the plan. It has these parts:
+not from the plan. Start it with the exact heading
+`## Summary of work (PR #<PR>)` (step 9 greps for it). It has these parts:
 
 - **Delivered** — files/artifacts and the exact render/run commands.
 - **Decisions** — each judgement call and why (including any the user
@@ -831,7 +832,9 @@ merging anyway.
 
 ```sh
 gh issue view <N> --json state   # confirm Closes #<N> auto-closed it
-gh issue view <N> --json comments --jq '.comments[].body' | grep -c "^## Summary\|Codex review, round"   # the review trail + summary from step 8 are on the ticket
+# both must print >= 1: the pre-merge summary and the per-round review trail are on the ticket
+gh issue view <N> --json comments --jq '[.comments[].body | select(startswith("## Summary of work"))] | length'
+gh issue view <N> --json comments --jq '[.comments[].body | select(test("^## (Codex|Fallback) review, round"))] | length'
 git worktree remove "$WORKTREE_DIR" 2>&1 || true
 git -C "$(git rev-parse --show-toplevel)" branch -d "$BRANCH" 2>&1 || true
 git -C "$(git rev-parse --show-toplevel)" fetch origin --prune
@@ -1010,11 +1013,17 @@ there may be follow-up commits before a human merges it.
   and read `auth.detail` / `sessionRuntime.endpoint`; (2) smoke-test
   with `node "$CODEX_SCRIPT" task --fresh "Reply with exactly: pong. Make no edits."`
   from the main checkout (`git rev-parse --show-toplevel` of the main
-  worktree, not the issue worktree) — if that works, run the real review
-  from there against the worktree's branch, or kill only *this session's*
+  worktree). That smoke test only *diagnoses* the runtime — **never run
+  the real review from the main checkout**: `--scope branch` reviews
+  whatever is checked out there, and it would return a confident clean
+  verdict for the wrong diff. The real review always runs from
+  `$WORKTREE_DIR` with step 8's branch assertion. If the smoke test
+  passes but the worktree run still fails, kill only *this session's*
   stale broker (`ps -p "$(cat <endpoint dir>/broker.pid)"`; other
-  issues' brokers belong to other sessions) and retry; (3) only if it
-  still fails, fall back and put the error text in the review comment.
+  issues' brokers belong to other sessions), then re-run the step-8
+  command from `$WORKTREE_DIR` and confirm the review's stated target is
+  `$BRANCH`; (3) only if that still fails, fall back and put the error
+  text in the review comment.
   Also note `task` is where an *opinion* question ("which of these two
   designs reads better?") goes — it works as well as `review` once the
   runtime is healthy.
