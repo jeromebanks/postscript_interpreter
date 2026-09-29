@@ -3,6 +3,14 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Keepin' It Real shirt artwork (issue #147, 2026-09-28)
+
+Finished front/back print art from the #144-#146 tools: `examples/keepin_it_real_shirt.ps`
+(config), `art/keepin-it-real/` (exports, manifest, proofs), design record and
+deviations in `docs/keepin_it_real_shirt.md`. Composition A (tucked, AlfaSlabOne) chosen
+over B (Pacifico stack, `examples/keepin_it_real_front_alt.ps`). Light garments only. Added
+`scripts/apparel_mock.sh` (light/dark garment mock + transparent-corner assertion, needs ffmpeg).
+
 ## `lib/apparel.ps`: two-sided apparel graphic template, optional sleeves, and `--transparent` (issue #146, 2026-09-28)
 
 Third slice of the shirt remake: a vendor-neutral template that turns one

@@ -90,8 +90,12 @@ fn artwork_is_transparent_and_stays_inside_its_margin() {
         ),
         ("examples/apparel_shirt.ps", "SleeveLeft", 252, 252, 0.25),
         ("examples/apparel_second.ps", "Back", 720, 288, 0.4),
+        // the finished shirt (issue #147), both sides
+        ("examples/keepin_it_real_shirt.ps", "Front", 864, 1008, 0.5),
+        ("examples/keepin_it_real_shirt.ps", "Back", 864, 360, 0.4),
+        ("examples/keepin_it_real_front_alt.ps", "Front", 864, 1008, 0.5),
     ] {
-        let png = dir.join(format!("{piece}.png"));
+        let png = dir.join(format!("{}-{piece}.png", config.replace('/', "_")));
         let (ok, _, err) = pscat(
             config,
             "draw",

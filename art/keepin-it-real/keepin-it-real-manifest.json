@@ -1,0 +1,132 @@
+{
+  "tool": "pscat lib/apparel.ps",
+  "vendor_neutral": true,
+  "name": "keepin-it-real",
+  "dpi": 300,
+  "background": "transparent",
+  "pieces": [
+    {
+      "piece": "Front",
+      "file_stem": "front",
+      "inches": [
+        12,
+        14
+      ],
+      "margin_in": 0.5,
+      "points": [
+        864,
+        1008
+      ],
+      "dpi": 300,
+      "background": "transparent",
+      "seed": 7,
+      "runs": [
+        {
+          "text": "Real",
+          "face": "AlfaSlabOne",
+          "treatment": "mottled"
+        },
+        {
+          "text": "Keepin' it",
+          "face": "AlfaSlabOne",
+          "treatment": "patches"
+        },
+        {
+          "text": "I'm",
+          "face": "AlfaSlabOne",
+          "treatment": "patches"
+        }
+      ],
+      "files": {
+        "png": "keepin-it-real-front.png",
+        "svg": "keepin-it-real-front.svg",
+        "pdf": "keepin-it-real-front.pdf"
+      },
+      "pixels": [
+        3600,
+        4200
+      ],
+      "png_color_type": "RGBA",
+      "vector_declared_points": [
+        864,
+        1008
+      ]
+    },
+    {
+      "piece": "Back",
+      "file_stem": "back",
+      "inches": [
+        12,
+        5
+      ],
+      "margin_in": 0.4,
+      "points": [
+        864,
+        360
+      ],
+      "dpi": 300,
+      "background": "transparent",
+      "seed": 107,
+      "runs": [
+        {
+          "text": "(Yeah, real",
+          "face": "Courier-Bold",
+          "treatment": "solid"
+        },
+        {
+          "text": "Phoney",
+          "face": "Courier-BoldOblique",
+          "treatment": "solid"
+        },
+        {
+          "text": "that is)",
+          "face": "Courier-Bold",
+          "treatment": "solid"
+        }
+      ],
+      "files": {
+        "png": "keepin-it-real-back.png",
+        "svg": "keepin-it-real-back.svg",
+        "pdf": "keepin-it-real-back.pdf"
+      },
+      "pixels": [
+        3600,
+        1500
+      ],
+      "png_color_type": "RGBA",
+      "vector_declared_points": [
+        864,
+        360
+      ]
+    }
+  ],
+  "proof": "keepin-it-real-proof.png",
+  "fonts": [
+    {
+      "face": "AlfaSlabOne",
+      "source": "catalog",
+      "files": [
+        "fonts/catalog/AlfaSlabOne/AlfaSlabOne-Regular.ttf"
+      ],
+      "license_file": "fonts/catalog/AlfaSlabOne/OFL.txt",
+      "license": "OFL-1.1"
+    },
+    {
+      "face": "Courier-Bold",
+      "source": "builtin"
+    },
+    {
+      "face": "Courier-BoldOblique",
+      "source": "builtin"
+    }
+  ],
+  "output_notes": {
+    "png": "RGBA; pixels outside the artwork have alpha 0",
+    "svg": "width/height are declared in pt (rewritten by the export script from the unitless renderer output) over a point-based viewBox; no backdrop rect; /transition fills stay native gradients",
+    "pdf": "MediaBox is in points (1/72 in); no page background is painted (this renderer never paints one); /transition fills are a flat average colour",
+    "vector_scale": "SVG and PDF are written without --dpi so their declared size is the physical size in points; only the PNG is dpi-scaled",
+    "mottled_flecks": "the /mottled wear flecks are painted cream, not knocked out; on a dark garment they print as ink",
+    "piece_sides": "SleeveLeft/SleeveRight are labels chosen by the config; this template does not say whether they mean the wearer side or the viewer side",
+    "transparent_background": "produced by pscat --transparent (issue #146); without it PNG and SVG carry an opaque white page"
+  }
+}
