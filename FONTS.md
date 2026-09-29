@@ -486,3 +486,16 @@ Courier for them (observed: `/PermanentMarker findfont /FontName get`
 gives `/Courier`) — so the library rejects both known fallbacks
 (`/Helvetica` in pscat, `/Courier` in gs) unless requested, and a
 catalog-face render is a pscat render.
+
+## Post-roadmap addendum — groovy rounded display faces (issue #155)
+
+`fonts/catalog/Chewy/` (Apache 2.0) and `fonts/catalog/BagelFatOne/`
+(OFL 1.1) stand in for the soft, blobby 1960s/70s face on the original
+"Keepin' it Real" shirt. Both are plain outline TrueType, so `charpath`
+capture works (`lib/lettering.ps`) and `lib/headline.ps` measures them
+like any catalog face; resolve them by file stem (`/Chewy-Regular`,
+`/BagelFatOne-Regular`, `ltfontcheck` compares `/FontName` to the stem).
+Both licences permit embedding and redistribution. The choice, the
+candidate sheet and the caveat that the photo does not identify the
+original font are in `docs/groovy_font_choice.md`; the specimen is
+`examples/groovy_faces.ps`, tested by `tests/groovy_faces.rs`.

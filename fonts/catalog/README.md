@@ -55,6 +55,8 @@ family's `OFL.txt` or Apache `LICENSE.txt`.
 | AtkinsonHyperlegible | high-legibility humanist sans | OFL |
 | ZillaSlab | contemporary slab serif | OFL |
 | AlfaSlabOne | fat-face slab display | OFL |
+| Chewy | soft hand-drawn 60s/70s display, flared-leg R, slanted-top l (best stand-in for the Keepin' it Real shirt face) | Apache 2.0 |
+| BagelFatOne | blobby ultra-heavy rounded display (Cooper-Black spirit, heavier alternative) | OFL |
 | JetBrainsMono | modern coding monospace | OFL |
 | GreatVibes | formal copperplate script | OFL |
 | Pacifico | 1950s brush script | OFL |

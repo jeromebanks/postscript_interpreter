@@ -3,6 +3,15 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Groovy display faces: Chewy + Bagel Fat One (issue #155, 2026-09-29)
+
+Two rounded 60s/70s catalog faces for the shirt's `Real` lettering: Chewy
+(Apache 2.0, primary: flared-leg R, slanted l) and Bagel Fat One (OFL,
+heavier). Chosen by eye from 20 candidates; the photo does not identify the
+original font, so the choice is flagged for review. Rationale, sheets and
+licences in `docs/groovy_font_choice.md`; specimen `examples/groovy_faces.ps`;
+`tests/groovy_faces.rs`. No Rust changes.
+
 ## Keepin' It Real shirt artwork (issue #147, 2026-09-28)
 
 Finished front/back print art from the #144-#146 tools: `examples/keepin_it_real_shirt.ps`
