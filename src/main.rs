@@ -67,8 +67,12 @@ fn main() -> ExitCode {
             eprintln!("pscat: --transparent doesn't combine with --halftone/--spool/--interactive");
             return ExitCode::FAILURE;
         }
-        if options.png.is_none() && options.svg.is_none() && options.pdf.is_none() {
-            eprintln!("pscat: --transparent needs --png, --svg or --pdf output");
+        if options.png.is_none()
+            && options.svg.is_none()
+            && options.pdf.is_none()
+            && options.contact_sheet.is_none()
+        {
+            eprintln!("pscat: --transparent needs --png, --svg, --pdf or --contact-sheet output");
             return ExitCode::FAILURE;
         }
     }

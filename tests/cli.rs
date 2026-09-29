@@ -612,3 +612,34 @@ fn transparent_is_rejected_where_it_cannot_apply() {
     );
     assert!(!ok && stderr.contains("--halftone"), "{stderr}");
 }
+
+/// Codex review of PR #152: a contact-sheet-only sweep may use
+/// --transparent; frames are blitted raw, so untouched cells keep alpha 0.
+#[test]
+fn transparent_works_with_a_contact_sheet_only_sweep() {
+    let sheet = tmp("transparent-sheet.png");
+    let (ok, _, stderr) = run(
+        &[
+            "--page",
+            "20x20",
+            "--transparent",
+            "--sweep-seed",
+            "1,2",
+            "--contact-sheet",
+            sheet.to_str().unwrap(),
+            "-",
+        ],
+        "1 0 0 setrgbcolor 5 5 5 5 rectfill",
+    );
+    assert!(ok, "stderr: {stderr}");
+    let pm = Pixmap::load_png(&sheet).expect("sheet");
+    let alphas: Vec<u8> = (0..pm.height())
+        .flat_map(|y| (0..pm.width()).map(move |x| (x, y)))
+        .map(|(x, y)| pm.pixel(x, y).unwrap().alpha())
+        .collect();
+    assert!(
+        alphas.contains(&0),
+        "untouched cell pixels stay transparent"
+    );
+    assert!(alphas.contains(&255), "ink is opaque");
+}
