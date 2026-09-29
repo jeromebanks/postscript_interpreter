@@ -681,15 +681,26 @@ fn fit_width_holds_for_curved_text_and_bad_flags_or_ctms_fail_safely() {
             "headline-fitregion-must-be-true"
         );
     }
-    // A singular CTM fails measurement; the caller's font must survive.
-    let mut it = with_lib(400, 200);
-    it.run_str("/Times-Roman findfont 17 scalefont setfont")
-        .expect("setup");
-    let r = it.run_str(
-        "gsave 0 1 scale [ 0 0 300 200 ] [ << /Text (Real) /Size 20 /At [ 10 10 ] >> ] hllayout",
-    );
-    assert!(r.is_err());
-    it.run_str("clear currentfont /FontName get 96 string cvs")
-        .ok();
-    assert_eq!(it.operand_stack().last().unwrap().repr(), "(Times-Roman)");
+    // Measurement ignores the caller's CTM: the same layout under a
+    // scaled or even singular transform reports the same ink, and the
+    // caller's font survives.
+    let ink_under = |pre: &str| {
+        let mut it = with_lib(400, 200);
+        it.run_str("/Times-Roman findfont 17 scalefont setfont")
+            .expect("setup");
+        it.run_str(&format!(
+            "gsave {pre} [ 0 0 300 200 ] [ << /Name /o /Text (o) /Font /PermanentMarker
+               /FitWidth 112 /At [ 10 10 ] >> ] hllayout /o hlrunink grestore
+             currentfont /FontName get 96 string cvs"
+        ))
+        .expect("layout");
+        it.operand_stack()
+            .iter()
+            .map(|o| o.repr())
+            .collect::<Vec<_>>()
+    };
+    let base = ink_under("");
+    assert_eq!(base, ink_under("0.01 0.01 scale"));
+    assert_eq!(base, ink_under("0 1 scale"));
+    assert_eq!(base.last().unwrap(), "(Times-Roman)");
 }
