@@ -548,3 +548,100 @@ fn oversized_contact_sheet_fails_before_any_frame_renders() {
         "no frame should have started rendering: {stdout}"
     );
 }
+
+// ---- --transparent (issue #146) ------------------------------------------
+
+/// Artwork for garments: with --transparent, untouched pixels have alpha 0,
+/// painted ones are opaque, and the SVG has no white backdrop rect. The
+/// default run stays opaque white.
+#[test]
+fn transparent_flag_leaves_the_background_unpainted() {
+    let art = "1 0 0 setrgbcolor 20 20 60 60 rectfill";
+    let png = tmp("transparent.png");
+    let svg = tmp("transparent.svg");
+    let (ok, _, stderr) = run(
+        &[
+            "--page",
+            "100x100",
+            "--transparent",
+            "--png",
+            png.to_str().unwrap(),
+            "--svg",
+            svg.to_str().unwrap(),
+            "-",
+        ],
+        art,
+    );
+    assert!(ok, "stderr: {stderr}");
+    let pm = Pixmap::load_png(&png).expect("png");
+    assert_eq!(
+        pm.pixel(2, 2).unwrap().alpha(),
+        0,
+        "corner must be transparent"
+    );
+    let ink = pm.pixel(50, 50).unwrap();
+    assert_eq!((ink.alpha(), ink.red()), (255, 255));
+    let text = std::fs::read_to_string(&svg).unwrap();
+    assert!(!text.contains("#ffffff"), "no white backdrop rect: {text}");
+
+    let opaque = tmp("opaque.png");
+    let (ok, _, stderr) = run(
+        &["--page", "100x100", "--png", opaque.to_str().unwrap(), "-"],
+        art,
+    );
+    assert!(ok, "stderr: {stderr}");
+    let pm = Pixmap::load_png(&opaque).expect("png");
+    let c = pm.pixel(2, 2).unwrap();
+    assert_eq!((c.alpha(), c.red(), c.green()), (255, 255, 255));
+}
+
+#[test]
+fn transparent_is_rejected_where_it_cannot_apply() {
+    let (ok, _, stderr) = run(&["--transparent", "-e", "1 pop"], "");
+    assert!(!ok && stderr.contains("--transparent"), "{stderr}");
+    let png = tmp("t-halftone.png");
+    let (ok, _, stderr) = run(
+        &[
+            "--transparent",
+            "--halftone",
+            "--png",
+            png.to_str().unwrap(),
+            "-",
+        ],
+        "",
+    );
+    assert!(!ok && stderr.contains("--halftone"), "{stderr}");
+}
+
+/// Codex review of PR #152: a contact-sheet-only sweep may use
+/// --transparent; frames are blitted raw, so untouched cells keep alpha 0.
+#[test]
+fn transparent_works_with_a_contact_sheet_only_sweep() {
+    let sheet = tmp("transparent-sheet.png");
+    let (ok, _, stderr) = run(
+        &[
+            "--page",
+            "20x20",
+            "--transparent",
+            "--sweep-seed",
+            "1,2",
+            "--contact-sheet",
+            sheet.to_str().unwrap(),
+            "-",
+        ],
+        "1 0 0 setrgbcolor 5 5 5 5 rectfill",
+    );
+    assert!(ok, "stderr: {stderr}");
+    let pm = Pixmap::load_png(&sheet).expect("sheet");
+    let alphas: Vec<u8> = (0..pm.height())
+        .flat_map(|y| (0..pm.width()).map(move |x| (x, y)))
+        .map(|(x, y)| pm.pixel(x, y).unwrap().alpha())
+        .collect();
+    assert!(
+        alphas.contains(&0),
+        "untouched cell pixels stay transparent"
+    );
+    assert!(alphas.contains(&255), "ink is opaque");
+    // the 4px gutter between the two 20px cells stays clear, not white
+    assert_eq!(pm.pixel(21, 2).unwrap().alpha(), 0, "gutter is transparent");
+}

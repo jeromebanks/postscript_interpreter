@@ -209,7 +209,7 @@ lines are kept, and input is lowercased (the font has no capitals).
 Options: `--size`, `--width`, `--height`, `--margin`, `--leading`
 (line spacing × size), `--jitter` (0 = a calm hand), `--pen`,
 `--ink R,G,B`, `--paper plain|ruled`, `--seed` (same seed, same
-page), `--dpi`, `--halftone`, `-o out.png`. Run with `--help` for
+page), `--dpi`, `--halftone`, `--transparent`, `-o out.png`. Run with `--help` for
 the full list.
 
 The business logic lives in `lib/handscript.ps` — the font plus a
@@ -730,6 +730,16 @@ the controls. A seed changes only the texture, never metrics or
 placement; a missing face is an error (`lettering-font-not-found`), not
 a silent Helvetica. `psyletterpath` exposes just the geometry.
 `examples/lettering.ps` is the specimen.
+
+`lib/apparel.ps` (issue #146) builds apparel graphics on top of those two: one
+config dict describes a front, back and optional left/right sleeve print area
+(physical inches, DPI, margin, phrase, face, treatment, seed), and
+`scripts/apparel_export.sh examples/apparel_shirt.ps out/` writes each piece
+as PNG/SVG/PDF plus a proof sheet and `manifest.json`. Artwork is exported
+with `--transparent` (PNG alpha, SVG without a white backdrop; PDF never had
+one). `pscat --page 1400x760 examples/apparel_shirt.ps` is the proof sheet;
+`examples/apparel_second.ps` shows a different design from configuration
+alone.
 
 ```postscript
 (lib/artkit.ps) run

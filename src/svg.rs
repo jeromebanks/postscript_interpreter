@@ -33,6 +33,8 @@ pub struct SvgRecorder {
     /// Next `<linearGradient>`/`<radialGradient>` id (issue #20's `shfill`).
     next_grad: usize,
     pages: Vec<String>,
+    /// Omit the white backdrop rect (`--transparent`).
+    transparent: bool,
 }
 
 pub(crate) type Chain = Option<Rc<ClipNode>>;
@@ -67,7 +69,12 @@ impl SvgRecorder {
             next_clip: 0,
             next_grad: 0,
             pages: Vec::new(),
+            transparent: false,
         }
+    }
+
+    pub(crate) fn set_transparent(&mut self, transparent: bool) {
+        self.transparent = transparent;
     }
 
     fn rule_attr(rule: FillRule) -> &'static str {
@@ -411,8 +418,15 @@ impl SvgRecorder {
             "<svg xmlns=\"http://www.w3.org/2000/svg\" \
              xmlns:xlink=\"http://www.w3.org/1999/xlink\" \
              width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\">\
-             <rect width=\"{w}\" height=\"{h}\" fill=\"#ffffff\"/>\
-             {defs}{body}</svg>\n",
+             {backdrop}{defs}{body}</svg>\n",
+            backdrop = if self.transparent {
+                String::new()
+            } else {
+                format!(
+                    "<rect width=\"{}\" height=\"{}\" fill=\"#ffffff\"/>",
+                    self.width, self.height
+                )
+            },
             w = self.width,
             h = self.height,
             defs = if self.defs.is_empty() {

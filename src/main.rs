@@ -26,6 +26,8 @@ struct Options {
     spool: Option<String>,
     /// Screen raster output like a mono laser printer (Stage 10).
     halftone: bool,
+    /// Transparent page background instead of opaque white (issue #146).
+    transparent: bool,
     /// The windowed REPL: type PostScript, watch it draw (Stage 8's
     /// last sliver).
     interactive: bool,
@@ -56,6 +58,24 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    if options.transparent {
+        // The window shows an opaque canvas, and --halftone screens the
+        // raster by luminance (transparent black would screen as ink);
+        // refuse rather than misrender silently.
+        if options.halftone || options.spool.is_some() || options.interactive {
+            eprintln!("pscat: --transparent doesn't combine with --halftone/--spool/--interactive");
+            return ExitCode::FAILURE;
+        }
+        if options.png.is_none()
+            && options.svg.is_none()
+            && options.pdf.is_none()
+            && options.contact_sheet.is_none()
+        {
+            eprintln!("pscat: --transparent needs --png, --svg, --pdf or --contact-sheet output");
+            return ExitCode::FAILURE;
+        }
+    }
 
     if options.sweep_seed.is_some() || options.sweep_param.is_some() {
         if options.sweep_seed.is_some() && options.sweep_param.is_some() {
@@ -155,6 +175,9 @@ fn main() -> ExitCode {
         );
         return ExitCode::FAILURE;
     };
+    if options.transparent {
+        interp.gfx_mut().set_transparent_background();
+    }
 
     if options.svg.is_some() {
         interp.gfx_mut().enable_svg();
@@ -525,7 +548,14 @@ fn run_sweep(options: &Options, source: &[u8]) -> ExitCode {
                 cell_h,
                 pscat::contact_sheet::GAP,
             ) {
-                Ok(s) => Some((s, cols)),
+                Ok(mut s) => {
+                    // Gaps and unused cells stay transparent too, matching
+                    // the transparent frames blitted into them.
+                    if options.transparent {
+                        s.fill(tiny_skia::Color::TRANSPARENT);
+                    }
+                    Some((s, cols))
+                }
                 Err(msg) => {
                     eprintln!("pscat: {msg}");
                     return ExitCode::FAILURE;
@@ -547,6 +577,9 @@ fn run_sweep(options: &Options, source: &[u8]) -> ExitCode {
             );
             return ExitCode::FAILURE;
         };
+        if options.transparent {
+            interp.gfx_mut().set_transparent_background();
+        }
         let label = match &axis {
             SweepAxis::Seed(seeds) => {
                 interp.set_seed_override(Some(seeds[i]));
@@ -1014,6 +1047,7 @@ fn parse_args() -> Result<Options, String> {
         pstack_on_error: false,
         spool: None,
         halftone: false,
+        transparent: false,
         interactive: false,
         lint: false,
         sweep_seed: None,
@@ -1064,6 +1098,7 @@ fn parse_args() -> Result<Options, String> {
                 options.spool = Some(args.next().ok_or("missing directory after --spool")?);
             }
             "--halftone" => options.halftone = true,
+            "--transparent" => options.transparent = true,
             "-i" | "--interactive" => options.interactive = true,
             "--lint" => options.lint = true,
             "--speed" => {
@@ -1160,6 +1195,9 @@ fn print_usage() {
     println!("      --pdf PATH      write the document as PDF (implies --headless)");
     println!("      --dpi N         device resolution (default 72 = 1 pixel per point)");
     println!("      --spool DIR     watch DIR and render each .ps/.eps that lands there");
+    println!(
+        "      --transparent   leave the page background transparent (PNG alpha, SVG without backdrop; needs --png/--svg/--pdf)"
+    );
     println!("      --halftone      screen the raster like a mono laser printer (window/PNG)");
     println!("      --pstack-on-error  print the operand stack after an error");
     println!("      --lint          check the finished run for common mistakes (implies");

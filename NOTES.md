@@ -3,6 +3,51 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## `lib/apparel.ps`: two-sided apparel graphic template, optional sleeves, and `--transparent` (issue #146, 2026-09-28)
+
+Third slice of the shirt remake: a vendor-neutral template that turns one
+configuration dict into separate front, back and (optional) left/right
+sleeve artwork files. It composes `headline.ps` (layout) and
+`lettering.ps` (drawing) and owns no renderer of its own.
+
+- **Config, not framework.** `examples/apparel_shirt.ps` is the concrete
+  shirt; `examples/apparel_second.ps` (different phrase, faces, DPI, no
+  sleeves) proves reuse is configuration-only. A piece that is absent is
+  not exported. Each piece is an independent print area (`/Size` in
+  inches, `/Margin`), fitted with `/Text` or laid out from raw
+  headline `/Runs`.
+- **Modes** (`ApparelMode`, set by a prelude): `/proof` (default; every
+  piece reduced, on a checkerboard, print area red / margin blue), `/draw`,
+  `/size`, `/list`, `/manifest`. `scripts/apparel_export.sh CONFIG OUTDIR`
+  sequences plain `pscat --page --dpi --transparent --png/--svg/--pdf`
+  runs (raster with `--dpi`; SVG/PDF without, so they declare the physical
+  size in points -- the script rewrites the SVG's unitless width/height to
+  `pt`), records the PNG's *measured* pixel size (pscat rounds in f32, so
+  a computed size can disagree by a pixel at .5), and writes `<name>-manifest.json` (inches, rounded points, DPI, pixels,
+  background mode, seed, per-run face/text/treatment, font files +
+  licences from `fonts/catalog`, per-format transparency notes) plus a
+  proof PNG.
+- **Contour vs. the edge.** `hllayout` cannot see `psyletter`'s outline
+  stroke, so the region is inset by the stroke half-width: lay out,
+  measure the fitted size, inset, repeat (size only shrinks, so it
+  converges; non-convergence raises `apparel-inset-did-not-converge`).
+  `tests/apparel.rs` checks ink-including-contour stays inside each
+  piece's margin.
+- **Transparency — observed, then fixed.** Before this change PNG output
+  was RGBA but pre-filled opaque white, and SVG began with
+  `<rect fill="#ffffff">`; only PDF had no background (it never painted
+  one). New `--transparent` starts the canvas as `(0,0,0,0)` (`Gfx`
+  `background`, used by the initial fill, `showpage` erase and
+  `erasepage`) and omits the SVG rect. Default output is unchanged.
+  Refused with `--halftone`/`--spool`/`--interactive` (they read or show
+  an opaque canvas) and without an output format. Caveat: anything that
+  reads pixels back and assumes white paper sees transparent black.
+  `--lint`'s blank-page check treats alpha-0 pixels as untouched.
+  Not addressed: PDF `/transition` fills remain a flat average colour
+  (pre-existing, recorded in the manifest).
+- Deferred: the finished *Keepin' it Real* artwork (#147), arched jersey
+  layout (#149), any product/vendor integration.
+
 ## `lib/headline.ps`: composition helpers for headline + supporting type (issue #145, 2026-09-28)
 
 Second slice of the shirt remake. One new sibling library
