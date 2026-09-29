@@ -1,7 +1,7 @@
 {
   "tool": "pscat lib/apparel.ps",
   "vendor_neutral": true,
-  "name": "keepin-it-real",
+  "name": "keepin-it-real-chewy",
   "dpi": 300,
   "background": "transparent",
   "pieces": [
@@ -38,9 +38,9 @@
         }
       ],
       "files": {
-        "png": "keepin-it-real-front.png",
-        "svg": "keepin-it-real-front.svg",
-        "pdf": "keepin-it-real-front.pdf"
+        "png": "keepin-it-real-chewy-front.png",
+        "svg": "keepin-it-real-chewy-front.svg",
+        "pdf": "keepin-it-real-chewy-front.pdf"
       },
       "pixels": [
         3600,
@@ -85,9 +85,9 @@
         }
       ],
       "files": {
-        "png": "keepin-it-real-back.png",
-        "svg": "keepin-it-real-back.svg",
-        "pdf": "keepin-it-real-back.pdf"
+        "png": "keepin-it-real-chewy-back.png",
+        "svg": "keepin-it-real-chewy-back.svg",
+        "pdf": "keepin-it-real-chewy-back.pdf"
       },
       "pixels": [
         3600,
@@ -100,11 +100,16 @@
       ]
     }
   ],
-  "proof": "keepin-it-real-proof.png",
+  "proof": "keepin-it-real-chewy-proof.png",
   "fonts": [
     {
       "face": "Chewy-Regular",
-      "source": "builtin"
+      "source": "catalog",
+      "files": [
+        "fonts/catalog/Chewy/Chewy-Regular.ttf"
+      ],
+      "license_file": "fonts/catalog/Chewy/LICENSE.txt",
+      "license": "Apache-2.0"
     },
     {
       "face": "Courier-Bold",

@@ -39,7 +39,7 @@ Renders are deterministic (same seed → identical output).
   (`apparel_mock.sh` asserts the corner pixels; the SVG has no backdrop rect;
   the PDF paints no page fill). No white box.
 - Front: GIMP-style plasma (`/Treatment /plasma`, `lib/fillkit.ps`, red/green/blue palette,
-  `/Turbulence 2 /Spread 0.01`, `/Wear 0.15`, thin dark outline) on all three runs. Back: solid black, no outline, no wear.
+  `/Turbulence 2 /Spread 0.01`, thin dark outline) on all three runs. Back: solid black, no outline, no wear (plasma has none: `/Wear` only applies to `/mottled`).
 
 ## Front composition: A chosen over B
 
@@ -79,7 +79,7 @@ print size — readable.
 
 Designed for **light garments**, like the original. On a dark shirt the front
 still reads (colours hold; the near-black contour merges with the fabric) but
-the cream wear flecks print as ink, and the **black back text disappears**
+the **black back text disappears**
 (see `mock-back.png`). For a dark garment, change the back's `/Palette` and
 add a light outline first.
 

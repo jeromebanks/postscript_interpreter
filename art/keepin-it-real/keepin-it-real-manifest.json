@@ -104,7 +104,12 @@
   "fonts": [
     {
       "face": "BagelFatOne-Regular",
-      "source": "builtin"
+      "source": "catalog",
+      "files": [
+        "fonts/catalog/BagelFatOne/BagelFatOne-Regular.ttf"
+      ],
+      "license_file": "fonts/catalog/BagelFatOne/OFL.txt",
+      "license": "OFL-1.1"
     },
     {
       "face": "Courier-Bold",

@@ -89,6 +89,9 @@ faces="$(ps manifest | "$PSCAT" --headless - | jq -r '[.pieces[].runs[].face]|un
 FONTS_JSON="[]"
 for face in $faces; do
   dir="fonts/catalog/$face"
+  # catalog directories are named for the family (BagelFatOne), faces for the
+  # style (BagelFatOne-Regular): fall back to the family stem
+  [ -d "$dir" ] || dir="fonts/catalog/${face%-Regular}"
   if [ -d "$dir" ]; then
     files="$(cd "$dir" && ls | grep -Ei '\.(ttf|otf|ttc)$' | jq -R . | jq -s .)"
     lic="$(cd "$dir" && ls | grep -Ei '^(OFL|LICENSE)' | head -1 || true)"
