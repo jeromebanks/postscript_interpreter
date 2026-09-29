@@ -704,3 +704,9 @@ fn fit_width_holds_for_curved_text_and_bad_flags_or_ctms_fail_safely() {
     assert_eq!(base, ink_under("0 1 scale"));
     assert_eq!(base.last().unwrap(), "(Times-Roman)");
 }
+
+#[test]
+fn ink_bounds_are_correct_beyond_any_fixed_sentinel_range() {
+    let v = nums("/Helvetica findfont 20000000 scalefont setfont (I) hlink");
+    assert!(v[0] > 1_000_000.0 && v[0] < v[2], "{v:?}");
+}
