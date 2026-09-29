@@ -622,7 +622,8 @@ rm -f /tmp/codex-review-<N>.json && \
   date +%s > "$H.tmp" && mv "$H.tmp" "$H" && \
   cd "$WORKTREE_DIR" && git fetch origin main && \
   test "$(git rev-parse --abbrev-ref HEAD)" = "$BRANCH" && \
-  node "$CODEX_SCRIPT" review --wait --json --scope branch --base origin/main \
+  node "$CODEX_SCRIPT" review --wait --json --model gpt-6-sol \
+  --scope branch --base origin/main \
   > /tmp/codex-review-<N>.json
 ```
 
@@ -640,6 +641,13 @@ under `agent-full` merge authority.
 cwd/variable reset — see Pitfalls) leaves *no* file behind rather than
 leaving a prior round's stale review sitting at that path where the
 posting step below would read and post it as if it were current.
+
+The review model is pinned explicitly with `--model gpt-6-sol` rather
+than inherited from `~/.codex/config.toml`, which can be stale or differ
+per machine. The companion's `review` subcommand accepts no `--effort`
+flag (only `task` does), so reasoning effort (`high`) still comes from
+`model_reasoning_effort` in `~/.codex/config.toml`; it cannot be pinned
+from here.
 
 This blocks (expect several minutes — it's a real model pass, it reads
 around the diff for context) and, on success, writes a JSON object
