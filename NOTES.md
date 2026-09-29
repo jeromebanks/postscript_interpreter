@@ -10,7 +10,10 @@ Two rounded 60s/70s catalog faces for the shirt's `Real` lettering: Chewy
 heavier). Chosen by eye from 20 candidates; the photo does not identify the
 original font, so the choice is flagged for review. Rationale, sheets and
 licences in `docs/groovy_font_choice.md`; specimen `examples/groovy_faces.ps`;
-`tests/groovy_faces.rs`. No Rust changes.
+`tests/groovy_faces.rs`. No Rust changes. Bagel Fat One's TTF is 1.5 MB (it carries a
+large Korean glyph set; still loaded lazily, nothing in the binary). Not added to
+`examples/font_catalog.ps`: page 2 is at its documented 40-cell capacity, so
+`examples/groovy_faces.ps` is their specimen.
 
 ## Keepin' It Real shirt artwork (issue #147, 2026-09-28)
 

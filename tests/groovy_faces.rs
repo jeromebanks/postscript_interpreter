@@ -44,6 +44,27 @@ fn faces_resolve_by_stem_and_are_not_type3() {
             "findfont substituted for {face}"
         );
         assert_ne!(ty.repr(), "3", "{face} must be an outline face");
+
+        // The family name must resolve through the `-Regular` fallback,
+        // and the apostrophe glyph must exist (a missing quoteright would
+        // still pass an ink count from the other letters).
+        let family = face.split('-').next().unwrap();
+        it.run_str(&format!(
+            "/{family} findfont /FontName get /{face} findfont 100 scalefont setfont \
+             (') stringwidth pop"
+        ))
+        .unwrap_or_else(|e| panic!("{face}: {}", it.error_report(&e)));
+        let w = it.pop().expect("width");
+        let fam = it.pop().expect("family FontName");
+        assert_eq!(
+            fam.repr(),
+            format!("/{face}"),
+            "family fallback for {family}"
+        );
+        assert!(
+            w.repr().parse::<f64>().unwrap_or(0.0) > 0.0,
+            "{face}: no apostrophe"
+        );
     }
 }
 
@@ -64,18 +85,21 @@ fn hllayout_tucks_shirt_front_in_each_face() {
     for face in FACES {
         let mut it = with_libs();
         it.run_str(&format!(
-            "/lay [ 20 20 580 380 ] [
-               << /Name /real /Text (Real) /Font /{face} /FitBox [ 500 200 ] /At [ 40 40 ] >>
-               << /Name /keep /Text (Keepin' it) /Font /{face} /SizeOf [ /real 0.17 ]
+            "/lettered {{ /ls exch def
+               << /Font /{face} /Size ls /Align /left /Treatment /mottled /Seed 7 >>
+               psyletter }} def
+             /lay [ 20 20 580 380 ] [
+               << /Name /real /Text (Real) /Font /{face} /Draw {{ lettered }} /FitBox [ 500 200 ] /At [ 40 40 ] >>
+               << /Name /keep /Text (Keepin' it) /Font /{face} /Draw {{ lettered }} /SizeOf [ /real 0.17 ]
                   /At << /To /real /Chars [ 1 3 ] /H 0 /V 1 >>
                   /Anchor [ /left /bottom ] /Offset [ 8 18 ]
                   /Avoid [ [ /real 0 1 ] [ /real 1 3 ] [ /real 3 4 ] ] /Clearance 10 >>
-               << /Name /im /Text (I'm) /Font /{face} /SizeOf [ /keep 0.75 ]
+               << /Name /im /Text (I'm) /Font /{face} /Draw {{ lettered }} /SizeOf [ /keep 0.75 ]
                   /At << /To /keep /H 0 /V 1 >>
                   /Anchor [ /left /bottom ] /Offset [ 0 12 ]
                   /Avoid [ /keep [ /real 0 1 ] [ /real 1 3 ] [ /real 3 4 ] ] /Clearance 10 >>
              ] hllayout def
-             0 setgray lay hldraw"
+             lay hldraw"
         ))
         .unwrap_or_else(|e| panic!("{face}: {}", it.error_report(&e)));
         assert!(ink(&it) > 5000, "{face}: layout drew almost nothing");

@@ -14,6 +14,12 @@ leg that flares outward, `e` with a slanted crossbar, single-storey-feel
 `a`, and an `l` whose top is cut at a slant. Heavy, but with visible
 counters. Thin dark outline. (Mixed case: `Real`, not `REAL`.)
 
+## Reference vs finalists
+
+| Original shirt (cropped photo) | Finalists: Gorditas, Bagel Fat One, Chewy, Kavoon |
+|---|---|
+| ![shirt front](fonts/reference-front.png) | ![finalists](fonts/groovy-finalists.png) |
+
 ## Candidates (20 rendered)
 
 `fonts/groovy-candidates.png`: `Real` and `I'm Keepin' it Real` in Caprasimo,
