@@ -316,3 +316,42 @@ fn runs_cannot_escape_the_margin_or_be_empty() {
         assert!(attempt(mode, "[ ]").contains("apparel-piece-needs-text-or-runs"));
     }
 }
+
+/// A config-level /Fill (fillkit options for /plasma runs) has to reach the
+/// runs: apparel copies only its style keys, so this once silently rendered
+/// with fillkit defaults (Codex review of #159).
+#[test]
+fn config_fill_options_reach_plasma_runs() {
+    let render = |turbulence: &str| {
+        let src = std::fs::read_to_string(format!("{ROOT}/examples/keepin_it_real_shirt.ps"))
+            .unwrap()
+            .replace("/Turbulence 2 ", &format!("/Turbulence {turbulence} "));
+        let dir = std::env::temp_dir().join(format!("apparel_fill_{turbulence}.ps"));
+        std::fs::write(&dir, &src).unwrap();
+        let png = std::env::temp_dir().join(format!("apparel_fill_{turbulence}.png"));
+        let mut child = Command::new(BIN)
+            .current_dir(ROOT)
+            .args(["--headless", "--page", "864x1008", "--dpi", "30", "--png"])
+            .arg(&png)
+            .arg("-")
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn pscat");
+        let prelude = "/ApparelMode /draw def /ApparelPiece /Front def\n";
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(format!("{prelude}{src}").as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        std::fs::read(&png).unwrap()
+    };
+    assert_ne!(render("2"), render("0.3"), "/Fill was ignored");
+}

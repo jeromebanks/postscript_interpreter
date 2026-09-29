@@ -89,6 +89,9 @@ faces="$(ps manifest | "$PSCAT" --headless - | jq -r '[.pieces[].runs[].face]|un
 FONTS_JSON="[]"
 for face in $faces; do
   dir="fonts/catalog/$face"
+  # catalog directories are named for the family (BagelFatOne), faces for the
+  # style (BagelFatOne-Regular): fall back to the family stem
+  [ -d "$dir" ] || dir="fonts/catalog/${face%-Regular}"
   if [ -d "$dir" ]; then
     files="$(cd "$dir" && ls | grep -Ei '\.(ttf|otf|ttc)$' | jq -R . | jq -s .)"
     lic="$(cd "$dir" && ls | grep -Ei '^(OFL|LICENSE)' | head -1 || true)"
@@ -122,7 +125,7 @@ ps manifest | "$PSCAT" --headless - | jq \
               + (if $t then "no page background is painted (this renderer never paints one)" else "a painted full-page rectangle fills the configured background colour (mock-up, not garment art)" end)
               + "; /transition fills are a flat average colour"),
         vector_scale: "SVG and PDF are written without --dpi so their declared size is the physical size in points; only the PNG is dpi-scaled",
-        mottled_flecks: "the /mottled wear flecks are painted cream, not knocked out; on a dark garment they print as ink",
+        mottled_flecks: "only if a run uses /mottled (the shirt configs use /plasma, which has no flecks): its wear flecks are painted cream, not knocked out; on a dark garment they print as ink",
         piece_sides: "SleeveLeft/SleeveRight are labels chosen by the config; this template does not say whether they mean the wearer side or the viewer side",
         transparent_background: "produced by pscat --transparent (issue #146); without it PNG and SVG carry an opaque white page"
       })
