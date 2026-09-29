@@ -17,6 +17,8 @@ large Korean glyph set; still loaded lazily, nothing in the binary). Not added t
 
 ## Keepin' It Real shirt artwork (issue #147, 2026-09-28)
 
+Update 2026-09-29: redone in Chewy (`art/keepin-it-real/`) and Bagel Fat One (`art/keepin-it-real-bagel/`) with `/plasma` fills (#154/#155), seed 11; gallery piece `gallery/keepin_it_real.ps` + site card. Jerome still to pick the face.
+
 Finished front/back print art from the #144-#146 tools: `examples/keepin_it_real_shirt.ps`
 (config), `art/keepin-it-real/` (exports, manifest, proofs), design record and
 deviations in `docs/keepin_it_real_shirt.md`. Composition A (tucked, AlfaSlabOne) chosen

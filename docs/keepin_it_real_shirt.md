@@ -9,7 +9,10 @@ from the photos; they were used only as the visual reference.
 
 | | |
 |---|---|
-| `examples/keepin_it_real_shirt.ps` | the editable source/config (chosen front + back) |
+| `examples/keepin_it_real_shirt.ps` | the editable source/config (front in Chewy + back) |
+| `examples/keepin_it_real_shirt_bagel.ps` | same config, Bagel Fat One front; exports in `art/keepin-it-real-bagel/` |
+| `art/keepin-it-real/font-comparison.png` | reference photo crop above both fronts (Chewy, Bagel Fat One) |
+| `gallery/keepin_it_real.ps` | gallery piece: both fronts + back, see `gallery/README.md` |
 | `examples/keepin_it_real_front_alt.ps` | rejected second front composition |
 | `art/keepin-it-real/keepin-it-real-{front,back}.{png,svg,pdf}` | print artwork |
 | `art/keepin-it-real/keepin-it-real-manifest.json` | sizes, DPI, fonts + licences, output notes |
@@ -27,16 +30,16 @@ Renders are deterministic (same seed → identical output).
 
 ## Recorded settings
 
-- **Seed** 7. **DPI** 300.
+- **Seed** 11 (plasma field; was 7 for the AlfaSlabOne/mottled pass). **DPI** 300.
 - **Front**: 12 × 14 in (864 × 1008 pt) → 3600 × 4200 px. **Back**: 12 × 5 in
   (864 × 360 pt) → 3600 × 1500 px. Margin 0.5 in / 0.4 in.
-- **Fonts**: front `AlfaSlabOne` (OFL, `fonts/catalog/AlfaSlabOne`); back
+- **Fonts**: front `Chewy-Regular` (Apache 2.0) or, in the `-bagel` variant, `BagelFatOne-Regular` (OFL), see `docs/groovy_font_choice.md`; back
   `Courier-Bold` and `Courier-BoldOblique` (built-in Liberation Mono, OFL).
 - **Background**: transparent. PNG is RGBA with alpha 0 outside the art
   (`apparel_mock.sh` asserts the corner pixels; the SVG has no backdrop rect;
   the PDF paints no page fill). No white box.
-- Front: mottled `Real` (red/green/blue, `/Wear 0.15`, thin dark outline),
-  patchwork `Keepin' it` / `I'm`. Back: solid black, no outline, no wear.
+- Front: GIMP-style plasma (`/Treatment /plasma`, `lib/fillkit.ps`, red/green/blue palette,
+  `/Turbulence 2 /Spread 0.01`, `/Wear 0.15`, thin dark outline) on all three runs. Back: solid black, no outline, no wear.
 
 ## Front composition: A chosen over B
 
@@ -54,13 +57,20 @@ print size — readable.
 
 ## Deviations from the original (please review)
 
-- **Face**: no catalog face is a true rounded, loose 60s/70s (Cooper-like)
-  display face. `AlfaSlabOne` is the closest heavy, soft-cornered choice; the
-  original's letters are rounder and the `l` shorter. Swap in a better face
-  by changing `/Font` in the config.
-- **Colour**: the original is a soft tie-dye cloud; this library's treatment
-  is hard-edged red/green/blue patches with specks. Its supporting words are
-  also multicolour and slightly smaller relative to `Real` than the photo.
+- **Face**: Chewy is a look-alike, not the original font (unidentifiable
+  from the photo); its bracketed serifs are vestigial. Bagel Fat One is
+  heavier and rounder but its counters (the R, the `a`) are tight at print
+  size. Both fronts are exported with identical layout, palette and seed;
+  **Jerome to pick** (the default `art/keepin-it-real/` is Chewy). See
+  `art/keepin-it-real/font-comparison.png`.
+- **Colour**: plasma is smooth and soft like the original but lower in
+  contrast and greener/less red-topped than the photo, which is more
+  tie-dye with grain; the original's red top / blue-green bottom is only
+  loosely echoed. All three runs use the same plasma, so the supporting
+  words are multicolour like the photo.
+- **Layout**: `Keepin' it` is offset a little higher (`/Offset [8 30]`) than
+  the AlfaSlabOne pass because Chewy's taller ascenders collided at the old
+  offset (`headline-runs-collide`).
 - **Back**: matches the photo (Courier Bold, oblique `Phoney`, three centered
   lines, capital P). Line spacing is by eye.
 - Spacing/sizes were judged from two phone photos of a creased shirt.

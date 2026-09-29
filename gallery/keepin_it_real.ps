@@ -1,0 +1,72 @@
+%!PS-Adobe-3.0
+%%Title: Keepin' it Real
+%%BoundingBox: 0 0 720 900
+%%Creator: Muse Code, after a GIMP shirt from ten years ago
+%%EndComments
+
+% Keepin' it Real -- the shirt front (issue #147) set in both groovy faces
+% (#155) side by side, filled with the GIMP-style plasma (#154). Same
+% composition, seed and palette in each: `Real` fills the width, `Keepin'
+% it` tucks against the `ea`, `I'm` sits centered over it. Chewy (top) is
+% the primary pick; Bagel Fat One (bottom) is heavier. The dry punchline of
+% the back is set in plain Courier under them. The print-ready exports are
+% examples/keepin_it_real_shirt*.ps; see docs/keepin_it_real_shirt.md.
+
+(lib/artkit.ps) run
+(lib/lettering.ps) run
+(lib/fillkit.ps) run
+(lib/headline.ps) run
+
+0.96 0.95 0.92 setrgbcolor clippath fill
+
+/lettered { % (text) x y size
+  /ls exch def
+  << /Font lface /Size ls /Align /left /OutlineWidth 0.014
+     /Treatment /plasma /Seed 11 /Fill << /Turbulence 2 /Spread 0.01 >>
+     /Palette [ [ 0.86 0.16 0.14 ] [ 0.10 0.62 0.30 ] [ 0.13 0.32 0.78 ] ]
+  >> psyletter
+} def
+
+/shirtfront { % region face at -> layout
+  /sf2 exch def /sf1 exch def /sf0 exch def
+  sf0 [
+    << /Name /real /Text (Real) /Font sf1 /Draw { lettered }
+       /FitBox [ 620 190 ] /At sf2 >>
+    << /Name /keep /Text (Keepin' it) /Font sf1 /Draw { lettered }
+       /SizeOf [ /real 0.205 ]
+       /At << /To /real /Chars [ 1 3 ] /H 0 /V 1 >>
+       /Anchor [ /left /bottom ] /Offset [ 8 30 ]
+       /Avoid [ [ /real 0 1 ] [ /real 1 3 ] [ /real 3 4 ] ] /Clearance 8 >>
+    << /Name /im /Text (I'm) /Font sf1 /Draw { lettered }
+       /SizeOf [ /keep 0.75 ]
+       /At << /To /keep /H 0.5 /V 1 >>
+       /Anchor [ /center /bottom ] /Offset [ 0 28 ]
+       /Avoid [ /keep [ /real 0 1 ] [ /real 1 3 ] [ /real 3 4 ] ] /Clearance 8 >>
+  ] hllayout
+} def
+
+/label { % (text) x y
+  gsave /Helvetica findfont 11 scalefont setfont 0.45 setgray moveto show grestore
+} def
+
+/faces [ /Chewy-Regular /BagelFatOne-Regular ] def
+/names [ (Chewy - Apache 2.0, primary pick) (Bagel Fat One - OFL, heavier) ] def
+/bottoms [ 580 260 ] def
+0 1 1 {
+  /fi exch def
+  faces fi get /lface exch def
+  bottoms fi get /by exch def
+  [ 40 by 680 by 320 add ] faces fi get [ 110 by 22 add ] shirtfront hldraw
+  names fi get 40 by 4 sub label
+} for
+
+% the back: plain, dry, deliberately unlike the front
+gsave 0 setgray /Courier-Bold findfont 26 scalefont setfont
+  (\(Yeah, real) dup stringwidth pop 360 exch 2 div sub 180 moveto show
+  /Courier-BoldOblique findfont 26 scalefont setfont
+  (Phoney) dup stringwidth pop 360 exch 2 div sub 150 moveto show
+  /Courier-Bold findfont 26 scalefont setfont
+  (that is\)) dup stringwidth pop 360 exch 2 div sub 120 moveto show
+grestore
+(back) 40 100 label
+showpage
