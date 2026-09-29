@@ -19,6 +19,22 @@ counters. Thin dark outline. (Mixed case: `Real`, not `REAL`.)
 | Original shirt (cropped photo) | Finalists: Gorditas, Bagel Fat One, Chewy, Kavoon |
 |---|---|
 | ![shirt front](fonts/reference-front.png) | ![finalists](fonts/groovy-finalists.png) |
+| | ![serif strip](fonts/groovy-serif-strip.png) |
+
+## Serifs and feet
+
+Looking closely at the crop, the original's `I` and `K` carry small soft
+bracketed serifs and the `R`/`l` have flared feet: a Cooper-Black-family
+trait, not a plain rounded sans. `groovy-serif-strip.png` sets Chewy,
+Caprasimo, Gorditas Bold, Kavoon, Bagel Fat One and Chicle at one size.
+Chewy's `I` has slab-like ends and the `R`/`K` legs flare; Kavoon is the
+same idea but more calligraphic. Caprasimo is the most literal Cooper
+clone (true serifs) but is crisp and regular where the shirt is loose and
+hand-cut, and its `l` is upright; Gorditas' serifs are hard slab blocks.
+**Trade-off:** Chewy matches the looseness, flared legs and slanted `l`
+but its serifs are vestigial; if the human reviewer wants a truer
+Cooper feel, Caprasimo is the alternative (not installed; it is OFL and a
+one-line addition).
 
 ## Candidates (20 rendered)
 
@@ -29,10 +45,11 @@ Chewy, Chicle, Coiny, Bowlby One, Fascinate.
 
 `fonts/groovy-finalists.png`: Gorditas Bold, Bagel Fat One, Chewy, Kavoon large.
 
-Rejected: Caprasimo, Bevan, Titan One, Chango and Rammetto One read as
-sturdy sign-painter faces without the loose hand-cut feel; Modak and
+Rejected: Bevan, Titan One, Chango and Rammetto One read as
+sturdy sign-painter faces without the loose hand-cut feel (Caprasimo: see
+above); Modak and
 Mochiy Pop One are too inflated (counters vanish); Shrikhand is
-italic; Gorditas has slab serifs on the `R`; Boogaloo, Galindo, Chicle
+italic; Gorditas has hard slab serifs on the `R`; Boogaloo, Galindo, Chicle
 and Coiny are too condensed or thin.
 
 ## Choice

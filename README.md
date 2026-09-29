@@ -254,7 +254,7 @@ cargo run --release -- --png poster2.png examples/font_library2.ps
 
 ## The font catalog
 
-`fonts/catalog/` — 58 libre outline faces loaded from disk at
+`fonts/catalog/` — 60 libre outline faces loaded from disk at
 `findfont` time (never compiled in; the binary and wasm stay lean).
 With it, **every name in the classic LaserWriter 35 resolves to a
 metric-compatible libre face**: the bundled Liberation faces cover
