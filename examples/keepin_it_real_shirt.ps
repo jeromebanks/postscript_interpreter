@@ -1,0 +1,71 @@
+%!PS-Adobe-3.0
+%%Title: Keepin' It Real — print-ready front and back shirt artwork (issue #147)
+%%EndComments
+
+% The finished recreation of Jerome's original "I'm Keepin' it Real" /
+% "(Yeah, real Phoney that is)" shirt (designed in GIMP, printed by Zazzle
+% over ten years ago), as a configuration of lib/apparel.ps -- see
+% docs/keepin_it_real_shirt.md for the design record.
+%
+%   scripts/apparel_export.sh examples/keepin_it_real_shirt.ps out/keepin-it-real
+%
+% writes the transparent front/back artwork (PNG @300 dpi, SVG, PDF), the
+% proof sheet and manifest.json. examples/keepin_it_real_front_alt.ps is
+% the rejected second front composition, kept for the comparison.
+%
+% Front: composition A -- `Real` fills the width, `Keepin' it` and `I'm`
+% tuck against the lowercase `ea` so the capital R rises up the left, as in
+% the original. Back: the dry punchline in plain typewriter (Courier Bold,
+% `Phoney` in the oblique, as printed), solid black, no outline or wear --
+% deliberately unlike the psychedelic front.
+%
+% Both sides are for LIGHT garments (the original was printed on white):
+% the back is black ink, and the front's worn flecks are cream ink.
+
+(lib/artkit.ps) run
+(lib/headline.ps) run
+(lib/lettering.ps) run
+(lib/apparel.ps) run
+
+<<
+  /Name (keepin-it-real)
+  /DPI 300
+  /Seed 7
+  /Background /transparent
+  /Treatment /mottled
+  /Wear 0.15
+  /OutlineWidth 0.014
+  /Font /AlfaSlabOne
+  /Palette [ [ 0.86 0.16 0.14 ] [ 0.10 0.62 0.30 ] [ 0.13 0.32 0.78 ] ]
+  /Pieces <<
+    /Front << /Size [ 12 14 ] /Margin 0.5
+      /Runs [
+        << /Name /real /Text (Real) /Font /AlfaSlabOne
+           /FitWidth 730 /At [ 66 380 ] >>
+        << /Name /keep /Text (Keepin' it) /Font /AlfaSlabOne
+           /Treatment /patches /OutlineWidth 0.02
+           /SizeOf [ /real 0.205 ]
+           /At << /To /real /Chars [ 1 3 ] /H 0 /V 1 >>
+           /Anchor [ /left /bottom ] /Offset [ 6 14 ]
+           /Avoid [ [ /real 0 1 ] [ /real 1 3 ] [ /real 3 4 ] ] /Clearance 8 >>
+        << /Name /im /Text (I'm) /Font /AlfaSlabOne
+           /Treatment /patches /OutlineWidth 0.02
+           /SizeOf [ /keep 0.75 ]
+           /At << /To /keep /H 0.5 /V 1 >>
+           /Anchor [ /center /bottom ] /Offset [ 0 28 ]
+           /Avoid [ /keep [ /real 0 1 ] [ /real 1 3 ] [ /real 3 4 ] ] /Clearance 8 >>
+      ] >>
+    % Courier advances 0.6 em, so at 64 pt the lines are ~422/230/307 pt
+    % wide; each is centered on the 864 pt piece's midline.
+    /Back << /Size [ 12 5 ] /Margin 0.4
+      /Treatment /solid /Palette [ [ 0 0 0 ] ] /Outline [ 0 0 0 ] /OutlineWidth 0
+      /Runs [
+        << /Name /l1 /Text (\(Yeah, real) /Font /Courier-Bold /Size 64
+           /At [ 432 235 ] /Anchor [ /center /baseline ] >>
+        << /Name /l2 /Text (Phoney) /Font /Courier-BoldOblique /Size 64
+           /At [ 432 155 ] /Anchor [ /center /baseline ] >>
+        << /Name /l3 /Text (that is\)) /Font /Courier-Bold /Size 64
+           /At [ 432 75 ] /Anchor [ /center /baseline ] >>
+      ] >>
+  >>
+>> apmain

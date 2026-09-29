@@ -1,0 +1,42 @@
+%!PS-Adobe-3.0
+%%Title: Keepin' It Real — rejected alternative front composition (issue #147)
+%%EndComments
+
+% Composition B, kept only for the comparison recorded in
+% docs/keepin_it_real_shirt.md: the loose script face (/Pacifico) with the
+% supporting words stacked and centered above `Real`. Rejected: the script
+% loses the big blocky R and its counter, and the original's shape is the
+% tucked composition A in examples/keepin_it_real_shirt.ps.
+%
+%   scripts/apparel_export.sh examples/keepin_it_real_front_alt.ps out/alt
+
+(lib/artkit.ps) run
+(lib/headline.ps) run
+(lib/lettering.ps) run
+(lib/apparel.ps) run
+
+<<
+  /Name (keepin-it-real-alt)
+  /DPI 300
+  /Seed 7
+  /Background /transparent
+  /Treatment /mottled
+  /Wear 0.15
+  /OutlineWidth 0.014
+  /Font /Pacifico
+  /Palette [ [ 0.86 0.16 0.14 ] [ 0.10 0.62 0.30 ] [ 0.13 0.32 0.78 ] ]
+  /Pieces <<
+    /Front << /Size [ 12 14 ] /Margin 0.5
+      /Runs [
+        << /Name /real /Text (Real) /FitWidth 700 /At [ 82 330 ] >>
+        << /Name /keep /Text (Keepin' it) /Treatment /patches /OutlineWidth 0.02
+           /SizeOf [ /real 0.3 ]
+           /At << /To /real /H 0.5 /V 1 >>
+           /Anchor [ /center /bottom ] /Offset [ 0 20 ] /Clearance 8 >>
+        << /Name /im /Text (I'm) /Treatment /patches /OutlineWidth 0.02
+           /SizeOf [ /keep 0.75 ]
+           /At << /To /keep /H 0.5 /V 1 >>
+           /Anchor [ /center /bottom ] /Offset [ 0 18 ] /Clearance 8 >>
+      ] >>
+  >>
+>> apmain

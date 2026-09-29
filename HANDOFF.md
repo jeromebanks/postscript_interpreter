@@ -317,7 +317,7 @@ auto-execution and unguarded-numeric-conversion hazards a caller-
 supplied value could trigger before its type was checked).
 Also done: issue #146, apparel template — `lib/apparel.ps` (`apmain`,
 config dict -> per-piece front/back/optional sleeve artwork), `examples/
-apparel_shirt.ps` + `apparel_second.ps`, `scripts/apparel_export.sh`
+apparel_shirt.ps` + `apparel_second.ps`, `scripts/apparel_export.sh` (finished shirt art, issue #147: `examples/keepin_it_real_shirt.ps`, `art/keepin-it-real/`, `docs/keepin_it_real_shirt.md`)
 (PNG/SVG/PDF + manifest + proof), and the new `--transparent` flag (PNG
 alpha / SVG without backdrop). Details and the observed pre-fix
 transparency behaviour in NOTES.md. Next in this thread: #147 (the actual
