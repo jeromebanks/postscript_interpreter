@@ -315,6 +315,13 @@ uses "scratch" as a term of art for private working state throughout
 every sibling library's own docs, and five review rounds' worth of
 auto-execution and unguarded-numeric-conversion hazards a caller-
 supplied value could trigger before its type was checked).
+Also done: issue #146, apparel template — `lib/apparel.ps` (`apmain`,
+config dict -> per-piece front/back/optional sleeve artwork), `examples/
+apparel_shirt.ps` + `apparel_second.ps`, `scripts/apparel_export.sh`
+(PNG/SVG/PDF + manifest + proof), and the new `--transparent` flag (PNG
+alpha / SVG without backdrop). Details and the observed pre-fix
+transparency behaviour in NOTES.md. Next in this thread: #147 (the actual
+shirt) is now just a config.
 Also done: issue #145, headline composition helpers — `lib/headline.ps`
 (`@requires: (lib/artkit.ps) run`, tag-migrated): `hllayout` places a
 dominant run plus supporting runs by anchors/offsets against measured

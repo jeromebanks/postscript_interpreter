@@ -1,0 +1,434 @@
+%!PS-Adobe-3.0
+%%Title: apparel.ps — two-sided (plus optional sleeve) apparel graphic template
+%%Creator: pscat — issue #146
+%%EndComments
+% @requires: (lib/artkit.ps) run (lib/headline.ps) run (lib/lettering.ps) run
+
+% A small, vendor-neutral template for shirt artwork: one configuration
+% dict describes a front, a back and (optionally) a left and right sleeve
+% graphic; each is rendered as its own artwork file at a physical size
+% and DPI. This library only makes the *images*; choosing a product,
+% ordering, or vendor automation belongs to the consumer, which reads
+% the manifest (`/manifest` below) to check a print service's
+% then-current requirements.
+%
+%   (lib/artkit.ps) run (lib/headline.ps) run (lib/lettering.ps) run
+%   (lib/apparel.ps) run
+%   << /Name (my-shirt) /DPI 300 /Seed 7 /Background /transparent
+%      /Pieces <<
+%        /Front << /Size [ 12 14 ] /Margin 0.4 /Text (Real) /Font /AlfaSlabOne >>
+%        /Back  << /Size [ 12 4 ]  /Margin 0.3 /Text (Keepin' it) >>
+%        /SleeveLeft << /Size [ 3.5 3.5 ] /Text (No.\n1) >>   % optional
+%      >> >> apmain
+%
+% CONFIG (top level; every key but /Pieces is optional)
+%   /Name string          used in output file names and the manifest
+%   /DPI n                export resolution (default 300); the page is
+%                         size-in-inches x 72 points, rendered at n dpi
+%   /Seed n               deterministic texture seed (default 1); each
+%                         piece derives its own from it, so front and back
+%                         differ but a re-run is byte-identical
+%   /Background           /transparent (default): nothing is painted
+%                         behind the art -- export with `--transparent`
+%                         (the script does). Or [r g b]: the page is
+%                         filled with that colour (a proof/mock only; do
+%                         not send it as garment art).
+%   /Pieces dict          /Front /Back /SleeveLeft /SleeveRight; a piece
+%                         that is absent is simply not exported
+%   Style defaults (any piece or run may override): /Font /Treatment
+%   /Palette /Outline /OutlineWidth /Wear /WearColor /Patches -- passed to
+%   lettering.ps's psyletter (default face /PermanentMarker)
+% PIECE
+%   /Size [w h]           physical print area, inches (required)
+%   /Margin n             inches kept clear on every side (default 0.25);
+%                         the lettering contour is kept inside it too
+%   /Text string          the phrase; \n breaks lines. It is fitted to
+%                         the print area (centered) -- this is how a
+%                         second phrase is supplied, no library edits.
+%   /Runs [ ... ]         instead of /Text: headline.ps run dicts
+%                         (see lib/headline.ps) in the piece's own points
+%                         coordinates, laid out in the piece's own region
+%   /Justify              /left /center /right for multi-line /Text
+%
+% MODES (an `ApparelMode` name defined before `apmain` runs; default
+% /proof; `ApparelPiece` names the piece for /draw and /size):
+%   /proof     one page showing every piece at reduced scale with print
+%              area and margin outlined -- the whole config at a glance
+%   /draw      one piece at full size, page = print area
+%   /size      prints "wpt hpt wpx hpx transparent|color" for a piece
+%   /list      prints the configured piece names, one per line
+%   /manifest  prints a JSON description of every piece
+%
+% Lettering contour: headline.ps cannot see psyletter's outline stroke,
+% so every piece's layout region is inset by the stroke's half-width
+% (found by laying out, measuring the fitted size, insetting, and
+% repeating -- the size only ever shrinks, so it converges), plus a
+% little slack. That keeps the *stroke*, not just the ink, inside the
+% margin and off the print-area edge. headline.ps raises
+% headline-run-outside-region rather than clip.
+%
+% Scratch prefix: ap- (a fresh dict per call holds every working name).
+
+% --- helpers -----------------------------------------------------------
+
+% v apisnum -> bool
+% @internal
+/apisnum { type dup /integertype eq exch /realtype eq or } def
+
+% @internal
+/apstylekeys [ /Font /Treatment /Palette /Outline /OutlineWidth /Wear /WearColor /Patches ] def
+
+% @internal
+/appieceorder [ /Front /Back /SleeveLeft /SleeveRight ] def
+
+% cfg piece -> (uses the caller's apcfg/appiece) key default apget -> value
+% Looks in the piece, then the config, else the default.
+% @internal
+/apget {
+  exch dup appiece exch known
+  { appiece exch get exch pop }
+  { dup apcfg exch known { apcfg exch get exch pop } { pop } ifelse }
+  ifelse
+} def
+
+% cfg apdpi -> n
+% @internal
+/apdpi { dup /DPI known { /DPI get } { pop 300 } ifelse } def
+
+% cfg /Piece appiecedict -> dict   (errors clearly if it is not configured)
+% @internal
+/appiecedict {
+  exch /Pieces get exch
+  2 copy known { get } { pop pop apparel-piece-not-configured } ifelse
+} def
+
+% piece apsizepts -> wpt hpt    (inches x 72, rounded: --page takes integers)
+% @internal
+/apsizepts {
+  /Size get dup type /arraytype ne { apparel-size-must-be-w-h-inches } if
+  dup length 2 ne { apparel-size-must-be-w-h-inches } if
+  dup 0 get apisnum not { apparel-size-must-be-w-h-inches } if
+  dup 1 get apisnum not { apparel-size-must-be-w-h-inches } if
+  dup 0 get 72 mul round cvi exch 1 get 72 mul round cvi
+} def
+
+% Copy of a dict (a run dict) so the caller's config is never mutated.
+% dict apcopydict -> dict
+% @internal
+/apcopydict {
+  dup length 8 add dict exch { 3 copy put pop pop } forall
+} def
+
+% The default run for /Text: one fitted, centered run filling the region.
+% region apdefaultrun -> run
+% @internal
+/apdefaultrun {
+  aload pop /apy1 exch def /apx1 exch def /apy0 exch def /apx0 exch def
+  <<
+    /Name /main
+    /Text appiece /Text get
+    /FitBox [ apx1 apx0 sub apy1 apy0 sub ]
+    /At [ apx0 apx1 add 2 div apy0 apy1 add 2 div ]
+    /Anchor [ /center /middle ]
+    /Justify /Justify /center apget
+  >>
+} def
+
+% Runs for one layout pass, each stamped with the resolved style, a seed
+% and a contour-aware clearance.  region apbuildruns -> runs-array
+% Needs apcfg appiece apnum apinset in scope.
+% @internal
+/apbuildruns {
+  appiece /Runs known {
+    /aprs appiece /Runs get length array def
+    0 1 aprs length 1 sub {
+      dup appiece /Runs get exch get apcopydict aprs 3 1 roll put
+    } for
+    pop
+  } {
+    appiece /Text known not { apparel-piece-needs-text-or-runs } if
+    /aprs [ 3 -1 roll apdefaultrun ] def
+  } ifelse
+  aprs {
+    /aprun exch def
+    apstylekeys {
+      dup aprun exch known not {
+        dup null apget dup null eq { pop pop } { aprun 3 1 roll put } ifelse
+      } { pop } ifelse
+    } forall
+    aprun /Font known not { aprun /Font /PermanentMarker put } if
+    aprun /Seed apcfg /Seed known { apcfg /Seed get } { 1 } ifelse apnum 100 mul add put
+    aprun /Clearance
+      aprun /Clearance known { aprun /Clearance get } { 0 } ifelse
+      apinset 2 mul add put
+    aprun /Draw [ aprun /apdrawline cvx ] cvx put
+  } forall
+  aprs
+} def
+
+% (text) x y size run apdrawline -    a run's /Draw proc: hand the line to
+% psyletter with the run's own face/size, left-aligned at the pen origin so
+% headline.ps's measured box and the drawn glyphs agree.
+% @internal
+/apdrawline {
+  12 dict begin
+  /adr exch def /ads exch def /ady exch def /adx exch def /adt exch def
+  /ado 14 dict def
+  apstylekeys {
+    dup adr exch known { dup adr exch get ado 3 1 roll put } { pop } ifelse
+  } forall
+  ado /Size ads put
+  ado /Align /left put
+  ado /Seed adr /Seed get put
+  adt adx ady ado psyletter
+  end
+} def
+
+% piece name -> its index in appieceorder (seed offset, stable per piece)
+% @internal
+/apnumof {
+  /apnq exch def /apnr 0 def
+  0 1 appieceorder length 1 sub {
+    dup appieceorder exch get apnq eq { /apnr exch def } { pop } ifelse
+  } for
+  apnr
+} def
+
+% piece-name -> file-name stem
+% @internal
+/apstem {
+  dup /Front eq { pop (front) } {
+  dup /Back eq { pop (back) } {
+  dup /SleeveLeft eq { pop (sleeve-left) } {
+  dup /SleeveRight eq { pop (sleeve-right) } { apparel-unknown-piece } ifelse } ifelse } ifelse } ifelse
+} def
+
+% cfg name apsetup -    defines apcfg appiece appname apnum in the current dict
+% @internal
+/apsetup {
+  /appname exch def /apcfg exch def
+  apcfg /Pieces known not { apparel-config-needs-pieces } if
+  /appiece apcfg appname appiecedict def
+  /apnum appname apnumof def
+} def
+
+% Lay out the piece, insetting the region by the contour's half-width.
+% apsetup must have run. -> layout
+% @internal
+/aplayout {
+  /apm appiece /Margin known { appiece /Margin get } { 0.25 } ifelse 72 mul def
+  appiece apsizepts /aph exch def /apw exch def
+  /apinset 0 def /apdone false def /aplay null def
+  6 {
+    apdone not {
+      [ apm apinset add dup apw apm sub apinset sub aph apm sub apinset sub ]
+      dup apbuildruns hllayout /aplay exch def
+      % largest fitted size and thickest contour among this pass's runs
+      /apmax 0 def /apfrac 0 def
+      aplay /Runs get { /Size get dup apmax gt { /apmax exch def } { pop } ifelse } forall
+      aprs {
+        dup /OutlineWidth known { /OutlineWidth get } { pop 0.03 } ifelse
+        2 div dup apfrac gt { /apfrac exch def } { pop } ifelse
+      } forall
+      apmax apfrac 0.005 add mul dup apinset 0.01 add le
+      { pop /apdone true def } { /apinset exch def } ifelse
+    } if
+  } repeat
+  apdone not { apparel-inset-did-not-converge } if
+  aplay
+} def
+
+% cfg name apdrawpiece -    draws one piece at full size (page origin =
+% the print area's bottom-left)
+% @internal
+/apdrawpiece {
+  40 dict begin
+  apsetup
+  apcfg /Background known { apcfg /Background get type /arraytype eq } { false } ifelse
+  { gsave apcfg /Background get aload pop setrgbcolor
+    0 0 appiece apsizepts rectfill grestore } if
+  aplayout hldraw
+  end
+} def
+
+% cfg apbgmode -> (transparent) | (color)
+% @internal
+/apbgmode {
+  dup /Background known
+  { /Background get type /arraytype eq { (color) } { (transparent) } ifelse }
+  { pop (transparent) } ifelse
+} def
+
+% --- public: sizes, list, manifest ------------------------------------
+
+% cfg /Piece appiecesize -> wpt hpt wpx hpx
+% @internal
+/appiecesize {
+  20 dict begin
+  exch /apcfg exch def /appiece apcfg 3 -1 roll appiecedict def
+  appiece apsizepts /aph exch def /apw exch def
+  apcfg apdpi /apd exch def
+  apw aph
+  apw apd 72 div mul round cvi
+  aph apd 72 div mul round cvi
+  2 copy 8000 gt exch 8000 gt or { apparel-pixels-exceed-8000 } if
+  end
+} def
+
+% Piece names configured, in export order.
+% cfg apconfigured -> array of names
+% @internal
+/apconfigured {
+  /Pieces get /apcp exch def
+  [ appieceorder { dup apcp exch known { } { pop } ifelse } forall ]
+} def
+
+% string apjs -     print as a JSON string
+% @internal
+/apjs {
+  (") print
+  { dup 34 eq { pop (\\") print } {
+    dup 92 eq { pop (\\\\) print } {
+    dup 10 eq { pop (\\n) print } {
+      1 string dup 0 4 -1 roll put print } ifelse } ifelse } ifelse
+  } forall
+  (") print
+} def
+
+% n apjn -    print a number
+% @internal
+/apjn { 24 string cvs print } def
+
+% [a b] apja2 -    print a 2-number array
+% @internal
+/apja2 { ([) print dup 0 get apjn (,) print 1 get apjn (]) print } def
+
+% One piece's manifest object. cfg name apjpiece -
+% @internal
+/apjpiece {
+  40 dict begin
+  apsetup
+  aplayout pop
+  appiece apsizepts /aph exch def /apw exch def
+  ({"piece":) print appname 40 string cvs apjs
+  (,"file_stem":) print appname apstem apjs
+  (,"inches":) print appiece /Size get apja2
+  (,"margin_in":) print appiece /Margin known { appiece /Margin get } { 0.25 } ifelse apjn
+  (,"points":) print [ apw aph ] apja2
+  apcfg appname appiecesize /apph exch def /appw exch def pop pop
+  (,"dpi":) print apcfg apdpi apjn
+  (,"pixels":) print [ appw apph ] apja2
+  (,"background":) print apcfg apbgmode apjs
+  (,"seed":) print aprs 0 get /Seed get apjn
+  (,"runs":[) print
+  aprs { /apjr exch def
+    apjr aprs 0 get ne { (,) print } if
+    ({"text":) print apjr /Text get apjs
+    (,"face":) print apjr /Font get 40 string cvs apjs
+    (,"treatment":) print apjr /Treatment known { apjr /Treatment get 40 string cvs } { (mottled) } ifelse apjs
+    (}) print
+  } forall
+  (]}) print
+  end
+} def
+
+% cfg apmanifest -    print the JSON description of every configured piece
+% @internal
+/apmanifest {
+  /apmcfg exch def
+  ({"tool":"pscat lib/apparel.ps","vendor_neutral":true,"name":) print
+  apmcfg /Name known { apmcfg /Name get } { (apparel) } ifelse apjs
+  (,"dpi":) print apmcfg apdpi apjn
+  (,"background":) print apmcfg apbgmode apjs
+  (,"pieces":[) print
+  apmcfg apconfigured /apml exch def
+  apml length 0 gt { apml 0 get } { null } ifelse /apmfirst exch def
+  apml { dup apmfirst ne { (,) print } if apmcfg exch apjpiece } forall
+  (]}\n) print
+} def
+
+% --- public: proof sheet ------------------------------------------------
+
+% w h apchecker -     light checkerboard over [0 w]x[0 h] (transparency cue)
+% @internal
+/apchecker {
+  /apch exch def /apcw exch def
+  gsave 0 0 apcw apch rectclip
+  0.93 setgray 0 0 apcw apch rectfill
+  0.83 setgray
+  0 12 apch { /apcy exch def
+    0 12 apcw { /apcx exch def
+      apcx 12 div cvi apcy 12 div cvi add 2 mod 0 eq { apcx apcy 12 12 rectfill } if
+    } for
+  } for
+  grestore
+} def
+
+% cfg approof -    one page: every configured piece at reduced scale on a
+% checkerboard (transparent areas show), the print area outlined in red and
+% the margin in blue.
+% @internal
+/approof {
+  /apfcfg exch def
+  clippath pathbbox /apPH exch def /apPW exch def pop pop
+  0.98 setgray 0 0 apPW apPH rectfill
+  apfcfg apconfigured /apfl exch def
+  /apsum 0 def /apmaxh 0 def
+  apfl { apfcfg exch appiecesize pop pop /apsh exch def /apsw exch def
+    apsh apmaxh gt { /apmaxh apsh def } if
+    /apsum apsum apsw add def } forall
+  /apgap 24 def /appad 30 def /aplab 30 def
+  /apsc
+    apPW appad 2 mul sub apfl length 1 sub apgap mul sub apsum div
+    apPH appad 2 mul sub aplab sub apmaxh div
+    2 copy gt { exch } if pop
+  def
+  /apx appad def
+  apfl { /apfn exch def
+    apfcfg apfn appiecesize pop pop /aph2 exch def /apw2 exch def
+    apfcfg /Pieces get apfn get /appiece2 exch def
+    /apy appad aplab add apPH appad 2 mul sub aplab sub apmaxh apsc mul sub 2 div add def
+    gsave apx apy translate apsc dup scale
+      apw2 aph2 apchecker
+      apfcfg apfn apdrawpiece
+      1 apsc div setlinewidth 0.85 0.15 0.15 setrgbcolor 0 0 apw2 aph2 rectstroke
+      appiece2 /Margin known { appiece2 /Margin get } { 0.25 } ifelse 72 mul /apmg exch def
+      0.15 0.25 0.85 setrgbcolor [ 6 apsc div 4 apsc div ] 0 setdash
+      apmg apmg apw2 apmg 2 mul sub aph2 apmg 2 mul sub rectstroke
+    grestore
+    gsave 0.15 setgray /Helvetica findfont 11 scalefont setfont
+      apx apy 14 sub moveto
+      apfn 40 string cvs show
+      (  ) show appiece2 /Size get 0 get apjn2 show ( x ) show
+      appiece2 /Size get 1 get apjn2 show ( in) show
+    grestore
+    /apx apx apw2 apsc mul add apgap add def
+  } forall
+} def
+
+% n apjn2 -> string
+% @internal
+/apjn2 { 24 string cvs } def
+
+% --- public entry point -----------------------------------------------------
+
+% cfg apmain -    dispatch on ApparelMode (default /proof); see the header
+% @kind: Procedure
+% @summary: Take a configuration dict for a two-sided (plus optional sleeve) apparel graphic and, per the ApparelMode name (default /proof), draw a reduced proof sheet of every piece, draw one piece at full size, or print a piece's size, the piece list, or a JSON manifest. Front, back and sleeves are independent print areas; absent pieces are skipped. Pair with scripts/apparel_export.sh for per-piece PNG/SVG/PDF files.
+% @example: << /Name (demo) /Pieces << /Front << /Size [ 6 6 ] /Text (Real) /Font /AlfaSlabOne >> >> >> apmain
+% @param: /Pieces dict of /Front /Back /SleeveLeft /SleeveRight piece dicts, each with /Size [w h] inches and /Text (or /Runs); absent pieces are not exported
+% @param: /DPI num export resolution (default 300)
+% @param: /Seed num integer texture seed (default 1); each piece derives its own
+% @param: /Background /transparent|[r g b] nothing behind the art (default), or a fill colour for mock-ups
+/apmain {
+  /apmcf exch def
+  /ApparelMode where { pop ApparelMode } { /proof } ifelse
+  dup /proof eq { pop apmcf approof } {
+  dup /manifest eq { pop apmcf apmanifest } {
+  dup /list eq { pop apmcf apconfigured { dup 40 string cvs print ( ) print apstem print (\n) print } forall } {
+  dup /size eq { pop apmcf ApparelPiece appiecesize
+    4 array astore { apjn ( ) print } forall
+    apmcf apbgmode print (\n) print } {
+  dup /draw eq { pop apmcf ApparelPiece apdrawpiece } {
+    pop apparel-unknown-mode } ifelse } ifelse } ifelse } ifelse } ifelse
+} def

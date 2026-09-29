@@ -1,0 +1,31 @@
+%!PS-Adobe-3.0
+%%Title: Two-sided apparel graphic — a second design on the same template
+%%EndComments
+
+% Proves lib/apparel.ps is a template, not a one-shirt script (issue
+% #146): a different phrase, faces, sizes and DPI, supplied purely through
+% the configuration dict. There are no /SleeveLeft or /SleeveRight
+% entries, so only the front and back are exported.
+%
+%   pscat --page 1000x700 examples/apparel_second.ps      proof sheet
+%   scripts/apparel_export.sh examples/apparel_second.ps out/second
+
+(lib/artkit.ps) run
+(lib/headline.ps) run
+(lib/lettering.ps) run
+(lib/apparel.ps) run
+
+<<
+  /Name (tuesday)
+  /DPI 200
+  /Seed 21
+  /Background /transparent
+  /Palette [ [ 0.95 0.55 0.10 ] [ 0.55 0.16 0.62 ] ]
+  /Pieces <<
+    /Front << /Size [ 10 10 ] /Margin 0.6 /Treatment /transition
+              /Text (Tuesday) /Font /Bangers >>
+    /Back  << /Size [ 10 4 ] /Margin 0.4 /Treatment /solid
+              /Text (at the usual\nplace, again) /Font /PermanentMarker
+              /Palette [ [ 0.55 0.16 0.62 ] ] >>
+  >>
+>> apmain
