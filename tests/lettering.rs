@@ -281,7 +281,7 @@ fn bad_options_raise_self_documenting_errors() {
     for (src, want) in [
         (
             "(Real) 1 1 << /Treatment /plaid >> psyletter",
-            "lettering-treatment-must-be-solid-transition-patches-or-mottled",
+            "lettering-treatment-must-be-solid-transition-patches-mottled-plasma-clouds-diffclouds-or-conical",
         ),
         (
             "(Real) 1 1 << /Size (big) >> psyletter",

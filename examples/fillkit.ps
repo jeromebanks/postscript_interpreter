@@ -1,0 +1,79 @@
+%!PS-Adobe-3.0
+%%Title: GIMP-style fills — a specimen sheet for fillkit.ps
+%%BoundingBox: 0 0 900 900
+%%EndComments
+
+% Specimen for lib/fillkit.ps (issue #154): the GIMP fill/render
+% algorithms as seeded, clip-friendly fills.
+%
+%   row 1  Plasma: random RGB (GIMP's default), /Turbulence low and
+%          high, and a palette blended through the plasma
+%   row 2  Solid Noise plain and /Turbulent, Difference Clouds, and
+%          the same clouds through a second palette
+%   row 3  Gradient shapes: conical, symmetric conical, spiral, square
+%   row 4  Grain on top of a fill: RGB noise, HSV noise, Spread, and
+%          all three together
+%   bottom  the same fills as psyletter treatments (lib/lettering.ps)
+%
+% Run from the repo root:
+%
+%   pscat --page 900x900 examples/fillkit.ps
+%
+% Each fill is one small image under the caller's clip (see the
+% fillkit.ps header for how that survives SVG and PDF).
+
+(lib/artkit.ps) run
+(lib/fillkit.ps) run
+(lib/lettering.ps) run
+
+0.97 0.95 0.9 setrgbcolor clippath fill
+0.1 setgray /Helvetica-Bold findfont 26 scalefont setfont
+40 862 moveto (GIMP-style fills) show
+/Helvetica findfont 12 scalefont setfont 0.35 setgray
+40 842 moveto (lib/fillkit.ps: plasma, solid noise, difference clouds, gradient shapes, grain) show
+
+/label { gsave /Helvetica findfont 10 scalefont setfont 0.3 setgray moveto show grestore } def
+
+% (label) col row opts /fillproc panel -
+/panel {
+  /pfill exch cvx def /popts exch def /prow exch def /pcol exch def /plab exch def
+  /px 40 pcol 205 mul add def
+  /py 690 prow 155 mul sub def
+  gsave
+    newpath px py moveto 190 0 rlineto 0 130 rlineto -190 0 rlineto closepath clip
+    px py px 190 add py 130 add popts pfill
+  grestore
+  0.1 setgray 0.6 setlinewidth px py 190 130 rectstroke
+  plab px py 12 sub label
+} def
+
+
+% row 1: plasma
+(plasma, random RGB) 0 0 << /Seed 7 /Resolution 160 >> /plasmafill panel
+(low turbulence 0.4) 1 0 << /Seed 7 /Turbulence 0.4 /Resolution 160 >> /plasmafill panel
+(high turbulence 2.5) 2 0 << /Seed 7 /Turbulence 2.5 /Resolution 160 >> /plasmafill panel
+(plasma through /dusk) 3 0 << /Seed 7 /Palette /dusk /Resolution 160 >> /plasmafill panel
+
+% row 2: solid noise and difference clouds
+(solid noise, /tide) 0 1 << /Seed 3 /Palette /tide /Resolution 160 >> /solidnoisefill panel
+(turbulent solid noise) 1 1 << /Seed 3 /Palette /tide /Turbulent true /Scale 3 /Resolution 160 >> /solidnoisefill panel
+(difference clouds, /nocturne) 2 1 << /Seed 5 /Palette /nocturne /Resolution 160 >> /diffcloudsfill panel
+(difference clouds, /ember) 3 1 << /Seed 9 /Palette /ember /Resolution 160 >> /diffcloudsfill panel
+
+% row 3: gradient shapes
+(conical) 0 2 << /Shape /conical /Palette /carnival /Resolution 160 >> /gradshapefill panel
+(conical, symmetric) 1 2 << /Shape /conical /Symmetric true /Palette /dusk /Resolution 160 >> /gradshapefill panel
+(spiral) 2 2 << /Shape /spiral /Palette /ember /Turns 4 /Resolution 160 >> /gradshapefill panel
+(square + bilinear angle) 3 2 << /Shape /square /Palette /meadow /Angle 20 /Resolution 160 >> /gradshapefill panel
+
+% row 4: grain modifiers over one plasma
+(RGB noise 0.12) 0 3 << /Seed 2 /Palette /tide /RGBNoise 0.12 /Resolution 160 >> /plasmafill panel
+(HSV noise) 1 3 << /Seed 2 /Palette /tide /HSVNoise [0.06 0.15 0.15] /Resolution 160 >> /plasmafill panel
+(Spread 0.04) 2 3 << /Seed 2 /Palette /tide /Spread 0.04 /Resolution 160 >> /plasmafill panel
+(all three) 3 3 << /Seed 2 /Palette /tide /RGBNoise 0.06 /HSVNoise [0.03 0.1 0.1] /Spread 0.02 /Resolution 160 >> /plasmafill panel
+
+% bottom: as psyletter treatments
+(Real) 130 40 << /Width 170 /Treatment /plasma /Seed 7 /Fill << /Resolution 200 >> >> psyletter
+(Real) 330 40 << /Width 170 /Treatment /clouds /Seed 3 /Palette /tide /Fill << /Resolution 200 >> >> psyletter
+(Real) 530 40 << /Width 170 /Treatment /diffclouds /Seed 5 /Palette /nocturne /Fill << /Resolution 200 >> >> psyletter
+(Real) 730 40 << /Width 170 /Treatment /conical /Palette /carnival /Fill << /Resolution 200 >> >> psyletter

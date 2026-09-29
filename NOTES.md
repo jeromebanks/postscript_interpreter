@@ -6218,6 +6218,56 @@ clean. `tests/site.rs` (which runs the full `scripts/build_site.sh`,
 wasm build included) passed, confirming the gallery/site changes
 integrate end to end, not just render standalone.
 
+## Issue #154 — GIMP-style fills (`lib/fillkit.ps`)
+
+Shipped a sibling library reproducing GIMP fill/render algorithms, and four
+new `psyletter` treatments built on it. Motivated by the shirt remake
+(#147): the original's red/green/blue tie-dye interior is a plasma fill.
+
+**Implemented** (each `x0 y0 x1 y1 opts NAMEfill`, seeded, deterministic):
+- **Plasma** (`plasmafill`): diamond-square midpoint displacement on a
+  (2^n+1) grid, bilinearly sampled. No `/Palette` gives GIMP's look —
+  three independent channel fields, random RGB; with `/Palette` one field
+  goes through the ramp. `/Turbulence` scales the displacement
+  (amplitude ~ turbulence * (step/size)^0.7); each field is stretched to
+  its full 0..1 range so a palette is fully used.
+- **Solid Noise** (`solidnoisefill`) = Perlin noise: GIMP's "Solid Noise"
+  *is* Perlin-style gradient noise, so the "Perlin-style noise" item is the
+  same implementation (artkit's `noise2`, fBm, `/Turbulent` sums |n|).
+- **Difference Clouds** (`diffcloudsfill`): |fieldA - fieldB|. GIMP
+  differences new clouds against the existing image; PostScript has no
+  pixel readback, so both fields are generated here.
+- **Gradient shapes** (`gradshapefill`): bilinear, square, conical
+  (optionally symmetric), spiral. Linear/radial already exist in artkit
+  (`axialsh`/`radialsh`) and are not duplicated.
+- **Grain**: `/RGBNoise`, `/HSVNoise`, `/Spread` on any fill.
+  Spread is coordinate jitter, since there is nothing to shuffle.
+
+**Skipped, deliberately:** tileable/periodic solid noise (`noise2`'s
+table is not periodic over the box); shapeburst/dimpled/"shaped" gradient
+shapes (need a distance transform); Difference Clouds *over existing
+pixels* and Spread *of existing pixels* (no readback); RGB noise's
+"correlated" switch (independent per-channel only).
+
+**Design decisions.** (1) *Raster vs vector:* a field is smooth, so cell
+rectangles would mean ~10^4 paths per fill and hairline AA seams; each fill
+is instead one `colorimage` under the caller's clip. Verified: PNG resamples
+it, SVG gets one base64 `<image>` inside the `<clipPath>`, PDF one Flate RGB
+XObject under `W n` — the glyph shape itself stays vector. pscat's image
+blit is nearest-neighbour, so `/Resolution /device` (one sample per device
+pixel) is what `psyletter` uses for smooth PNGs. (2) *Global state:*
+`noiseinit` writes the global `Perm`; the fill runs it inside its own scratch
+dict, so the `def` shadows and the caller's table is untouched (tested), and
+`rrand` is saved/restored around the reseed. (3) *Lettering dependency:*
+`psyletter` looks the fill procs up with `where` and raises
+`lettering-treatment-needs-fillkit` instead of auto-loading, so existing
+callers and `@requires` lines are unchanged. The treatment-name error was
+renamed (`...-plasma-clouds-diffclouds-or-conical`).
+
+**Found while building:** stack-index arithmetic in argument checks (an
+`index` after a push is off by one); `mod` is integer-only (use `atan`'s
+0..360 directly); an executable name stored via `def` needs `cvx exec`.
+
 ## Stage 22 — Korean, Japanese, Thai fonts (2026-07-24)
 
 Not on the original roadmap; came from a direct ask ("can we print out
