@@ -642,4 +642,6 @@ fn transparent_works_with_a_contact_sheet_only_sweep() {
         "untouched cell pixels stay transparent"
     );
     assert!(alphas.contains(&255), "ink is opaque");
+    // the 4px gutter between the two 20px cells stays clear, not white
+    assert_eq!(pm.pixel(21, 2).unwrap().alpha(), 0, "gutter is transparent");
 }

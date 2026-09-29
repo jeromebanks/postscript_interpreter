@@ -548,7 +548,14 @@ fn run_sweep(options: &Options, source: &[u8]) -> ExitCode {
                 cell_h,
                 pscat::contact_sheet::GAP,
             ) {
-                Ok(s) => Some((s, cols)),
+                Ok(mut s) => {
+                    // Gaps and unused cells stay transparent too, matching
+                    // the transparent frames blitted into them.
+                    if options.transparent {
+                        s.fill(tiny_skia::Color::TRANSPARENT);
+                    }
+                    Some((s, cols))
+                }
                 Err(msg) => {
                     eprintln!("pscat: {msg}");
                     return ExitCode::FAILURE;
