@@ -695,8 +695,38 @@ merge/no-merge gate.
 
 ```sh
 gh pr comment <PR#> --body "$(jq -r '"## Codex review\n\n" + .codex.stdout' /tmp/codex-review-<N>.json)"
-gh issue comment <N> --body "Codex review posted on <PR URL> — <one-line: clean, or what's being fixed/dispositioned>."
 ```
+
+**The issue gets the findings themselves, not a one-line pointer.**
+The PR comment above is verbatim; the ticket must also carry every
+finding and what was done about it, because the issue is where a human
+reads the history and `/tmp/codex-review-<N>.json` is overwritten by the
+next round (#160 — on #147 only the PR held the verbatim text). Once
+you have read the review and decided what to do about each finding,
+post one comment per review round on the **issue** (a fresh comment
+each round; never edit or replace an earlier round's):
+
+```sh
+gh issue comment <N> --body-file - <<'EOF'
+## Codex review, round <R> (PR <PR URL>)
+
+<details><summary>Codex output, verbatim</summary>
+
+<paste .codex.stdout exactly as returned>
+
+</details>
+
+| # | Finding (Codex's words, with its [P#] tag) | Real defect? | Our response |
+|---|---|---|---|
+| 1 | ... | yes / no / partly | Fixed in <short sha>: <what changed> — or — Not fixing: <explicit reason> |
+EOF
+```
+
+Every finding gets a row, including ones judged not real (say why) and
+including a clean pass ("no findings", one row or a sentence). "Our
+response" is written after the fix is committed, so it can cite the
+commit. If a round produced fixes, the next round's comment records the
+re-review result the same way.
 
 If anything needs fixing: fix it, **commit and `git push` the fix**,
 then re-run the quality gate and re-run the Codex review on the
@@ -722,9 +752,12 @@ policy as above — unconditionally, including a clean result — but
 via `gh pr comment`/`gh issue comment` with the agent's own report
 text directly as the body; there's no `/tmp/codex-review-<N>.json` in
 this path, so the `jq` mechanics above don't apply. Note in both
-comments that this was a same-family fallback. Same rule as above: fix
-or explicitly disposition everything it raises, commit and push before
-any re-review, before continuing.
+comments that this was a same-family fallback *and why* (the actual
+error text and what you tried; see the stale-Codex-broker Pitfall
+before concluding Codex is really unavailable). The issue comment uses
+the same per-finding format as above (verbatim report + disposition
+table). Same rule as above: fix or explicitly disposition everything it
+raises, commit and push before any re-review, before continuing.
 
 With the review clean (nothing left unfixed without a stated reason,
 via whichever path ran), decide merge eligibility from the policy:
@@ -741,6 +774,31 @@ via whichever path ran), decide merge eligibility from the policy:
   files) is under `max_changed_lines` and touches none of
   `sensitive_paths`; otherwise stop here (same lock release as the
   `human-only` case above) and say which condition it missed.
+
+**Before merging, post the summary on the issue** (#160). The PR's
+`Closes #<N>` closes the issue the instant it merges, so the
+wrap-up has to already be there — a comment added afterwards lands on a
+closed ticket nobody is watching. Write it from what actually happened,
+not from the plan. It has these parts:
+
+- **Delivered** — files/artifacts and the exact render/run commands.
+- **Decisions** — each judgement call and why (including any the user
+  made in conversation, and any second opinions asked for and what they
+  said, even when they disagreed with the outcome).
+- **Review record** — every round, which reviewer (Codex, or the
+  same-family fallback and why), and a pointer to the per-round
+  finding/response comments above; list defects found and how each was
+  fixed.
+- **Known deviations / open points** — what still differs from the spec
+  or the original, and any follow-up worth filing.
+
+```sh
+gh issue comment <N> --body-file /tmp/issue-<N>-summary.md
+```
+
+Skip this only when the merge policy stops before merging
+(`human-only` / over the bar); then post it when the human merges, or
+say in the step-9 report that it is still owed.
 
 If eligible, merge:
 
@@ -773,6 +831,7 @@ merging anyway.
 
 ```sh
 gh issue view <N> --json state   # confirm Closes #<N> auto-closed it
+gh issue view <N> --json comments --jq '.comments[].body' | grep -c "^## Summary\|Codex review, round"   # the review trail + summary from step 8 are on the ticket
 git worktree remove "$WORKTREE_DIR" 2>&1 || true
 git -C "$(git rev-parse --show-toplevel)" branch -d "$BRANCH" 2>&1 || true
 git -C "$(git rev-parse --show-toplevel)" fetch origin --prune
@@ -934,3 +993,28 @@ there may be follow-up commits before a human merges it.
   means `git worktree remove` at step 9 no longer cleans it up as a
   side effect the way the old worktree-gitdir heartbeat file did.
   Step 9's explicit `rm -rf` is load-bearing, not decorative.
+- **A Codex failure is not automatically "Codex unavailable" — check for
+  a stale shared broker first** (#160, seen on #147). Round 1 of a review
+  worked; minutes later `review` and `task` both failed instantly with
+  `failed to load configuration: No such file or directory (os error 2)`
+  and `node "$CODEX_SCRIPT" setup --json` reported `ready: false`,
+  `auth.detail: "failed to load workspace requirements"` with
+  `sessionRuntime.mode: "shared"` pointing at one `cxc-*/broker.sock`.
+  The `codex login` was fine and `codex --version` worked; the failing
+  runs were launched from a linked worktree. From the main checkout the
+  same `setup --json` said `ready: true` and a `task "reply pong"`
+  succeeded on a *new* broker. Observed cause: the session's broker
+  process (pid in its `broker.pid`) was still alive but had no
+  `codex app-server` child; the exact trigger is unproven. Before
+  falling back to the same-family `Agent` review: (1) run `setup --json`
+  and read `auth.detail` / `sessionRuntime.endpoint`; (2) smoke-test
+  with `node "$CODEX_SCRIPT" task --fresh "Reply with exactly: pong. Make no edits."`
+  from the main checkout (`git rev-parse --show-toplevel` of the main
+  worktree, not the issue worktree) — if that works, run the real review
+  from there against the worktree's branch, or kill only *this session's*
+  stale broker (`ps -p "$(cat <endpoint dir>/broker.pid)"`; other
+  issues' brokers belong to other sessions) and retry; (3) only if it
+  still fails, fall back and put the error text in the review comment.
+  Also note `task` is where an *opinion* question ("which of these two
+  designs reads better?") goes — it works as well as `review` once the
+  runtime is healthy.
