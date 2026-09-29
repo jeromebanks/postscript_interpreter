@@ -217,3 +217,54 @@ fn reported_pixel_size_matches_the_render_and_manifest_escapes_controls() {
     );
     assert!(manifest.contains(r"a\u0009b\u000d"), "{manifest}");
 }
+
+/// Codex review of PR #152, round 2: manifest strings are always valid
+/// JSON text -- well-formed UTF-8 passes through, anything else (a
+/// single-byte PostScript string) becomes Latin-1 \u00XX escapes.
+#[test]
+fn manifest_names_are_valid_utf8_or_escaped() {
+    let manifest_for = |name: &str| -> Vec<u8> {
+        let cfg = format!(
+            "(lib/artkit.ps) run (lib/headline.ps) run (lib/lettering.ps) run \
+             (lib/apparel.ps) run << /Name ({name}) /Pieces << \
+             /Front << /Size [ 3 3 ] /Text (Hi) >> >> >> apmain"
+        );
+        let mut child = Command::new(BIN)
+            .current_dir(ROOT)
+            .arg("--headless")
+            .arg("-")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(format!("/ApparelMode /manifest def {cfg}").as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out.stdout
+    };
+    let cases: [(&str, &str); 5] = [
+        (r"caf\303\251", "caf\u{e9}"),            // valid 2-byte UTF-8, raw
+        (r"\360\237\230\200", "\u{1F600}"),       // valid 4-byte UTF-8, raw
+        (r"caf\351", r"caf\u00e9"),               // lone Latin-1 byte, escaped
+        (r"\355\240\200", r"\u00ed\u00a0\u0080"), // UTF-8-encoded surrogate: invalid
+        (r"\300\200", r"\u00c0\u0080"),           // overlong NUL: invalid
+    ];
+    for (source, expected) in cases {
+        let out = manifest_for(source);
+        let text = String::from_utf8(out).expect("manifest must be valid UTF-8");
+        assert!(
+            text.contains(&format!("\"name\":\"{expected}\"")),
+            "{source}: {text}"
+        );
+    }
+}

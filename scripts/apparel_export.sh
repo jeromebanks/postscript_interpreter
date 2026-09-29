@@ -112,15 +112,20 @@ ps manifest | "$PSCAT" --headless - | jq \
   | . + {
       proof: $proof,
       fonts: $fonts,
-      output_notes: {
-        png: "RGBA; pixels outside the artwork have alpha 0 when background is transparent",
-        svg: "width/height are declared in pt (rewritten by the export script from the unitless renderer output) over a point-based viewBox; no backdrop rect when background is transparent; /transition fills stay native gradients",
-        pdf: "MediaBox is in points (1/72 in); no page background is painted (never had one); /transition fills are a flat average colour",
+      output_notes: ((.background == "transparent") as $t | {
+        png: (if $t then "RGBA; pixels outside the artwork have alpha 0"
+              else "RGBA but the page is filled with the configured background colour: a mock-up, NOT transparent garment art" end),
+        svg: ("width/height are declared in pt (rewritten by the export script from the unitless renderer output) over a point-based viewBox; "
+              + (if $t then "no backdrop rect" else "a painted full-page rect fills the configured background colour (mock-up, not garment art)" end)
+              + "; /transition fills stay native gradients"),
+        pdf: ("MediaBox is in points (1/72 in); "
+              + (if $t then "no page background is painted (this renderer never paints one)" else "a painted full-page rectangle fills the configured background colour (mock-up, not garment art)" end)
+              + "; /transition fills are a flat average colour"),
         vector_scale: "SVG and PDF are written without --dpi so their declared size is the physical size in points; only the PNG is dpi-scaled",
         mottled_flecks: "the /mottled wear flecks are painted cream, not knocked out; on a dark garment they print as ink",
         piece_sides: "SleeveLeft/SleeveRight are labels chosen by the config; this template does not say whether they mean the wearer side or the viewer side",
         transparent_background: "produced by pscat --transparent (issue #146); without it PNG and SVG carry an opaque white page"
-      }
+      })
     }' > "$OUT/$NAME-manifest.json"
 rm -f "$OUT/.measured.json"
 

@@ -293,17 +293,62 @@
 % string apjs -     print as a JSON string
 % @internal
 /apjs {
+  dup aputf8ok /apraw exch def
   (") print
   { dup 34 eq { pop (\\") print } {
     dup 92 eq { pop (\\\\) print } {
     dup 10 eq { pop (\\n) print } {
     dup 32 lt {
-      (\\u00) print dup 16 idiv (0123456789abcdef) exch 1 getinterval print
-      16 mod (0123456789abcdef) exch 1 getinterval print
+      apjhex
     } {
-      1 string dup 0 4 -1 roll put print } ifelse } ifelse } ifelse } ifelse
+      dup 127 gt apraw not and { apjhex } { 1 string dup 0 4 -1 roll put print } ifelse
+    } ifelse } ifelse } ifelse } ifelse
   } forall
   (") print
+} def
+
+% byte apjhex -    print as a \u00XX escape
+% @internal
+/apjhex {
+  (\\u00) print dup 16 idiv (0123456789abcdef) exch 1 getinterval print
+  16 mod (0123456789abcdef) exch 1 getinterval print
+} def
+
+% string aputf8ok -> bool    is it well-formed UTF-8? (Text that is not is
+% a single-byte PostScript string, e.g. caf\351; it is emitted as Latin-1
+% \u00XX escapes instead of raw bytes that would not be valid JSON.)
+% @internal
+/aputf8ok {
+  6 dict begin
+  /aus exch def /aui 0 def /auok true def
+  {
+    aui aus length ge auok not or { exit } if
+    aus aui get /aub exch def
+    aub 128 lt { /aui aui 1 add def } {
+      aub 194 ge aub 223 le and { 1 } {
+      aub 224 ge aub 239 le and { 2 } {
+      aub 240 ge aub 244 le and { 3 } { 0 } ifelse } ifelse } ifelse
+      dup 0 eq { pop /auok false def } {
+        /aun exch def
+        aui aun add aus length ge { /auok false def } {
+          1 1 aun {
+            aus exch aui add get dup 128 lt exch 191 gt or { /auok false def } if
+          } for
+          % the second byte's range rules out overlongs, surrogates, > U+10FFFF
+          auok aun 1 ge and {
+            aus aui 1 add get aub
+            dup 224 eq { pop 160 lt { /auok false def } if } {
+            dup 237 eq { pop 159 gt { /auok false def } if } {
+            dup 240 eq { pop 144 lt { /auok false def } if } {
+            244 eq { 143 gt { /auok false def } if } { pop } ifelse } ifelse } ifelse } ifelse
+          } if
+          /aui aui aun add 1 add def
+        } ifelse
+      } ifelse
+    } ifelse
+  } loop
+  auok
+  end
 } def
 
 % n apjn -    print a number
