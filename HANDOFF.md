@@ -315,6 +315,20 @@ uses "scratch" as a term of art for private working state throughout
 every sibling library's own docs, and five review rounds' worth of
 auto-execution and unguarded-numeric-conversion hazards a caller-
 supplied value could trigger before its type was checked).
+Also done: issue #145, headline composition helpers — `lib/headline.ps`
+(`@requires: (lib/artkit.ps) run`, tag-migrated): `hllayout` places a
+dominant run plus supporting runs by anchors/offsets against measured
+*ink* boxes (whole runs or glyph ranges `[i,j)`), sized by `/Size`,
+`/Fit*` or `/SizeOf`, and fails with named errors
+(`headline-run-outside-region`, `headline-runs-collide`,
+`headline-fit-below-minimum-size`, ...) instead of clipping; `hldraw`
+draws (per-run `/Draw` proc, so `psyletter` can slot in),
+`hlrunink`/`hlcharink`/`hlink` read the geometry back. Gotcha worth
+remembering repo-wide: `pathbbox` after `charpath` includes the trailing
+advance-point `moveto` and (unflattened) Bezier control points — walk
+the flattened path instead (NOTES.md has the details).
+`examples/headline.ps` is the specimen (shirt front + `Tuesday`), with a
+site card. The final shirt using #144's treatment is a follow-up.
 Also done: issue #144, psychedelic display lettering — `lib/lettering.ps`
 (`@requires: (lib/artkit.ps) run`, tag-migrated): `psyletter` draws an
 outline face's `charpath` with a clipped multicolor interior

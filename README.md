@@ -737,6 +737,36 @@ a silent Helvetica. `psyletterpath` exposes just the geometry.
 (Real) 306 300 << /Size 220 /Treatment /mottled /Seed 7 >> psyletter
 ```
 
+A headline-composition sibling, `lib/headline.ps` (issue #145), lays out
+one dominant run with smaller supporting runs tucked around it, from
+*measured ink bounds* (not advance widths -- ascenders, descenders and a
+rising capital are accounted for). `hllayout` takes a region and an
+array of run dicts and returns a layout; `hldraw` draws it;
+`hlrunink`, `hlcharink` and `hlink` read the measured boxes back. A run
+is sized by `/Size`, `/FitWidth`, `/FitHeight`, `/FitBox`,
+`/FitRegion` or `/SizeOf` (a ratio of another run), and positioned by
+`/At` -- a point, or a point in an *earlier run's* ink box or one glyph
+range of it -- plus `/Anchor` and `/Offset`. `/Text` may contain `\n`
+line breaks (`/Justify`, `/Leading`). A run that would leave its region,
+sit too close to what it `/Avoid`s (`/Clearance`), or fit smaller than
+`/MinSize` raises a named error (`headline-run-outside-region`,
+`headline-runs-collide`, `headline-fit-below-minimum-size`) instead of
+overflowing silently. `/Draw` takes a per-line procedure, so
+`psyletter` can render the same layout. `examples/headline.ps` is the
+specimen.
+
+```postscript
+(lib/artkit.ps) run
+(lib/headline.ps) run
+[ 40 40 860 400 ] [
+  << /Name /real /Text (Real) /Font /AlfaSlabOne /FitBox [ 780 300 ] /At [ 60 60 ] >>
+  << /Name /keep /Text (Keepin' it) /Font /Helvetica-Bold /SizeOf [ /real 0.17 ]
+     /At << /To /real /Chars [ 1 3 ] /H 0 /V 1 >> /Anchor [ /left /bottom ]
+     /Offset [ 8 18 ] /Avoid [ [ /real 0 1 ] [ /real 1 3 ] [ /real 3 4 ] ]
+     /Clearance 10 >>
+] hllayout hldraw
+```
+
 A tenth sibling, `lib/printkit.ps` (issue #52), composes `hatch`,
 `scatter`, and (optionally) `grain` into three printmaking presets --
 `woodcut`, `linocut`, `engraving` -- over a shared options dict

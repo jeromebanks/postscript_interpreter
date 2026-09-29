@@ -1,0 +1,690 @@
+%!PS-Adobe-3.0
+%%Title: headline.ps — composition helpers for expressive headline and supporting type
+%%Creator: pscat — issue #145
+%%EndComments
+% @requires: (lib/artkit.ps) run
+
+% Display-typography layout: one dominant word with smaller phrases that
+% tuck around it. The caller chooses the artistic positions; this file
+% makes them reproducible and easy to revise by measuring real glyphs,
+% resolving anchors against those measurements, and failing loudly when
+% the result would clip or collide.
+%
+%   (lib/artkit.ps) run (lib/headline.ps) run
+%   [ 30 30 570 370 ] [
+%     << /Name /big /Text (Real) /Font /PermanentMarker
+%        /FitBox [ 500 260 ] /At [ 40 40 ] >>
+%     << /Name /small /Text (Keepin' it) /Font /Helvetica-Bold
+%        /SizeOf [ /big 0.2 ] /At << /To /big /H 1 /V 1 >>
+%        /Anchor [ /right /bottom ] /Offset [ 0 10 ] >>
+%   ] hllayout hldraw
+%
+% MEASURED BOXES ARE INK BOUNDS, not advance boxes. Every box this
+% library reports or checks ([x0 y0 x1 y1], user space) is the tight
+% bounding box of the glyph outlines (`charpath`, flattened so Bezier
+% control points do not inflate it, and without the trailing pen-advance
+% point charpath leaves behind), so an ascender, a descender, or a
+% capital that rises above its lowercase neighbours is accounted for
+% exactly. The advance width (`stringwidth`, what `show` moves the pen
+% by) is a different, wider number that includes side bearings; it is
+% only used to place successive lines' /Justify and the prefix of a
+% glyph range. Ink boxes are axis-aligned rectangles: a collision test
+% between two boxes is conservative for diagonal or curved glyph
+% shapes, which is what /Avoid on a glyph range (below) is for.
+%
+% A layout is a dict: /Region, /Runs (placed runs in declaration order)
+% and /Names (name -> placed run). A placed run is a dict with /Name,
+% /Lines, /FontDict, /Size, /Origin [x y] (first baseline's left end),
+% /LineOrigins, /Ink [x0 y0 x1 y1], /Draw and /Leading. Everything is
+% computed from the font metrics and the run options alone -- no random
+% draws, no dependence on the current graphics state -- so identical
+% inputs give an identical layout.
+%
+% RUN OPTIONS (each run is a dict in the runs array, laid out in order;
+% a run may only refer to runs declared before it):
+%   /Name name       needed only if another run refers to this one
+%   /Text string     required; a newline (\n) forces a line break
+%   /Font name       an installed outline face (default /Helvetica-Bold);
+%                    a missing face raises headline-font-not-found rather
+%                    than silently substituting, and Type 3 faces (no
+%                    outlines) raise headline-type3-faces-have-no-outlines
+%   Size, exactly one of:
+%     /Size n              points
+%     /FitWidth w          scale so the ink is w wide
+%     /FitHeight h         scale so the ink is h tall
+%     /FitBox [w h]        largest size whose ink fits in w x h
+%     /FitRegion true      as /FitBox, for the run's region
+%     /SizeOf [name r]     r times the named run's size
+%   /MaxSize n       clamp a fitted size down to at most n
+%   /MinSize n       if a fitted size is below n, raise
+%                    headline-fit-below-minimum-size (fail, don't shrink)
+%   /At              where the anchor goes: [x y], or a reference
+%                    << /To name /H f /V f /Chars [i j] >> to the point
+%                    (f in the ink box: 0 = left/bottom, 1 = right/top;
+%                    or /left /center /right /bottom /middle /top;
+%                    /V also takes /baseline) of the named run's ink
+%                    box -- or of just glyphs [i,j) of it (one-line runs
+%                    only), which is how a phrase tucks against one
+%                    letter. /H and /V default to 0.5.
+%   /Anchor [h v]    which point of this run's own ink box sits on /At
+%                    (default [/left /baseline]: the left edge of the ink,
+%                    on the first line's baseline)
+%   /Offset [dx dy]  points added to the resolved /At
+%   /Leading n       line spacing, times the size (default 1.15)
+%   /Justify name    /left /center /right within a multi-line run
+%   /Region [x0 y0 x1 y1]  this run's region (default the layout's)
+%   /Clearance n     required gap to everything in /Avoid (default 0)
+%   /Avoid [ ... ]   what this run's ink must clear: a name (a whole
+%                    earlier run) or [name i j] (glyphs [i,j) of one).
+%                    Default: every earlier run. [] disables the check.
+%   /Draw proc       (text) x y size -> draws one line with the run's
+%                    font already set (default: moveto show). It must
+%                    consume its four operands and leave nothing on the
+%                    stack (hldraw runs under save/restore so that a
+%                    failing proc cannot leak graphics state; the same
+%                    restore also rolls back its VM side effects, e.g.
+%                    values it stores into older dicts). Hand this
+%                    to another renderer (e.g. lettering.ps) at will --
+%                    but note that renderer's own geometry is invisible
+%                    to the checks here: pass psyletter the same /Font
+%                    and /Size, /Align /left, and add the contour's half
+%                    width (about 1.5% of the size) to /Clearance and
+%                    the region margin.
+%   Indices in /Chars [i j] and /Avoid [name i j] are BYTE offsets into
+%   the string; for multi-byte text (UTF-8) keep them on character
+%   boundaries.
+%
+% Failures are named errors (self-documenting undefined names, like the
+% rest of this repo) raised *before* anything is drawn and with the
+% caller's font, path and operand stack restored:
+%   headline-run-outside-region, headline-runs-collide,
+%   headline-fit-below-minimum-size, headline-text-has-no-ink, ...
+%
+% Scratch prefix: hl- (a fresh dict per call holds every working name).
+
+% --- helpers -----------------------------------------------------------
+
+% v hlisnum -> bool             (stack-only)
+% @internal
+/hlisnum { type dup /integertype eq exch /realtype eq or } def
+
+% val errproc hlnum -> val      (errproc runs, self-documenting, if not a number)
+% @internal
+/hlnum {
+  exch dup type dup /integertype eq exch /realtype eq or
+  { exch pop } { pop exec } ifelse
+} def
+
+% dict key default hlgd -> value
+% @internal
+/hlgd { 3 1 roll 2 copy known { get exch pop } { pop pop } ifelse } def
+
+% arr errproc hlpair -> arr    (errproc unless a 2-number array)
+% @internal
+/hlpair {
+  exch dup type /arraytype eq { dup xcheck not { dup length 2 eq } { false } ifelse } { false } ifelse
+  { dup true exch { hlisnum and } forall } { false } ifelse
+  { exch pop } { pop exec } ifelse
+} def
+
+% arr errproc hlrect -> arr    (errproc unless a 4-number array)
+% @internal
+/hlrect {
+  exch dup type /arraytype eq { dup xcheck not { dup length 4 eq } { false } ifelse } { false } ifelse
+  { dup true exch { hlisnum and } forall } { false } ifelse
+  { exch pop } { pop exec } ifelse
+} def
+
+% named positions along an axis, as a fraction of [lo,hi]
+% @internal
+/hlfrac << /left 0 /bottom 0 /center 0.5 /middle 0.5 /right 1 /top 1 >> def
+
+% spec lo hi base hlresolve -> value
+% A fraction (number) or a named position along [lo,hi]; /baseline
+% yields base itself.
+% @internal
+/hlresolve {
+  /hlqb exch def /hlqhi exch def /hlqlo exch def
+  dup type /nametype eq {
+    dup /baseline eq { pop hlqb } {
+      dup hlfrac exch known not { headline-unknown-position-name } if
+      hlfrac exch get hlqhi hlqlo sub mul hlqlo add
+    } ifelse
+  } {
+    dup hlisnum not { headline-position-must-be-a-number-or-name } if
+    hlqhi hlqlo sub mul hlqlo add
+  } ifelse
+} def
+
+% x y hlkacc -      (grow the running box; used only inside hlink?'s dict)
+% @internal
+/hlkacc {
+  /hlky exch def /hlkx exch def
+  hlkx hlkx0 lt { /hlkx0 hlkx def } if
+  hlkx hlkx1 gt { /hlkx1 hlkx def } if
+  hlky hlky0 lt { /hlky0 hlky def } if
+  hlky hlky1 gt { /hlky1 hlky def } if
+} def
+
+% (s) hlink? -> [x0 y0 x1 y1] true | false
+% Ink bounds of `s` in the current font with the pen at the origin.
+% Two measured hazards are avoided by walking the flattened path
+% ourselves instead of calling pathbbox on it:
+%   - pathbbox on a curved outline includes the Bezier control points
+%     ("Real" at 100pt: 0.98 too wide, 0.24 too tall unflattened);
+%   - charpath leaves a trailing moveto at the pen's *advance* point,
+%     and pathbbox counts it, so the box's right edge would be the
+%     advance (not the ink) and a string sitting above the baseline
+%     (an apostrophe) would report a bottom of 0. A moveto only counts
+%     once a lineto follows it.
+% Text with no ink (empty, spaces) is false.
+% @internal
+/hlink? {
+  8 dict begin
+  /hlkx0 1e30 def /hlky0 1e30 def /hlkx1 -1e30 def /hlky1 -1e30 def
+  /hlkpend false def
+  % Measured under the default matrix, so bounds (and the flattening
+  % tolerance) never depend on the caller's current transformation.
+  gsave initmatrix newpath 0 0 moveto
+  % No font set, or a singular CTM that pathforall cannot invert, would
+  % otherwise abort with our gsave and dict still open.
+  {
+    false charpath flattenpath
+    { /hlkpy exch def /hlkpx exch def /hlkpend true def }
+    { hlkpend { hlkpx hlkpy hlkacc /hlkpend false def } if hlkacc }
+    { pop pop pop pop pop pop }
+    { }
+    pathforall
+  } stopped { grestore end headline-text-cannot-be-measured } if
+  grestore
+  hlkx1 hlkx0 lt { end false } { [ hlkx0 hlky0 hlkx1 hlky1 ] end true } ifelse
+} def
+
+% arr dx dy hlshift -> arr'
+% @internal
+/hlshift {
+  /hlsy exch def /hlsx exch def
+  /hlsa exch def
+  [ hlsa 0 get hlsx add hlsa 1 get hlsy add hlsa 2 get hlsx add hlsa 3 get hlsy add ]
+} def
+
+% arr n hlscale -> arr'
+% @internal
+/hlscale {
+  /hlsn exch def /hlsa exch def
+  [ 0 1 3 { hlsa exch get hlsn mul } for ]
+} def
+
+% (a\nb) hlsplit -> [(a) (b)]
+% @internal
+/hlsplit {
+  /hlss exch def
+  /hlst 0 def
+  [
+  0 1 hlss length 1 sub {
+    /hlsi exch def
+    hlss hlsi get 10 eq {
+      hlss hlst hlsi hlst sub getinterval dup length string copy
+      /hlst hlsi 1 add def
+    } if
+  } for
+  hlss hlst hlss length hlst sub getinterval dup length string copy
+  ]
+} def
+
+% (name-or-string) hlfontcheck -> fontdict
+% findfont quietly answers /Helvetica for an unknown face (Ghostscript:
+% Courier), which would ship the wrong type without a word, so the
+% resolved /FontName must be what was asked for.
+% @internal
+/hlfontcheck {
+  /hlreq exch def
+  % An unknown face raises invalidfont in pscat and substitutes in some
+  % other interpreters; both must end as the same named error.
+  { hlreq cvn findfont } stopped { headline-font-not-found } if
+  /hlfd exch def
+  hlfd /FontType get 3 eq { headline-type3-faces-have-no-outlines } if
+  /hlgot hlfd /FontName get 96 string cvs def
+  /hlgotreg hlreq length 8 add string dup 0 hlreq putinterval
+    dup hlreq length (-Regular) putinterval def
+  hlgot hlreq eq hlgot hlgotreg eq or
+  hlgot (Helvetica) ne hlgot (Courier) ne and or not { headline-font-not-found } if
+  hlfd
+} def
+
+% Called from a `stopped` handler with the failed call's scratch dict
+% still open: drop operands left mid-procedure back to the depth the
+% call started at, grestore, close the scratch dict, then re-raise.
+% @internal
+/hlunwind {
+  $error /command get 1 array astore /hlecmdbox exch def
+  $error /errorname get /hlename exch def
+  count hlbase sub dup 0 gt { { pop } repeat } { pop } ifelse
+  hlename /undefined eq { hlecmdbox 0 get } { /stop } ifelse
+  % Pop every dict a failed helper left open (not just ours), then ours.
+  countdictstack hlbdepth sub
+  grestore
+  { end } repeat
+  end
+  cvx exec
+} def
+
+% args... n proc hlcall -> results...
+% Run `proc` (which consumes the n operands below it) inside a fresh
+% scratch dict and a gsave, restoring both and the operand stack on
+% error.
+% @internal
+/hlcall {
+  exch count 2 sub 1 index sub
+  80 dict begin
+  /hlbase exch def pop
+  /hlbdepth countdictstack def
+  /hlproc exch def
+  gsave
+  { hlproc } stopped { hlunwind } if
+  grestore end
+} def
+
+% --- measuring one run --------------------------------------------------
+
+% Measures at size hlmsz (flattening tolerance does not scale, so a
+% measurement is only exact at the size that will be drawn).
+% Sets hlU (ink at size 1, [x0 y0 x1 y1], first baseline at y=0) and
+% hlLineX (per-line justify offsets at size 1) for hllines/hlfd.
+% @internal
+/hlmeasure {
+  hlfd hlmsz scalefont setfont
+  /hlw 0 def
+  hllines { stringwidth pop dup hlw gt { /hlw exch def } { pop } ifelse } forall
+  /hlLineX hllines length array def
+  /hlU null def
+  0 1 hllines length 1 sub {
+    /hlk exch def
+    hllines hlk get stringwidth pop /hladv exch def
+    hljust /left eq { 0 } { hljust /center eq { hlw hladv sub 2 div } { hlw hladv sub } ifelse } ifelse
+    /hlx exch def
+    hlLineX hlk hlx hlmsz div put
+    hllines hlk get hlink? {
+      hlx hlk hlleading mul hlmsz mul neg hlshift /hlb exch def
+      hlU null eq { /hlU hlb def } {
+        /hlU [
+          hlU 0 get hlb 0 get 2 copy gt { exch } if pop
+          hlU 1 get hlb 1 get 2 copy gt { exch } if pop
+          hlU 2 get hlb 2 get 2 copy lt { exch } if pop
+          hlU 3 get hlb 3 get 2 copy lt { exch } if pop
+        ] def
+      } ifelse
+    } if
+  } for
+  hlU null eq { headline-text-has-no-ink } if
+  /hlU hlU 1 hlmsz div hlscale def
+} def
+
+% placed i j hlpchars -> [x0 y0 x1 y1]
+% Ink of glyphs [i,j) of a one-line placed run, in place.
+% @internal
+/hlpchars {
+  % Stack-only checks first: naming an executable operand and then
+  % referencing it would run it.
+  1 index type /integertype eq 1 index type /integertype eq and
+    not { headline-chars-must-be-integers } if
+  /hlcj exch def /hlci exch def /hlcp exch def
+  hlcp /Lines get length 1 ne { headline-chars-need-a-single-line-run } if
+  /hlctext hlcp /Lines get 0 get def
+  hlci 0 lt hlcj hlctext length gt or hlci hlcj ge or { headline-chars-out-of-range } if
+  gsave
+    hlcp /FontDict get hlcp /Size get scalefont setfont
+    hlctext 0 hlci getinterval stringwidth pop /hlcpre exch def
+    hlctext hlci hlcj hlci sub getinterval hlink?
+  grestore
+  not { headline-chars-have-no-ink } if
+  hlcp /Origin get aload pop /hlcoy exch def hlcpre add hlcoy hlshift
+} def
+
+% --- placing one run ----------------------------------------------------
+
+% -> x y   the run's /At point (with /Offset applied)
+% @internal
+/hlatpoint {
+  hlo /At known not { headline-run-needs-an-at-point } if
+  hlo /At get dup type /nulltype eq { headline-at-must-be-a-point-or-a-reference } if
+  dup xcheck { headline-at-must-be-a-point-or-a-reference } if
+  /hlat exch def
+  hlat type /arraytype eq {
+    hlat { headline-at-point-must-be-two-numbers } hlpair aload pop
+  } {
+    hlat type /dicttype ne { headline-at-must-be-a-point-or-a-reference } if
+    hlat /To known not { headline-reference-needs-a-to-name } if
+    hlat /To get dup type /nametype ne { headline-reference-to-must-be-a-name } if
+    hlnames 1 index known not { pop headline-unknown-reference } if
+    hlnames exch get /hlref exch def
+    hlat /Chars known {
+      hlat /Chars get { headline-chars-must-be-a-pair } hlpair /hlch exch def
+      hlref hlch 0 get hlch 1 get hlpchars
+    } { hlref /Ink get } ifelse
+    /hlrb exch def
+    hlat /H 0.5 hlgd hlrb 0 get hlrb 2 get hlrb 0 get hlresolve
+    hlat /V 0.5 hlgd hlrb 1 get hlrb 3 get hlref /Origin get 1 get hlresolve
+  } ifelse
+  hlo /Offset [ 0 0 ] hlgd { headline-offset-must-be-two-numbers } hlpair aload pop
+  /hldy exch def /hldx exch def
+  hldy add exch hldx add exch
+} def
+
+% w h hlfitbox -> size    (largest size whose unit ink fits w x h)
+% @internal
+/hlfitbox {
+  2 copy 0 le exch 0 le or { headline-fit-box-must-be-positive } if
+  hluh div exch hluw div
+  2 copy gt { exch } if pop
+} def
+
+% -> size, from exactly one of the size options; applies /MaxSize and
+% /MinSize.
+% @internal
+/hlsize {
+  /hlcnt 0 def
+  [ /Size /FitWidth /FitHeight /FitBox /FitRegion /SizeOf ]
+  { hlo exch known { /hlcnt hlcnt 1 add def } if } forall
+  hlcnt 1 ne { headline-run-needs-exactly-one-size-option } if
+  /hluw hlU 2 get hlU 0 get sub def
+  /hluh hlU 3 get hlU 1 get sub def
+  hlo /Size known {
+    hlo /Size get { headline-size-must-be-a-number } hlnum
+    dup 0 le { headline-size-must-be-positive } if
+  } if
+  hlo /FitWidth known {
+    hlo /FitWidth get { headline-fitwidth-must-be-a-number } hlnum
+    dup 0 le { headline-fitwidth-must-be-positive } if
+    hluw div
+  } if
+  hlo /FitHeight known {
+    hlo /FitHeight get { headline-fitheight-must-be-a-number } hlnum
+    dup 0 le { headline-fitheight-must-be-positive } if
+    hluh div
+  } if
+  hlo /FitBox known {
+    hlo /FitBox get { headline-fitbox-must-be-w-h } hlpair aload pop hlfitbox
+  } if
+  hlo /FitRegion known {
+    hlo /FitRegion get dup type /booleantype ne { headline-fitregion-must-be-true } if
+    not { headline-fitregion-must-be-true } if
+    hlrreg 2 get hlrreg 0 get sub hlrreg 3 get hlrreg 1 get sub hlfitbox
+  } if
+  hlo /SizeOf known {
+    hlo /SizeOf get dup type /arraytype ne { headline-sizeof-must-be-name-ratio } if
+    dup xcheck { headline-sizeof-must-be-name-ratio } if
+    /hlso exch def
+    hlso length 2 ne { headline-sizeof-must-be-name-ratio } if
+    hlnames hlso 0 get known not { headline-unknown-reference } if
+    hlso 1 get { headline-sizeof-ratio-must-be-a-number } hlnum
+    dup 0 le { headline-sizeof-ratio-must-be-positive } if
+    hlnames hlso 0 get get /Size get mul
+  } if
+  hlo /MaxSize known {
+    hlo /MaxSize get { headline-maxsize-must-be-a-number } hlnum
+    dup 0 le { headline-maxsize-must-be-positive } if
+    2 copy gt { exch } if pop
+  } if
+  hlo /MinSize known {
+    hlo /MinSize get { headline-minsize-must-be-a-number } hlnum
+    1 index gt { headline-fit-below-minimum-size } if
+  } if
+} def
+
+% ink box (in hlnk) must clear box `bx` by hlclr
+% @internal
+/hlcollide {
+  /hlbx exch def
+  hlnk 0 get hlbx 2 get hlclr add lt
+  hlbx 0 get hlnk 2 get hlclr add lt and
+  hlnk 1 get hlbx 3 get hlclr add lt and
+  hlbx 1 get hlnk 3 get hlclr add lt and
+  { headline-runs-collide } if
+} def
+
+% name hlavoidname -
+% @internal
+/hlavoidname {
+  dup type /nametype ne { headline-avoid-entry-must-be-name-or-name-i-j } if
+  hlnames 1 index known not { pop headline-unknown-reference } if
+  hlnames exch get /Ink get hlcollide
+} def
+
+% entry hlavoid1 -      (a name, or [name] or [name i j])
+% @internal
+/hlavoid1 {
+  dup type /arraytype eq {
+    dup xcheck { headline-avoid-entry-must-be-name-or-name-i-j } if
+    dup length 1 eq { 0 get hlavoidname } {
+      dup length 3 ne { headline-avoid-entry-must-be-name-or-name-i-j } if
+      dup xcheck { headline-avoid-entry-must-be-name-or-name-i-j } if
+      /hlvv exch def
+      hlvv 0 get type /nametype ne { headline-avoid-entry-must-be-name-or-name-i-j } if
+      hlnames hlvv 0 get known not { headline-unknown-reference } if
+      hlnames hlvv 0 get get hlvv 1 get hlvv 2 get hlpchars hlcollide
+    } ifelse
+  } { hlavoidname } ifelse
+} def
+
+% run-dict hlplace -     (appends to hlplaced[hli]; registers /Name)
+% @internal
+/hlplace {
+  dup type /dicttype ne { headline-run-must-be-a-dict } if
+  /hlo exch def
+  hlo /Name null hlgd
+  dup type dup /nametype ne exch /nulltype ne and { headline-name-must-be-a-name } if
+  /hlname exch def
+  hlname null ne {
+    hlnames hlname known { headline-duplicate-run-name } if
+  } if
+  hlo /Text known not { headline-run-needs-text } if
+  hlo /Text get dup type /stringtype ne { headline-text-must-be-a-string } if
+  % Snapshot: the layout must keep describing what it measured even if
+  % the caller later mutates its own string.
+  dup length string copy
+  /hltext exch def
+  /hllines hltext hlsplit def
+  hlo /Font /Helvetica-Bold hlgd
+  dup type /nametype eq { 96 string cvs } {
+    dup type /stringtype ne { headline-font-must-be-a-name } if
+  } ifelse
+  hlfontcheck /hlfd exch def
+  /hlleading hlo /Leading 1.15 hlgd { headline-leading-must-be-a-number } hlnum def
+  hlleading 0 le { headline-leading-must-be-positive } if
+  hlo /Justify /left hlgd dup type /nametype ne { headline-justify-must-be-left-center-or-right } if
+  /hljust exch def
+  hljust /left eq hljust /center eq or hljust /right eq or not
+    { headline-justify-must-be-left-center-or-right } if
+  /hlrreg hlo /Region hlregion hlgd { headline-run-region-must-be-x0-y0-x1-y1 } hlrect def
+  hlo /Clearance 0 hlgd { headline-clearance-must-be-a-number } hlnum /hlclr exch def
+  hlclr 0 lt { headline-clearance-must-not-be-negative } if
+  % A procedure is never bound to a name here (naming it would run it on
+  % the next reference); it is fetched from hlo each time it is needed.
+  hlo /Draw { pop moveto show } hlgd
+  dup type /arraytype ne { headline-draw-must-be-a-procedure } if
+  xcheck not { headline-draw-must-be-a-procedure } if
+  hlo /Anchor [ /left /baseline ] hlgd
+  dup type /arraytype ne { headline-anchor-must-be-h-v } if
+  dup xcheck { headline-anchor-must-be-h-v } if
+  dup length 2 ne { headline-anchor-must-be-h-v } if
+  /hlanc exch def
+  /hlmsz 100 def hlmeasure
+  /hlsz hlsize def
+  % Fit options: the 100pt measurement only estimates the ink at the
+  % final size (flattening tolerance does not scale), so re-measure at
+  % the chosen size until the ink at that size really fits the box: each
+  % pass either accepts the size or shrinks to the size the measurement
+  % implies (less a 0.01% margin) and tries again.
+  [ /FitWidth /FitHeight /FitBox /FitRegion ] { hlo exch known } forall
+  3 { or } repeat
+  {
+    16 {
+      /hlmsz hlsz def hlmeasure hlsize /hlst exch def
+      hlst hlsz ge { exit } if
+      /hlsz hlst 0.9999 mul def
+    } repeat
+    % A fit landing on /MinSize is already at the limit; the margin
+    % must not slip it under unannounced.
+    hlo /MinSize known {
+      hlsz hlo /MinSize get lt { headline-fit-below-minimum-size } if
+    } if
+  } if
+  % Final ink is measured at exactly the size that will be drawn.
+  /hlmsz hlsz def hlmeasure
+  hlanc 0 get hlU 0 get hlsz mul hlU 2 get hlsz mul hlU 0 get hlsz mul hlresolve /hlax exch def
+  hlanc 1 get hlU 1 get hlsz mul hlU 3 get hlsz mul 0 hlresolve /hlay exch def
+  hlatpoint
+  hlay sub /hloy exch def
+  hlax sub /hlox exch def
+  /hlnk [
+    hlox hlU 0 get hlsz mul add hloy hlU 1 get hlsz mul add
+    hlox hlU 2 get hlsz mul add hloy hlU 3 get hlsz mul add
+  ] def
+  hlnk 0 get hlrreg 0 get 0.01 sub lt
+  hlnk 1 get hlrreg 1 get 0.01 sub lt or
+  hlnk 2 get hlrreg 2 get 0.01 add gt or
+  hlnk 3 get hlrreg 3 get 0.01 add gt or
+  { headline-run-outside-region } if
+  hlo /Avoid known {
+    hlo /Avoid get dup type /arraytype ne { headline-avoid-must-be-an-array } if
+    dup xcheck { headline-avoid-must-be-an-array } if
+    { hlavoid1 } forall
+  } {
+    0 1 hli 1 sub { hlplaced exch get /Ink get hlcollide } for
+  } ifelse
+  /hlcur 12 dict def
+  hlname null ne { hlcur /Name hlname put } if
+  hlcur /Text hltext put
+  hlcur /Lines hllines put
+  hlcur /FontDict hlfd put
+  hlcur /Size hlsz put
+  hlcur /Leading hlleading put
+  hlcur /Origin [ hlox hloy ] put
+  hlcur /Ink hlnk put
+  hlcur /Draw hlo /Draw { pop moveto show } hlgd put
+  hlcur /LineOrigins [
+    0 1 hllines length 1 sub {
+      /hlk exch def
+      [ hlLineX hlk get hlsz mul hlox add  hloy hlk hlleading mul hlsz mul sub ]
+    } for
+  ] put
+  hlplaced hli hlcur put
+  hlname null ne { hlnames hlname hlcur put } if
+} def
+
+% region runs -> layout
+% @internal
+/hlbody {
+  % Stack-only checks first (naming an executable operand and then
+  % referencing it would run it); inside hlcall so a failure also
+  % restores the caller's operand stack.
+  1 index { headline-region-must-be-x0-y0-x1-y1 } hlrect pop
+  dup type /arraytype ne { headline-runs-must-be-an-array } if
+  dup xcheck { headline-runs-must-be-an-array } if
+  /hlruns exch def /hlregion exch def
+  hlregion 2 get hlregion 0 get le hlregion 3 get hlregion 1 get le or
+    { headline-region-must-have-positive-size } if
+  /hlnames hlruns length 1 add dict def
+  /hlplaced hlruns length array def
+  0 1 hlruns length 1 sub { /hli exch def hlruns hli get hlplace } for
+  << /Region hlregion /Runs hlplaced /Names hlnames >>
+} def
+
+% layout name hlfindrun -> placed
+% @internal
+/hlfindrun {
+  1 index type /dicttype ne { headline-layout-must-be-a-dict } if
+  dup type /nametype ne { headline-run-name-must-be-a-name } if
+  /hlfn exch def /hlfl exch def
+  hlfl /Names known not { headline-layout-must-be-a-dict } if
+  hlfl /Names get hlfn known not { headline-unknown-run } if
+  hlfl /Names get hlfn get
+} def
+
+% Called from a `stopped` handler in hldrawrun: unwind what a failed
+% /Draw proc (or hldrawrun itself) left open, then re-raise.
+% @internal
+/hdunwind {
+  $error /command get 1 array astore /hdcmdbox exch def
+  $error /errorname get /hdname exch def
+  count hdbase sub dup 0 gt { { pop } repeat } { pop } ifelse
+  hdname /undefined eq { hdcmdbox 0 get } { /stop } ifelse
+  countdictstack hdbdepth sub
+  % restore (not grestore) so gsaves a failed /Draw proc leaked go too.
+  hdsv restore
+  { end } repeat
+  end
+  cvx exec
+} def
+
+% placed hldrawrun -
+% @internal
+/hldrawrun {
+  12 dict begin
+  /hdp exch def
+  save /hdsv exch def
+  /hdbdepth countdictstack def
+  /hdbase count def
+  {
+    hdp /FontDict get hdp /Size get scalefont setfont
+    0 1 hdp /Lines get length 1 sub {
+      /hdk exch def
+      hdp /Lines get hdk get
+      hdp /LineOrigins get hdk get aload pop
+      hdp /Size get
+      gsave hdp /Draw get exec grestore
+    } for
+  } stopped { hdunwind } if
+  hdsv restore
+  end
+} def
+
+% --- public ------------------------------------------------------------
+
+% (text) hlink -> x0 y0 x1 y1
+% @kind: Procedure
+% @summary: Ink bounds of `text` in the current font, pen at the origin: the tight bounding box of the glyph outlines (ascenders, descenders and all), not the wider advance box that stringwidth reports. Raises headline-text-has-no-ink for empty or all-space text. Needs an outline face (charpath).
+% @example: /PermanentMarker findfont 100 scalefont setfont (Real) hlink
+/hlink {
+  dup type /stringtype ne { headline-text-must-be-a-string } if
+  hlink? not { headline-text-has-no-ink } if
+  aload pop
+} def
+
+% region runs hllayout -> layout
+% @kind: Procedure
+% @summary: Measure and place a headline region: one dominant run and any number of supporting runs, each positioned by anchors and offsets against the region or against another run's (or one glyph range's) measured ink box, sized by point size, fit-to-box or ratio to another run. Nothing is drawn. Fails with a named error (headline-run-outside-region, headline-runs-collide, headline-fit-below-minimum-size, ...) rather than clip or overlap silently; the caller's font, path and operand stack are untouched on both success and failure. See the file header for every run option.
+% @example: [ 30 30 570 370 ] [ << /Name /big /Text (Real) /Font /PermanentMarker /FitBox [ 500 260 ] /At [ 40 40 ] >> << /Name /small /Text (Keepin' it) /SizeOf [ /big 0.2 ] /At << /To /big /H 1 /V 1 >> /Anchor [ /right /bottom ] /Offset [ 0 10 ] >> ] hllayout hldraw
+% @param: /Text string the run's text; a newline forces a line break
+% @param: /Font name installed outline face (default /Helvetica-Bold); a missing face raises headline-font-not-found
+% @param: /Size num points; or exactly one of /FitWidth, /FitHeight, /FitBox [w h], /FitRegion true, /SizeOf [name ratio]
+% @param: /At [x y] or << /To name /H f /V f /Chars [i j] >> (byte offsets) the point the anchor lands on, absolute or in an earlier run's ink box
+% @param: /Anchor [h v] which point of the run's own ink box sits on /At (default [/left /baseline]: left ink edge on the first baseline)
+% @param: /Offset [dx dy] points added to the resolved /At
+% @param: /Avoid array names or [name i j] glyph ranges this run's ink must clear by /Clearance (default every earlier run)
+/hllayout { 2 { hlbody } hlcall } def
+
+% layout hldraw -
+% @kind: Procedure
+% @summary: Draw every run of a layout from hllayout in the current color, one line at a time, calling each run's /Draw proc (default moveto show) with `(text) x y size` and the run's font set. Runs inside per-line gsaves, so the caller's font and path are untouched.
+% @example: layout hldraw
+/hldraw {
+  dup type /dicttype ne { headline-layout-must-be-a-dict } if
+  dup /Runs known not { headline-layout-must-be-a-dict } if
+  /Runs get { hldrawrun } forall
+} def
+
+% layout name hlrunink -> x0 y0 x1 y1
+% @kind: Procedure
+% @summary: The measured ink box of a placed run, for composing further geometry (rules, backgrounds, checks) against a layout. Raises headline-unknown-run for a name the layout doesn't have.
+% @example: layout /big hlrunink
+/hlrunink { 2 { hlfindrun /Ink get aload pop } hlcall } def
+
+% layout name i j hlcharink -> x0 y0 x1 y1
+% @kind: Procedure
+% @summary: The measured ink box of glyphs [i,j) of a one-line placed run, at their placed position -- e.g. the capital alone versus the lowercase after it. Raises headline-chars-out-of-range or headline-chars-have-no-ink for a bad range.
+% @example: layout /big 1 4 hlcharink
+/hlcharink {
+  4 { 4 2 roll hlfindrun 3 1 roll hlpchars aload pop } hlcall
+} def

@@ -66,5 +66,6 @@ render examples/template_certificate.ps 612x792
 render examples/template_invitation.ps 612x792
 render examples/template_poster.ps 612x792
 render examples/lettering.ps 900x900
+render examples/headline.ps 900x900
 
 echo "site assembled: $OUT ($(du -sh "$OUT" | cut -f1))"
