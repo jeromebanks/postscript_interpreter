@@ -729,7 +729,20 @@ array of `[r g b]`), `/Seed`, `/Wear`, `/Outline`, `/OutlineWidth` are
 the controls. A seed changes only the texture, never metrics or
 placement; a missing face is an error (`lettering-font-not-found`), not
 a silent Helvetica. `psyletterpath` exposes just the geometry.
-`examples/lettering.ps` is the specimen.
+`examples/lettering.ps` is the specimen. With `lib/fillkit.ps` loaded,
+`/Treatment` also takes `/plasma`, `/clouds`, `/diffclouds` and `/conical`
+(see the next paragraph); `/Fill << ... >>` forwards any fillkit option.
+
+`lib/fillkit.ps` (issue #154) reproduces GIMP's fill/render algorithms as
+seeded fills over a box, meant to sit inside a clip: `plasmafill`
+(diamond-square plasma; random RGB like GIMP, or blended through a
+`/Palette`; `/Turbulence`), `solidnoisefill` (Perlin fBm, `/Turbulent`),
+`diffcloudsfill` (|noise - noise|), and `gradshapefill` (`/bilinear`
+`/square` `/conical` `/spiral`), all with `/RGBNoise`, `/HSVNoise` and
+`/Spread` grain. Each is one small `colorimage` under the caller's clip, so
+the shape stays vector in SVG/PDF; `/Resolution /device` samples once per device pixel (capped at 512 per side, so
+larger print-DPI boxes show blocky steps).
+`examples/fillkit.ps` is the specimen.
 
 `lib/apparel.ps` (issue #146) builds apparel graphics on top of those two: one
 config dict describes a front, back and optional left/right sleeve print area

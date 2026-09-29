@@ -1,0 +1,594 @@
+%!PS-Adobe-3.0
+%%Title: fillkit.ps — GIMP-style fill algorithms (plasma, solid noise, clouds, gradient shapes)
+%%Creator: pscat — issue #154
+%%EndComments
+% @requires: (lib/artkit.ps) run
+
+% Reproductions of the fill/render algorithms GIMP offers (Filters >
+% Render > Noise > Plasma / Solid Noise / Difference Clouds, the noise
+% filters, and Gradient tool shapes), as seeded, deterministic fills
+% that paint a rectangle and are meant to be used *inside a clip* — a
+% glyph outline, a blob, a page region — the way `lib/lettering.ps`
+% does for its treatments (`/Treatment /plasma` there is this file).
+%
+%   (lib/artkit.ps) run (lib/fillkit.ps) run
+%   gsave  newpath 40 40 moveto 360 40 lineto 200 260 lineto closepath clip
+%     40 40 360 260 << /Seed 7 /Turbulence 1.2 >> plasmafill
+%   grestore
+%
+% Every fill takes  x0 y0 x1 y1 opts  and paints exactly that box; the
+% caller's clip decides the visible shape. Nothing else in the graphics
+% state is disturbed (each call is wrapped in gsave/grestore, and the
+% caller's `rand` state and artkit noise table are restored on the way
+% out — see "Determinism").
+%
+% How a fill is drawn (the vector-vs-raster note):
+%   A smooth field cannot be a handful of paths, and thousands of tiny
+%   cell rectangles bloat SVG/PDF and leave hairline seams at cell
+%   edges under antialiasing. Each fill is therefore painted as ONE
+%   small RGB image (`colorimage`) stretched over the box and clipped
+%   by the caller's clip. Per output format (verified against pscat's
+%   own exports):
+%     PNG   the image is blitted nearest-neighbour; the clip edge is
+%           antialiased as usual.
+%     SVG   one base64-PNG <image> inside the clip's <clipPath>; the
+%           clip itself (the glyph outlines) stays vector.
+%     PDF   one Flate-compressed RGB XObject under a `W n` clip; the
+%           clip stays vector.
+%   /Resolution (default 128 samples along the longer side, max 512)
+%   sets the image size — and so the file size and the smallest
+%   feature. pscat's image operator samples nearest-neighbour, so a
+%   field stretched over many device pixels per sample shows square
+%   steps; `/Resolution /device` picks one sample per device pixel
+%   (clamped to 512) for a smooth PNG, at the cost of more work. The
+%   cap is real: a box wider than 512 device pixels (a large print-DPI
+%   export) is upscaled nearest-neighbour, so steps and grain show as
+%   multi-pixel blocks. Use /device for screen-size output.
+%   Only the *field* is raster; the shape it fills is never rasterized.
+%
+% Options shared by every fill (all optional):
+%   /Seed n          integer seed (default 1); a different seed is a
+%                    different field, and only the field changes
+%   /Resolution n    image samples along the longer side, 8..512 (128)
+%   /Palette p       a palette name from artkit's `Palettes`, or an
+%                    array of [r g b]. Scalar fields (everything but
+%                    plasma's default) are mapped through the palette
+%                    as a linear ramp. Default: black-to-white ramp.
+%   /Spread n        GIMP "Spread": each sample is taken from a randomly
+%                    displaced point, up to n * box size away (0..1,
+%                    default 0 = off). Done as a coordinate jitter,
+%                    because there is no pixel readback to shuffle.
+%   /RGBNoise n      GIMP "RGB Noise": independent per-channel jitter of
+%                    +-n (0..1, default 0 = off)
+%   /HSVNoise [h s v] GIMP "HSV Noise": hue (fraction of the circle),
+%                    saturation and value jitter, each 0..1 (default off)
+% Grain options draw from the seeded stream only when nonzero, so
+% turning grain on never changes the underlying field.
+%
+% Determinism: `/Seed` reseeds `srand` for the duration of the call and
+% the caller's `rand` state is restored afterwards, so a fill never
+% perturbs the caller's own random stream, and the same inputs paint
+% identically. The Perlin-style noise (`solidnoisefill`,
+% `diffcloudsfill`) needs artkit's `noiseinit` permutation table; that
+% table is *shadowed inside this file's scratch dict* rather than
+% rebuilt globally, so a caller's own `noiseinit`/`noise2` field is
+% left byte-for-byte alone.
+%
+% Errors are self-documenting undefined names (fillkit-...) raised
+% before anything is drawn or the seed is touched.
+%
+% Scratch prefix: fk- (a fresh dict per call holds every working name).
+
+% --- helpers -----------------------------------------------------------
+
+% v fkisnum -> bool             (stack-only, never names the value)
+% @internal
+/fkisnum { type dup /integertype eq exch /realtype eq or } def
+
+% key default fkget -> value      (reads the current call's fkopts)
+% @internal
+/fkget {
+  exch dup fkopts exch known { fkopts exch get exch pop } { pop } ifelse
+} def
+
+% val errproc fknum -> val        (errproc runs if val is not a number)
+% @internal
+/fknum {
+  exch dup type dup /integertype eq exch /realtype eq or
+  { exch pop } { pop exec } ifelse
+} def
+
+% dx dy fkdevlen -> length of the vector (dx,dy) in device pixels
+% @internal
+/fkdevlen { dtransform exch dup mul exch dup mul add sqrt } def
+
+% val lo hi fkclamp -> val
+% @internal
+/fkclamp { 3 -1 roll min max } def
+
+% val errproc fkrgb -> val        (errproc runs unless val is [r g b] numbers)
+% @internal
+/fkrgb {
+  exch dup type /arraytype eq { dup xcheck not { dup length 3 eq } { false } ifelse } { false } ifelse
+  { dup true exch { type dup /integertype eq exch /realtype eq or and } forall }
+  { false } ifelse
+  { exch pop } { pop exec } ifelse
+} def
+
+% Unwind after a caught failure: drop operands left mid-procedure back
+% to the depth the call started at, grestore, close the scratch dict,
+% then re-raise (an `undefined` self-documenting error is re-raised by
+% re-executing its name; anything else falls back to `stop`).
+% @internal
+/fkunwind {
+  $error /command get 1 array astore /fkecmdbox exch def
+  $error /errorname get /fkename exch def
+  count fkbase sub dup 0 gt { { pop } repeat } { pop } ifelse
+  fksaved null ne { fksaved srand } if
+  fkename /undefined eq { fkecmdbox 0 get } { /stop } ifelse
+  grestore end
+  cvx exec
+} def
+
+% x0 y0 x1 y1 opts -> same      (operand checks, before any state changes)
+% @internal
+/fkargs {
+  dup type /dicttype ne { fillkit-opts-must-be-a-dict } if
+  4 index fkisnum not { fillkit-x0-must-be-a-number } if
+  3 index fkisnum not { fillkit-y0-must-be-a-number } if
+  2 index fkisnum not { fillkit-x1-must-be-a-number } if
+  1 index fkisnum not { fillkit-y1-must-be-a-number } if
+  2 index 5 index le { fillkit-box-must-have-positive-width } if
+  1 index 4 index le { fillkit-box-must-have-positive-height } if
+} def
+
+% -> the palette as an array of [r g b], or null when none was given
+% @internal
+/fkpalette {
+  fkopts /Palette known not { null } {
+    fkopts /Palette get
+    dup type /nametype eq {
+      dup Palettes exch known { Palettes exch get } { fillkit-unknown-palette } ifelse
+    } if
+    dup type /arraytype ne { fillkit-palette-must-be-an-array } if
+    dup xcheck { fillkit-palette-must-be-an-array } if
+    dup length 0 eq { fillkit-palette-must-not-be-empty } if
+    dup { { fillkit-palette-entries-must-be-rgb } fkrgb pop } forall
+  } ifelse
+} def
+
+% t fkramp -> r g b       (t in 0..1 through fkpal, linear between stops)
+% @internal
+/fkramp {
+  0 max 1 min fkpn 1 sub mul /fkrt exch def
+  fkpn 1 eq { fkpal 0 get aload pop } {
+    /fkri fkrt floor cvi def
+    fkri fkpn 2 sub gt { /fkri fkpn 2 sub def } if
+    fkpal fkri get fkpal fkri 1 add get fkrt fkri sub mix3
+  } ifelse
+} def
+
+% --- grain: RGB / HSV noise --------------------------------------------
+
+% r g b fkrgb2hsv -> h s v      (all 0..1)
+% @internal
+/fkrgb2hsv {
+  /fkcb exch def /fkcg exch def /fkcr exch def
+  /fkmx fkcr fkcg max fkcb max def
+  /fkmn fkcr fkcg min fkcb min def
+  /fkd fkmx fkmn sub def
+  fkd 0 eq { 0 } {
+    fkmx fkcr eq { fkcg fkcb sub fkd div } {
+      fkmx fkcg eq { fkcb fkcr sub fkd div 2 add } { fkcr fkcg sub fkd div 4 add } ifelse
+    } ifelse
+    dup 0 lt { 6 add } if 6 div
+  } ifelse
+  fkmx 0 eq { 0 } { fkd fkmx div } ifelse
+  fkmx
+} def
+
+% h s v fkhsv2rgb -> r g b
+% @internal
+/fkhsv2rgb {
+  /fkhv exch def /fkhs exch def 6 mul /fkhh exch def
+  fkhh 6 ge { /fkhh 0 def } if
+  /fkhi fkhh floor cvi def /fkhf fkhh fkhi sub def
+  /fkhp fkhv 1 fkhs sub mul def
+  /fkhq fkhv 1 fkhs fkhf mul sub mul def
+  /fkht fkhv 1 fkhs 1 fkhf sub mul sub mul def
+  fkhi 0 eq { fkhv fkht fkhp } {
+  fkhi 1 eq { fkhq fkhv fkhp } {
+  fkhi 2 eq { fkhp fkhv fkht } {
+  fkhi 3 eq { fkhp fkhq fkhv } {
+  fkhi 4 eq { fkht fkhp fkhv } { fkhv fkhp fkhq } ifelse } ifelse } ifelse } ifelse } ifelse
+} def
+
+% r g b fkgrain -> r g b        (applies /RGBNoise and /HSVNoise if set)
+% @internal
+/fkgrain {
+  fkrgbn 0 gt {
+    /fknb exch frnd 0.5 sub 2 mul fkrgbn mul add 0 1 fkclamp def
+    /fkng exch frnd 0.5 sub 2 mul fkrgbn mul add 0 1 fkclamp def
+    /fknr exch frnd 0.5 sub 2 mul fkrgbn mul add 0 1 fkclamp def
+    fknr fkng fknb
+  } if
+  fkhsvon {
+    fkrgb2hsv
+    /fknv exch frnd 0.5 sub 2 mul fkhsvn 2 get mul add 0 1 fkclamp def
+    /fkns exch frnd 0.5 sub 2 mul fkhsvn 1 get mul add 0 1 fkclamp def
+    frnd 0.5 sub 2 mul fkhsvn 0 get mul add
+    dup 0 lt { 1 add } if dup 1 ge { 1 sub } if
+    fkns fknv fkhsv2rgb
+  } if
+} def
+
+% --- plasma: diamond-square midpoint displacement -----------------------
+
+% x y fkat -> A[y*N+x]        (reads the grid in fkga)
+% @internal
+/fkat { fkgn mul add fkga exch get } def
+
+% -> a fresh N*N array of displaced values; consumes the seeded stream.
+% Corner values are random; each level fills square centres from their
+% 4 corners, then edge midpoints from their 3-4 neighbours, and adds a
+% random displacement of (step/size)^H. H = 1/(1+/Turbulence) is the
+% *roughness*: each level's displacement shrinks by 2^-H, so a low
+% turbulence decays fast (smooth, blobby) and a high one keeps energy at
+% the fine levels (busy, crinkled). A plain gain would not do — the
+% final min/max stretch divides any uniform gain back out.
+% @internal
+/fkds {
+  /fkga fkgn fkgn mul array def
+  0 1 fkgn fkgn mul 1 sub { fkga exch 0 put } for
+  fkga 0 frnd put
+  fkga fkgn 1 sub frnd put
+  fkga fkgn 1 sub fkgn mul frnd put
+  fkga fkgn fkgn mul 1 sub frnd put
+  /fkstep fkgn 1 sub def
+  {
+    fkstep 2 lt { exit } if
+    /fkhalf fkstep 2 idiv def
+    /fkamp fkstep fkgn 1 sub div fkhurst exp def
+    % diamond step: square centres
+    fkhalf fkstep fkgn 1 sub { /fkyy exch def
+      fkhalf fkstep fkgn 1 sub { /fkxx exch def
+        fkxx fkhalf sub fkyy fkhalf sub fkat
+        fkxx fkhalf add fkyy fkhalf sub fkat add
+        fkxx fkhalf sub fkyy fkhalf add fkat add
+        fkxx fkhalf add fkyy fkhalf add fkat add 4 div
+        frnd 0.5 sub fkamp mul add
+        fkga fkyy fkgn mul fkxx add 3 -1 roll put
+      } for
+    } for
+    % square step: edge midpoints
+    0 fkhalf fkgn 1 sub { /fkyy exch def
+      fkyy fkhalf idiv 2 mod 0 eq { fkhalf } { 0 } ifelse fkstep fkgn 1 sub { /fkxx exch def
+        /fksum 0 def /fkcnt 0 def
+        fkxx fkhalf sub dup 0 ge { fkyy fkat fksum add /fksum exch def /fkcnt fkcnt 1 add def } { pop } ifelse
+        fkxx fkhalf add dup fkgn 1 sub le { fkyy fkat fksum add /fksum exch def /fkcnt fkcnt 1 add def } { pop } ifelse
+        fkyy fkhalf sub dup 0 ge { fkxx exch fkat fksum add /fksum exch def /fkcnt fkcnt 1 add def } { pop } ifelse
+        fkyy fkhalf add dup fkgn 1 sub le { fkxx exch fkat fksum add /fksum exch def /fkcnt fkcnt 1 add def } { pop } ifelse
+        fksum fkcnt div frnd 0.5 sub fkamp mul add
+        fkga fkyy fkgn mul fkxx add 3 -1 roll put
+      } for
+    } for
+    /fkstep fkhalf def
+  } loop
+  % stretch to the full 0..1 range so the palette/channel is fully used
+  /fklo 1e9 def /fkhi -1e9 def
+  fkga { dup fklo lt { dup /fklo exch def } if dup fkhi gt { dup /fkhi exch def } if pop } forall
+  /fkspan fkhi fklo sub def
+  fkspan 1e-9 lt { /fkspan 1 def } if
+  0 1 fkgn fkgn mul 1 sub { /fkii exch def
+    fkga fkii fkga fkii get fklo sub fkspan div put
+  } for
+  fkga
+} def
+
+% grid u v fkbil -> value       (bilinear sample of an N*N grid, u v in 0..1)
+% @internal
+/fkbil {
+  fkgn 1 sub mul 0 max fkgn 1 sub min /fkbv exch def
+  fkgn 1 sub mul 0 max fkgn 1 sub min /fkbu exch def
+  /fkbg exch def
+  /fkbx fkbu floor cvi def fkbx fkgn 2 sub gt { /fkbx fkgn 2 sub def } if
+  /fkby fkbv floor cvi def fkby fkgn 2 sub gt { /fkby fkgn 2 sub def } if
+  /fkbfx fkbu fkbx sub def /fkbfy fkbv fkby sub def
+  fkbg fkby fkgn mul fkbx add get 1 fkbfx sub mul
+  fkbg fkby fkgn mul fkbx add 1 add get fkbfx mul add
+  1 fkbfy sub mul
+  fkbg fkby 1 add fkgn mul fkbx add get 1 fkbfx sub mul
+  fkbg fkby 1 add fkgn mul fkbx add 1 add get fkbfx mul add
+  fkbfy mul add
+} def
+
+% u v -> r g b
+% @internal
+/fkalg-plasma {
+  /fkv exch def /fku exch def
+  fknopal {
+    fkgr fku fkv fkbil fkgg fku fkv fkbil fkgb fku fkv fkbil
+  } {
+    fkgr fku fkv fkbil fkramp
+  } ifelse
+} def
+
+% --- solid noise / clouds ------------------------------------------------
+
+% x y fkfbm -> t in 0..1     (fractal Brownian motion of artkit's noise2)
+% Each octave doubles the frequency and halves the amplitude. The plain
+% form is centred on 0.5; the /Turbulent form sums |noise| (GIMP's
+% "Turbulent" switch), which gives the creased, ridged look.
+% @internal
+/fkfbm {
+  /fkfy exch def /fkfx exch def
+  /fksum 0 def /fknorm 0 def /fkfa 1 def /fkff 1 def
+  fkoct {
+    fkfx fkff mul fkfy fkff mul noise2
+    fkturbl { abs } if
+    fkfa mul fksum add /fksum exch def
+    fknorm fkfa add /fknorm exch def
+    /fkfa fkfa 0.5 mul def /fkff fkff 2 mul def
+  } repeat
+  fkturbl { fksum fknorm div 2.2 mul } { fksum fknorm div 0.9 mul 0.5 add } ifelse
+  0 1 fkclamp
+} def
+
+% u v -> r g b     (u v are scaled by the box aspect so features stay round)
+% @internal
+/fkalg-solid2 {
+  fkbh fkbmax div mul fkscale mul 0.71 add /fkfy exch def
+  fkbw fkbmax div mul fkscale mul 0.37 add /fkfx exch def
+  fkfx fkfy fkfbm fkramp
+} def
+
+% u v -> r g b     (|fieldA - fieldB|: GIMP's Difference Clouds, minus the
+%                   pixel readback — both fields are generated here)
+% @internal
+/fkalg-diff {
+  /fkdv exch fkbh fkbmax div mul fkscale mul def
+  /fkdu exch fkbw fkbmax div mul fkscale mul def
+  fkdu 0.37 add fkdv 0.71 add fkfbm
+  fkdu 31.4 add fkdv 17.7 add fkfbm
+  sub abs 3 mul 0 1 fkclamp fkramp
+} def
+
+% y x fkturn -> angle in 0..1 turns; the exact centre (0,0) is 0, since
+% atan(0,0) is undefinedresult
+% @internal
+/fkturn { 2 copy 0 eq exch 0 eq and { pop pop 0 } { atan 360 div } ifelse } def
+
+% --- gradient shapes ------------------------------------------------------
+
+% u v -> r g b     (shape from fkshape; geometry in box points)
+% @internal
+/fkalg-grad {
+  /fkgv exch fkcy sub fkbh mul def
+  /fkgu exch fkcx sub fkbw mul def
+  fkgu fkca mul fkgv fkcs mul add /fkgx exch def
+  fkgv fkca mul fkgu fkcs mul sub /fkgy exch def
+  fkshape /bilinear eq { fkgx abs fkrad div } {
+  fkshape /square eq { fkgx abs fkgy abs max fkrad div } {
+  fkshape /conical eq {
+    fkgy fkgx fkturn
+    fksym { dup 0.5 gt { 1 exch sub } if 2 mul } if
+  } {                                                   % spiral
+    fkgy fkgx fkturn
+    fkgx dup mul fkgy dup mul add sqrt fkrad div fkturns mul add
+    dup floor sub
+  } ifelse } ifelse } ifelse
+  fkramp
+} def
+
+% --- the shared drawing engine ---------------------------------------------
+
+% One image row of fkw pixels, top row first; called by colorimage.
+% @internal
+/fkrow {
+  /fkrs fkw 3 mul string def
+  0 1 fkw 1 sub { /fkpx exch def
+    fkpx 0.5 add fkw div
+    fkh fkrowi 0.5 add sub fkh div
+    fkspread 0 gt {
+      exch frnd 0.5 sub 2 mul fkspread mul add 0 1 fkclamp
+      exch frnd 0.5 sub 2 mul fkspread mul add 0 1 fkclamp
+    } if
+    fkalg cvx exec
+    fkgrain
+    255 mul cvi 0 255 fkclamp /fkob exch def
+    255 mul cvi 0 255 fkclamp /fkog exch def
+    255 mul cvi 0 255 fkclamp /fkor exch def
+    fkrs fkpx 3 mul fkor put
+    fkrs fkpx 3 mul 1 add fkog put
+    fkrs fkpx 3 mul 2 add fkob put
+  } for
+  /fkrowi fkrowi 1 add def
+  fkrs
+} def
+
+% Options every fill shares, validated before any state change.
+% @internal
+/fkcommon {
+  /fkbw fkx1 fkx0 sub def /fkbh fky1 fky0 sub def
+  /fkbmax fkbw fkbh max def
+  /Seed 1 fkget { fillkit-seed-must-be-a-number } fknum
+  dup abs 2147483647 gt { fillkit-seed-out-of-range } if /fkseed exch def
+  /Resolution 128 fkget
+  dup type /nametype eq {
+    /device eq not { fillkit-resolution-must-be-a-number-or-device } if
+    fkbw 0 fkdevlen 0 fkbh fkdevlen max
+  } { { fillkit-resolution-must-be-a-number-or-device } fknum } ifelse
+  8 512 fkclamp cvi /fkres exch def
+  /Spread 0 fkget { fillkit-spread-must-be-a-number } fknum 0 1 fkclamp /fkspread exch def
+  /RGBNoise 0 fkget { fillkit-rgbnoise-must-be-a-number } fknum 0 1 fkclamp /fkrgbn exch def
+  /HSVNoise [0 0 0] fkget
+  dup type /arraytype ne { fillkit-hsvnoise-must-be-an-array-of-3-numbers } if
+  dup length 3 ne { fillkit-hsvnoise-must-be-an-array-of-3-numbers } if
+  dup { fkisnum not { fillkit-hsvnoise-must-be-an-array-of-3-numbers } if } forall
+  dup { 0 1 fkclamp } forall 3 array astore /fkhsvn exch def pop
+  /fkhsvon fkhsvn 0 get 0 gt fkhsvn 1 get 0 gt or fkhsvn 2 get 0 gt or def
+  /fkpal fkpalette def
+  fkpal null eq { /fkpal [[0 0 0] [1 1 1]] def /fknopal true def } { /fknopal false def } ifelse
+  /fkpn fkpal length def
+  fkbw fkbh ge
+    { /fkw fkres def /fkh fkres fkbh mul fkbw div round cvi 1 max def }
+    { /fkh fkres def /fkw fkres fkbw mul fkbh div round cvi 1 max def } ifelse
+} def
+
+% Reseed, build any field state, paint the image, restore rand.
+% @internal
+/fkpaint {
+  /fksaved rrand def
+  fkseed cvi srand
+  fkalg /fkalg-solid2 eq fkalg /fkalg-diff eq or { noiseinit } if
+  fkalg /fkalg-plasma eq {
+    fknopal {
+      fkds /fkgr exch def fkds /fkgg exch def fkds /fkgb exch def
+    } { fkds /fkgr exch def } ifelse
+  } if
+  /fkrowi 0 def
+  fkx0 fky0 translate fkbw fkbh scale
+  fkw fkh 8 [fkw 0 0 fkh neg 0 fkh] { fkrow } false 3 colorimage
+  fksaved srand /fksaved null def
+} def
+
+% --- public ---------------------------------------------------------------
+
+% x0 y0 x1 y1 opts plasmafill -
+% @kind: Procedure
+% @summary: Fill the box x0 y0 x1 y1 with a GIMP-style plasma: a midpoint-displacement (diamond-square) fractal colour field of soft, blended clouds. Random RGB per channel by default (GIMP's look), or one field mapped through /Palette. Paint inside a clip to fill a shape; seeded and deterministic, and the caller's rand state is left alone.
+% @example: gsave 40 40 360 260 rectclip 40 40 360 260 << /Seed 7 /Turbulence 1.2 >> plasmafill grestore
+% @param: /Seed num integer seed (default 1)
+% @param: /Turbulence num 0..10 roughness: per-level displacement decays as 2^(-1/(1+t)), so low is smooth and blobby, high keeps fine crinkle (default 1)
+% @param: /Detail num 3..7 subdivision levels, i.e. a (2^n+1)-point square grid; capped at 7 to stay under Level 2's 65535-element array limit (default 6)
+% @param: /Palette name-or-array blend this palette instead of random RGB: one plasma field mapped through the ramp (default: random RGB)
+% @param: /Resolution num-or-/device 8..512 image samples along the longer side, or /device for one per device pixel (default 128)
+% @param: /Spread num 0..1 GIMP Spread as sample-coordinate jitter (default 0)
+% @param: /RGBNoise num 0..1 per-channel grain (default 0)
+% @param: /HSVNoise [h s v] hue/saturation/value grain, each 0..1 (default off)
+/plasmafill {
+  fkargs
+  count 5 sub 300 dict begin
+  /fksaved null def
+  /fkbase exch def /fkopts exch def /fky1 exch def /fkx1 exch def /fky0 exch def /fkx0 exch def
+  gsave
+  {
+    fkcommon
+    /Turbulence 1 fkget { fillkit-turbulence-must-be-a-number } fknum 0 10 fkclamp /fkturb exch def
+    /Detail 6 fkget { fillkit-detail-must-be-a-number } fknum 3 7 fkclamp cvi /fkdet exch def
+    /fkhurst 1 fkturb 1 add div def
+    /fkgn 1 fkdet bitshift 1 add def
+    /fkalg /fkalg-plasma def
+    fkpaint
+  } stopped { fkunwind } if
+  grestore
+  end
+} def
+
+% x0 y0 x1 y1 opts solidnoisefill -
+% @kind: Procedure
+% @summary: Fill the box with GIMP-style Solid Noise: Perlin-style fractal noise (artkit's noise2, several octaves) mapped through /Palette (default black to white). /Turbulent gives the creased, ridged variant. Not tileable, unlike GIMP's, because noise2's table is not periodic in the box.
+% @example: gsave 40 40 360 260 rectclip 40 40 360 260 << /Seed 3 /Palette /dusk /Scale 3 >> solidnoisefill grestore
+% @param: /Seed num integer seed (default 1)
+% @param: /Scale num > 0 noise features across the longer side (default 4)
+% @param: /Detail num 1..8 octaves (default 4)
+% @param: /Turbulent bool sum absolute values for the ridged look (default false)
+% @param: /Palette name-or-array ramp the noise is mapped through (default black to white)
+% @param: /Resolution num-or-/device 8..512 image samples along the longer side, or /device for one per device pixel (default 128)
+% @param: /Spread num 0..1 GIMP Spread as sample-coordinate jitter (default 0)
+% @param: /RGBNoise num 0..1 per-channel grain (default 0)
+% @param: /HSVNoise [h s v] hue/saturation/value grain, each 0..1 (default off)
+/solidnoisefill {
+  fkargs
+  count 5 sub 300 dict begin
+  /fksaved null def
+  /fkbase exch def /fkopts exch def /fky1 exch def /fkx1 exch def /fky0 exch def /fkx0 exch def
+  gsave
+  {
+    fkcommon
+    /Scale 4 fkget { fillkit-scale-must-be-a-number } fknum
+    dup 0 le { fillkit-scale-must-be-positive } if 0.01 1000 fkclamp /fkscale exch def
+    /Detail 4 fkget { fillkit-detail-must-be-a-number } fknum 1 8 fkclamp cvi /fkoct exch def
+    /Turbulent false fkget dup type /booleantype ne { fillkit-turbulent-must-be-a-bool } if /fkturbl exch def
+    /fkalg /fkalg-solid2 def
+    fkpaint
+  } stopped { fkunwind } if
+  grestore
+  end
+} def
+
+% x0 y0 x1 y1 opts diffcloudsfill -
+% @kind: Procedure
+% @summary: Fill the box with a Difference-Clouds look: the absolute difference of two independent fractal-noise fields, which folds the noise into dark creases and bright veins. GIMP's filter differences the new clouds against the existing image; with no pixel readback in PostScript, both fields are generated here.
+% @example: gsave 40 40 360 260 rectclip 40 40 360 260 << /Seed 5 /Palette /nocturne >> diffcloudsfill grestore
+% @param: /Seed num integer seed (default 1)
+% @param: /Scale num > 0 noise features across the longer side (default 3)
+% @param: /Detail num 1..8 octaves (default 4)
+% @param: /Palette name-or-array ramp the result is mapped through (default black to white)
+% @param: /Resolution num-or-/device 8..512 image samples along the longer side, or /device for one per device pixel (default 128)
+% @param: /Spread num 0..1 GIMP Spread as sample-coordinate jitter (default 0)
+% @param: /RGBNoise num 0..1 per-channel grain (default 0)
+% @param: /HSVNoise [h s v] hue/saturation/value grain, each 0..1 (default off)
+/diffcloudsfill {
+  fkargs
+  count 5 sub 300 dict begin
+  /fksaved null def
+  /fkbase exch def /fkopts exch def /fky1 exch def /fkx1 exch def /fky0 exch def /fkx0 exch def
+  gsave
+  {
+    fkcommon
+    /Scale 3 fkget { fillkit-scale-must-be-a-number } fknum
+    dup 0 le { fillkit-scale-must-be-positive } if 0.01 1000 fkclamp /fkscale exch def
+    /Detail 4 fkget { fillkit-detail-must-be-a-number } fknum 1 8 fkclamp cvi /fkoct exch def
+    /fkturbl false def
+    /fkalg /fkalg-diff def
+    fkpaint
+  } stopped { fkunwind } if
+  grestore
+  end
+} def
+
+% x0 y0 x1 y1 opts gradshapefill -
+% @kind: Procedure
+% @summary: Fill the box with one of the GIMP gradient shapes that artkit's axialsh/radialsh do not cover: /bilinear (mirrored linear), /square, /conical (angle sweep) or /spiral, mapped through /Palette. Linear and radial gradients stay in artkit (axialsh, radialsh); GIMP's shapeburst and dimpled shapes need distance transforms and are skipped.
+% @example: gsave 40 40 360 260 rectclip 40 40 360 260 << /Shape /conical /Palette /carnival >> gradshapefill grestore
+% @param: /Shape name /bilinear, /square, /conical or /spiral (default /conical)
+% @param: /Center [cx cy] gradient centre as fractions of the box (default [0.5 0.5])
+% @param: /Angle num rotation in degrees (default 0)
+% @param: /Radius num > 0 extent as a fraction of half the longer side (default 1)
+% @param: /Turns num spiral windings from centre to /Radius (default 3)
+% @param: /Symmetric bool conical only: mirror the sweep so it has no seam (default false)
+% @param: /Palette name-or-array ramp (default black to white)
+% @param: /Resolution num-or-/device 8..512 image samples along the longer side, or /device for one per device pixel (default 128)
+% @param: /Spread num 0..1 GIMP Spread as sample-coordinate jitter (default 0)
+% @param: /RGBNoise num 0..1 per-channel grain (default 0)
+% @param: /HSVNoise [h s v] hue/saturation/value grain, each 0..1 (default off)
+/gradshapefill {
+  fkargs
+  count 5 sub 300 dict begin
+  /fksaved null def
+  /fkbase exch def /fkopts exch def /fky1 exch def /fkx1 exch def /fky0 exch def /fkx0 exch def
+  gsave
+  {
+    fkcommon
+    /Shape /conical fkget dup type /nametype ne { fillkit-shape-must-be-a-name } if /fkshape exch def
+    fkshape /bilinear eq fkshape /square eq or fkshape /conical eq or fkshape /spiral eq or not
+      { fillkit-shape-must-be-bilinear-square-conical-or-spiral } if
+    /Center [0.5 0.5] fkget
+    dup type /arraytype ne { fillkit-center-must-be-an-array-of-2-numbers } if
+    dup length 2 ne { fillkit-center-must-be-an-array-of-2-numbers } if
+    dup { fkisnum not { fillkit-center-must-be-an-array-of-2-numbers } if } forall
+    dup 0 get /fkcx exch def 1 get /fkcy exch def
+    /Angle 0 fkget { fillkit-angle-must-be-a-number } fknum /fkang exch def
+    /fkca fkang cos def /fkcs fkang sin def
+    /Radius 1 fkget { fillkit-radius-must-be-a-number } fknum
+    dup 0 le { fillkit-radius-must-be-positive } if /fkrad exch fkbmax 2 div mul def
+    /Turns 3 fkget { fillkit-turns-must-be-a-number } fknum /fkturns exch def
+    /Symmetric false fkget dup type /booleantype ne { fillkit-symmetric-must-be-a-bool } if /fksym exch def
+    /fkalg /fkalg-grad def
+    fkpaint
+  } stopped { fkunwind } if
+  grestore
+  end
+} def
+%%EOF

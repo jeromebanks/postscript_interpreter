@@ -43,10 +43,25 @@
 % on a mismatch. Ghostscript's own fallback (Courier) is rejected the
 % same way, so under gs only builtin faces work; catalog faces are pscat's.
 %
+% Fill treatments (issue #154): /plasma, /clouds (Perlin solid noise),
+% /diffclouds and /conical hand the glyph box to `lib/fillkit.ps` (GIMP's
+% plasma / solid noise / difference clouds / conical gradient) inside the
+% glyph clip. They need `(lib/fillkit.ps) run` loaded after artkit; a
+% caller that forgot gets `lettering-treatment-needs-fillkit` rather than
+% a bare undefined. /Palette blends the palette through the field
+% (for /plasma: only if given — with no /Palette the plasma is GIMP's
+% random RGB); /Seed picks the field; /Fill << ... >> passes any
+% fillkit option straight through (/Turbulence, /Scale, /RGBNoise...).
+% The field is one small image under the vector clip (fillkit.ps header).
+%
 % Which effects survive which output (all verified against pscat's
 % own SVG/PDF/PNG output; see NOTES.md, issue #144):
 %   /solid /patches /mottled   pure paths + clip: vector in SVG and PDF
 %                              (SVG <clipPath>, PDF `W n`), never rasterized
+%   /plasma /clouds /diffclouds /conical
+%                              one RGB image (fillkit.ps) under the vector
+%                              glyph clip: the letters stay vector in SVG
+%                              and PDF, the field inside is an embedded image
 %   /transition                uses `shfill`: a native <linearGradient> in
 %                              SVG; a flat average-color approximation in
 %                              the PDF export; smooth only in PNG
@@ -222,6 +237,26 @@
     fill } repeat
 } def
 
+% The fillkit treatments: one `x0 y0 x1 y1 opts` call over the glyph box,
+% inside the clip psyletter already set. Lettering's own /Seed and
+% /Palette feed the fill (the palette only when given for /plasma, so the
+% plasma default stays GIMP's random RGB); /Fill entries win over both.
+% @internal
+/ltfillpaint {
+  /ltfo 12 dict def
+  ltfo /Seed ltseed put
+  ltfo /Resolution /device put
+  lttreat /plasma ne ltopts /Palette known or { ltfo /Palette ltpal put } if
+  lttreat /conical eq { ltfo /Shape /conical put } if
+  ltopts /Fill known { ltopts /Fill get { ltfo 3 1 roll put } forall } if
+  ltbx0 ltby0 ltbx1 ltby1 ltfo
+  lttreat /plasma eq { plasmafill } {
+    lttreat /clouds eq { solidnoisefill } {
+      lttreat /diffclouds eq { diffcloudsfill } { gradshapefill } ifelse
+    } ifelse
+  } ifelse
+} def
+
 % The body of psyletter, run inside its gsave and scratch dict.
 % @internal
 /ltdraw {
@@ -232,7 +267,13 @@
   /Treatment /mottled ltget dup type /nametype ne { lettering-treatment-must-be-a-name } if
   /lttreat exch def
   lttreat /solid eq lttreat /transition eq or lttreat /patches eq or
-  lttreat /mottled eq or not { lettering-treatment-must-be-solid-transition-patches-or-mottled } if
+  lttreat /mottled eq or lttreat /plasma eq or lttreat /clouds eq or
+  lttreat /diffclouds eq or lttreat /conical eq or not
+    { lettering-treatment-must-be-solid-transition-patches-mottled-plasma-clouds-diffclouds-or-conical } if
+  lttreat /plasma eq lttreat /clouds eq or lttreat /diffclouds eq or lttreat /conical eq or {
+    /plasmafill where { pop } { lettering-treatment-needs-fillkit } ifelse
+    ltopts /Fill known { ltopts /Fill get type /dicttype ne { lettering-fill-must-be-a-dict } if } if
+  } if
   /ltoutc /Outline [0.06 0.05 0.08] ltget { lettering-outline-must-be-an-rgb-array } ltrgb def
   /ltwearc /WearColor [0.96 0.92 0.82] ltget { lettering-wearcolor-must-be-an-rgb-array } ltrgb def
   /ltow /OutlineWidth 0.03 ltget { lettering-outlinewidth-must-be-a-number } ltnum
@@ -259,6 +300,8 @@
     lttreat /transition eq ltpal length 1 gt and {
       ltbx0 ltby1 ltbx1 ltby0 ltpal axialsh shfill
     } if
+    lttreat /plasma eq lttreat /clouds eq or lttreat /diffclouds eq or
+    lttreat /conical eq or { ltfillpaint } if
     lttreat /patches eq lttreat /mottled eq or {
       /ltsaved rrand def
       ltseed cvi srand
@@ -292,7 +335,7 @@
   3 index type /stringtype ne { lettering-text-must-be-a-string } if
   2 index ltisnum not { lettering-x-must-be-a-number } if
   1 index ltisnum not { lettering-y-must-be-a-number } if
-  count 4 sub 40 dict begin
+  count 4 sub 80 dict begin
   /ltbase exch def /ltopts exch def /lty exch def /ltx exch def /lttext exch def
   /ltfor true def
   { ltprep ltaddpath } stopped { false ltunwind } if
@@ -307,7 +350,8 @@
 % @param: /Size num > 0 font size in points (default 160)
 % @param: /Width num > 0 fit the text to exactly this width; overrides /Size
 % @param: /Align /left|/center|/right which side of x the text is anchored to (default /center)
-% @param: /Treatment /solid|/transition|/patches|/mottled interior look (default /mottled)
+% @param: /Treatment /solid|/transition|/patches|/mottled|/plasma|/clouds|/diffclouds|/conical interior look; the last four need lib/fillkit.ps (default /mottled)
+% @param: /Fill dict extra lib/fillkit.ps options for the fillkit treatments, e.g. << /Turbulence 1.5 /RGBNoise 0.05 >>; they win over /Seed and /Palette
 % @param: /Palette name-or-array artkit palette name, or an array of [r g b]; the interior colors (default red, green, blue)
 % @param: /Seed num integer seed for the texture only (default 1)
 % @param: /Patches num count of color patches for /patches and /mottled (default scales with the glyph box: about 26 for one word like Real)
@@ -320,7 +364,7 @@
   3 index type /stringtype ne { lettering-text-must-be-a-string } if
   2 index ltisnum not { lettering-x-must-be-a-number } if
   1 index ltisnum not { lettering-y-must-be-a-number } if
-  count 4 sub 40 dict begin
+  count 4 sub 80 dict begin
   /ltbase exch def /ltopts exch def /lty exch def /ltx exch def /lttext exch def
   gsave
   { ltdraw } stopped { true ltunwind } if

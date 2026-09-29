@@ -346,6 +346,13 @@ rather than `findfont`'s silent Helvetica. `examples/lettering.ps` is
 the specimen, with a site card (NOTES.md's entry has the vector-vs-raster
 table and the gs caveats). First slice of the shirt remake; composition
 and print assets are follow-up issues.
+Also done: issue #154, GIMP-style fills — `lib/fillkit.ps`
+(`@requires: (lib/artkit.ps) run`, tag-migrated): `plasmafill`,
+`solidnoisefill`, `diffcloudsfill`, `gradshapefill` over `x0 y0 x1 y1 opts`,
+each one `colorimage` under the caller's clip. `psyletter` gained
+`/Treatment` `/plasma` `/clouds` `/diffclouds` `/conical` (need fillkit
+loaded, else `lettering-treatment-needs-fillkit`). `examples/fillkit.ps`
+is the specimen; NOTES.md's entry lists what GIMP algorithms were skipped.
 Also done: issue #52, woodcut/linocut/engraving mark presets — a
 tenth sibling, `lib/printkit.ps`, composing `hatchkit.ps`'s `hatch`,
 `artkit.ps`'s `scatter`, and (optionally, `/Paper true`)
