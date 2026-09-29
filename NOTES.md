@@ -20,8 +20,10 @@ sleeve artwork files. It composes `headline.ps` (layout) and
   piece reduced, on a checkerboard, print area red / margin blue), `/draw`,
   `/size`, `/list`, `/manifest`. `scripts/apparel_export.sh CONFIG OUTDIR`
   sequences plain `pscat --page --dpi --transparent --png/--svg/--pdf`
-  runs, checks the PNG's real pixel size against the requested one, and
-  writes `<name>-manifest.json` (inches, rounded points, DPI, pixels,
+  runs (raster with `--dpi`; SVG/PDF without, so they declare the physical
+  size in points -- the script rewrites the SVG's unitless width/height to
+  `pt`), records the PNG's *measured* pixel size (pscat rounds in f32, so
+  a computed size can disagree by a pixel at .5), and writes `<name>-manifest.json` (inches, rounded points, DPI, pixels,
   background mode, seed, per-run face/text/treatment, font files +
   licences from `fonts/catalog`, per-format transparency notes) plus a
   proof PNG.

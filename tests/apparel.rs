@@ -51,7 +51,7 @@ fn sleeves_are_optional_and_pieces_are_independent() {
     assert_eq!(list.lines().count(), 2, "{list}");
     let (ok, size, err) = pscat("examples/apparel_second.ps", "size", "Back", &[]);
     assert!(ok, "{err}");
-    assert_eq!(size.trim(), "720 288 2000 800 transparent");
+    assert_eq!(size.trim(), "720 288 transparent");
 }
 
 #[test]
@@ -63,7 +63,6 @@ fn manifest_records_size_dpi_background_and_fonts() {
         r#""dpi":300"#,
         r#""inches":[12,14]"#,
         r#""points":[864,1008]"#,
-        r#""pixels":[3600,4200]"#,
         r#""face":"AlfaSlabOne""#,
         r#""text":"No.\n1""#,
         // the front is a three-run tucked composition (/Runs)
@@ -154,4 +153,67 @@ fn a_phrase_that_cannot_fit_fails_loudly_instead_of_clipping() {
     let out = child.wait_with_output().unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("headline-run-outside-region"));
+}
+
+/// Codex review of PR #152: /size reports points (no double-vs-f32 pixel
+/// rounding disagreement at 0.75in @150dpi), and control bytes in
+/// /Name or /Text must be escaped so the manifest stays valid JSON.
+#[test]
+fn reported_pixel_size_matches_the_render_and_manifest_escapes_controls() {
+    let cfg = "(lib/artkit.ps) run (lib/headline.ps) run (lib/lettering.ps) run \
+               (lib/apparel.ps) run << /Name (a\\tb\\r) /DPI 150 /Pieces << \
+               /Front << /Size [ 0.75 3 ] /Margin 0.05 /Text (Hi) /Font /AlfaSlabOne >> >> >> apmain";
+    let go = |mode: &str, extra: &[&str]| {
+        let mut child = Command::new(BIN)
+            .current_dir(ROOT)
+            .args(["--headless"])
+            .args(extra)
+            .arg("-")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(
+                format!("/ApparelMode /{mode} def /ApparelPiece /Front def {cfg}").as_bytes(),
+            )
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let size = go("size", &[]);
+    let f: Vec<&str> = size.split_whitespace().collect();
+    let png = std::env::temp_dir().join(format!("pscat-apparel-px-{}.png", std::process::id()));
+    go(
+        "draw",
+        &[
+            "--page",
+            &format!("{}x{}", f[0], f[1]),
+            "--dpi",
+            "150",
+            "--transparent",
+            "--png",
+            png.to_str().unwrap(),
+        ],
+    );
+    let pm = Pixmap::load_png(&png).unwrap();
+    // within a pixel of pt * dpi/72 (pscat rounds in f32; see appiecesize)
+    let want = |pt: &str| pt.parse::<f32>().unwrap() * 150.0 / 72.0;
+    assert!((pm.width() as f32 - want(f[0])).abs() <= 1.0);
+    assert!((pm.height() as f32 - want(f[1])).abs() <= 1.0);
+    let manifest = go("manifest", &[]);
+    assert!(
+        !manifest.bytes().any(|b| b < 32 && b != b'\n'),
+        "raw control byte in {manifest:?}"
+    );
+    assert!(manifest.contains(r"a\u0009b\u000d"), "{manifest}");
 }

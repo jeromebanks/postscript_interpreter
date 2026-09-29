@@ -60,7 +60,7 @@
 %   /proof     one page showing every piece at reduced scale with print
 %              area and margin outlined -- the whole config at a glance
 %   /draw      one piece at full size, page = print area
-%   /size      prints "wpt hpt wpx hpx transparent|color" for a piece
+%   /size      prints "wpt hpt transparent|color" for a piece
 %   /list      prints the configured piece names, one per line
 %   /manifest  prints a JSON description of every piece
 %
@@ -270,18 +270,14 @@
 
 % --- public: sizes, list, manifest ------------------------------------
 
-% cfg /Piece appiecesize -> wpt hpt wpx hpx
+% cfg /Piece appiecesize -> wpt hpt
+% Pixel sizes are deliberately not computed here: pscat rounds
+% pt * f32(dpi/72) in single precision, PostScript reals are double, and
+% they disagree at .5 (0.75in @150dpi: 112 vs 113 px). The export script
+% records the PNG's *measured* size instead.
 % @internal
 /appiecesize {
-  20 dict begin
-  exch /apcfg exch def /appiece apcfg 3 -1 roll appiecedict def
-  appiece apsizepts /aph exch def /apw exch def
-  apcfg apdpi /apd exch def
-  apw aph
-  apw apd 72 div mul round cvi
-  aph apd 72 div mul round cvi
-  2 copy 8000 gt exch 8000 gt or { apparel-pixels-exceed-8000 } if
-  end
+  exch /Pieces get exch get apsizepts
 } def
 
 % Piece names configured, in export order.
@@ -301,7 +297,11 @@
   { dup 34 eq { pop (\\") print } {
     dup 92 eq { pop (\\\\) print } {
     dup 10 eq { pop (\\n) print } {
-      1 string dup 0 4 -1 roll put print } ifelse } ifelse } ifelse
+    dup 32 lt {
+      (\\u00) print dup 16 idiv (0123456789abcdef) exch 1 getinterval print
+      16 mod (0123456789abcdef) exch 1 getinterval print
+    } {
+      1 string dup 0 4 -1 roll put print } ifelse } ifelse } ifelse } ifelse
   } forall
   (") print
 } def
@@ -326,9 +326,7 @@
   (,"inches":) print appiece /Size get apja2
   (,"margin_in":) print appiece /Margin known { appiece /Margin get } { 0.25 } ifelse apjn
   (,"points":) print [ apw aph ] apja2
-  apcfg appname appiecesize /apph exch def /appw exch def pop pop
   (,"dpi":) print apcfg apdpi apjn
-  (,"pixels":) print [ appw apph ] apja2
   (,"background":) print apcfg apbgmode apjs
   (,"seed":) print aprs 0 get /Seed get apjn
   (,"runs":[) print
@@ -390,7 +388,7 @@
   0.98 setgray 0 0 apPW apPH rectfill
   apfcfg apconfigured /apfl exch def
   /apsum 0 def /apmaxh 0 def
-  apfl { apfcfg exch appiecesize pop pop /apsh exch def /apsw exch def
+  apfl { apfcfg exch appiecesize /apsh exch def /apsw exch def
     apsh apmaxh gt { /apmaxh apsh def } if
     /apsum apsum apsw add def } forall
   /apgap 24 def /appad 30 def /aplab 30 def
@@ -401,7 +399,7 @@
   def
   /apx appad def
   apfl { /apfn exch def
-    apfcfg apfn appiecesize pop pop /aph2 exch def /apw2 exch def
+    apfcfg apfn appiecesize /aph2 exch def /apw2 exch def
     apfcfg /Pieces get apfn get /appiece2 exch def
     /apy appad aplab add apPH appad 2 mul sub aplab sub apmaxh apsc mul sub 2 div add def
     gsave apx apy translate apsc dup scale
@@ -445,7 +443,7 @@
   dup /manifest eq { pop apmcf apmanifest } {
   dup /list eq { pop apmcf apconfigured { dup 40 string cvs print ( ) print apstem print (\n) print } forall } {
   dup /size eq { pop apmcf ApparelPiece appiecesize
-    4 array astore { apjn ( ) print } forall
+    2 array astore { apjn ( ) print } forall
     apmcf apbgmode print (\n) print } {
   dup /draw eq { pop apmcf ApparelPiece apdrawpiece } {
     pop apparel-unknown-mode } ifelse } ifelse } ifelse } ifelse } ifelse
