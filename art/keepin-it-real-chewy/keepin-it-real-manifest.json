@@ -1,7 +1,7 @@
 {
   "tool": "pscat lib/apparel.ps",
   "vendor_neutral": true,
-  "name": "keepin-it-real-bagel",
+  "name": "keepin-it-real",
   "dpi": 300,
   "background": "transparent",
   "pieces": [
@@ -23,24 +23,24 @@
       "runs": [
         {
           "text": "Real",
-          "face": "BagelFatOne-Regular",
+          "face": "Chewy-Regular",
           "treatment": "plasma"
         },
         {
           "text": "Keepin' it",
-          "face": "BagelFatOne-Regular",
+          "face": "Chewy-Regular",
           "treatment": "plasma"
         },
         {
           "text": "I'm",
-          "face": "BagelFatOne-Regular",
+          "face": "Chewy-Regular",
           "treatment": "plasma"
         }
       ],
       "files": {
-        "png": "keepin-it-real-bagel-front.png",
-        "svg": "keepin-it-real-bagel-front.svg",
-        "pdf": "keepin-it-real-bagel-front.pdf"
+        "png": "keepin-it-real-front.png",
+        "svg": "keepin-it-real-front.svg",
+        "pdf": "keepin-it-real-front.pdf"
       },
       "pixels": [
         3600,
@@ -85,9 +85,9 @@
         }
       ],
       "files": {
-        "png": "keepin-it-real-bagel-back.png",
-        "svg": "keepin-it-real-bagel-back.svg",
-        "pdf": "keepin-it-real-bagel-back.pdf"
+        "png": "keepin-it-real-back.png",
+        "svg": "keepin-it-real-back.svg",
+        "pdf": "keepin-it-real-back.pdf"
       },
       "pixels": [
         3600,
@@ -100,10 +100,10 @@
       ]
     }
   ],
-  "proof": "keepin-it-real-bagel-proof.png",
+  "proof": "keepin-it-real-proof.png",
   "fonts": [
     {
-      "face": "BagelFatOne-Regular",
+      "face": "Chewy-Regular",
       "source": "builtin"
     },
     {

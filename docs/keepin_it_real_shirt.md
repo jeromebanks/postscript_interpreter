@@ -9,8 +9,8 @@ from the photos; they were used only as the visual reference.
 
 | | |
 |---|---|
-| `examples/keepin_it_real_shirt.ps` | the editable source/config (front in Chewy + back) |
-| `examples/keepin_it_real_shirt_bagel.ps` | same config, Bagel Fat One front; exports in `art/keepin-it-real-bagel/` |
+| `examples/keepin_it_real_shirt.ps` | the editable source/config (front in Bagel Fat One + back) — **chosen** |
+| `examples/keepin_it_real_shirt_chewy.ps` | same config, Chewy front (unchosen, kept for the record); exports in `art/keepin-it-real-chewy/` |
 | `art/keepin-it-real/font-comparison.png` | reference photo crop above both fronts (Chewy, Bagel Fat One) |
 | `gallery/keepin_it_real.ps` | gallery piece: both fronts + back, see `gallery/README.md` |
 | `examples/keepin_it_real_front_alt.ps` | rejected second front composition |
@@ -33,7 +33,7 @@ Renders are deterministic (same seed → identical output).
 - **Seed** 11 (plasma field; was 7 for the AlfaSlabOne/mottled pass). **DPI** 300.
 - **Front**: 12 × 14 in (864 × 1008 pt) → 3600 × 4200 px. **Back**: 12 × 5 in
   (864 × 360 pt) → 3600 × 1500 px. Margin 0.5 in / 0.4 in.
-- **Fonts**: front `Chewy-Regular` (Apache 2.0) or, in the `-bagel` variant, `BagelFatOne-Regular` (OFL), see `docs/groovy_font_choice.md`; back
+- **Fonts**: front `BagelFatOne-Regular` (OFL), or `Chewy-Regular` (Apache 2.0) in the `-chewy` variant, see `docs/groovy_font_choice.md`; back
   `Courier-Bold` and `Courier-BoldOblique` (built-in Liberation Mono, OFL).
 - **Background**: transparent. PNG is RGBA with alpha 0 outside the art
   (`apparel_mock.sh` asserts the corner pixels; the SVG has no backdrop rect;
@@ -57,11 +57,11 @@ print size — readable.
 
 ## Deviations from the original (please review)
 
-- **Face**: Chewy is a look-alike, not the original font (unidentifiable
-  from the photo); its bracketed serifs are vestigial. Bagel Fat One is
-  heavier and rounder but its counters (the R, the `a`) are tight at print
-  size. Both fronts are exported with identical layout, palette and seed;
-  **Jerome to pick** (the default `art/keepin-it-real/` is Chewy). See
+- **Face**: neither face is the original font (unidentifiable from the
+  photo). Bagel Fat One is heavier and more geometric than the photo's
+  bracketed-serif lettering; its `e`/`a` counters are slits but stay open.
+  Chewy's serifs are vestigial. Both fronts are exported with identical layout, palette and seed;
+  **Jerome picked Bagel Fat One** (groovier, and its sincere heft sets up the back's punchline better; Chewy matched the photo's looseness more closely). Counters checked open at 300 dpi. See
   `art/keepin-it-real/font-comparison.png`.
 - **Colour**: plasma is smooth and soft like the original but lower in
   contrast and greener/less red-topped than the photo, which is more

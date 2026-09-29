@@ -23,17 +23,17 @@
       "runs": [
         {
           "text": "Real",
-          "face": "Chewy-Regular",
+          "face": "BagelFatOne-Regular",
           "treatment": "plasma"
         },
         {
           "text": "Keepin' it",
-          "face": "Chewy-Regular",
+          "face": "BagelFatOne-Regular",
           "treatment": "plasma"
         },
         {
           "text": "I'm",
-          "face": "Chewy-Regular",
+          "face": "BagelFatOne-Regular",
           "treatment": "plasma"
         }
       ],
@@ -103,7 +103,7 @@
   "proof": "keepin-it-real-proof.png",
   "fonts": [
     {
-      "face": "Chewy-Regular",
+      "face": "BagelFatOne-Regular",
       "source": "builtin"
     },
     {
