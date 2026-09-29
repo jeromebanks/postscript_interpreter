@@ -6228,9 +6228,11 @@ new `psyletter` treatments built on it. Motivated by the shirt remake
 - **Plasma** (`plasmafill`): diamond-square midpoint displacement on a
   (2^n+1) grid, bilinearly sampled. No `/Palette` gives GIMP's look —
   three independent channel fields, random RGB; with `/Palette` one field
-  goes through the ramp. `/Turbulence` scales the displacement
-  (amplitude ~ turbulence * (step/size)^0.7); each field is stretched to
-  its full 0..1 range so a palette is fully used.
+  goes through the ramp. `/Turbulence` sets the per-level
+  roughness (displacement (step/size)^H, H = 1/(1+turbulence)) — a plain
+  gain would be undone by the min/max stretch that fills each field's
+  0..1 range so a palette is fully used. A test pins that adjacent-pixel
+  difference rises monotonically with turbulence.
 - **Solid Noise** (`solidnoisefill`) = Perlin noise: GIMP's "Solid Noise"
   *is* Perlin-style gradient noise, so the "Perlin-style noise" item is the
   same implementation (artkit's `noise2`, fBm, `/Turbulent` sums |n|).
@@ -6255,7 +6257,8 @@ is instead one `colorimage` under the caller's clip. Verified: PNG resamples
 it, SVG gets one base64 `<image>` inside the `<clipPath>`, PDF one Flate RGB
 XObject under `W n` — the glyph shape itself stays vector. pscat's image
 blit is nearest-neighbour, so `/Resolution /device` (one sample per device
-pixel) is what `psyletter` uses for smooth PNGs. (2) *Global state:*
+pixel, capped at 512, so print-DPI boxes still upscale in blocks) is what
+`psyletter` uses for smooth screen-size PNGs. (2) *Global state:*
 `noiseinit` writes the global `Perm`; the fill runs it inside its own scratch
 dict, so the `def` shadows and the caller's table is untouched (tested), and
 `rrand` is saved/restored around the reseed. (3) *Lettering dependency:*
@@ -6264,7 +6267,10 @@ dict, so the `def` shadows and the caller's table is untouched (tested), and
 callers and `@requires` lines are unchanged. The treatment-name error was
 renamed (`...-plasma-clouds-diffclouds-or-conical`).
 
-**Found while building:** stack-index arithmetic in argument checks (an
+**Found while building:** `atan` of (0,0) is `undefinedresult`, so conical/
+spiral guard the exact centre; a helper named `fkang` was silently
+shadowed by an option variable of the same name (scratch names in a shared
+dict must be globally unique); stack-index arithmetic in argument checks (an
 `index` after a push is off by one); `mod` is integer-only (use `atan`'s
 0..360 directly); an executable name stored via `def` needs `cvx exec`.
 

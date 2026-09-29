@@ -29,7 +29,7 @@
 %   small RGB image (`colorimage`) stretched over the box and clipped
 %   by the caller's clip. Per output format (verified against pscat's
 %   own exports):
-%     PNG   the image is resampled by the rasterizer; the clip edge is
+%     PNG   the image is blitted nearest-neighbour; the clip edge is
 %           antialiased as usual.
 %     SVG   one base64-PNG <image> inside the clip's <clipPath>; the
 %           clip itself (the glyph outlines) stays vector.
@@ -40,7 +40,10 @@
 %   feature. pscat's image operator samples nearest-neighbour, so a
 %   field stretched over many device pixels per sample shows square
 %   steps; `/Resolution /device` picks one sample per device pixel
-%   (clamped to 512) for a smooth PNG, at the cost of more work.
+%   (clamped to 512) for a smooth PNG, at the cost of more work. The
+%   cap is real: a box wider than 512 device pixels (a large print-DPI
+%   export) is upscaled nearest-neighbour, so steps and grain show as
+%   multi-pixel blocks. Use /device for screen-size output.
 %   Only the *field* is raster; the shape it fills is never rasterized.
 %
 % Options shared by every fill (all optional):
@@ -121,6 +124,7 @@
   $error /command get 1 array astore /fkecmdbox exch def
   $error /errorname get /fkename exch def
   count fkbase sub dup 0 gt { { pop } repeat } { pop } ifelse
+  fksaved null ne { fksaved srand } if
   fkename /undefined eq { fkecmdbox 0 get } { /stop } ifelse
   grestore end
   cvx exec
@@ -227,9 +231,11 @@
 % -> a fresh N*N array of displaced values; consumes the seeded stream.
 % Corner values are random; each level fills square centres from their
 % 4 corners, then edge midpoints from their 3-4 neighbours, and adds a
-% random displacement scaled by (step/size)^0.7 — shrinking per level, so
-% the field is smooth at large scale and rougher at small, /Turbulence
-% multiplying that displacement.
+% random displacement of (step/size)^H. H = 1/(1+/Turbulence) is the
+% *roughness*: each level's displacement shrinks by 2^-H, so a low
+% turbulence decays fast (smooth, blobby) and a high one keeps energy at
+% the fine levels (busy, crinkled). A plain gain would not do — the
+% final min/max stretch divides any uniform gain back out.
 % @internal
 /fkds {
   /fkga fkgn fkgn mul array def
@@ -242,7 +248,7 @@
   {
     fkstep 2 lt { exit } if
     /fkhalf fkstep 2 idiv def
-    /fkamp fkturb fkstep fkgn 1 sub div 0.7 exp mul def
+    /fkamp fkstep fkgn 1 sub div fkhurst exp def
     % diamond step: square centres
     fkhalf fkstep fkgn 1 sub { /fkyy exch def
       fkhalf fkstep fkgn 1 sub { /fkxx exch def
@@ -347,6 +353,11 @@
   sub abs 3 mul 0 1 fkclamp fkramp
 } def
 
+% y x fkturn -> angle in 0..1 turns; the exact centre (0,0) is 0, since
+% atan(0,0) is undefinedresult
+% @internal
+/fkturn { 2 copy 0 eq exch 0 eq and { pop pop 0 } { atan 360 div } ifelse } def
+
 % --- gradient shapes ------------------------------------------------------
 
 % u v -> r g b     (shape from fkshape; geometry in box points)
@@ -359,10 +370,10 @@
   fkshape /bilinear eq { fkgx abs fkrad div } {
   fkshape /square eq { fkgx abs fkgy abs max fkrad div } {
   fkshape /conical eq {
-    fkgy fkgx atan 360 div
+    fkgy fkgx fkturn
     fksym { dup 0.5 gt { 1 exch sub } if 2 mul } if
   } {                                                   % spiral
-    fkgy fkgx atan 360 div
+    fkgy fkgx fkturn
     fkgx dup mul fkgy dup mul add sqrt fkrad div fkturns mul add
     dup floor sub
   } ifelse } ifelse } ifelse
@@ -438,7 +449,7 @@
   /fkrowi 0 def
   fkx0 fky0 translate fkbw fkbh scale
   fkw fkh 8 [fkw 0 0 fkh neg 0 fkh] { fkrow } false 3 colorimage
-  fksaved srand
+  fksaved srand /fksaved null def
 } def
 
 % --- public ---------------------------------------------------------------
@@ -448,8 +459,8 @@
 % @summary: Fill the box x0 y0 x1 y1 with a GIMP-style plasma: a midpoint-displacement (diamond-square) fractal colour field of soft, blended clouds. Random RGB per channel by default (GIMP's look), or one field mapped through /Palette. Paint inside a clip to fill a shape; seeded and deterministic, and the caller's rand state is left alone.
 % @example: gsave 40 40 360 260 rectclip 40 40 360 260 << /Seed 7 /Turbulence 1.2 >> plasmafill grestore
 % @param: /Seed num integer seed (default 1)
-% @param: /Turbulence num 0..10 displacement strength: low is smooth and blobby, high is busy and saturated (default 1)
-% @param: /Detail num 3..8 subdivision levels, i.e. a (2^n+1)-point square grid (default 6)
+% @param: /Turbulence num 0..10 roughness: per-level displacement decays as 2^(-1/(1+t)), so low is smooth and blobby, high keeps fine crinkle (default 1)
+% @param: /Detail num 3..7 subdivision levels, i.e. a (2^n+1)-point square grid; capped at 7 to stay under Level 2's 65535-element array limit (default 6)
 % @param: /Palette name-or-array blend this palette instead of random RGB: one plasma field mapped through the ramp (default: random RGB)
 % @param: /Resolution num-or-/device 8..512 image samples along the longer side, or /device for one per device pixel (default 128)
 % @param: /Spread num 0..1 GIMP Spread as sample-coordinate jitter (default 0)
@@ -458,12 +469,14 @@
 /plasmafill {
   fkargs
   count 5 sub 300 dict begin
+  /fksaved null def
   /fkbase exch def /fkopts exch def /fky1 exch def /fkx1 exch def /fky0 exch def /fkx0 exch def
   gsave
   {
     fkcommon
     /Turbulence 1 fkget { fillkit-turbulence-must-be-a-number } fknum 0 10 fkclamp /fkturb exch def
-    /Detail 6 fkget { fillkit-detail-must-be-a-number } fknum 3 8 fkclamp cvi /fkdet exch def
+    /Detail 6 fkget { fillkit-detail-must-be-a-number } fknum 3 7 fkclamp cvi /fkdet exch def
+    /fkhurst 1 fkturb 1 add div def
     /fkgn 1 fkdet bitshift 1 add def
     /fkalg /fkalg-plasma def
     fkpaint
@@ -488,6 +501,7 @@
 /solidnoisefill {
   fkargs
   count 5 sub 300 dict begin
+  /fksaved null def
   /fkbase exch def /fkopts exch def /fky1 exch def /fkx1 exch def /fky0 exch def /fkx0 exch def
   gsave
   {
@@ -518,6 +532,7 @@
 /diffcloudsfill {
   fkargs
   count 5 sub 300 dict begin
+  /fksaved null def
   /fkbase exch def /fkopts exch def /fky1 exch def /fkx1 exch def /fky0 exch def /fkx0 exch def
   gsave
   {
@@ -551,6 +566,7 @@
 /gradshapefill {
   fkargs
   count 5 sub 300 dict begin
+  /fksaved null def
   /fkbase exch def /fkopts exch def /fky1 exch def /fkx1 exch def /fky0 exch def /fkx0 exch def
   gsave
   {

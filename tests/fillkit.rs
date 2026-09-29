@@ -367,3 +367,69 @@ fn psyletter_fill_treatment_without_fillkit_is_a_clear_error() {
         "lettering-fill-must-be-a-dict"
     );
 }
+
+/// Mean absolute difference between horizontally adjacent pixels' red channel.
+fn roughness(px: &[u8]) -> f64 {
+    let (w, h) = (60usize, 40usize);
+    let mut sum = 0.0;
+    for y in 0..h {
+        for x in 0..w - 1 {
+            sum += (px[(y * w + x) * 3] as f64 - px[(y * w + x + 1) * 3] as f64).abs();
+        }
+    }
+    sum / ((w - 1) * h) as f64
+}
+
+#[test]
+fn plasma_turbulence_controls_roughness() {
+    let rough = |t: &str| {
+        (1..=3)
+            .map(|seed| {
+                roughness(&paint(
+                    "plasmafill",
+                    &format!(
+                        "/Seed {seed} /Palette [[0 0 0] [1 1 1]] /Turbulence {t} /Resolution 60"
+                    ),
+                ))
+            })
+            .sum::<f64>()
+    };
+    let (lo, mid, hi) = (rough("0.2"), rough("1"), rough("5"));
+    assert!(
+        lo < mid && mid < hi,
+        "roughness should rise with turbulence: {lo} {mid} {hi}"
+    );
+}
+
+#[test]
+fn resolution_device_matches_an_explicit_resolution() {
+    // 20x20 box at 72 dpi = 20 device pixels per side
+    let paint20 = |res: &str| {
+        let mut it = kit(30, 30);
+        run(&mut it, "1 setgray clippath fill");
+        run(
+            &mut it,
+            &format!("5 5 25 25 << /Seed 3 /Resolution {res} >> plasmafill"),
+        );
+        rgb(&it)
+    };
+    assert_eq!(paint20("/device"), paint20("20"));
+    assert_ne!(paint20("/device"), paint20("9"));
+}
+
+#[test]
+fn gradient_shapes_survive_a_sample_exactly_on_the_centre() {
+    // a square box at /Resolution 9: the middle sample sits exactly on
+    // /Center [0.5 0.5], where atan(0,0) would be undefinedresult
+    for shape in ["conical", "spiral", "bilinear", "square"] {
+        let mut it = kit(30, 30);
+        run(&mut it, "1 setgray clippath fill");
+        run(
+            &mut it,
+            &format!("0 0 30 30 << /Shape /{shape} /Resolution 9 /Palette /dusk >> gradshapefill"),
+        );
+        let px = rgb(&it);
+        assert_ne!(px, vec![255; px.len()], "{shape}");
+        assert!(it.operand_stack().is_empty(), "{shape}");
+    }
+}

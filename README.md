@@ -740,7 +740,8 @@ seeded fills over a box, meant to sit inside a clip: `plasmafill`
 `diffcloudsfill` (|noise - noise|), and `gradshapefill` (`/bilinear`
 `/square` `/conical` `/spiral`), all with `/RGBNoise`, `/HSVNoise` and
 `/Spread` grain. Each is one small `colorimage` under the caller's clip, so
-the shape stays vector in SVG/PDF; `/Resolution /device` gives a smooth PNG.
+the shape stays vector in SVG/PDF; `/Resolution /device` samples once per device pixel (capped at 512 per side, so
+larger print-DPI boxes show blocky steps).
 `examples/fillkit.ps` is the specimen.
 
 `lib/apparel.ps` (issue #146) builds apparel graphics on top of those two: one
