@@ -48,8 +48,18 @@ while read -r PIECE STEM; do
   BASE="$OUT/$NAME-$STEM"
   FLAGS=()
   [ "$BG" = transparent ] && FLAGS+=(--transparent)
+  # The raster gets --dpi. The vector files do not: --dpi scales the
+  # *device* (an SVG/PDF rendered at 300 dpi declares a 50-inch page), so
+  # they are written in a second, plain 72-dpi run where 1 unit = 1 point.
   ps draw "$PIECE" | "$PSCAT" --page "${WPT}x${HPT}" --dpi "$DPI" ${FLAGS[@]+"${FLAGS[@]}"} \
-    --png "$BASE.png" --svg "$BASE.svg" --pdf "$BASE.pdf" -
+    --png "$BASE.png" -
+  ps draw "$PIECE" | "$PSCAT" --page "${WPT}x${HPT}" ${FLAGS[@]+"${FLAGS[@]}"} \
+    --svg "$BASE.svg" --pdf "$BASE.pdf" -
+  PDF_BOX="$(grep -a -o 'MediaBox \[[^]]*\]' "$BASE.pdf" | head -1 | tr -dc '0-9. ' | xargs)"
+  SVG_W="$(sed -nE 's/.*<svg [^>]*width="([0-9.]+)" height="([0-9.]+)".*/\1/p' "$BASE.svg" | head -1)"
+  SVG_H="$(sed -nE 's/.*<svg [^>]*width="([0-9.]+)" height="([0-9.]+)".*/\2/p' "$BASE.svg" | head -1)"
+  [ "$PDF_BOX" = "0 0 $WPT $HPT" ] && [ "$SVG_W" = "$WPT" ] && [ "$SVG_H" = "$HPT" ] || {
+    echo "$BASE vector size mismatch (pdf '$PDF_BOX', svg ${SVG_W}x${SVG_H}, want ${WPT}x${HPT}pt)" >&2; exit 1; }
   # what pscat actually wrote, not what we asked for
   KIND="$(file "$BASE.png")"
   ACT_W="$(sed -E 's/.*PNG image data, ([0-9]+) x ([0-9]+).*/\1/' <<<"$KIND")"
@@ -59,8 +69,10 @@ while read -r PIECE STEM; do
     echo "$BASE.png is ${ACT_W}x${ACT_H}, expected ${WPX}x${HPX}" >&2; exit 1; }
   PIECE_JSON+=("$(jq -n --arg piece "$PIECE" --arg stem "$STEM" --arg color "$COLOR" \
     --arg base "$(basename "$BASE")" --argjson w "$ACT_W" --argjson h "$ACT_H" \
+    --argjson vw "$WPT" --argjson vh "$HPT" \
     '{piece:$piece, files:{png:($base+".png"), svg:($base+".svg"), pdf:($base+".pdf")},
-      png_actual_pixels:[$w,$h], png_color_type:$color}')")
+      png_actual_pixels:[$w,$h], png_color_type:$color,
+      vector_declared_points:[$vw,$vh]}')")
   echo "$PIECE: ${WPX}x${HPX}px (${WPT}x${HPT}pt @ ${DPI}dpi, $BG)"
 done <<<"$PIECES"
 
@@ -94,8 +106,11 @@ ps manifest | "$PSCAT" --headless - | jq \
       fonts: $fonts,
       output_notes: {
         png: "RGBA; pixels outside the artwork have alpha 0 when background is transparent",
-        svg: "no backdrop rect when background is transparent; /transition fills stay native gradients",
-        pdf: "no page background is painted (never had one); /transition fills are a flat average colour",
+        svg: "width/height are unitless user units = points (1/72 in), not pixels; no backdrop rect when background is transparent; /transition fills stay native gradients",
+        pdf: "MediaBox is in points (1/72 in); no page background is painted (never had one); /transition fills are a flat average colour",
+        vector_scale: "SVG and PDF are written without --dpi so their declared size is the physical size in points; only the PNG is dpi-scaled",
+        mottled_flecks: "the /mottled wear flecks are painted cream, not knocked out; on a dark garment they print as ink",
+        piece_sides: "SleeveLeft/SleeveRight are labels chosen by the config; this template does not say whether they mean the wearer side or the viewer side",
         transparent_background: "produced by pscat --transparent (issue #146); without it PNG and SVG carry an opaque white page"
       }
     }' > "$OUT/$NAME-manifest.json"

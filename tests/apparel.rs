@@ -66,6 +66,9 @@ fn manifest_records_size_dpi_background_and_fonts() {
         r#""pixels":[3600,4200]"#,
         r#""face":"AlfaSlabOne""#,
         r#""text":"No.\n1""#,
+        // the front is a three-run tucked composition (/Runs)
+        r#""text":"Keepin' it""#,
+        r#""text":"I'm""#,
     ] {
         assert!(json.contains(needle), "missing {needle} in {json}");
     }

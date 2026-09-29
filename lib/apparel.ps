@@ -47,7 +47,12 @@
 %                         second phrase is supplied, no library edits.
 %   /Runs [ ... ]         instead of /Text: headline.ps run dicts
 %                         (see lib/headline.ps) in the piece's own points
-%                         coordinates, laid out in the piece's own region
+%                         coordinates, laid out in the piece's own region.
+%                         Each run may carry its own style keys and /Seed;
+%                         a run's /Clearance is *added to* the contour pad
+%                         (one stroke half-width, sized for the largest run), and a /Draw of its
+%                         own replaces the lettering draw (its contour is
+%                         then not accounted for)
 %   /Justify              /left /center /right for multi-line /Text
 %
 % MODES (an `ApparelMode` name defined before `apmain` runs; default
@@ -157,11 +162,13 @@
       } { pop } ifelse
     } forall
     aprun /Font known not { aprun /Font /PermanentMarker put } if
-    aprun /Seed apcfg /Seed known { apcfg /Seed get } { 1 } ifelse apnum 100 mul add put
+    aprun /Seed known not {
+      aprun /Seed apcfg /Seed known { apcfg /Seed get } { 1 } ifelse apnum 100 mul add put
+    } if
     aprun /Clearance
       aprun /Clearance known { aprun /Clearance get } { 0 } ifelse
-      apinset 2 mul add put
-    aprun /Draw [ aprun /apdrawline cvx ] cvx put
+      apinset add put
+    aprun /Draw known not { aprun /Draw [ aprun /apdrawline cvx ] cvx put } if
   } forall
   aprs
 } def
@@ -187,11 +194,13 @@
 % piece name -> its index in appieceorder (seed offset, stable per piece)
 % @internal
 /apnumof {
+  4 dict begin
   /apnq exch def /apnr 0 def
   0 1 appieceorder length 1 sub {
     dup appieceorder exch get apnq eq { /apnr exch def } { pop } ifelse
   } for
   apnr
+  end
 } def
 
 % piece-name -> file-name stem
@@ -279,8 +288,10 @@
 % cfg apconfigured -> array of names
 % @internal
 /apconfigured {
+  2 dict begin
   /Pieces get /apcp exch def
   [ appieceorder { dup apcp exch known { } { pop } ifelse } forall ]
+  end
 } def
 
 % string apjs -     print as a JSON string
@@ -335,6 +346,7 @@
 % cfg apmanifest -    print the JSON description of every configured piece
 % @internal
 /apmanifest {
+  6 dict begin
   /apmcfg exch def
   ({"tool":"pscat lib/apparel.ps","vendor_neutral":true,"name":) print
   apmcfg /Name known { apmcfg /Name get } { (apparel) } ifelse apjs
@@ -345,6 +357,7 @@
   apml length 0 gt { apml 0 get } { null } ifelse /apmfirst exch def
   apml { dup apmfirst ne { (,) print } if apmcfg exch apjpiece } forall
   (]}\n) print
+  end
 } def
 
 % --- public: proof sheet ------------------------------------------------
@@ -352,6 +365,7 @@
 % w h apchecker -     light checkerboard over [0 w]x[0 h] (transparency cue)
 % @internal
 /apchecker {
+  6 dict begin
   /apch exch def /apcw exch def
   gsave 0 0 apcw apch rectclip
   0.93 setgray 0 0 apcw apch rectfill
@@ -362,6 +376,7 @@
     } for
   } for
   grestore
+  end
 } def
 
 % cfg approof -    one page: every configured piece at reduced scale on a
@@ -369,6 +384,7 @@
 % the margin in blue.
 % @internal
 /approof {
+  40 dict begin
   /apfcfg exch def
   clippath pathbbox /apPH exch def /apPW exch def pop pop
   0.98 setgray 0 0 apPW apPH rectfill
@@ -404,6 +420,7 @@
     grestore
     /apx apx apw2 apsc mul add apgap add def
   } forall
+  end
 } def
 
 % n apjn2 -> string
@@ -421,6 +438,7 @@
 % @param: /Seed num integer texture seed (default 1); each piece derives its own
 % @param: /Background /transparent|[r g b] nothing behind the art (default), or a fill colour for mock-ups
 /apmain {
+  4 dict begin
   /apmcf exch def
   /ApparelMode where { pop ApparelMode } { /proof } ifelse
   dup /proof eq { pop apmcf approof } {
@@ -431,4 +449,5 @@
     apmcf apbgmode print (\n) print } {
   dup /draw eq { pop apmcf ApparelPiece apdrawpiece } {
     pop apparel-unknown-mode } ifelse } ifelse } ifelse } ifelse } ifelse
+  end
 } def
