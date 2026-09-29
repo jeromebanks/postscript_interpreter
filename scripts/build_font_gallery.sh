@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # build_font_gallery.sh — render one card PNG per available font face for
 # site/fonts.html: the eight Type3 lib/fonts/ faces (their natural
-# materials, colors lifted from examples/font_library*.ps) and the 46
+# materials, colors lifted from examples/font_library*.ps) and the 48
 # fonts/catalog/ families (the standard 35 plus the display shelf, same
 # label/font/sample data as examples/font_catalog.ps). Deterministic
 # (each rand-driven face is srand-seeded) and self-contained: run it any
@@ -179,6 +179,8 @@ NotoSansKR|NotoSansKR-Regular|안녕하세요, 세계|24
 NotoSansJP|NotoSansJP-Regular|こんにちは、世界|24
 NotoSansThai|NotoSansThai-Regular|สวัสดีชาวโลก|24
 NanumBrushScript|NanumBrushScript-Regular|안녕하세요|28
+Chewy|Chewy-Regular|Hamburgefonst|26
+BagelFatOne|BagelFatOne-Regular|Hamburgefonst|24
 TABLE
   slug=$(echo "$label" | tr 'A-Z ' 'a-z-' | tr -cd 'a-z0-9-')
   card "$slug" 440x90 catalog <<EOF
