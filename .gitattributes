@@ -1,1 +1,2 @@
-art/** -diff
+art/**/*.png -diff
+art/**/*.pdf -diff
