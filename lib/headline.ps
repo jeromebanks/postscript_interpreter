@@ -184,13 +184,16 @@
   /hlkx0 1000000 def /hlky0 1000000 def /hlkx1 -1000000 def /hlky1 -1000000 def
   /hlkpend false def
   gsave newpath 0 0 moveto
-  { false charpath } stopped { grestore end headline-a-font-must-be-set } if
-  flattenpath
-  { /hlkpy exch def /hlkpx exch def /hlkpend true def }
-  { hlkpend { hlkpx hlkpy hlkacc /hlkpend false def } if hlkacc }
-  { pop pop pop pop pop pop }
-  { }
-  pathforall
+  % No font set, or a singular CTM that pathforall cannot invert, would
+  % otherwise abort with our gsave and dict still open.
+  {
+    false charpath flattenpath
+    { /hlkpy exch def /hlkpx exch def /hlkpend true def }
+    { hlkpend { hlkpx hlkpy hlkacc /hlkpend false def } if hlkacc }
+    { pop pop pop pop pop pop }
+    { }
+    pathforall
+  } stopped { grestore end headline-text-cannot-be-measured } if
   grestore
   hlkx1 hlkx0 lt { end false } { [ hlkx0 hlky0 hlkx1 hlky1 ] end true } ifelse
 } def
@@ -402,6 +405,8 @@
     hlo /FitBox get { headline-fitbox-must-be-w-h } hlpair aload pop hlfitbox
   } if
   hlo /FitRegion known {
+    hlo /FitRegion get dup type /booleantype ne { headline-fitregion-must-be-true } if
+    not { headline-fitregion-must-be-true } if
     hlrreg 2 get hlrreg 0 get sub hlrreg 3 get hlrreg 1 get sub hlfitbox
   } if
   hlo /SizeOf known {
@@ -505,17 +510,22 @@
   /hlmsz 100 def hlmeasure
   /hlsz hlsize def
   % Fit options: the 100pt measurement only estimates the ink at the
-  % final size, so re-measure at the chosen size and refine twice, then
-  % back off 0.01% so the converged fit never lands a hair over its box.
+  % final size (flattening tolerance does not scale), so re-measure at
+  % the chosen size until the ink at that size really fits the box: each
+  % pass either accepts the size or shrinks to the size the measurement
+  % implies (less a 0.01% margin) and tries again.
   [ /FitWidth /FitHeight /FitBox /FitRegion ] { hlo exch known } forall
   3 { or } repeat
   {
-    2 { /hlmsz hlsz def hlmeasure /hlsz hlsize def } repeat
-    /hlsz hlsz 0.9999 mul def
+    16 {
+      /hlmsz hlsz def hlmeasure hlsize /hlst exch def
+      hlst hlsz ge { exit } if
+      /hlsz hlst 0.9999 mul def
+    } repeat
     % A fit landing on /MinSize is already at the limit; the margin
     % must not slip it under unannounced.
     hlo /MinSize known {
-      hlsz hlo /MinSize get le { headline-fit-below-minimum-size } if
+      hlsz hlo /MinSize get lt { headline-fit-below-minimum-size } if
     } if
   } if
   % Final ink is measured at exactly the size that will be drawn.

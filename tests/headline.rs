@@ -665,3 +665,31 @@ fn mutating_the_source_text_after_layout_does_not_change_what_is_drawn() {
     };
     assert_eq!(render(false), render(true));
 }
+
+#[test]
+fn fit_width_holds_for_curved_text_and_bad_flags_or_ctms_fail_safely() {
+    // Codex repro: (o) fitted to exactly the region width must lay out.
+    stack_of(
+        "[ 0 0 112 200 ] [ << /Text (o) /Font /PermanentMarker /FitWidth 112
+            /Anchor [ /left /bottom ] /At [ 0 0 ] >> ] hllayout pop",
+    );
+    for flag in ["false", "(no)"] {
+        assert_eq!(
+            err_of(&format!(
+                "[ 0 0 300 200 ] [ << /Text (Real) /FitRegion {flag} /At [ 0 0 ] >> ] hllayout"
+            )),
+            "headline-fitregion-must-be-true"
+        );
+    }
+    // A singular CTM fails measurement; the caller's font must survive.
+    let mut it = with_lib(400, 200);
+    it.run_str("/Times-Roman findfont 17 scalefont setfont")
+        .expect("setup");
+    let r = it.run_str(
+        "gsave 0 1 scale [ 0 0 300 200 ] [ << /Text (Real) /Size 20 /At [ 10 10 ] >> ] hllayout",
+    );
+    assert!(r.is_err());
+    it.run_str("clear currentfont /FontName get 96 string cvs")
+        .ok();
+    assert_eq!(it.operand_stack().last().unwrap().repr(), "(Times-Roman)");
+}
