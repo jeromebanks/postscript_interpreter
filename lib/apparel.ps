@@ -52,7 +52,9 @@
 %                         a run's /Clearance is *added to* the contour pad
 %                         (one stroke half-width, sized for the largest run), and a /Draw of its
 %                         own replaces the lettering draw (its contour is
-%                         then not accounted for)
+%                         then not accounted for). /Region is rejected
+%                         (apparel-run-region-not-allowed): it would escape
+%                         the margin. An empty /Runs is an error too.
 %   /Justify              /left /center /right for multi-line /Text
 %
 % MODES (an `ApparelMode` name defined before `apmain` runs; default
@@ -145,6 +147,7 @@
 % @internal
 /apbuildruns {
   appiece /Runs known {
+    appiece /Runs get length 0 eq { apparel-piece-needs-text-or-runs } if
     /aprs appiece /Runs get length array def
     0 1 aprs length 1 sub {
       dup appiece /Runs get exch get apcopydict aprs 3 1 roll put
@@ -156,6 +159,8 @@
   } ifelse
   aprs {
     /aprun exch def
+    % a run's own /Region would step outside the inset region and so the margin
+    aprun /Region known { apparel-run-region-not-allowed } if
     apstylekeys {
       dup aprun exch known not {
         dup null apget dup null eq { pop pop } { aprun 3 1 roll put } ifelse

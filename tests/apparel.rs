@@ -268,3 +268,41 @@ fn manifest_names_are_valid_utf8_or_escaped() {
         );
     }
 }
+
+/// Codex review of PR #152, round 5: a run's own /Region would bypass the
+/// margin, and an empty /Runs must fail in every mode, not just /manifest.
+#[test]
+fn runs_cannot_escape_the_margin_or_be_empty() {
+    let attempt = |mode: &str, runs: &str| -> String {
+        let cfg = format!(
+            "(lib/artkit.ps) run (lib/headline.ps) run (lib/lettering.ps) run \
+             (lib/apparel.ps) run << /Pieces << /Front << /Size [ 1 1 ] \
+             /Margin 0.25 /Runs {runs} >> >> >> apmain"
+        );
+        let mut child = Command::new(BIN)
+            .current_dir(ROOT)
+            .args(["--headless", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(
+                format!("/ApparelMode /{mode} def /ApparelPiece /Front def {cfg}").as_bytes(),
+            )
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(!out.status.success(), "{mode} {runs} should fail");
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+    let region =
+        "[ << /Text (Hi) /Font /AlfaSlabOne /Size 20 /At [ 1 1 ] /Region [ 0 0 72 72 ] >> ]";
+    for mode in ["draw", "manifest"] {
+        assert!(attempt(mode, region).contains("apparel-run-region-not-allowed"));
+        assert!(attempt(mode, "[ ]").contains("apparel-piece-needs-text-or-runs"));
+    }
+}
