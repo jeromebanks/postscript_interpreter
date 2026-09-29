@@ -74,7 +74,7 @@ fn check_blank_pages(interp: &Interp, findings: &mut Vec<LintFinding>) {
 }
 
 /// Untouched device pixels are opaque white — the fill `Gfx::with_scale`
-/// starts every page with. A deliberate solid fill (even solid white
+/// starts every page with (or fully transparent under `--transparent`). A deliberate solid fill (even solid white
 /// paper drawn on purpose) isn't distinguishable from "nothing drawn"
 /// this way, but that's a rare and harmless false negative; the
 /// common case this catches is "the program never painted at all".
@@ -84,7 +84,7 @@ fn is_blank(pixmap: &Pixmap) -> bool {
         .as_chunks::<4>()
         .0
         .iter()
-        .all(|p| *p == [255, 255, 255, 255])
+        .all(|p| *p == [255, 255, 255, 255] || p[3] == 0)
 }
 
 fn check_gsave_balance(interp: &Interp, findings: &mut Vec<LintFinding>) {

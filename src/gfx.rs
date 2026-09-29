@@ -504,6 +504,9 @@ pub struct Gfx {
     /// single-page programs keep their final image. Multi-page
     /// programs get the erase the moment page N+1's first mark lands.
     pending_erase: bool,
+    /// Colour a fresh or erased page starts as: opaque white by default,
+    /// fully transparent under `--transparent` (see `set_transparent_background`).
+    background: tiny_skia::Color,
     /// Anything painted since the last page boundary? Decides whether
     /// the trailing canvas counts as a final page.
     painted_since_page: bool,
@@ -558,6 +561,7 @@ impl Gfx {
             completed: Vec::new(),
             completed_had_ink: Vec::new(),
             pending_erase: false,
+            background: tiny_skia::Color::WHITE,
             painted_since_page: false,
             svg: None,
             pdf: None,
@@ -789,7 +793,7 @@ impl Gfx {
     pub(crate) fn prepare_paint(&mut self) {
         if self.pending_erase {
             self.pending_erase = false;
-            self.pixmap.fill(tiny_skia::Color::WHITE);
+            self.pixmap.fill(self.background);
             if let Some(svg) = &mut self.svg {
                 svg.erase();
             }
@@ -1211,13 +1215,26 @@ impl Gfx {
         }
     }
 
+    /// Make the page background transparent instead of opaque white, so
+    /// PNG output carries a real alpha channel and SVG output omits its
+    /// white backdrop rect (issue #146: artwork for garments must not
+    /// carry a white rectangle). Call before anything is painted; it
+    /// also resets the current canvas.
+    pub fn set_transparent_background(&mut self) {
+        self.background = tiny_skia::Color::TRANSPARENT;
+        self.pixmap.fill(self.background);
+        if let Some(svg) = &mut self.svg {
+            svg.set_transparent(true);
+        }
+    }
+
     pub fn erase(&mut self) {
         if self.suppress_paint > 0 {
             return;
         }
         self.pending_erase = false;
         self.painted_since_page = true;
-        self.pixmap.fill(tiny_skia::Color::WHITE);
+        self.pixmap.fill(self.background);
         if let Some(svg) = &mut self.svg {
             svg.erase();
         }
@@ -1285,6 +1302,15 @@ impl Gfx {
             self.pixmap.width(),
             self.pixmap.height(),
         )));
+        if self.background.alpha() == 0.0 {
+            self.svg_mut_transparent();
+        }
+    }
+
+    fn svg_mut_transparent(&mut self) {
+        if let Some(svg) = &mut self.svg {
+            svg.set_transparent(true);
+        }
     }
 
     /// Finished SVG page documents (None when recording is off).
