@@ -43,8 +43,8 @@
 %   a smooth result, at the cost of more work (clamped to 4096, which
 %   covers a 13 in box at 300 dpi; a numeric /Resolution stays capped
 %   at 512). A box wider than 4096 device pixels is still upscaled
-%   nearest-neighbour. A 3600x4200 px print front takes ~40 s with
-%   /device and adds a few MB per export.
+%   nearest-neighbour. Cost grows with the pixel count: a 3600x4200 px
+%   fill is ~15M samples, tens of seconds and a few MB of image data.
 %   Only the *field* is raster; the shape it fills is never rasterized.
 %
 % Options shared by every fill (all optional):
