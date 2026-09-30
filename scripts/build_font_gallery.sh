@@ -151,6 +151,8 @@ Oswald|Oswald-Regular|Hamburgefonstiv|24
 AtkinsonHyperlegible|AtkinsonHyperlegible-Regular|Hamburgefonstiv|22
 ZillaSlab|ZillaSlab-Regular|Hamburgefonstiv|24
 AlfaSlabOne|AlfaSlabOne-Regular|Hamburgefonst|22
+Graduate|Graduate-Regular|HAMBURGEFONST 69|22
+Anton|Anton-Regular|Hamburgefonst 86|22
 JetBrainsMono|JetBrainsMono-Regular|Hamburgefonst|20
 GreatVibes|GreatVibes-Regular|Hamburgefonstiv|26
 Pacifico|Pacifico-Regular|Hamburgefonstiv|24

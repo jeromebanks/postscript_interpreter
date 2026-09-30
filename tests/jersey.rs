@@ -587,3 +587,263 @@ fn outlines_ignore_the_callers_dash_pattern() {
     let dashed = render(&format!("[ 6 4 ] 0 setdash 2 setlinecap {o} jersey"));
     assert_eq!(plain.gfx().pixmap.data(), dashed.gfx().pixmap.data());
 }
+
+fn painted_extent(o: &str) -> [f64; 4] {
+    painted_bbox(&format!("{o} jersey"))
+}
+
+#[test]
+fn layered_outlines_grow_the_paint_but_stay_inside_the_margin() {
+    let base = opts("Metro Comets", "7", "/OutlineWidth 3 /Outline [ 1 0 0 ]");
+    let two = opts(
+        "Metro Comets",
+        "7",
+        "/OutlineWidth 3 /Outline [ 1 0 0 ] /Outline2Width 5 /Outline2 [ 0 0 1 ]",
+    );
+    // the ink box is the letters' own; the outer band must not change it by more than the inset
+    let (p1, p2) = (painted_extent(&base), painted_extent(&two));
+    assert!(p2[2] - p2[0] >= p1[2] - p1[0] - 6.0, "{p1:?} {p2:?}");
+    for p in [p1, p2] {
+        assert!(
+            p[0] >= 20.0 + 10.0 - 2.0 && p[2] <= 580.0 - 10.0 + 2.0,
+            "{p:?}"
+        );
+        assert!(
+            p[1] >= 20.0 + 10.0 - 2.0 && p[3] <= 680.0 - 10.0 + 2.0,
+            "{p:?}"
+        );
+    }
+    // the second band really is painted (blue pixels exist), and the first still is (red)
+    let it = render(&format!("{two} jersey"));
+    let px = it.gfx().pixmap.pixels().to_vec();
+    assert!(
+        px.iter().any(|p| p.blue() > 200 && p.red() < 60),
+        "outer band"
+    );
+    assert!(
+        px.iter().any(|p| p.red() > 200 && p.blue() < 60),
+        "inner band"
+    );
+}
+
+#[test]
+fn a_shadow_stays_inside_the_margin_and_paints() {
+    let o = opts(
+        "Cleveland Steamers",
+        "69",
+        "/OutlineWidth 3 /Shadow [ 0 0.8 0 ] /ShadowOffset [ 9 -9 ] /NameFont /Helvetica-Bold",
+    );
+    let p = painted_extent(&o);
+    assert!(
+        p[0] >= 29.0 && p[2] <= 571.0 && p[1] >= 29.0 && p[3] <= 671.0,
+        "{p:?}"
+    );
+    let it = render(&format!("{o} jersey"));
+    assert!(
+        it.gfx()
+            .pixmap
+            .pixels()
+            .iter()
+            .any(|q| q.green() > 180 && q.red() < 60),
+        "shadow"
+    );
+}
+
+#[test]
+fn tracking_widens_the_name_and_name_width_narrows_it() {
+    let width = |extra: &str| {
+        let v = nums(&format!(
+            "{} jerseylayout /Name get /Ink get aload pop",
+            opts(
+                "Comets",
+                "7",
+                &format!("/NameMaxSize 40 /Radius 2000 {extra}")
+            )
+        ));
+        v[2] - v[0]
+    };
+    assert!(width("/Tracking 0.3") > width("/Tracking 0") + 20.0);
+    // the fit honours /NameWidth: a fraction of the usable width (540 here)
+    let v = nums(&format!(
+        "{} jerseylayout /Name get /Ink get aload pop",
+        opts(
+            "Cleveland Steamers International",
+            "7",
+            "/NameWidth 0.5 /Radius 2000"
+        )
+    ));
+    assert!(v[2] - v[0] <= 0.5 * 540.0 + 0.5, "{v:?}");
+}
+
+#[test]
+fn new_options_are_validated() {
+    for bad in [
+        "/Outline2Width -2 /Outline2 [ 0 0 0 ]",
+        "/Outline2 [ 0 0 ]",
+        "/Outline2Width 3",
+        "/Shadow [ 0 0 0 ] /ShadowOffset [ 1 ]",
+        "/Shadow [ 0 0 0 ] /ShadowOffset (x)",
+        "/Tracking (x)",
+        "/NameWidth 0",
+        "/NameWidth 1.5",
+    ] {
+        assert_eq!(
+            err_of(&format!("{} jerseylayout", opts("Metro Comets", "7", bad))),
+            "jersey-option-wrong-type",
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn part_spacing_includes_every_band_and_the_shadow() {
+    // ink-to-ink spacing = Gap + 2 x (both outline bands) + the shadow's reach
+    let o = opts(
+        "IIII",
+        "8",
+        "/Caption (8) /Gap 1 /OutlineWidth 4 /Outline2Width 6 /Outline2 [ 0 0 1 ] \
+         /Shadow [ 0 0 0 ] /ShadowOffset [ 5 -7 ] /NameFont /Helvetica-Bold",
+    );
+    let v = nums(&format!(
+        "{o} jerseylayout /L exch def L /Number get /Ink get aload pop L /Caption get /Ink get aload pop"
+    ));
+    let gap = v[1] - v[7];
+    assert!(gap >= 1.0 + 2.0 * (4.0 + 6.0) + 7.0 - 0.01, "gap {gap}");
+    // and everything, bands and shadow included, is still inside the margin
+    let p = painted_bbox(&format!("{o} jersey"));
+    assert!(
+        p[0] >= 29.0 && p[2] <= 571.0 && p[1] >= 29.0 && p[3] <= 671.0,
+        "{p:?}"
+    );
+}
+
+#[test]
+fn a_big_offset_shadow_is_one_solid_block() {
+    // A thin letter with a shadow 24pt away: no gaps along a row through the sweep.
+    let o = "<< /Name (I) /Number (1) /Rect [ 20 20 580 680 ] /NameMaxSize 10 /OutlineWidth 0 \
+              /NameFont /Helvetica-Bold /Fill [ 1 1 1 ] /Shadow [ 0 0.8 0 ] /ShadowOffset [ 24 0 ] >>";
+    let it = render(&format!("{o} jersey"));
+    let pm = &it.gfx().pixmap;
+    let (w, h) = (pm.width() as usize, pm.height() as usize);
+    // the name's row band: find a row with green and check its green span has no holes
+    let is_green = |i: usize| {
+        let p = pm.pixels()[i];
+        p.green() > 150 && p.red() < 100
+    };
+    let mut checked = false;
+    for y in 0..h {
+        let xs: Vec<usize> = (0..w).filter(|&x| is_green(y * w + x)).collect();
+        if xs.len() > 8 {
+            let (a, b) = (xs[0], *xs.last().unwrap());
+            // white letter sits on top; antialiased edge pixels are not holes (nine
+            // separated copies would leave dozens of gap pixels)
+            let holes = (a..=b)
+                .filter(|&x| {
+                    let p = pm.pixels()[y * w + x];
+                    !is_green(y * w + x) && !(p.red() > 200 && p.green() > 200)
+                })
+                .count();
+            assert!(
+                holes <= 4,
+                "row {y}: {holes} gap pixels in a {}px sweep",
+                b - a
+            );
+            checked = true;
+        }
+    }
+    assert!(checked, "no shadow pixels found");
+}
+
+#[test]
+fn a_zero_outline_shadow_leaves_no_hairline_and_huge_offsets_are_rejected() {
+    // zero outline + zero offset: the shadow hides entirely behind the fill
+    let base = "/OutlineWidth 0 /Fill [ 1 1 1 ]";
+    let with = render(&format!(
+        "{} jersey",
+        opts(
+            "Metro Comets",
+            "7",
+            &format!("{base} /Shadow [ 0 0.8 0 ] /ShadowOffset [ 0 0 ]")
+        )
+    ));
+    assert!(
+        !with
+            .gfx()
+            .pixmap
+            .pixels()
+            .iter()
+            .any(|p| p.green() > 150 && p.red() < 100),
+        "a hairline shadow leaked"
+    );
+    assert_eq!(
+        err_of(&format!(
+            "{} jerseylayout",
+            opts("I", "1", "/Shadow [ 0 0 0 ] /ShadowOffset [ 600 0 ]")
+        )),
+        "jersey-shadow-offset-too-large"
+    );
+}
+
+#[test]
+fn hairline_serifs_still_get_a_solid_shadow() {
+    // Times-Roman at 6 units has serifs far thinner than one unit; drawn at 10 px per
+    // unit so the gaps a coarse sweep would leave are whole pixels wide.
+    let o = "<< /Name (I) /Number (1) /Rect [ 2 2 58 68 ] /Margin 1 \
+             /NameFont /Times-Roman /NameMaxSize 6 /OutlineWidth 0 /Fill [ 0 0 0 ] \
+             /Shadow [ 0 0.8 0 ] /ShadowOffset [ 0 -10 ] >>";
+    let v = nums(&format!(
+        "10 10 scale {o} jerseylayout /Name get /Ink get aload pop"
+    ));
+    let it = render(&format!("10 10 scale {o} jersey"));
+    let pm = &it.gfx().pixmap;
+    let (w, h) = (pm.width() as usize, pm.height() as usize);
+    let (x0, x1) = (
+        (v[0] * 10.0).ceil() as usize + 1,
+        (v[2] * 10.0).floor() as usize - 1,
+    );
+    let (ylo, yhi) = ((v[1] * 10.0) as usize - 90, (v[1] * 10.0) as usize - 20);
+    let mut white = 0;
+    for x in x0..x1 {
+        for y in ylo..yhi {
+            let p = pm.pixels()[(h - 1 - y) * w + x];
+            if p.red() > 230 && p.green() > 230 && p.blue() > 230 {
+                white += 1;
+            }
+        }
+    }
+    assert!(x1 > x0 + 10 && yhi > ylo, "test geometry");
+    assert_eq!(
+        white, 0,
+        "gaps inside the swept shadow of a hairline-serif letter"
+    );
+}
+
+#[test]
+fn a_diagonal_shadow_of_a_thin_letter_is_solid_along_its_sweep() {
+    // Offset (10, -10) is ~14 units long: copies must be a point apart along the
+    // diagonal, not along the larger axis. Sample the path a hyphen's centre sweeps (a tiny straight-edged feature:
+    // round one-point blobs 1.4 units apart would leave gaps between them).
+    let o = "<< /Name (-) /Number (1) /Rect [ 2 2 58 68 ] /Margin 1 \
+             /NameFont /Times-Roman /NameMaxSize 1 /MinNameSize 1 /OutlineWidth 0 /Fill [ 0 0 0 ] \
+             /Shadow [ 0 0.8 0 ] /ShadowOffset [ 10 -10 ] >>";
+    let v = nums(&format!(
+        "10 10 scale {o} jerseylayout /Name get /Ink get aload pop"
+    ));
+    let it = render(&format!("10 10 scale {o} jersey"));
+    let pm = &it.gfx().pixmap;
+    let (w, h) = (pm.width() as usize, pm.height() as usize);
+    let (xc, yc) = ((v[0] + v[2]) / 2.0, (v[1] + v[3]) / 2.0);
+    let mut white = 0;
+    for k in 10..=990 {
+        let t = k as f64 / 1000.0;
+        let (px, py) = (
+            ((xc + 10.0 * t) * 10.0) as usize,
+            ((yc - 10.0 * t) * 10.0) as usize,
+        );
+        let p = pm.pixels()[(h - 1 - py) * w + px];
+        if p.red() > 230 && p.green() > 230 && p.blue() > 230 {
+            white += 1;
+        }
+    }
+    assert_eq!(white, 0, "gaps along the diagonal sweep of a thin letter");
+}

@@ -802,7 +802,11 @@ The arch is placed by glyph midpoint with the ink centred on the axis
 its end letters stay within `/MaxTilt` and the number stays dominant, and
 impossible geometry raises a named error (`jersey-name-too-wide`,
 `jersey-name-too-tilted`, `jersey-does-not-fit`, ...) instead of clipping.
-`examples/jersey.ps` is the specimen.
+`examples/jersey.ps` is the specimen. Team-jersey lettering is also
+available: `/Outline2` adds a second outer outline band (fill, thin accent,
+dark outer), `/Shadow` a solid block shadow, `/Tracking` wide-tracked
+capitals and `/NameWidth` a name narrower than the number;
+`gallery/varsity_backs.ps` shows them on two jersey backs.
 
 ```postscript
 (lib/artkit.ps) run
