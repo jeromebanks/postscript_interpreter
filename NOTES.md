@@ -77,7 +77,7 @@ sleeve artwork files. It composes `headline.ps` (layout) and
 refine on what a high-school/college jersey actually carries gave four
 changes. `lib/jersey.ps` gained `/Outline2` + `/Outline2Width` (a second,
 outer band: fill / thin accent / dark outer), `/Shadow` + `/ShadowOffset`
-(a solid block shadow, swept in 8 offset strokes so large letters leave no
+(a solid block shadow, swept in 9 offset passes so large letters leave no
 gaps), `/Tracking` (extra space per name letter, in em -- athletic names are
 tracked capitals) and `/NameWidth` (the name may use only a fraction of the
 usable width, since a real back sets a name narrower than the number).

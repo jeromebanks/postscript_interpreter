@@ -492,6 +492,7 @@
   % the outline grows the ink by its width on every side, so the fit
   % below is for the rectangle inset by it
   /jyow1 jyo /OutlineWidth jyrw 0.005 mul jygn def
+  jyo /Outline2Width known jyo /Outline2 known not and { jersey-option-wrong-type } if
   /jyoutl2 jyo /Outline2 [ 0 0 0 ] jygc def
   /jyow2 jyo /Outline2 known { jyo /Outline2Width jyow1 jygn } { 0 } ifelse def
   /jyshc jyo /Shadow [ 0 0 0 ] jygc def

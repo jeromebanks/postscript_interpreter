@@ -117,17 +117,11 @@
     CX 57 add 758  CX 28 add 768  CX 768 curveto
     CX 28 sub 768  CX 57 sub 758  CX 62 sub 744 curveto closepath fill
     1 setlinejoin
-    JT rgb 9 setlinewidth Jneckfront stroke
+    % from behind you see the *inside* of the front neckline: its rib is in shade
+    JB 0.4 shade rgb 7 setlinewidth Jneckfront stroke
     JD rgb 10 setlinewidth Jneckback stroke
     JT rgb 3 setlinewidth Jneckback stroke
 
-    % size tag sewn inside the back neck, and the yoke's centre seam
-    gsave 0.94 0.94 0.92 setrgbcolor CX 13 sub 700 26 26 rectfill
-        JD rgb 0.5 setlinewidth CX 13 sub 700 26 26 rectstroke
-        /Helvetica-Bold findfont 11 scalefont setfont JD rgb
-        (L) dup stringwidth pop 2 div CX exch sub 708 moveto show
-        JD rgb 0.6 setlinewidth CX 727 moveto CX 726 lineto stroke
-    grestore
     % armhole seams and hem stitching
     JB 0.5 shade rgb 1 setlinewidth
     { 205 716 moveto 190 680 172 630 168 585 curveto stroke } Jboth

@@ -680,6 +680,7 @@ fn new_options_are_validated() {
     for bad in [
         "/Outline2Width -2 /Outline2 [ 0 0 0 ]",
         "/Outline2 [ 0 0 ]",
+        "/Outline2Width 3",
         "/Shadow [ 0 0 0 ] /ShadowOffset [ 1 ]",
         "/Shadow [ 0 0 0 ] /ShadowOffset (x)",
         "/Tracking (x)",
@@ -692,4 +693,26 @@ fn new_options_are_validated() {
             "{bad}"
         );
     }
+}
+
+#[test]
+fn part_spacing_includes_every_band_and_the_shadow() {
+    // ink-to-ink spacing = Gap + 2 x (both outline bands) + the shadow's reach
+    let o = opts(
+        "IIII",
+        "8",
+        "/Caption (8) /Gap 1 /OutlineWidth 4 /Outline2Width 6 /Outline2 [ 0 0 1 ] \
+         /Shadow [ 0 0 0 ] /ShadowOffset [ 5 -7 ] /NameFont /Helvetica-Bold",
+    );
+    let v = nums(&format!(
+        "{o} jerseylayout /L exch def L /Number get /Ink get aload pop L /Caption get /Ink get aload pop"
+    ));
+    let gap = v[1] - v[7];
+    assert!(gap >= 1.0 + 2.0 * (4.0 + 6.0) + 7.0 - 0.01, "gap {gap}");
+    // and everything, bands and shadow included, is still inside the margin
+    let p = painted_bbox(&format!("{o} jersey"));
+    assert!(
+        p[0] >= 29.0 && p[2] <= 571.0 && p[1] >= 29.0 && p[3] <= 671.0,
+        "{p:?}"
+    );
 }
