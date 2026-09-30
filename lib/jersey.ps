@@ -229,19 +229,38 @@
   } for
 } def
 
+% -> [x0 y0 x1 y1] | null
+% Ink box of the arch built on a scratch path. Never raises and always
+% leaves the graphics state balanced: a failure anywhere in jyarch (no
+% current font, a non-outline face...) comes back as null, with the
+% operands it stranded dropped and the caller's path intact.
+% @internal
+/jyarchbbox {
+  /jymc count def
+  gsave newpath
+  { jyarch jybbox } stopped { count jymc sub { pop } repeat null } if
+  grestore
+} def
+
 % Rotates the arch (jyphi) until the ink of the whole string is centred
-% on x = jycxs, then leaves the final ink box in jyNI. Measures about
+% on x = jycxs, iterating to a 0.05pt residual (jyconv false if it never got there: the
+% name is wider than the circle can hold), and leaves the final ink box
+% in jyNI. Measures about
 % the true centre so it is exact at this size.
 % @internal
 /jycenter {
   /jyphi 0 def
-  3 {
-    gsave newpath jyarch jybbox grestore dup null eq { pop jersey-text-has-no-ink } if aload pop
+  /jyconv false def
+  0 1 11 {
+    pop
+    jyarchbbox dup null eq { pop jersey-text-has-no-ink } if
+    dup /jyNI exch def aload pop
     /jyury exch def /jyurx exch def /jylly exch def /jyllx exch def
-    /jyphi jyphi  jyllx jyurx add 2 div jycxs sub  jyr jyury jycys sub add 2 div div
-      57.29578 mul add def
-  } repeat
-  gsave newpath jyarch jybbox grestore dup null eq { pop jersey-text-has-no-ink } if /jyNI exch def
+    /jyxc jyllx jyurx add 2 div jycxs sub def
+    jyxc abs 0.05 lt { /jyconv true def exit } if
+    /jyphi jyphi jyxc jyr jyury jycys sub add 2 div div 57.29578 mul add def
+  } for
+  % jyconv says whether the ink really ended up on the axis; callers decide
 } def
 
 % (str) cx cy r jerseyarch -
@@ -266,6 +285,7 @@
   /jycx jycxs def /jycy jycys def
   % a string with no ink (a tab) only shows up as an empty measurement
   { jycenter } stopped { end jersey-text-has-no-ink } if
+  jyconv not { end jersey-does-not-fit } if
   jyarch
   end
 } def
@@ -311,8 +331,10 @@
   /jycx 0 def /jycy 0 def /jycxs 0 def /jycys 0 def
   jynfd jys scalefont setfont
   jycenter
-  jymaxrot jymaxtilt gt { /jycode 1 def } if
-  jyNI 2 get jyNI 0 get sub jyW gt { /jycode 2 def } if
+  % an arch that cannot be centred is a name far too long for the circle
+  jyconv not { /jycode 1 def } if
+  jycode 0 eq { jymaxrot jymaxtilt gt { /jycode 1 def } if } if
+  jycode 0 eq { jyNI 2 get jyNI 0 get sub jyW gt { /jycode 2 def } if } if
   jycode 0 eq {
     % cap height and descent of the name, at this size
     (H) jynfd jys jyink 3 get /jycap exch def

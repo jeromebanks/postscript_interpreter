@@ -263,7 +263,9 @@ fn a_tighter_arch_curves_more_and_shrinks_the_name() {
 fn impossible_geometry_is_rejected_by_name() {
     // a long name in a tiny rectangle
     assert_eq!(
-        err_of("<< /Name (Cleveland Steamers) /Number (69) /Rect [ 0 0 40 400 ] >> jerseylayout"),
+        err_of(
+            "<< /Name (Cleveland Steamers) /Number (69) /Rect [ 0 0 40 400 ] /Radius 2000 >> jerseylayout"
+        ),
         "jersey-name-too-wide"
     );
     // a very tight arch: the end letters would be severely tilted
@@ -537,5 +539,43 @@ fn negative_outline_or_margin_and_non_ascii_arch_are_rejected() {
     assert_eq!(
         err_of("(\\303\\251) 300 100 300 jerseyarch"),
         "jersey-name-must-be-ascii"
+    );
+}
+
+#[test]
+fn trailing_spaces_in_the_name_still_centre_the_ink() {
+    // Twenty trailing spaces shift the advance centre far from the ink centre.
+    let o = format!(
+        "<< /Name (Team{}) /Number (7) /Rect [ 20 20 580 680 ] /Radius 300 /Margin 10 >>",
+        " ".repeat(20)
+    );
+    let v = nums(&format!("{o} jerseylayout /Name get /Ink get aload pop"));
+    assert!(((v[0] + v[2]) / 2.0 - 300.0).abs() < 0.1, "{v:?}");
+    assert!(v[0] >= 30.0 && v[2] <= 570.0, "{v:?}");
+}
+
+#[test]
+fn jerseyarch_without_a_usable_font_leaves_the_caller_intact() {
+    let mut it = Interp::with_page(W, H).expect("page");
+    for f in ["lib/artkit.ps", "lib/jersey.ps"] {
+        it.run_source(&std::fs::read(f).expect("lib"))
+            .expect("lib loads");
+    }
+    // /Courier-less builtin Type 3 faces have no outlines: measurement fails inside jyarch
+    it.run_str("newpath 7 8 moveto 9 10 lineto countdictstack")
+        .expect("setup");
+    let depth = it.operand_stack().last().map(|o| o.repr()).unwrap();
+    it.run_str("clear { (A) 300 100 300 jerseyarch } stopped pop clear countdictstack pathbbox")
+        .expect("probe");
+    let s: Vec<String> = it.operand_stack().iter().map(|o| o.repr()).collect();
+    assert_eq!(
+        s,
+        [
+            depth,
+            "7.0".into(),
+            "8.0".into(),
+            "9.0".into(),
+            "10.0".into()
+        ]
     );
 }
