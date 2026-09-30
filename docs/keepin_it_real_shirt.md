@@ -38,6 +38,10 @@ Renders are deterministic (same seed → identical output).
 - **Background**: transparent. PNG is RGBA with alpha 0 outside the art
   (`apparel_mock.sh` asserts the corner pixels; the SVG has no backdrop rect;
   the PDF paints no page fill). No white box.
+- **Plasma fill resolution**: `psyletter` samples the fill at `/Resolution /device`,
+  one sample per device pixel (capped at 4096, enough for the 3600 px front), so the
+  300 dpi fill has no upscaling blocks (issue #162; the old 512 cap gave ~49 PPI across
+  `Real`). Cost: the full export went from ~5 s to ~43 s and the front PNG from 0.56 MB to 3.9 MB.
 - Front: GIMP-style plasma (`/Treatment /plasma`, `lib/fillkit.ps`, red/green/blue palette,
   `/Turbulence 2 /Spread 0.01`, thin dark outline) on all three runs. Back: solid black, no outline, no wear (plasma has none: `/Wear` only applies to `/mottled`).
 
