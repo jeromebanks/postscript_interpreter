@@ -469,3 +469,53 @@ fn a_name_size_ceiling_below_the_floor_is_rejected() {
         "jersey-does-not-fit"
     );
 }
+
+#[test]
+fn thick_outlines_do_not_overlap_between_parts() {
+    // ink-to-ink spacing must include both outlines: 1pt of clear space with 10pt outlines
+    let o = opts(
+        "IIII",
+        "8",
+        "/Caption (8) /Gap 1 /OutlineWidth 10 /NameFont /Helvetica-Bold",
+    );
+    let v = nums(&format!(
+        "{o} jerseylayout /L exch def L /Number get /Ink get aload pop L /Caption get /Ink get aload pop"
+    ));
+    let (num_bottom, cap_top) = (v[1], v[7]);
+    assert!(
+        num_bottom - cap_top >= 1.0 + 20.0 - 0.01,
+        "gap {}",
+        num_bottom - cap_top
+    );
+}
+
+#[test]
+fn inkless_text_and_zero_radius_do_not_leak_state() {
+    let mut it = with_lib(W, H);
+    it.run_str(
+        "/Times-Roman findfont 14 scalefont setfont newpath 7 8 moveto 9 10 lineto countdictstack",
+    )
+    .expect("setup");
+    let depth = it.operand_stack().last().map(|o| o.repr()).unwrap();
+    for bad in [
+        "<< /Name (\\t) /Number (1) /Rect [ 20 20 580 680 ] >> jerseylayout",
+        "(A) 100 100 0 jerseyarch",
+    ] {
+        it.run_str(&format!("clear {{ {bad} }} stopped pop clear"))
+            .expect("probe");
+    }
+    it.run_str("countdictstack pathbbox currentfont /FontName get 40 string cvs")
+        .expect("probe");
+    let s: Vec<String> = it.operand_stack().iter().map(|o| o.repr()).collect();
+    assert_eq!(
+        s,
+        [
+            depth,
+            "7.0".into(),
+            "8.0".into(),
+            "9.0".into(),
+            "10.0".into(),
+            "(Times-Roman)".into()
+        ]
+    );
+}

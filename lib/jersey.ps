@@ -46,7 +46,8 @@
 %                      name's cap height (default 6), so a roomy
 %                      rectangle does not produce a dwarfed name; any
 %                      height left over is split above and below.
-%   /Gap n             spacing between name, number and caption, points.
+%   /Gap n             clear space between the outlines of name, number and
+%                      caption, points (ink-to-ink is this + 2 x outline).
 %                      Default 0.3 x the name's cap height.
 %   /NameMaxSize n     ceiling for the fitted name size (default 0.3 x
 %                      the usable height); /MinNameSize n the floor
@@ -235,12 +236,12 @@
 /jycenter {
   /jyphi 0 def
   3 {
-    gsave newpath jyarch jybbox aload pop grestore
+    gsave newpath jyarch jybbox grestore dup null eq { jersey-text-has-no-ink } if aload pop
     /jyury exch def /jyurx exch def /jylly exch def /jyllx exch def
     /jyphi jyphi  jyllx jyurx add 2 div jycxs sub  jyr jyury jycys sub add 2 div div
       57.29578 mul add def
   } repeat
-  gsave newpath jyarch jybbox grestore /jyNI exch def
+  gsave newpath jyarch jybbox grestore dup null eq { jersey-text-has-no-ink } if /jyNI exch def
 } def
 
 % (str) cx cy r jerseyarch -
@@ -257,6 +258,7 @@
   % path it builds cannot live under a gsave we could unwind.
   dup jyisnum 2 index jyisnum and 3 index jyisnum and 4 index type /stringtype eq and
     not { jersey-option-wrong-type } if
+  dup 0 le { jersey-does-not-fit } if
   3 index jynonspace not { jersey-text-has-no-ink } if
   40 dict begin
   /jyr exch def /jycys exch def /jycxs exch def /jyname exch def
@@ -313,7 +315,9 @@
     % cap height and descent of the name, at this size
     (H) jynfd jys jyink 3 get /jycap exch def
     jyname jynfd jys jyink 1 get neg dup 0 lt { pop 0 } if /jydesc exch def
-    /jygap jygapopt 0 lt { jycap 0.3 mul } { jygapopt } ifelse def
+    % /Gap is the clear space between the *outlines* of adjacent parts,
+    % so the ink-to-ink spacing grows by both outlines' thickness
+    /jygap jygapopt 0 lt { jycap 0.3 mul } { jygapopt } ifelse jyow 2 mul add def
     % top of the name's ink is y = 0, so the circle centre is at -ink top
     /jyyc jyNI 3 get neg def
     % caption (size fitted to the width), as offsets from its baseline
