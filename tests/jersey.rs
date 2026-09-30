@@ -716,3 +716,40 @@ fn part_spacing_includes_every_band_and_the_shadow() {
         "{p:?}"
     );
 }
+
+#[test]
+fn a_big_offset_shadow_is_one_solid_block() {
+    // A thin letter with a shadow 24pt away: no gaps along a row through the sweep.
+    let o = "<< /Name (I) /Number (1) /Rect [ 20 20 580 680 ] /NameMaxSize 10 /OutlineWidth 0 \
+              /NameFont /Helvetica-Bold /Fill [ 1 1 1 ] /Shadow [ 0 0.8 0 ] /ShadowOffset [ 24 0 ] >>";
+    let it = render(&format!("{o} jersey"));
+    let pm = &it.gfx().pixmap;
+    let (w, h) = (pm.width() as usize, pm.height() as usize);
+    // the name's row band: find a row with green and check its green span has no holes
+    let is_green = |i: usize| {
+        let p = pm.pixels()[i];
+        p.green() > 150 && p.red() < 100
+    };
+    let mut checked = false;
+    for y in 0..h {
+        let xs: Vec<usize> = (0..w).filter(|&x| is_green(y * w + x)).collect();
+        if xs.len() > 8 {
+            let (a, b) = (xs[0], *xs.last().unwrap());
+            // white letter sits on top; antialiased edge pixels are not holes (nine
+            // separated copies would leave dozens of gap pixels)
+            let holes = (a..=b)
+                .filter(|&x| {
+                    let p = pm.pixels()[y * w + x];
+                    !is_green(y * w + x) && !(p.red() > 200 && p.green() > 200)
+                })
+                .count();
+            assert!(
+                holes <= 4,
+                "row {y}: {holes} gap pixels in a {}px sweep",
+                b - a
+            );
+            checked = true;
+        }
+    }
+    assert!(checked, "no shadow pixels found");
+}

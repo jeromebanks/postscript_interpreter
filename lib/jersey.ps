@@ -623,9 +623,9 @@
 /jypaint {
   /jypf exch def /jypp exch def
   jyhassh {
-    0 1 8 { /jysi exch def
+    0 1 jyshn { /jysi exch def
       gsave
-        jyshoff 0 get jysi mul 8 div  jyshoff 1 get jysi mul 8 div  translate
+        jyshoff 0 get jysi mul jyshn div  jyshoff 1 get jysi mul jyshn div  translate
         newpath jypp jyshc jycolor
         jyow1 jyow2 add 2 mul setlinewidth gsave stroke grestore fill
       grestore
@@ -647,7 +647,11 @@
   /jyoutl jylay /Outline get def
   /jyoutl2 jylay /Outline2 [ 0 0 0 ] jygd def
   /jyhassh jylay /Shadow known def
-  jyhassh { /jyshc jylay /Shadow get def /jyshoff jylay /ShadowOffset get def } if
+  jyhassh { /jyshc jylay /Shadow get def /jyshoff jylay /ShadowOffset get def
+    % a copy every half point along the offset (capped), so thin letters
+    % and big offsets still sweep out one solid block, not separate copies
+    /jyshn jyshoff 0 get abs jyshoff 1 get abs 2 copy lt { exch } if pop
+      2 mul ceiling cvi 1 max 240 min def } if
   /jyfill jylay /Fill get def
   % the paint must not inherit the caller's stroke state (inside our gsave)
   1 setlinejoin 0 setlinecap [ ] 0 setdash
