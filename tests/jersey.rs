@@ -817,3 +817,33 @@ fn hairline_serifs_still_get_a_solid_shadow() {
         "gaps inside the swept shadow of a hairline-serif letter"
     );
 }
+
+#[test]
+fn a_diagonal_shadow_of_a_thin_letter_is_solid_along_its_sweep() {
+    // Offset (10, -10) is ~14 units long: copies must be a point apart along the
+    // diagonal, not along the larger axis. Sample the path a hyphen's centre sweeps (a tiny straight-edged feature:
+    // round one-point blobs 1.4 units apart would leave gaps between them).
+    let o = "<< /Name (-) /Number (1) /Rect [ 2 2 58 68 ] /Margin 1 \
+             /NameFont /Times-Roman /NameMaxSize 1 /MinNameSize 1 /OutlineWidth 0 /Fill [ 0 0 0 ] \
+             /Shadow [ 0 0.8 0 ] /ShadowOffset [ 10 -10 ] >>";
+    let v = nums(&format!(
+        "10 10 scale {o} jerseylayout /Name get /Ink get aload pop"
+    ));
+    let it = render(&format!("10 10 scale {o} jersey"));
+    let pm = &it.gfx().pixmap;
+    let (w, h) = (pm.width() as usize, pm.height() as usize);
+    let (xc, yc) = ((v[0] + v[2]) / 2.0, (v[1] + v[3]) / 2.0);
+    let mut white = 0;
+    for k in 10..=990 {
+        let t = k as f64 / 1000.0;
+        let (px, py) = (
+            ((xc + 10.0 * t) * 10.0) as usize,
+            ((yc - 10.0 * t) * 10.0) as usize,
+        );
+        let p = pm.pixels()[(h - 1 - py) * w + px];
+        if p.red() > 230 && p.green() > 230 && p.blue() > 230 {
+            white += 1;
+        }
+    }
+    assert_eq!(white, 0, "gaps along the diagonal sweep of a thin letter");
+}

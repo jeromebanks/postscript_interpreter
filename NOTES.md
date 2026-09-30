@@ -103,6 +103,12 @@ football-jersey numeral) and **Anton** (tall condensed athletic gothic),
 added to `fonts/catalog/` with their OFL.txt, the catalog README, the
 font-gallery script and site/fonts.html. Bowlby One was tried and dropped
 (round, not athletic).
+Known limitation (filed as #169): pscat's stroker leaves a hollow centre
+when a tiny *curved* closed contour is stroked wider than its diameter (a
+period or an `i` dot under a thick outline); straight-edged contours are
+fine. The shadow passes are stroked at least a point wide so copies always
+overlap; the regression tests therefore use straight-edged features (a
+hyphen) rather than dots.
 Gotcha hit while building it: a name bound to an executable array *runs*
 when referenced, so `jbp exec` runs the proc and then `exec` underflows;
 reference it bare.

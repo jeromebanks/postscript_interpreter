@@ -505,7 +505,7 @@
   /jytrack jyo /Tracking 0 jygn def
   /jynwfrac jyo /NameWidth 1 jygn def
   jynwfrac 0 le jynwfrac 1 gt or { jersey-option-wrong-type } if
-  % the sweep takes a pass per point of offset, each copy stroked at least
+  % the sweep takes a pass per point of offset distance, each copy stroked at least
   % a point wide so neighbours always overlap (even hairline serifs): cap
   % the offset rather than draw separate copies
   /jyshd jyshoff 0 get abs jyshoff 1 get abs 2 copy lt { exch } if pop def
@@ -659,7 +659,8 @@
   /jyhassh jylay /Shadow known def
   jyhassh { /jyshc jylay /Shadow get def /jyshoff jylay /ShadowOffset get def
     % a copy per point of offset, each stroked >= 1 pt wide: one solid block
-    /jyshn jyshoff 0 get abs jyshoff 1 get abs 2 copy lt { exch } if pop
+    % (Euclidean distance: a diagonal offset's copies are farther apart)
+    /jyshn jyshoff 0 get dup mul jyshoff 1 get dup mul add sqrt
       ceiling cvi dup 1 lt { pop 1 } if def } if
   /jyfill jylay /Fill get def
   % the paint must not inherit the caller's stroke state (inside our gsave)
