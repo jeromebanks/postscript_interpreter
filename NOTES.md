@@ -70,6 +70,48 @@ sleeve artwork files. It composes `headline.ps` (layout) and
 - Deferred: the finished *Keepin' it Real* artwork (#147), arched jersey
   layout (#149), any product/vendor integration.
 
+## `lib/jersey.ps`: arched team name over a player number (issue #149, 2026-09-30)
+
+One new sibling library, `@requires: (lib/artkit.ps) run`: `jerseylayout`
+sizes and places an arched name over a dominant number (plus an optional
+caption) inside a print rectangle, `jerseydraw` paints it (outline
+stroked first, outside the letters only, then the fill), `jersey` does
+both, and `jerseyarch` is the bare path builder. `examples/jersey.ps` is
+the specimen (both slogans, reuse, narrow/wide numbers, a wide aspect),
+`tests/jersey.rs` the checks.
+
+- **Why not `ctextctr`.** Rendered at jersey scale first, as the issue
+  asks. `pathtext` only `show`s inside a per-glyph gsave -- no outline, no
+  ink box -- and stamps each glyph with the tangent at its *left* edge;
+  `ctextctr` centres the *advance* and `ctext` sweeps 5% past it, so the
+  name sits a few points off-axis. The fix is a separate builder, not a
+  change to `ctext` (its goldens and `examples/circular_text.ps` are
+  untouched): each letter goes on its advance *midpoint*, rotated to the
+  tangent there, added with `charpath` under a saved/restored CTM (the
+  path stays in device space, and unlike gsave it isn't discarded).
+  That one path gives fill, outline and `pathbbox`; the arch is then
+  rotated a few fixed-point iterations until the *ink* is centred.
+- **Advance vs ink** is documented in the file header; everything this
+  library reports or checks is flattened-`charpath` ink.
+- **Fit.** The name is bisected to the largest size meeting: end-letter
+  tilt <= `/MaxTilt` (35), ink width <= usable width, and the number still
+  >= `/Dominance` (1.8) x the name's cap height in the height left. The
+  number is bisected to the largest that fits the width, the height left
+  and `/MaxDominance` (6). The number's top is placed against the *curve*
+  of the arch at the number's half-width (an arch droops at its ends, so
+  a narrow number tucks up under the apex). Failures are named
+  (`jersey-name-too-wide`, `-too-tilted`, `jersey-does-not-fit`,
+  `jersey-number-not-dominant`) and leave the caller's stack/font/path
+  alone. The outline width is inset from the usable rectangle so outline
+  + ink never cross the margin.
+- **Not done / judgment calls.** Kerning is not applied (neither `show`
+  nor `stringwidth` here does). A space at the apex is not special-cased.
+  Vertical slack (a tall, width-limited rectangle) is split above and
+  below by default (`/VAlign /top` to hug the top). The clearance test
+  in `tests/jersey.rs` is per pixel column (vertical), not Euclidean --
+  conservative where the arch is steep. Garment/vendor templates stay
+  out of this repo (see #146).
+
 ## `lib/headline.ps`: composition helpers for headline + supporting type (issue #145, 2026-09-28)
 
 Second slice of the shirt remake. One new sibling library

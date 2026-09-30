@@ -790,6 +790,28 @@ specimen.
 ] hllayout hldraw
 ```
 
+An arched-name-over-number sibling, `lib/jersey.ps` (issue #149), lays
+out the classic athletic-jersey graphic: a team-like name on an arch above
+a large player number, with an optional caption, fitted into a print
+rectangle. `jerseylayout` takes an options dict (`/Name`, `/Number` as
+text so `00` survives, `/Rect`, `/Margin`, fonts, `/Radius`, colours or a
+`/Preset /light`/`/dark`) and returns a layout of measured *ink* boxes;
+`jerseydraw` paints it (outline first, then fill) and `jersey` does both.
+The arch is placed by glyph midpoint with the ink centred on the axis
+(`jerseyarch` is the reusable path builder); the name is sized down until
+its end letters stay within `/MaxTilt` and the number stays dominant, and
+impossible geometry raises a named error (`jersey-name-too-wide`,
+`jersey-name-too-tilted`, `jersey-does-not-fit`, ...) instead of clipping.
+`examples/jersey.ps` is the specimen.
+
+```postscript
+(lib/artkit.ps) run
+(lib/jersey.ps) run
+<< /Name (Cleveland Steamers) /Number (69)
+   /NameFont /AlfaSlabOne /NumberFont /AlfaSlabOne
+   /Rect [ 36 36 576 684 ] /Margin 12 /Preset /light >> jersey
+```
+
 A tenth sibling, `lib/printkit.ps` (issue #52), composes `hatch`,
 `scatter`, and (optionally) `grain` into three printmaking presets --
 `woodcut`, `linocut`, `engraving` -- over a shared options dict

@@ -322,6 +322,14 @@ apparel_shirt.ps` + `apparel_second.ps`, `scripts/apparel_export.sh` (finished s
 alpha / SVG without backdrop). Details and the observed pre-fix
 transparency behaviour in NOTES.md. Next in this thread (#155 landed: `/Chewy-Regular`, `/BagelFatOne-Regular`, see docs/groovy_font_choice.md): #147 (the actual
 shirt) is now just a config.
+Also done: issue #149, arched jersey layout — `lib/jersey.ps`
+(`@requires: (lib/artkit.ps) run`, tag-migrated): `jerseylayout` /
+`jerseydraw` / `jersey` place an ink-centred, midpoint-tangent arched name
+over a dominant number (+ optional caption) in a print rectangle, with
+outline + fill, light/dark presets, tilt/dominance limits, and named
+rejections (`jersey-name-too-wide`, ...). `jerseyarch` is the reusable
+path builder; `ctext`/`ctextctr` are unchanged (NOTES.md says why they
+weren't enough). `examples/jersey.ps`, `tests/jersey.rs`, a site card.
 Also done: issue #145, headline composition helpers — `lib/headline.ps`
 (`@requires: (lib/artkit.ps) run`, tag-migrated): `hllayout` places a
 dominant run plus supporting runs by anchors/offsets against measured
