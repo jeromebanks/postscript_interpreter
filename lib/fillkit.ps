@@ -39,17 +39,19 @@
 %   sets the image size — and so the file size and the smallest
 %   feature. pscat's image operator samples nearest-neighbour, so a
 %   field stretched over many device pixels per sample shows square
-%   steps; `/Resolution /device` picks one sample per device pixel
-%   (clamped to 512) for a smooth PNG, at the cost of more work. The
-%   cap is real: a box wider than 512 device pixels (a large print-DPI
-%   export) is upscaled nearest-neighbour, so steps and grain show as
-%   multi-pixel blocks. Use /device for screen-size output.
+%   steps; `/Resolution /device` picks one sample per device pixel for
+%   a smooth result, at the cost of more work (clamped to 4096, which
+%   covers a 13 in box at 300 dpi; a numeric /Resolution stays capped
+%   at 512). A box wider than 4096 device pixels is still upscaled
+%   nearest-neighbour. A 3600x4200 px print front takes ~40 s with
+%   /device and adds a few MB per export.
 %   Only the *field* is raster; the shape it fills is never rasterized.
 %
 % Options shared by every fill (all optional):
 %   /Seed n          integer seed (default 1); a different seed is a
 %                    different field, and only the field changes
-%   /Resolution n    image samples along the longer side, 8..512 (128)
+%   /Resolution n    image samples along the longer side, 8..512 (128);
+%                    /device: one per device pixel, up to 4096
 %   /Palette p       a palette name from artkit's `Palettes`, or an
 %                    array of [r g b]. Scalar fields (everything but
 %                    plasma's default) are mapped through the palette
@@ -416,9 +418,9 @@
   /Resolution 128 fkget
   dup type /nametype eq {
     /device eq not { fillkit-resolution-must-be-a-number-or-device } if
-    fkbw 0 fkdevlen 0 fkbh fkdevlen max
-  } { { fillkit-resolution-must-be-a-number-or-device } fknum } ifelse
-  8 512 fkclamp cvi /fkres exch def
+    fkbw 0 fkdevlen 0 fkbh fkdevlen max 8 4096 fkclamp
+  } { { fillkit-resolution-must-be-a-number-or-device } fknum 8 512 fkclamp } ifelse
+  cvi /fkres exch def
   /Spread 0 fkget { fillkit-spread-must-be-a-number } fknum 0 1 fkclamp /fkspread exch def
   /RGBNoise 0 fkget { fillkit-rgbnoise-must-be-a-number } fknum 0 1 fkclamp /fkrgbn exch def
   /HSVNoise [0 0 0] fkget
@@ -462,7 +464,7 @@
 % @param: /Turbulence num 0..10 roughness: per-level displacement decays as 2^(-1/(1+t)), so low is smooth and blobby, high keeps fine crinkle (default 1)
 % @param: /Detail num 3..7 subdivision levels, i.e. a (2^n+1)-point square grid; capped at 7 to stay under Level 2's 65535-element array limit (default 6)
 % @param: /Palette name-or-array blend this palette instead of random RGB: one plasma field mapped through the ramp (default: random RGB)
-% @param: /Resolution num-or-/device 8..512 image samples along the longer side, or /device for one per device pixel (default 128)
+% @param: /Resolution num-or-/device 8..512 image samples along the longer side, or /device for one per device pixel, up to 4096 (default 128)
 % @param: /Spread num 0..1 GIMP Spread as sample-coordinate jitter (default 0)
 % @param: /RGBNoise num 0..1 per-channel grain (default 0)
 % @param: /HSVNoise [h s v] hue/saturation/value grain, each 0..1 (default off)
@@ -494,7 +496,7 @@
 % @param: /Detail num 1..8 octaves (default 4)
 % @param: /Turbulent bool sum absolute values for the ridged look (default false)
 % @param: /Palette name-or-array ramp the noise is mapped through (default black to white)
-% @param: /Resolution num-or-/device 8..512 image samples along the longer side, or /device for one per device pixel (default 128)
+% @param: /Resolution num-or-/device 8..512 image samples along the longer side, or /device for one per device pixel, up to 4096 (default 128)
 % @param: /Spread num 0..1 GIMP Spread as sample-coordinate jitter (default 0)
 % @param: /RGBNoise num 0..1 per-channel grain (default 0)
 % @param: /HSVNoise [h s v] hue/saturation/value grain, each 0..1 (default off)
@@ -525,7 +527,7 @@
 % @param: /Scale num > 0 noise features across the longer side (default 3)
 % @param: /Detail num 1..8 octaves (default 4)
 % @param: /Palette name-or-array ramp the result is mapped through (default black to white)
-% @param: /Resolution num-or-/device 8..512 image samples along the longer side, or /device for one per device pixel (default 128)
+% @param: /Resolution num-or-/device 8..512 image samples along the longer side, or /device for one per device pixel, up to 4096 (default 128)
 % @param: /Spread num 0..1 GIMP Spread as sample-coordinate jitter (default 0)
 % @param: /RGBNoise num 0..1 per-channel grain (default 0)
 % @param: /HSVNoise [h s v] hue/saturation/value grain, each 0..1 (default off)
@@ -559,7 +561,7 @@
 % @param: /Turns num spiral windings from centre to /Radius (default 3)
 % @param: /Symmetric bool conical only: mirror the sweep so it has no seam (default false)
 % @param: /Palette name-or-array ramp (default black to white)
-% @param: /Resolution num-or-/device 8..512 image samples along the longer side, or /device for one per device pixel (default 128)
+% @param: /Resolution num-or-/device 8..512 image samples along the longer side, or /device for one per device pixel, up to 4096 (default 128)
 % @param: /Spread num 0..1 GIMP Spread as sample-coordinate jitter (default 0)
 % @param: /RGBNoise num 0..1 per-channel grain (default 0)
 % @param: /HSVNoise [h s v] hue/saturation/value grain, each 0..1 (default off)

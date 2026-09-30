@@ -418,6 +418,24 @@ fn resolution_device_matches_an_explicit_resolution() {
 }
 
 #[test]
+fn device_resolution_exceeds_the_numeric_cap_for_print_sized_boxes() {
+    // 600 device pixels wide: a numeric /Resolution stays clamped to 512
+    // (so 600 == 512), while /device keeps one sample per pixel instead of
+    // upscaling 512 samples in blocks (issue #162).
+    let paint = |res: &str| {
+        let mut it = kit(600, 8);
+        run(&mut it, "1 setgray clippath fill");
+        run(
+            &mut it,
+            &format!("0 0 600 8 << /Seed 3 /Resolution {res} >> plasmafill"),
+        );
+        rgb(&it)
+    };
+    assert_eq!(paint("600"), paint("512"));
+    assert_ne!(paint("/device"), paint("512"));
+}
+
+#[test]
 fn gradient_shapes_survive_a_sample_exactly_on_the_centre() {
     // a square box at /Resolution 9: the middle sample sits exactly on
     // /Center [0.5 0.5], where atan(0,0) would be undefinedresult

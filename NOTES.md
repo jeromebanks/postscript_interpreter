@@ -6271,7 +6271,8 @@ is instead one `colorimage` under the caller's clip. Verified: PNG resamples
 it, SVG gets one base64 `<image>` inside the `<clipPath>`, PDF one Flate RGB
 XObject under `W n` — the glyph shape itself stays vector. pscat's image
 blit is nearest-neighbour, so `/Resolution /device` (one sample per device
-pixel, capped at 512, so print-DPI boxes still upscale in blocks) is what
+pixel, capped at 4096 since #162 — a 512 cap upscaled 300-dpi print fronts in
+blocks; numeric values stay capped at 512) is what
 `psyletter` uses for smooth screen-size PNGs. (2) *Global state:*
 `noiseinit` writes the global `Perm`; the fill runs it inside its own scratch
 dict, so the `def` shadows and the caller's table is untouched (tested), and
