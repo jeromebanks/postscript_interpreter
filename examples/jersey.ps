@@ -1,0 +1,93 @@
+%!PS-Adobe-3.0
+%%Title: Jersey — a specimen sheet for jersey.ps
+%%BoundingBox: 0 0 900 1200
+%%EndComments
+
+% Specimen for lib/jersey.ps (issue #149): an arched team name over a
+% dominant player number, with an optional caption.
+%
+%   row 1  the two jerseys the feature was written for --
+%          `Cleveland Steamers` over 69 (light-garment colours) and
+%          `Persona non grata` over 86 (dark-garment colours)
+%   row 2  reuse: a neutral team with the narrow number (7), one with the
+%          double-width (00) and a caption, and the 3-digit (123)
+%   row 3  left: why the arch is placed by glyph midpoint and ink --
+%          artkit's ctextctr (red) vs jerseyarch (black) on the same
+%          circle, with the vertical axis drawn; right: a wide, short
+%          print area, the same call
+%
+% Dashed boxes are the requested print rectangles and the thin blue
+% boxes the ink the layout reports (Name / Number / Caption), drawn from
+% the layout itself -- so the picture is also the proof that the numbers
+% and the glyphs agree. Run from the repo root:
+%
+%   pscat --page 900x1200 examples/jersey.ps
+
+(lib/artkit.ps) run
+(lib/jersey.ps) run
+
+0.95 0.94 0.92 setrgbcolor clippath fill
+
+/guide {                                          % [x0 y0 x1 y1] -
+    aload pop /gy1 exch def /gx1 exch def /gy0 exch def /gx0 exch def
+    gsave 0.5 setgray 0.6 setlinewidth [ 4 3 ] 0 setdash
+    gx0 gy0 gx1 gx0 sub gy1 gy0 sub rectstroke grestore
+} def
+/inkbox {                                         % [x0 y0 x1 y1] -
+    aload pop /gy1 exch def /gx1 exch def /gy0 exch def /gx0 exch def
+    gsave 0.1 0.3 0.9 setrgbcolor 0.4 setlinewidth
+    gx0 gy0 gx1 gx0 sub gy1 gy0 sub rectstroke grestore
+} def
+/piece {                                          % opts -
+    jerseylayout /pL exch def
+    pL /Rect get guide
+    pL jerseydraw
+    pL /Name get /Ink get inkbox
+    pL /Number get /Ink get inkbox
+    pL /Caption known { pL /Caption get /Ink get inkbox } if
+} def
+
+% --- row 1 ---------------------------------------------------------------
+[ 20 640 440 1180 ] guide
+<< /Name (Cleveland Steamers) /Number (69)
+   /NameFont /AlfaSlabOne /NumberFont /AlfaSlabOne
+   /Rect [ 20 640 440 1180 ] /Margin 14 /Preset /light >> piece
+
+gsave 0.09 0.1 0.13 setrgbcolor 460 640 420 540 rectfill grestore
+<< /Name (Persona non grata) /Number (86)
+   /NameFont /BebasNeue /NumberFont /BebasNeue
+   /Rect [ 460 640 880 1180 ] /Margin 14 /Preset /dark
+   /Radius 520 >> piece
+
+% --- row 2 ---------------------------------------------------------------
+<< /Name (Metro Comets) /Number (7) /NameFont /Helvetica-Bold
+   /NumberFont /Helvetica-Bold
+   /Rect [ 20 330 290 620 ] /Margin 10 /Preset /light
+   /Fill [ 0.6 0.08 0.1 ] /Outline [ 0.1 0.1 0.12 ] >> piece
+<< /Name (Lake City Rovers) /Number (00) /Caption (EST. 1998)
+   /NameFont /AlfaSlabOne /NumberFont /AlfaSlabOne /CaptionFont /BebasNeue
+   /Rect [ 310 330 590 620 ] /Margin 10 /Preset /light >> piece
+<< /Name (Riverside) /Number (123) /NameFont /Bungee /NumberFont /Bungee
+   /Rect [ 610 330 880 620 ] /Margin 10 /Preset /light
+   /Fill [ 0.05 0.35 0.25 ] /Outline [ 0.95 0.75 0.15 ] >> piece
+
+% --- row 3, left: ctextctr vs jerseyarch --------------------------------
+gsave
+    /Helvetica-Bold findfont 46 scalefont setfont
+    1 0.2 0.2 setrgbcolor
+    220 40 175 (CLEVELAND STEAMERS) ctextctr
+    0 setgray
+    newpath (CLEVELAND STEAMERS) 220 40 175 jerseyarch fill
+    0.1 0.3 0.9 setrgbcolor 0.4 setlinewidth
+    220 0 moveto 220 300 lineto stroke
+grestore
+gsave /Helvetica findfont 10 scalefont setfont 0.2 setgray
+    20 308 moveto (ctextctr: advance-centred, left-edge tangent) show
+    20 296 moveto (jerseyarch: ink-centred, midpoint tangent (black)) show
+grestore
+
+% --- row 3, right: a wide, short print area -----------------------------
+<< /Name (Northern Lights) /Number (11) /Caption (HOME OPENER)
+   /NameFont /AlfaSlabOne /NumberFont /AlfaSlabOne /CaptionFont /Helvetica-Bold
+   /Rect [ 460 20 880 300 ] /Margin 10 /Preset /light
+   /Fill [ 0.3 0.1 0.45 ] /Outline [ 0.9 0.6 0.1 ] >> piece

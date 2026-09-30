@@ -1,0 +1,619 @@
+%!PS-Adobe-3.0
+%%Title: jersey.ps — arched team name over a dominant player number
+%%Creator: pscat — issue #149
+%%EndComments
+% @requires: (lib/artkit.ps) run
+
+% A reusable athletic-jersey / sweatshirt composition: a team-like name
+% arched above a large player number, with an optional smaller caption
+% below. It is pure layout -- a print rectangle in, sized and placed text
+% out -- and is independent of any garment or print vendor.
+%
+%   (lib/artkit.ps) run (lib/jersey.ps) run
+%   << /Name (Cleveland Steamers) /Number (69)
+%      /NameFont /AlfaSlabOne /NumberFont /AlfaSlabOne
+%      /Rect [ 36 36 576 684 ] /Margin 12
+%      /Preset /light >> jersey
+%
+% or, to inspect or test the numbers before drawing:
+%
+%   << ... >> jerseylayout /L exch def
+%   L /Name get /Ink get          % [x0 y0 x1 y1] of the arched name
+%   L jerseydraw
+%
+% OPTIONS (Name, Number and Rect are required)
+%   /Name string       the arched line (exact text kept: case, spaces)
+%   /Number string     the number *as text*, so (00) and (07) survive
+%   /Caption string    optional small line below the number
+%   /NameFont /NumberFont /CaptionFont   installed outline faces
+%                      (default /Helvetica-Bold; a missing face raises
+%                      jersey-font-not-found rather than silently
+%                      substituting; Type 3 faces have no outlines)
+%   /Rect [x0 y0 x1 y1]   the print rectangle, user space
+%   /Margin n          kept clear on every side (default 0). The outline
+%                      is inside it too: ink + outline never crosses it.
+%   /Radius n          radius of the circle the name's baseline rides
+%                      (curvature = 1/n). Default 1.1 x the usable width.
+%                      Smaller = a tighter arch (and more end tilt).
+%   /MaxTilt deg       largest rotation any name letter may reach at the
+%                      ends of the arch (default 35). The name is sized
+%                      down to honour it: no upside-down or severely
+%                      tilted end letters.
+%   /Dominance n       the number's ink height must be at least n times
+%                      the name's cap height (default 1.8). The name is
+%                      sized down until it is.
+%   /MaxDominance n    the number's ink height is at most n times the
+%                      name's cap height (default 6), so a roomy
+%                      rectangle does not produce a dwarfed name; any
+%                      height left over is split above and below.
+%   /Gap n             clear space between the outlines of name, number and
+%                      caption, points (ink-to-ink is this + 2 x outline).
+%                      Default 0.3 x the name's cap height.
+%   /NameMaxSize n     ceiling for the fitted name size (default 0.3 x
+%                      the usable height); /MinNameSize n the floor
+%                      (default 6): below it the layout is rejected.
+%   /CaptionSize n     caption size (default 0.6 x the name size); it
+%                      is always shrunk to fit the usable width.
+%   /VAlign /center (default) | /top   where the stack sits when the
+%                      number is width-limited and height is left over.
+%   Colours ([r g b]): /Fill (name + number), /Outline, /CaptionFill.
+%   /OutlineWidth n    outside outline thickness in points (default 0.5%
+%                      of the usable width; 0 = none).
+%   /Preset /light | /dark   default colours for a light garment (navy
+%                      fill, red outline) or a dark garment (white fill,
+%                      gold outline). Explicit colours override.
+%
+% NAME TEXT is walked one byte per letter, so the arched name must be
+% 7-bit ASCII: a multi-byte UTF-8 name (Unicode-mode catalog faces) would
+% be split mid-character, so it raises jersey-name-must-be-ascii rather
+% than draw garbage. The number and caption are drawn whole, and kerning
+% is not applied anywhere (neither `show` nor `stringwidth` does here).
+% A too-short rectangle usually reports jersey-number-not-dominant: use a
+% taller rectangle, a flatter arch (larger /Radius) or a lower /Dominance.
+%
+% ADVANCE vs INK. Every box this file reports or checks is INK: the tight
+% bounding box of the glyph outlines (`charpath`, flattened so Bezier
+% control points do not inflate it). `stringwidth` is the pen *advance*,
+% which includes side bearings and is wider; a number like (1) is
+% visibly narrower than its advance, and a centred advance leaves it
+% lopsided. So the number and caption are centred by ink, and the arch is
+% rotated until the ink of the whole name is centred on the axis
+% (artkit's ctextctr centres the advance and sweeps 5% past it).
+%
+% THE ARCH is placed by glyph *midpoint* analytically, not by pathtext:
+% each letter is centred on its advance midpoint, rotated to the tangent
+% there, and added to the path with `charpath`. That is what makes an
+% ink box, a fill and a contrasting outline all possible from one path
+% (pathtext only `show`s inside a per-glyph gsave, so there is no outline
+% and no ink box, and it stamps each glyph with the tangent at its *left*
+% edge and centres the advance -- a few points of lopsidedness and
+% splay at this scale, visible in examples/jersey.ps, row 3).
+% ctext/ctextctr are unchanged. `jerseyarch` exposes the path builder.
+%
+% FITTING. The name size is the largest for which: the end-letter tilt is
+% within /MaxTilt, the name's ink fits the width, and the number can
+% still be Dominance x the name's cap height inside the height left. The
+% number is then the largest that fits the width and the remaining
+% height, placed so its top corners clear the *curve* of the arch by the
+% gap (an arch droops at its ends, so the number tucks up under the
+% apex). Impossible geometry is rejected, before drawing, with a
+% self-documenting undefined name: jersey-name-too-tilted,
+% jersey-name-too-wide, jersey-does-not-fit, jersey-number-not-dominant
+% (also jersey-option-wrong-type, jersey-name-must-be-ascii, jersey-missing-option, jersey-font-not-found,
+% jersey-type3-faces-have-no-outlines, jersey-text-has-no-ink,
+% jersey-not-a-layout). The caller's operand stack, font, path and
+% graphics state are restored on every error.
+%
+% Scratch prefix: jy- (a fresh dict per call holds every working name).
+
+% --- helpers -----------------------------------------------------------
+
+% dict key default jygd -> value
+% @internal
+/jygd { 3 1 roll 2 copy known { get exch pop } { pop pop } ifelse } def
+
+% obj jyisnum -> bool
+% @internal
+/jyisnum { type dup /integertype eq exch /realtype eq or } def
+
+% dict key default jygn -> number      (jygd that insists on a number)
+% @internal
+/jygn { jygd dup jyisnum not { jersey-option-wrong-type } if } def
+
+% dict key default jygc -> [r g b]     (jygd that insists on a colour)
+% @internal
+/jygc {
+  jygd dup type /arraytype ne { jersey-option-wrong-type } if
+  dup length 3 ne { jersey-option-wrong-type } if
+  dup { jyisnum not { jersey-option-wrong-type } if } forall
+} def
+
+% [a b c] -> r g b set as the current colour
+% @internal
+/jycolor { aload pop setrgbcolor } def
+
+% /Name jyfontcheck -> fontdict
+% @internal
+/jyfontcheck {
+  dup type /stringtype eq { cvn } if /jyreq exch def
+  { jyreq findfont } stopped { jersey-font-not-found } if
+  /jyfd exch def
+  jyfd /FontType get 3 eq { jersey-type3-faces-have-no-outlines } if
+  /jygot jyfd /FontName get 96 string cvs def
+  /jyrs jyreq 96 string cvs def
+  /jygotreg jyrs length 8 add string def
+  jygotreg 0 jyrs putinterval
+  jygotreg jyrs length (-Regular) putinterval
+  jygot jyrs eq jygot jygotreg eq or
+  jygot (Helvetica) ne jygot (Courier) ne and or not { jersey-font-not-found } if
+  jyfd
+} def
+
+% -> [x0 y0 x1 y1] | null
+% Ink box of the current path, flattened. `charpath` leaves a moveto at
+% the pen's final advance position, which `pathbbox` would count as ink
+% (trailing spaces would drag the box), so a moveto only counts once a
+% segment is drawn from it. null when the path has no ink. Never raises.
+% @internal
+/jybbox {
+  gsave flattenpath
+  /jybx0 1e30 def /jyby0 1e30 def /jybx1 -1e30 def /jyby1 -1e30 def
+  /jypend false def
+  { /jypy exch def /jypx exch def /jypend true def }
+  { /jyly exch def /jylx exch def
+    jypend { jypx jypy jyinc /jypend false def } if
+    jylx jyly jyinc }
+  { pop pop pop pop pop pop }
+  { }
+  pathforall
+  grestore
+  jybx0 jybx1 gt { null } { [ jybx0 jyby0 jybx1 jyby1 ] } ifelse
+} def
+
+% x y jyinc -   (grow the jybbox accumulator)
+% @internal
+/jyinc {
+  /jyiy exch def /jyix exch def
+  jyix jybx0 lt { /jybx0 jyix def } if
+  jyiy jyby0 lt { /jyby0 jyiy def } if
+  jyix jybx1 gt { /jybx1 jyix def } if
+  jyiy jyby1 gt { /jyby1 jyiy def } if
+} def
+
+% (str) jynonspace -> bool        (has a byte other than a space)
+% @internal
+/jynonspace { false exch { 32 ne { pop true } if } forall } def
+
+% (str) jyascii -> bool             (every byte is 7-bit)
+% @internal
+/jyascii { true exch { 128 ge { pop false } if } forall } def
+
+% (str) fontdict size jyink -> [x0 y0 x1 y1]
+% Ink of a straight string, pen at the origin. Runs under gsave, so the
+% caller's path and font are untouched.
+% @internal
+/jyink {
+  gsave newpath scalefont setfont
+  0 0 moveto true charpath jybbox
+  grestore dup null eq { pop jersey-text-has-no-ink } if
+} def
+
+% --- the arch ------------------------------------------------------------
+
+% Appends the arched string `jyname` to the current path in the current
+% font. Uses: jyname jycx jycy (centre of the circle) jyr (baseline
+% radius) jyphi (extra rotation, degrees). Sets jymaxrot (the largest
+% |rotation| of any letter, degrees). Each letter sits on its advance
+% midpoint; `charpath` adds it under a transformed CTM, which the
+% setmatrix then restores -- the path stays in device space.
+% @internal
+/jyarch {
+  /jymat matrix currentmatrix def
+  /jyA jyname stringwidth pop def
+  /jymaxrot 0 def
+  /jya 0 def
+  0 1 jyname length 1 sub {
+    /jyi exch def
+    jyname jyi 1 getinterval dup stringwidth pop /jyw exch def /jyc exch def
+    jyc 0 get 32 ne {
+      % rotation of this letter: minus (midpoint offset / r), in degrees
+      /jyrot jya jyw 2 div add jyA 2 div sub neg jyr div 57.29578 mul jyphi add def
+      jyrot abs jymaxrot gt { /jymaxrot jyrot abs def } if
+      jycx jyr jyrot sin mul sub  jycy jyr jyrot cos mul add  translate
+      jyrot rotate
+      jyw 2 div neg 0 moveto
+      jyc true charpath
+      jymat setmatrix
+    } if
+    /jya jya jyw add def
+  } for
+} def
+
+% -> [x0 y0 x1 y1] | null
+% Ink box of the arch built on a scratch path. Never raises and always
+% leaves the graphics state balanced: a failure anywhere in jyarch (no
+% current font, a non-outline face...) comes back as null, with the
+% operands it stranded dropped and the caller's path intact.
+% @internal
+/jyarchbbox {
+  /jymc count def
+  gsave newpath
+  { jyarch jybbox } stopped { count jymc sub { pop } repeat null } if
+  grestore
+} def
+
+% Rotates the arch (jyphi) until the ink of the whole string is centred
+% on x = jycxs, iterating to a 0.05pt residual (jyconv false if it never got there: the
+% name is wider than the circle can hold), and leaves the final ink box
+% in jyNI. Measures about
+% the true centre so it is exact at this size.
+% @internal
+/jycenter {
+  /jyphi 0 def
+  /jyconv false def
+  0 1 11 {
+    pop
+    jyarchbbox dup null eq { pop jersey-text-has-no-ink } if
+    dup /jyNI exch def aload pop
+    /jyury exch def /jyurx exch def /jylly exch def /jyllx exch def
+    /jyxc jyllx jyurx add 2 div jycxs sub def
+    jyxc abs 0.05 lt { /jyconv true def exit } if
+    /jyphi jyphi jyxc jyr jyury jycys sub add 2 div div 57.29578 mul add def
+  } for
+  % jyconv says whether the ink really ended up on the axis; callers decide
+} def
+
+% (str) cx cy r jerseyarch -
+% Adds `str`, in the current font and size, to the current path as an
+% arch: baseline on the circle of radius r about cx,cy, ink-centred on
+% the vertical axis through cx, reading left to right over the top.
+% Fill it, stroke it, clip with it, or pathbbox it. Uses the current
+% point's graphics state only (the caller's font is not changed).
+% @kind: Procedure
+% @summary: Append `str`, in the current font and size, to the current path as an arch: baseline on the circle of radius r about cx,cy, the ink centred on the vertical axis through cx, reading left to right over the top. Each letter sits on its advance midpoint, rotated to the tangent there, added with charpath -- so the result can be filled, stroked, clipped or measured with pathbbox. Unlike artkit's ctextctr it centres the ink, not the advance.
+% @example: /Helvetica-Bold findfont 60 scalefont setfont newpath (CLEVELAND) 300 100 300 jerseyarch fill
+/jerseyarch {
+  % Validate before opening a dict: nothing below may raise, since the
+  % path it builds cannot live under a gsave we could unwind.
+  dup jyisnum 2 index jyisnum and 3 index jyisnum and 4 index type /stringtype eq and
+    not { jersey-option-wrong-type } if
+  dup 0 le { jersey-does-not-fit } if
+  3 index jynonspace not { jersey-text-has-no-ink } if
+  3 index jyascii not { jersey-name-must-be-ascii } if
+  40 dict begin
+  /jyr exch def /jycys exch def /jycxs exch def /jyname exch def
+  /jycx jycxs def /jycy jycys def
+  % a string with no ink (a tab) only shows up as an empty measurement
+  { jycenter } stopped { end jersey-text-has-no-ink } if
+  jyconv not { end jersey-does-not-fit } if
+  jyarch
+  end
+} def
+
+% --- layout ----------------------------------------------------------------
+
+% Errors leave a dict and a gstate open; restore them, re-raise.
+% @internal
+/jyunwind {
+  $error /command get 1 array astore /jyecmdbox exch def
+  $error /errorname get /jyename exch def
+  count jybase sub dup 0 gt { { pop } repeat } { pop } ifelse
+  jyename /undefined eq { jyecmdbox 0 get } { /stop } ifelse
+  countdictstack jybdepth sub
+  grestore
+  { end } repeat
+  end
+  cvx exec
+} def
+
+% args... n proc jycall -> results...   (fresh scratch dict + gsave)
+% @internal
+/jycall {
+  exch count 2 sub 1 index sub
+  120 dict begin
+  /jybase exch def pop
+  /jybdepth countdictstack def
+  /jyproc exch def
+  gsave
+  { jyproc } stopped { jyunwind } if
+  grestore end
+} def
+
+% Evaluates the layout at name size jys (relative to a circle centre at
+% (0,0) and the top of the stack at y = 0). Leaves a failure code in
+% jycode: 0 ok, 1 tilt, 2 too wide, 3 no room, 4 number not dominant.
+% On success it also leaves jyNI, jysN, jyyc (circle centre y) and the
+% rest of the vertical stack.
+% @internal
+/jyeval {
+  /jys exch def
+  /jycode 0 def
+  /jycx 0 def /jycy 0 def /jycxs 0 def /jycys 0 def
+  jynfd jys scalefont setfont
+  jycenter
+  % an arch that cannot be centred is a name far too long for the circle
+  jyconv not { /jycode 1 def } if
+  jycode 0 eq { jymaxrot jymaxtilt gt { /jycode 1 def } if } if
+  jycode 0 eq { jyNI 2 get jyNI 0 get sub jyW gt { /jycode 2 def } if } if
+  jycode 0 eq {
+    % cap height and descent of the name, at this size
+    (H) jynfd jys jyink 3 get /jycap exch def
+    jyname jynfd jys jyink 1 get neg dup 0 lt { pop 0 } if /jydesc exch def
+    % /Gap is the clear space between the *outlines* of adjacent parts,
+    % so the ink-to-ink spacing grows by both outlines' thickness
+    /jygap jygapopt 0 lt { jycap 0.3 mul } { jygapopt } ifelse jyow 2 mul add def
+    % top of the name's ink is y = 0, so the circle centre is at -ink top
+    /jyyc jyNI 3 get neg def
+    % caption (size fitted to the width), as offsets from its baseline
+    jycapstr null ne {
+      /jycsz jycsizeopt 0 lt { jys 0.6 mul } { jycsizeopt } ifelse def
+      jycapstr jycfd 100 jyink /jyCU exch def
+      jyCU 2 get jyCU 0 get sub dup 0 le { jersey-text-has-no-ink } if
+        jyW exch div 100 mul dup jycsz lt { /jycsz exch def } { pop } ifelse
+      /jychh jyCU 3 get jyCU 1 get sub jycsz mul 100 div def
+    } { /jychh 0 def } ifelse
+    % largest number size whose stack still fits: bisect (monotone)
+    /jysNhi jyW 100 mul jyUI 2 get jyUI 0 get sub div def
+    % never let the number dwarf the name past /MaxDominance
+    jycap jymaxdom mul 100 mul jyUI 3 get jyUI 1 get sub div
+      dup jysNhi lt { /jysNhi exch def } { pop } ifelse
+    /jysNlo 0 def
+    /jysN jysNhi def
+    jysNhi jystackbottom jyH neg lt {
+      24 {
+        jysNlo jysNhi add 2 div /jysN exch def
+        jysN jystackbottom jyH neg lt { /jysNhi jysN def } { /jysNlo jysN def } ifelse
+      } repeat
+      /jysN jysNlo def
+    } if
+    jysN 0.5 lt { /jycode 3 def } {
+      jysN jystackbottom pop
+      jyUI 3 get jyUI 1 get sub jysN mul 100 div jycap jydom mul lt { /jycode 4 def } if
+    } ifelse
+  } if
+} def
+
+% halfwidth jycurve -> y
+% Where the underside of the arch is over a part of half-width `halfwidth`
+% (top of the name's ink = 0): the circle's height at that |x|, clamped
+% to where the name's ink actually ends, less the name's descender.
+% @internal
+/jycurve {
+  /jyxe exch def
+  /jyxm jyNI 0 get abs jyNI 2 get abs 2 copy lt { exch } if pop def
+  jyxe jyxm gt { /jyxe jyxm def } if
+  jyxe jyr 0.999 mul gt { /jyxe jyr 0.999 mul def } if
+  jyyc jyr dup mul jyxe dup mul sub sqrt add jydesc sub
+} def
+
+% sN -> y of the lowest ink of the whole stack (name top = 0). Also sets
+% jynumtop and jycaptop, which jyfinish places from. The lowest ink is
+% the caption or number -- or the name's own drooping end letters when
+% the number is short, so the arch can never run off the rectangle.
+% @internal
+/jystackbottom {
+  /jysNq exch def
+  jyUI 2 get jyUI 0 get sub jysNq mul 200 div jycurve jygap sub /jynumtop exch def
+  jynumtop jyUI 3 get jyUI 1 get sub jysNq mul 100 div sub /jynumbot exch def
+  jycapstr null ne {
+    % the caption clears the number *and* the curve of the arch above it
+    jynumbot jygap sub
+    jyCU 2 get jyCU 0 get sub jycsz mul 200 div jycurve jygap sub
+    2 copy gt { exch } if pop /jycaptop exch def
+    jycaptop jychh sub
+  } { jynumbot } ifelse
+  jyNI 1 get jyyc add 2 copy gt { exch } if pop
+} def
+
+% options-dict jerseylayout -> layout-dict
+% @kind: Procedure
+% @summary: Size and place an arched team name over a dominant player number, with an optional caption, inside a print rectangle. Nothing is drawn; the layout dict reports each part's size, origin and ink box (/Name /Number /Caption, each with /Ink [x0 y0 x1 y1]), plus /Ink for the whole graphic. Fails with a named error (jersey-name-too-wide, jersey-name-too-tilted, jersey-does-not-fit, jersey-number-not-dominant, ...) when the requested geometry is impossible; the caller's font, path and operand stack are untouched either way. See the file header for every option.
+% @example: << /Name (Cleveland Steamers) /Number (69) /Rect [ 36 36 576 684 ] /Margin 12 /Preset /light >> jerseylayout
+% @param: /Name string the arched line; exact text kept
+% @param: /Number string the number as text, so (00) survives
+% @param: /Rect [x0 y0 x1 y1] the print rectangle
+% @param: /Caption string optional small line under the number
+% @param: /NameFont /NumberFont /CaptionFont name installed outline faces (default /Helvetica-Bold)
+% @param: /Margin num kept clear on every side (default 0); outline included
+% @param: /Radius num baseline radius of the arch (default 1.1 x usable width); smaller is tighter
+% @param: /MaxTilt deg largest rotation of any name letter (default 35)
+% @param: /Dominance num, /MaxDominance num the number's ink height as a multiple of the name's cap height: at least (default 1.8), at most (default 6)
+% @param: /Fill /Outline /CaptionFill [r g b] colours; /OutlineWidth num points (0 = none); /Preset /light or /dark defaults
+/jerseylayout {
+  1 { jybuild } jycall
+} def
+
+% @internal
+/jybuild {
+  /jyo exch def
+  jyo /Name known jyo /Number known and jyo /Rect known and not { jersey-missing-option } if
+  jyo /Name get type /stringtype ne jyo /Number get type /stringtype ne or
+    { jersey-option-wrong-type } if
+  jyo /Caption known { jyo /Caption get type /stringtype ne { jersey-option-wrong-type } if } if
+  jyo /Rect get dup type /arraytype ne { jersey-option-wrong-type } if
+    dup length 4 ne { jersey-option-wrong-type } if
+    { jyisnum not { jersey-option-wrong-type } if } forall
+  /jyname jyo /Name get def
+  /jynumstr jyo /Number get def
+  /jycapstr jyo /Caption null jygd def
+  /jynfd jyo /NameFont /Helvetica-Bold jygd jyfontcheck def
+  /jyufd jyo /NumberFont /Helvetica-Bold jygd jyfontcheck def
+  /jycfd jyo /CaptionFont /Helvetica-Bold jygd jyfontcheck def
+  /jyrect jyo /Rect get def
+  /jymargin jyo /Margin 0 jygn def
+  /jymaxtilt jyo /MaxTilt 35 jygn def
+  /jydom jyo /Dominance 1.8 jygn def
+  /jymaxdom jyo /MaxDominance 6 jygn def
+  /jygapopt jyo /Gap -1 jygn def
+  /jycsizeopt jyo /CaptionSize -1 jygn def
+  /jyvalign jyo /VAlign /center jygd def
+  jyname jynonspace not jynumstr jynonspace not or { jersey-text-has-no-ink } if
+  jycapstr null ne { jycapstr jynonspace not { jersey-text-has-no-ink } if } if
+  jyname jyascii not { jersey-name-must-be-ascii } if
+  % colours
+  jyo /Preset /light jygd /dark eq
+    { /jydf [ 1 1 1 ] def /jydo [ 0.95 0.75 0.15 ] def }
+    { /jydf [ 0.05 0.1 0.3 ] def /jydo [ 0.8 0.1 0.12 ] def } ifelse
+  /jyfill jyo /Fill jydf jygc def
+  /jyoutl jyo /Outline jydo jygc def
+  /jycapfill jyo /CaptionFill jyfill jygc def
+  % usable rectangle, before the outline inset (a thin outline is grown
+  % in below once the cap height is known)
+  /jyrw jyrect 2 get jyrect 0 get sub jymargin 2 mul sub def
+  /jyrh jyrect 3 get jyrect 1 get sub jymargin 2 mul sub def
+  jyrw 0 le jyrh 0 le or { jersey-does-not-fit } if
+  /jyr jyo /Radius jyrw 1.1 mul jygn def
+  jyr 0 le { jersey-does-not-fit } if
+  % number ink at size 100 (scaled from here on)
+  /jyUI jynumstr jyufd 100 jyink def
+  jyUI 2 get jyUI 0 get sub 0 le { jersey-text-has-no-ink } if
+  /jymin jyo /MinNameSize 6 jygn def
+  /jymax jyo /NameMaxSize jyrh 0.3 mul jygn def
+  % the outline grows the ink by its width on every side, so the fit
+  % below is for the rectangle inset by it
+  /jyow jyo /OutlineWidth jyrw 0.005 mul jygn def
+  jyow 0 lt jymargin 0 lt or { jersey-option-wrong-type } if
+  /jyW jyrw jyow 2 mul sub def
+  /jyH jyrh jyow 2 mul sub def
+  jyW 0 le jyH 0 le or { jersey-does-not-fit } if
+  jymax jymin lt { jersey-does-not-fit } if
+  jymin jyeval
+  jycode 0 ne {
+    jycode 1 eq { jersey-name-too-tilted } if
+    jycode 2 eq { jersey-name-too-wide } if
+    jycode 3 eq { jersey-does-not-fit } if
+    jersey-number-not-dominant
+  } if
+  jymax jyeval
+  jycode 0 ne {
+    /jylo jymin def /jyhi jymax def
+    30 {
+      jylo jyhi add 2 div jyeval
+      jycode 0 eq { /jylo jys def } { /jyhi jys def } ifelse
+    } repeat
+    jylo jyeval
+  } if
+  jyfinish
+} def
+
+% [a] [b] jyunion -> [union of the two boxes]
+% @internal
+/jyunion {
+  /jyub exch def /jyua exch def
+  [ jyua 0 get jyub 0 get 2 copy gt { exch } if pop
+    jyua 1 get jyub 1 get 2 copy gt { exch } if pop
+    jyua 2 get jyub 2 get 2 copy lt { exch } if pop
+    jyua 3 get jyub 3 get 2 copy lt { exch } if pop ]
+} def
+
+% Turns the evaluated fit into the layout dict, placed in the rectangle.
+% @internal
+/jyfinish {
+  % vertical slack left under the stack (it is width-limited), then
+  % the shift that puts the stack's top at the rectangle's top (or
+  % centres it); everything so far is relative to the name's ink top = 0
+  jysN jystackbottom /jybot exch def
+  /jyslack jybot jyH add def
+  /jytop jyrect 3 get jymargin sub jyow sub
+    jyvalign /center eq { jyslack 2 div sub } if def
+  /jycxr jyrect 0 get jyrect 2 get add 2 div def
+  % name ink, circle centre, number and caption origins, absolute
+  /jyNA [ jyNI 0 get jycxr add  jyNI 1 get jyyc add jytop add
+          jyNI 2 get jycxr add  jyNI 3 get jyyc add jytop add ] def
+  /jyycabs jyyc jytop add def
+  % number: centred by ink, top at jynumtop
+  /jyNUI [ jyUI aload pop ] def
+  /jynw jyUI 2 get jyUI 0 get sub jysN mul 100 div def
+  /jynh jyUI 3 get jyUI 1 get sub jysN mul 100 div def
+  /jynumx jycxr jyUI 0 get jyUI 2 get add jysN mul 200 div sub def
+  /jynumy jynumtop jytop add jyUI 3 get jysN mul 100 div sub def
+  /jynumink [ jynumx jyUI 0 get jysN mul 100 div add  jynumy jyUI 1 get jysN mul 100 div add
+              jynumx jyUI 2 get jysN mul 100 div add  jynumy jyUI 3 get jysN mul 100 div add ] def
+  /jylay 20 dict def
+  jylay /Rect jyrect put
+  jylay /Radius jyr put
+  jylay /Gap jygap put
+  jylay /OutlineWidth jyow put
+  jylay /Fill jyfill put
+  jylay /Outline jyoutl put
+  jylay /CaptionFill jycapfill put
+  jylay /Center [ jycxr jyycabs ] put
+  jylay /MaxTilt jymaxrot put
+  jylay /Name <<
+    /Text jyname /FontDict jynfd /Size jys /Phi jyphi /Ink jyNA
+    /Tilt jymaxrot >> put
+  jylay /Number <<
+    /Text jynumstr /FontDict jyufd /Size jysN /Origin [ jynumx jynumy ]
+    /Ink jynumink >> put
+  /jyun jyNA jynumink jyunion def
+  jycapstr null ne {
+    /jycy0 jycaptop jytop add jychh sub def
+    /jycx0 jycxr jyCU 0 get jyCU 2 get add jycsz mul 200 div sub def
+    /jycby jycy0 jyCU 1 get jycsz mul 100 div sub def
+    /jycink [ jycx0 jyCU 0 get jycsz mul 100 div add  jycby jyCU 1 get jycsz mul 100 div add
+              jycx0 jyCU 2 get jycsz mul 100 div add  jycby jyCU 3 get jycsz mul 100 div add ] def
+    jylay /Caption <<
+      /Text jycapstr /FontDict jycfd /Size jycsz /Origin [ jycx0 jycby ]
+      /Ink jycink >> put
+    /jyun jyun jycink jyunion def
+  } if
+  jylay /Ink jyun put
+  jylay /Inner [ jyrect 0 get jymargin add jyow add  jyrect 1 get jymargin add jyow add
+                 jyrect 2 get jymargin sub jyow sub  jyrect 3 get jymargin sub jyow sub ] put
+  jylay
+} def
+
+% layout jerseydraw -
+% Draws a layout: outline stroked first (outside the letters only), then
+% the fill on top. Leaves the caller's graphics state as it found it.
+% @kind: Procedure
+% @summary: Draw a layout from jerseylayout: the outline is stroked first (outside the letters only), then the fill on top, for the name, the number and the caption. The caller's graphics state is restored on return.
+% @example: layout jerseydraw
+/jerseydraw {
+  1 { jydrawdict } jycall
+} def
+
+% @internal
+/jydrawdict {
+  dup type /dicttype ne { jersey-not-a-layout } if
+  dup /Name known 1 index /Number known and 1 index /Fill known and not
+    { jersey-not-a-layout } if
+  /jylay exch def
+  /jyow jylay /OutlineWidth get def
+  /jyoutl jylay /Outline get def
+  /jyfill jylay /Fill get def
+  % the outline must not inherit the caller's stroke state (inside our gsave)
+  1 setlinejoin 0 setlinecap [ ] 0 setdash
+  % name
+  jylay /Name get /jyd exch def
+  jyd /FontDict get jyd /Size get scalefont setfont
+  /jyname jyd /Text get def
+  /jycx jylay /Center get 0 get def
+  /jycy jylay /Center get 1 get def
+  /jycxs jycx def /jycys jycy def
+  /jyr jylay /Radius get def
+  /jyphi jyd /Phi get def
+  newpath jyarch
+  jyow 0 gt { gsave jyoutl jycolor jyow 2 mul setlinewidth stroke grestore } if
+  jyfill jycolor fill
+  % number
+  jylay /Number get /jyd exch def
+  jyd /FontDict get jyd /Size get scalefont setfont
+  newpath jyd /Origin get aload pop moveto jyd /Text get true charpath
+  jyow 0 gt { gsave jyoutl jycolor jyow 2 mul setlinewidth stroke grestore } if
+  jyfill jycolor fill
+  % caption
+  jylay /Caption known {
+    jylay /Caption get /jyd exch def
+    jyd /FontDict get jyd /Size get scalefont setfont
+    newpath jyd /Origin get aload pop moveto jyd /Text get true charpath
+    jyow 0 gt { gsave jyoutl jycolor jyow 2 mul setlinewidth stroke grestore } if
+    jylay /CaptionFill get jycolor fill
+  } if
+} def
+
+% options-dict jersey -
+% @kind: Procedure
+% @summary: Lay out and draw an arched name over a player number in one call (jerseylayout then jerseydraw); takes the same options as jerseylayout.
+% @example: << /Name (Persona non grata) /Number (86) /Rect [ 36 36 576 684 ] /Preset /dark >> jersey
+/jersey { jerseylayout jerseydraw } def
