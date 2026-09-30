@@ -136,8 +136,16 @@ fn ink_is_centred_and_inside_the_print_area() {
             "<< /Name ({name}) /Number ({number}) /Rect {rect} /Margin 12 /NameFont /Helvetica-Bold >>"
         );
         let r = nums(&format!("{rect} aload pop"));
-        let u = ink(&o, "Ink");
-        let (cx, n, m) = ((r[0] + r[2]) / 2.0, ink(&o, "Name"), ink(&o, "Number"));
+        let v = nums(&format!(
+            "{o} jerseylayout /L exch def L /Ink get aload pop \
+             L /Name get /Ink get aload pop L /Number get /Ink get aload pop"
+        ));
+        let (u, n, m) = (
+            [v[0], v[1], v[2], v[3]],
+            [v[4], v[5], v[6], v[7]],
+            [v[8], v[9], v[10], v[11]],
+        );
+        let cx = (r[0] + r[2]) / 2.0;
         // centred by ink on the vertical axis (name and number both)
         assert!(
             ((n[0] + n[2]) / 2.0 - cx).abs() < 0.5,
@@ -275,7 +283,7 @@ fn impossible_geometry_is_rejected_by_name() {
     assert_eq!(
         err_of(&format!(
             "{} jerseylayout",
-            opts("Hi", "9", "/MinNameSize 300 /Dominance 3")
+            opts("Hi", "9", "/MinNameSize 120 /Dominance 8 /NameMaxSize 200")
         )),
         "jersey-number-not-dominant"
     );
@@ -398,5 +406,66 @@ fn the_caption_clears_the_arch_too() {
     let u = ink(&o, "Ink");
     assert!(
         u[1] >= r[1] + 10.0 && u[3] <= r[3] - 10.0 && u[0] >= r[0] + 10.0 && u[2] <= r[2] - 10.0
+    );
+}
+
+#[test]
+fn trailing_space_does_not_pull_the_number_off_centre() {
+    // charpath leaves a moveto at the pen's final position; it must not count as ink.
+    let o = opts("Sox", "1      ", "");
+    let n = ink(&o, "Number");
+    assert!(((n[0] + n[2]) / 2.0 - 300.0).abs() < 0.5, "{n:?}");
+    // the arch's per-glyph advance movetos too: a name ending in a space
+    let a = ink(&opts("Sox ", "1", ""), "Name");
+    let b = ink(&opts("Sox", "1", ""), "Name");
+    assert!(
+        (a[0] - b[0]).abs() < 0.5 && (a[2] - b[2]).abs() < 0.5,
+        "{a:?} vs {b:?}"
+    );
+}
+
+#[test]
+fn bad_input_is_rejected_without_corrupting_the_caller() {
+    for bad in [
+        "<< /Name [ 65 ] /Number (1) /Rect [ 20 20 580 680 ] >>",
+        "<< /Name (A) /Number (1) /Rect [ 20 20 580 ] >>",
+        "<< /Name (A) /Number (1) /Rect [ 20 20 580 680 ] /Margin (x) >>",
+        "<< /Name (A) /Number (1) /Rect [ 20 20 580 680 ] /Fill [ 1 0 ] >>",
+    ] {
+        assert_eq!(
+            err_of(&format!("{bad} jerseylayout")),
+            "jersey-option-wrong-type"
+        );
+    }
+    // the public arch primitive: no dict or path left behind on a rejection
+    let mut it = with_lib(W, H);
+    it.run_str(
+        "/Times-Roman findfont 14 scalefont setfont newpath 7 8 moveto 9 10 lineto countdictstack",
+    )
+    .expect("setup");
+    let depth = it.operand_stack().last().map(|o| o.repr()).unwrap();
+    it.run_str("clear { () 300 100 300 jerseyarch } stopped pop clear countdictstack pathbbox")
+        .expect("probe");
+    let s: Vec<String> = it.operand_stack().iter().map(|o| o.repr()).collect();
+    assert_eq!(
+        s,
+        [
+            depth,
+            "7.0".into(),
+            "8.0".into(),
+            "9.0".into(),
+            "10.0".into()
+        ]
+    );
+}
+
+#[test]
+fn a_name_size_ceiling_below_the_floor_is_rejected() {
+    assert_eq!(
+        err_of(&format!(
+            "{} jerseylayout",
+            opts("A", "1", "/MinNameSize 210")
+        )),
+        "jersey-does-not-fit"
     );
 }

@@ -98,7 +98,7 @@
 % apex). Impossible geometry is rejected, before drawing, with a
 % self-documenting undefined name: jersey-name-too-tilted,
 % jersey-name-too-wide, jersey-does-not-fit, jersey-number-not-dominant
-% (also jersey-name-must-be-ascii, jersey-missing-option, jersey-font-not-found,
+% (also jersey-option-wrong-type, jersey-name-must-be-ascii, jersey-missing-option, jersey-font-not-found,
 % jersey-type3-faces-have-no-outlines, jersey-text-has-no-ink,
 % jersey-not-a-layout). The caller's operand stack, font, path and
 % graphics state are restored on every error.
@@ -110,6 +110,22 @@
 % dict key default jygd -> value
 % @internal
 /jygd { 3 1 roll 2 copy known { get exch pop } { pop pop } ifelse } def
+
+% obj jyisnum -> bool
+% @internal
+/jyisnum { type dup /integertype eq exch /realtype eq or } def
+
+% dict key default jygn -> number      (jygd that insists on a number)
+% @internal
+/jygn { jygd dup jyisnum not { jersey-option-wrong-type } if } def
+
+% dict key default jygc -> [r g b]     (jygd that insists on a colour)
+% @internal
+/jygc {
+  jygd dup type /arraytype ne { jersey-option-wrong-type } if
+  dup length 3 ne { jersey-option-wrong-type } if
+  dup { jyisnum not { jersey-option-wrong-type } if } forall
+} def
 
 % [a b c] -> r g b set as the current colour
 % @internal
@@ -132,6 +148,37 @@
   jyfd
 } def
 
+% -> [x0 y0 x1 y1] | null
+% Ink box of the current path, flattened. `charpath` leaves a moveto at
+% the pen's final advance position, which `pathbbox` would count as ink
+% (trailing spaces would drag the box), so a moveto only counts once a
+% segment is drawn from it. null when the path has no ink. Never raises.
+% @internal
+/jybbox {
+  gsave flattenpath
+  /jybx0 1e30 def /jyby0 1e30 def /jybx1 -1e30 def /jyby1 -1e30 def
+  /jypend false def
+  { /jypy exch def /jypx exch def /jypend true def }
+  { /jyly exch def /jylx exch def
+    jypend { jypx jypy jyinc /jypend false def } if
+    jylx jyly jyinc }
+  { pop pop pop pop pop pop }
+  { }
+  pathforall
+  grestore
+  jybx0 jybx1 gt { null } { [ jybx0 jyby0 jybx1 jyby1 ] } ifelse
+} def
+
+% x y jyinc -   (grow the jybbox accumulator)
+% @internal
+/jyinc {
+  /jyiy exch def /jyix exch def
+  jyix jybx0 lt { /jybx0 jyix def } if
+  jyiy jyby0 lt { /jyby0 jyiy def } if
+  jyix jybx1 gt { /jybx1 jyix def } if
+  jyiy jyby1 gt { /jyby1 jyiy def } if
+} def
+
 % (str) jynonspace -> bool        (has a byte other than a space)
 % @internal
 /jynonspace { false exch { 32 ne { pop true } if } forall } def
@@ -146,8 +193,8 @@
 % @internal
 /jyink {
   gsave newpath scalefont setfont
-  0 0 moveto true charpath flattenpath pathbbox
-  grestore 4 array astore
+  0 0 moveto true charpath jybbox
+  grestore dup null eq { jersey-text-has-no-ink } if
 } def
 
 % --- the arch ------------------------------------------------------------
@@ -187,14 +234,13 @@
 % @internal
 /jycenter {
   /jyphi 0 def
-  5 {
-    gsave newpath jyarch flattenpath pathbbox grestore
+  3 {
+    gsave newpath jyarch jybbox aload pop grestore
     /jyury exch def /jyurx exch def /jylly exch def /jyllx exch def
     /jyphi jyphi  jyllx jyurx add 2 div jycxs sub  jyr jyury jycys sub add 2 div div
       57.29578 mul add def
   } repeat
-  gsave newpath jyarch flattenpath pathbbox grestore
-  4 array astore /jyNI exch def
+  gsave newpath jyarch jybbox grestore /jyNI exch def
 } def
 
 % (str) cx cy r jerseyarch -
@@ -207,6 +253,11 @@
 % @summary: Append `str`, in the current font and size, to the current path as an arch: baseline on the circle of radius r about cx,cy, the ink centred on the vertical axis through cx, reading left to right over the top. Each letter sits on its advance midpoint, rotated to the tangent there, added with charpath -- so the result can be filled, stroked, clipped or measured with pathbbox. Unlike artkit's ctextctr it centres the ink, not the advance.
 % @example: /Helvetica-Bold findfont 60 scalefont setfont newpath (CLEVELAND) 300 100 300 jerseyarch fill
 /jerseyarch {
+  % Validate before opening a dict: nothing below may raise, since the
+  % path it builds cannot live under a gsave we could unwind.
+  dup jyisnum 2 index jyisnum and 3 index jyisnum and 4 index type /stringtype eq and
+    not { jersey-option-wrong-type } if
+  3 index jynonspace not { jersey-text-has-no-ink } if
   40 dict begin
   /jyr exch def /jycys exch def /jycxs exch def /jyname exch def
   /jycx jycxs def /jycy jycys def
@@ -348,6 +399,12 @@
 /jybuild {
   /jyo exch def
   jyo /Name known jyo /Number known and jyo /Rect known and not { jersey-missing-option } if
+  jyo /Name get type /stringtype ne jyo /Number get type /stringtype ne or
+    { jersey-option-wrong-type } if
+  jyo /Caption known { jyo /Caption get type /stringtype ne { jersey-option-wrong-type } if } if
+  jyo /Rect get dup type /arraytype ne { jersey-option-wrong-type } if
+    dup length 4 ne { jersey-option-wrong-type } if
+    { jyisnum not { jersey-option-wrong-type } if } forall
   /jyname jyo /Name get def
   /jynumstr jyo /Number get def
   /jycapstr jyo /Caption null jygd def
@@ -355,12 +412,12 @@
   /jyufd jyo /NumberFont /Helvetica-Bold jygd jyfontcheck def
   /jycfd jyo /CaptionFont /Helvetica-Bold jygd jyfontcheck def
   /jyrect jyo /Rect get def
-  /jymargin jyo /Margin 0 jygd def
-  /jymaxtilt jyo /MaxTilt 35 jygd def
-  /jydom jyo /Dominance 1.8 jygd def
-  /jymaxdom jyo /MaxDominance 6 jygd def
-  /jygapopt jyo /Gap -1 jygd def
-  /jycsizeopt jyo /CaptionSize -1 jygd def
+  /jymargin jyo /Margin 0 jygn def
+  /jymaxtilt jyo /MaxTilt 35 jygn def
+  /jydom jyo /Dominance 1.8 jygn def
+  /jymaxdom jyo /MaxDominance 6 jygn def
+  /jygapopt jyo /Gap -1 jygn def
+  /jycsizeopt jyo /CaptionSize -1 jygn def
   /jyvalign jyo /VAlign /center jygd def
   jyname jynonspace not jynumstr jynonspace not or { jersey-text-has-no-ink } if
   jycapstr null ne { jycapstr jynonspace not { jersey-text-has-no-ink } if } if
@@ -369,27 +426,28 @@
   jyo /Preset /light jygd /dark eq
     { /jydf [ 1 1 1 ] def /jydo [ 0.95 0.75 0.15 ] def }
     { /jydf [ 0.05 0.1 0.3 ] def /jydo [ 0.8 0.1 0.12 ] def } ifelse
-  /jyfill jyo /Fill jydf jygd def
-  /jyoutl jyo /Outline jydo jygd def
-  /jycapfill jyo /CaptionFill jyfill jygd def
+  /jyfill jyo /Fill jydf jygc def
+  /jyoutl jyo /Outline jydo jygc def
+  /jycapfill jyo /CaptionFill jyfill jygc def
   % usable rectangle, before the outline inset (a thin outline is grown
   % in below once the cap height is known)
   /jyrw jyrect 2 get jyrect 0 get sub jymargin 2 mul sub def
   /jyrh jyrect 3 get jyrect 1 get sub jymargin 2 mul sub def
   jyrw 0 le jyrh 0 le or { jersey-does-not-fit } if
-  /jyr jyo /Radius jyrw 1.1 mul jygd def
+  /jyr jyo /Radius jyrw 1.1 mul jygn def
   jyr 0 le { jersey-does-not-fit } if
   % number ink at size 100 (scaled from here on)
   /jyUI jynumstr jyufd 100 jyink def
   jyUI 2 get jyUI 0 get sub 0 le { jersey-text-has-no-ink } if
-  /jymin jyo /MinNameSize 6 jygd def
-  /jymax jyo /NameMaxSize jyrh 0.3 mul jygd def
+  /jymin jyo /MinNameSize 6 jygn def
+  /jymax jyo /NameMaxSize jyrh 0.3 mul jygn def
   % the outline grows the ink by its width on every side, so the fit
   % below is for the rectangle inset by it
-  /jyow jyo /OutlineWidth jyrw 0.005 mul jygd def
+  /jyow jyo /OutlineWidth jyrw 0.005 mul jygn def
   /jyW jyrw jyow 2 mul sub def
   /jyH jyrh jyow 2 mul sub def
   jyW 0 le jyH 0 le or { jersey-does-not-fit } if
+  jymax jymin lt { jersey-does-not-fit } if
   jymin jyeval
   jycode 0 ne {
     jycode 1 eq { jersey-name-too-tilted } if
