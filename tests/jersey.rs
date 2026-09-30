@@ -579,3 +579,11 @@ fn jerseyarch_without_a_usable_font_leaves_the_caller_intact() {
         ]
     );
 }
+
+#[test]
+fn outlines_ignore_the_callers_dash_pattern() {
+    let o = opts("Metro Comets", "7", "");
+    let plain = render(&format!("{o} jersey"));
+    let dashed = render(&format!("[ 6 4 ] 0 setdash 2 setlinecap {o} jersey"));
+    assert_eq!(plain.gfx().pixmap.data(), dashed.gfx().pixmap.data());
+}

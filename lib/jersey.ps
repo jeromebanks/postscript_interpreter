@@ -582,7 +582,8 @@
   /jyow jylay /OutlineWidth get def
   /jyoutl jylay /Outline get def
   /jyfill jylay /Fill get def
-  1 setlinejoin
+  % the outline must not inherit the caller's stroke state (inside our gsave)
+  1 setlinejoin 0 setlinecap [ ] 0 setdash
   % name
   jylay /Name get /jyd exch def
   jyd /FontDict get jyd /Size get scalefont setfont
