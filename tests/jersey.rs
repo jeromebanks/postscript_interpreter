@@ -783,3 +783,37 @@ fn a_zero_outline_shadow_leaves_no_hairline_and_huge_offsets_are_rejected() {
         "jersey-shadow-offset-too-large"
     );
 }
+
+#[test]
+fn hairline_serifs_still_get_a_solid_shadow() {
+    // Times-Roman at 6 units has serifs far thinner than one unit; drawn at 10 px per
+    // unit so the gaps a coarse sweep would leave are whole pixels wide.
+    let o = "<< /Name (I) /Number (1) /Rect [ 2 2 58 68 ] /Margin 1 \
+             /NameFont /Times-Roman /NameMaxSize 6 /OutlineWidth 0 /Fill [ 0 0 0 ] \
+             /Shadow [ 0 0.8 0 ] /ShadowOffset [ 0 -10 ] >>";
+    let v = nums(&format!(
+        "10 10 scale {o} jerseylayout /Name get /Ink get aload pop"
+    ));
+    let it = render(&format!("10 10 scale {o} jersey"));
+    let pm = &it.gfx().pixmap;
+    let (w, h) = (pm.width() as usize, pm.height() as usize);
+    let (x0, x1) = (
+        (v[0] * 10.0).ceil() as usize + 1,
+        (v[2] * 10.0).floor() as usize - 1,
+    );
+    let (ylo, yhi) = ((v[1] * 10.0) as usize - 90, (v[1] * 10.0) as usize - 20);
+    let mut white = 0;
+    for x in x0..x1 {
+        for y in ylo..yhi {
+            let p = pm.pixels()[(h - 1 - y) * w + x];
+            if p.red() > 230 && p.green() > 230 && p.blue() > 230 {
+                white += 1;
+            }
+        }
+    }
+    assert!(x1 > x0 + 10 && yhi > ylo, "test geometry");
+    assert_eq!(
+        white, 0,
+        "gaps inside the swept shadow of a hairline-serif letter"
+    );
+}

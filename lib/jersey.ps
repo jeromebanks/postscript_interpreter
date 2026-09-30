@@ -505,13 +505,18 @@
   /jytrack jyo /Tracking 0 jygn def
   /jynwfrac jyo /NameWidth 1 jygn def
   jynwfrac 0 le jynwfrac 1 gt or { jersey-option-wrong-type } if
-  % the sweep takes a pass every half point, at most 240: beyond 120 pt it
-  % could no longer stay solid, so say so rather than draw separate copies
-  jyhassh { jyshoff 0 get abs 120 gt jyshoff 1 get abs 120 gt or { jersey-shadow-offset-too-large } if } if
+  % the sweep takes a pass per point of offset, each copy stroked at least
+  % a point wide so neighbours always overlap (even hairline serifs): cap
+  % the offset rather than draw separate copies
+  /jyshd jyshoff 0 get abs jyshoff 1 get abs 2 copy lt { exch } if pop def
+  jyhassh { jyshd 120 gt { jersey-shadow-offset-too-large } if } if
+  % a zero offset is no shadow at all (it would only add a border)
+  jyshd 0 eq { /jyhassh false def } if
   jyow1 0 lt jyow2 0 lt or jymargin 0 lt or { jersey-option-wrong-type } if
   % ink + every outline band + the shadow's reach on any side
+  % (the shadow's strokes are at least a point wide: half a point each side)
   /jyow jyow1 jyow2 add jyhassh
-    { jyshoff 0 get abs jyshoff 1 get abs 2 copy lt { exch } if pop } { 0 } ifelse add def
+    { dup 0.5 lt { pop 0.5 } if jyshd add } if def
   /jyW jyrw jyow 2 mul sub def
   /jyH jyrh jyow 2 mul sub def
   /jyWn jyW jynwfrac mul def
@@ -630,8 +635,8 @@
       gsave
         jyshoff 0 get jysi mul jyshn div  jyshoff 1 get jysi mul jyshn div  translate
         newpath jypp jyshc jycolor
-        % a zero-width stroke is a device hairline, not nothing
-        jyow1 jyow2 add 0 gt { jyow1 jyow2 add 2 mul setlinewidth gsave stroke grestore } if
+        % at least a point wide, so copies one point apart always overlap
+        jyow1 jyow2 add 2 mul dup 1 lt { pop 1 } if setlinewidth gsave stroke grestore
         fill
       grestore
     } for
@@ -653,10 +658,9 @@
   /jyoutl2 jylay /Outline2 [ 0 0 0 ] jygd def
   /jyhassh jylay /Shadow known def
   jyhassh { /jyshc jylay /Shadow get def /jyshoff jylay /ShadowOffset get def
-    % a copy every half point along the offset (capped), so thin letters
-    % and big offsets still sweep out one solid block, not separate copies
+    % a copy per point of offset, each stroked >= 1 pt wide: one solid block
     /jyshn jyshoff 0 get abs jyshoff 1 get abs 2 copy lt { exch } if pop
-      2 mul ceiling cvi 1 max 240 min def } if
+      ceiling cvi dup 1 lt { pop 1 } if def } if
   /jyfill jylay /Fill get def
   % the paint must not inherit the caller's stroke state (inside our gsave)
   1 setlinejoin 0 setlinecap [ ] 0 setdash
