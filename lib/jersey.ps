@@ -114,7 +114,7 @@
 % apex). Impossible geometry is rejected, before drawing, with a
 % self-documenting undefined name: jersey-name-too-tilted,
 % jersey-name-too-wide, jersey-does-not-fit, jersey-number-not-dominant
-% (also jersey-option-wrong-type, jersey-name-must-be-ascii, jersey-missing-option, jersey-font-not-found,
+% (also jersey-shadow-offset-too-large (over 120 pt), jersey-option-wrong-type, jersey-name-must-be-ascii, jersey-missing-option, jersey-font-not-found,
 % jersey-type3-faces-have-no-outlines, jersey-text-has-no-ink,
 % jersey-not-a-layout). The caller's operand stack, font, path and
 % graphics state are restored on every error.
@@ -505,6 +505,9 @@
   /jytrack jyo /Tracking 0 jygn def
   /jynwfrac jyo /NameWidth 1 jygn def
   jynwfrac 0 le jynwfrac 1 gt or { jersey-option-wrong-type } if
+  % the sweep takes a pass every half point, at most 240: beyond 120 pt it
+  % could no longer stay solid, so say so rather than draw separate copies
+  jyhassh { jyshoff 0 get abs 120 gt jyshoff 1 get abs 120 gt or { jersey-shadow-offset-too-large } if } if
   jyow1 0 lt jyow2 0 lt or jymargin 0 lt or { jersey-option-wrong-type } if
   % ink + every outline band + the shadow's reach on any side
   /jyow jyow1 jyow2 add jyhassh
@@ -627,7 +630,9 @@
       gsave
         jyshoff 0 get jysi mul jyshn div  jyshoff 1 get jysi mul jyshn div  translate
         newpath jypp jyshc jycolor
-        jyow1 jyow2 add 2 mul setlinewidth gsave stroke grestore fill
+        % a zero-width stroke is a device hairline, not nothing
+        jyow1 jyow2 add 0 gt { jyow1 jyow2 add 2 mul setlinewidth gsave stroke grestore } if
+        fill
       grestore
     } for
   } if

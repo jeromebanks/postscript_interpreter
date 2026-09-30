@@ -753,3 +753,33 @@ fn a_big_offset_shadow_is_one_solid_block() {
     }
     assert!(checked, "no shadow pixels found");
 }
+
+#[test]
+fn a_zero_outline_shadow_leaves_no_hairline_and_huge_offsets_are_rejected() {
+    // zero outline + zero offset: the shadow hides entirely behind the fill
+    let base = "/OutlineWidth 0 /Fill [ 1 1 1 ]";
+    let with = render(&format!(
+        "{} jersey",
+        opts(
+            "Metro Comets",
+            "7",
+            &format!("{base} /Shadow [ 0 0.8 0 ] /ShadowOffset [ 0 0 ]")
+        )
+    ));
+    assert!(
+        !with
+            .gfx()
+            .pixmap
+            .pixels()
+            .iter()
+            .any(|p| p.green() > 150 && p.red() < 100),
+        "a hairline shadow leaked"
+    );
+    assert_eq!(
+        err_of(&format!(
+            "{} jerseylayout",
+            opts("I", "1", "/Shadow [ 0 0 0 ] /ShadowOffset [ 600 0 ]")
+        )),
+        "jersey-shadow-offset-too-large"
+    );
+}
