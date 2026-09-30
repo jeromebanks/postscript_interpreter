@@ -123,6 +123,13 @@ fn ink_is_centred_and_inside_the_print_area() {
         ("Northern Lights", "11", "[ 20 200 580 420 ]"),
         ("Cleveland Steamers", "69", "[ 150 20 450 680 ]"),
         ("A", "1", "[ 100 100 300 300 ]"),
+        // a short, wide print area, a long name and a narrow number: the
+        // arch's own drooping ends are the lowest ink
+        (
+            "Cleveland Steamers International",
+            "1",
+            "[ 20 300 580 380 ]",
+        ),
     ];
     for (name, number, rect) in cases {
         let o = format!(
@@ -350,4 +357,46 @@ fn jerseyarch_centres_the_ink_on_the_axis() {
          newpath (Illy) 300 100 300 jerseyarch fill",
     );
     assert!(((b[0] + b[2]) / 2.0 - 300.0).abs() < 1.5, "{b:?}");
+}
+
+#[test]
+fn the_caption_clears_the_arch_too() {
+    // A wide caption under a narrow number: its ends sit right under the
+    // drooping ends of the name.
+    let o = opts(
+        "Cleveland Steamers",
+        "1",
+        "/Caption (WORLD CHAMPIONS OF EVERYTHING) /NameFont /Helvetica-Bold /Gap 8",
+    );
+    let lay = format!("{o} jerseylayout /L exch def");
+    let name = render(&format!(
+        "{lay} L /Name get dup /FontDict get exch /Size get scalefont setfont \
+         newpath L /Name get /Text get L /Center get aload pop L /Radius get jerseyarch fill"
+    ));
+    let cap = render(&format!(
+        "{lay} L /Caption get dup /FontDict get exch /Size get scalefont setfont \
+         newpath L /Caption get /Origin get aload pop moveto L /Caption get /Text get true charpath fill"
+    ));
+    let (nc, cc) = (columns(&name), columns(&cap));
+    let mut shared = 0;
+    for (a, b) in nc.iter().zip(&cc) {
+        if let (Some((name_lo, _)), Some((_, cap_hi))) = (a, b) {
+            assert!(
+                name_lo - cap_hi >= 8.0 - 2.0,
+                "caption clearance {}",
+                name_lo - cap_hi
+            );
+            shared += 1;
+        }
+    }
+    assert!(
+        shared > 20,
+        "caption should sit under the name ({shared} shared columns)"
+    );
+    // and the whole stack still fits
+    let r = nums("[ 20 20 580 680 ] aload pop");
+    let u = ink(&o, "Ink");
+    assert!(
+        u[1] >= r[1] + 10.0 && u[3] <= r[3] - 10.0 && u[0] >= r[0] + 10.0 && u[2] <= r[2] - 10.0
+    );
 }

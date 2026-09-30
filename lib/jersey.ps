@@ -62,6 +62,14 @@
 %                      fill, red outline) or a dark garment (white fill,
 %                      gold outline). Explicit colours override.
 %
+% NAME TEXT is walked one byte per letter, so the arched name must be
+% 7-bit ASCII: a multi-byte UTF-8 name (Unicode-mode catalog faces) would
+% be split mid-character, so it raises jersey-name-must-be-ascii rather
+% than draw garbage. The number and caption are drawn whole, and kerning
+% is not applied anywhere (neither `show` nor `stringwidth` does here).
+% A too-short rectangle usually reports jersey-number-not-dominant: use a
+% taller rectangle, a flatter arch (larger /Radius) or a lower /Dominance.
+%
 % ADVANCE vs INK. Every box this file reports or checks is INK: the tight
 % bounding box of the glyph outlines (`charpath`, flattened so Bezier
 % control points do not inflate it). `stringwidth` is the pen *advance*,
@@ -90,7 +98,7 @@
 % apex). Impossible geometry is rejected, before drawing, with a
 % self-documenting undefined name: jersey-name-too-tilted,
 % jersey-name-too-wide, jersey-does-not-fit, jersey-number-not-dominant
-% (also jersey-missing-option, jersey-font-not-found,
+% (also jersey-name-must-be-ascii, jersey-missing-option, jersey-font-not-found,
 % jersey-type3-faces-have-no-outlines, jersey-text-has-no-ink,
 % jersey-not-a-layout). The caller's operand stack, font, path and
 % graphics state are restored on every error.
@@ -123,6 +131,14 @@
   jygot (Helvetica) ne jygot (Courier) ne and or not { jersey-font-not-found } if
   jyfd
 } def
+
+% (str) jynonspace -> bool        (has a byte other than a space)
+% @internal
+/jynonspace { false exch { 32 ne { pop true } if } forall } def
+
+% (str) jyascii -> bool             (every byte is 7-bit)
+% @internal
+/jyascii { true exch { 128 ge { pop false } if } forall } def
 
 % (str) fontdict size jyink -> [x0 y0 x1 y1]
 % Ink of a straight string, pen at the origin. Runs under gsave, so the
@@ -278,18 +294,36 @@
   } if
 } def
 
-% sN -> y of the bottom of the stack (leaves jynumtop set), top of name = 0
+% halfwidth jycurve -> y
+% Where the underside of the arch is over a part of half-width `halfwidth`
+% (top of the name's ink = 0): the circle's height at that |x|, clamped
+% to where the name's ink actually ends, less the name's descender.
+% @internal
+/jycurve {
+  /jyxe exch def
+  /jyxm jyNI 0 get abs jyNI 2 get abs 2 copy lt { exch } if pop def
+  jyxe jyxm gt { /jyxe jyxm def } if
+  jyxe jyr 0.999 mul gt { /jyxe jyr 0.999 mul def } if
+  jyyc jyr dup mul jyxe dup mul sub sqrt add jydesc sub
+} def
+
+% sN -> y of the lowest ink of the whole stack (name top = 0). Also sets
+% jynumtop and jycaptop, which jyfinish places from. The lowest ink is
+% the caption or number -- or the name's own drooping end letters when
+% the number is short, so the arch can never run off the rectangle.
 % @internal
 /jystackbottom {
   /jysNq exch def
-  /jyhw jyUI 2 get jyUI 0 get sub jysNq mul 200 div def
-  % the arch ends where the name's ink ends: clear the curve there
-  /jyxe jyNI 0 get abs jyNI 2 get abs 2 copy lt { exch } if pop def
-  jyhw jyxe lt { /jyxe jyhw def } if
-  /jyxe jyxe jyr 0.999 mul 2 copy gt { exch } if pop def
-  /jynumtop jyyc jyr dup mul jyxe dup mul sub sqrt add jydesc sub jygap sub def
-  jynumtop jyUI 3 get jyUI 1 get sub jysNq mul 100 div sub
-  jycapstr null ne { jygap sub jychh sub } if
+  jyUI 2 get jyUI 0 get sub jysNq mul 200 div jycurve jygap sub /jynumtop exch def
+  jynumtop jyUI 3 get jyUI 1 get sub jysNq mul 100 div sub /jynumbot exch def
+  jycapstr null ne {
+    % the caption clears the number *and* the curve of the arch above it
+    jynumbot jygap sub
+    jyCU 2 get jyCU 0 get sub jycsz mul 200 div jycurve jygap sub
+    2 copy gt { exch } if pop /jycaptop exch def
+    jycaptop jychh sub
+  } { jynumbot } ifelse
+  jyNI 1 get jyyc add 2 copy gt { exch } if pop
 } def
 
 % options-dict jerseylayout -> layout-dict
@@ -328,7 +362,9 @@
   /jygapopt jyo /Gap -1 jygd def
   /jycsizeopt jyo /CaptionSize -1 jygd def
   /jyvalign jyo /VAlign /center jygd def
-  jyname length 0 eq jynumstr length 0 eq or { jersey-text-has-no-ink } if
+  jyname jynonspace not jynumstr jynonspace not or { jersey-text-has-no-ink } if
+  jycapstr null ne { jycapstr jynonspace not { jersey-text-has-no-ink } if } if
+  jyname jyascii not { jersey-name-must-be-ascii } if
   % colours
   jyo /Preset /light jygd /dark eq
     { /jydf [ 1 1 1 ] def /jydo [ 0.95 0.75 0.15 ] def }
@@ -424,7 +460,7 @@
     /Ink jynumink >> put
   /jyun jyNA jynumink jyunion def
   jycapstr null ne {
-    /jycy0 jynumy jyUI 1 get jysN mul 100 div add jygap sub jychh sub def
+    /jycy0 jycaptop jytop add jychh sub def
     /jycx0 jycxr jyCU 0 get jyCU 2 get add jycsz mul 200 div sub def
     /jycby jycy0 jyCU 1 get jycsz mul 100 div sub def
     /jycink [ jycx0 jyCU 0 get jycsz mul 100 div add  jycby jyCU 1 get jycsz mul 100 div add

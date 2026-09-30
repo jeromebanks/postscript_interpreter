@@ -67,8 +67,9 @@ sleeve artwork files. It composes `headline.ps` (layout) and
   `--lint`'s blank-page check treats alpha-0 pixels as untouched.
   Not addressed: PDF `/transition` fills remain a flat average colour
   (pre-existing, recorded in the manifest).
-- Deferred: the finished *Keepin' it Real* artwork (#147), arched jersey
-  layout (#149), any product/vendor integration.
+- Deferred: the finished *Keepin' it Real* artwork (#147), any
+  product/vendor integration. (The arched jersey layout, #149, has since
+  landed -- see `lib/jersey.ps` below.)
 
 ## `lib/jersey.ps`: arched team name over a player number (issue #149, 2026-09-30)
 
@@ -104,6 +105,18 @@ the specimen (both slogans, reuse, narrow/wide numbers, a wide aspect),
   `jersey-number-not-dominant`) and leave the caller's stack/font/path
   alone. The outline width is inset from the usable rectangle so outline
   + ink never cross the margin.
+- **"Editable".** The text and number stay plain strings in the options
+  dict (and in the returned layout), so changing a slogan or number is a
+  one-word edit and a re-run. The *output* is outlines: SVG/PDF carry
+  `charpath` geometry, not live text, because the arch is per-glyph.
+- **Guards added in review.** The vertical fit includes the name's own
+  drooping end letters (a short, wide rectangle with a narrow number
+  used to let the arch run off the bottom) and the caption clears the
+  arch curve at its own half-width. The arched name must be 7-bit ASCII
+  (`jersey-name-must-be-ascii`: it is walked a byte per letter, so a UTF-8
+  Korean/Thai name would be split mid-character); the number and caption
+  are drawn whole. All-space text raises `jersey-text-has-no-ink`. A
+  too-short rectangle usually reports `jersey-number-not-dominant`.
 - **Not done / judgment calls.** Kerning is not applied (neither `show`
   nor `stringwidth` here does). A space at the apex is not special-cased.
   Vertical slack (a tall, width-limited rectangle) is split above and
