@@ -71,6 +71,42 @@ sleeve artwork files. It composes `headline.ps` (layout) and
   product/vendor integration. (The arched jersey layout, #149, has since
   landed -- see `lib/jersey.ps` below.)
 
+## Jersey realism pass: layered outlines, shadow, tracking, a garment mockup (issue #167, 2026-09-30)
+
+#149's graphic was correct but read as a sticker. Looping render -> look ->
+refine on what a high-school/college jersey actually carries gave four
+changes. `lib/jersey.ps` gained `/Outline2` + `/Outline2Width` (a second,
+outer band: fill / thin accent / dark outer), `/Shadow` + `/ShadowOffset`
+(a solid block shadow, swept in 8 offset strokes so large letters leave no
+gaps), `/Tracking` (extra space per name letter, in em -- athletic names are
+tracked capitals) and `/NameWidth` (the name may use only a fraction of the
+usable width, since a real back sets a name narrower than the number).
+Every band and the shadow's reach are inside the margin (they feed the
+inset the fit already used for the outline), and `/Gap` stays the clear
+space between *outlines*. Drawing was restructured around `jypaint`, which
+takes a path-*building* proc and re-runs it per pass: a stroke consumes the
+path and `translate` does not move an existing one, so shadow and bands
+cannot share one built path.
+
+`gallery/varsity_backs.ps` puts two jerseys (cardinal/gold, navy/white) in
+front of the viewer: silhouette, mesh fabric, rib collar, yoke, side
+panels, sleeve and hem stripes, size tag and hanger hook are all specimen
+art -- the library stays garment-independent. The print rectangle is the
+area between the yoke and the hem stripes. What made it read as a jersey,
+in order of effect: the garment cues (yoke, side panels, stripes), a number
+filling most of the rectangle (`/MaxDominance 14` -- the default 6 caps it
+at 6x a long name's small cap height), the layered outline, and tracking.
+Fonts: the first mockup used AlfaSlabOne / Bebas Neue and read as a
+sticker; two OFL faces fetched from google/fonts settled it -- **Graduate**
+(the collegiate block slab with chamfered numerals; `69` in it is the
+football-jersey numeral) and **Anton** (tall condensed athletic gothic),
+added to `fonts/catalog/` with their OFL.txt, the catalog README, the
+font-gallery script and site/fonts.html. Bowlby One was tried and dropped
+(round, not athletic).
+Gotcha hit while building it: a name bound to an executable array *runs*
+when referenced, so `jbp exec` runs the proc and then `exec` underflows;
+reference it bare.
+
 ## `lib/jersey.ps`: arched team name over a player number (issue #149, 2026-09-30)
 
 One new sibling library, `@requires: (lib/artkit.ps) run`: `jerseylayout`

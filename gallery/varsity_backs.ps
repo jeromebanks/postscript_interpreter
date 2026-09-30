@@ -1,0 +1,167 @@
+%!PS-Adobe-3.0
+%%Title: Varsity Backs — lib/jersey.ps on a garment
+%%BoundingBox: 0 0 1050 660
+%%EndComments
+
+% Two team-jersey backs carrying the arched name / number graphic from
+% lib/jersey.ps (issue #167). The garment -- silhouette, mesh fabric,
+% collar, yoke, side panels, sleeve and hem stripes -- is specimen art
+% built here, not part of the vendor-independent library: the library
+% only sizes and draws the lettering for a print rectangle, which is what
+% each jersey's /Rect is (the area between the yoke and the hem stripes).
+%
+%   pscat --page 1050x660 gallery/varsity_backs.ps
+
+(lib/artkit.ps) run
+(lib/jersey.ps) run
+
+% drawn on a 1400x880 design grid, scaled to the gallery's 1050x660 page
+0.75 dup scale
+
+/JB 0 def /JT 0 def /JD 0 def /CX 350 def   % base / trim / dark colours, centre line
+
+/shade {                                     % [r g b] f -> [r*f g*f b*f]
+    /sf exch def aload pop /sb exch def /sg exch def /sr exch def
+    [ sr sf mul sg sf mul sb sf mul ]
+} def
+/rgb { aload pop setrgbcolor } def
+
+% --- silhouette: right half in local coordinates (x = distance from centre) --
+/Jhalf {
+    0 728 moveto
+    22 728 50 734 62 744 curveto
+    205 716 lineto
+    250 700 288 672 306 640 curveto
+    292 555 lineto
+    178 548 lineto
+    168 585 lineto
+    170 450 172 250 168 130 curveto
+    118 120 60 114 0 114 curveto
+    closepath
+} def
+/Jboth {                                     % proc -  (right half, then mirrored)
+    /jbp exch def
+    gsave CX 0 translate jbp grestore
+    gsave CX 0 translate -1 1 scale jbp grestore
+} def
+/Jbody {                                     % the whole silhouette as one path
+    /jm matrix currentmatrix def
+    CX 0 translate Jhalf jm setmatrix
+    CX 0 translate -1 1 scale Jhalf jm setmatrix
+} def
+/Jneckback {
+    CX 62 sub 744 moveto
+    CX 50 sub 734  CX 22 sub 728  CX 728 curveto
+    CX 22 add 728  CX 50 add 734  CX 62 add 744 curveto
+} def
+/Jneckfront {
+    CX 62 sub 744 moveto
+    CX 57 sub 758  CX 28 sub 768  CX 768 curveto
+    CX 28 add 768  CX 57 add 758  CX 62 add 744 curveto
+} def
+/Jhemline {                                  % dy -  a curve across the hem, raised by dy
+    /jdy exch def
+    CX 170 sub 130 jdy add moveto
+    CX 118 sub 120 jdy add  CX 60 sub 114 jdy add  CX 114 jdy add curveto
+    CX 60 add 114 jdy add   CX 118 add 120 jdy add  CX 170 add 130 jdy add curveto
+} def
+/Jsleeve {                                   % offset width colour -  (stripe parallel to the sleeve hem)
+    rgb setlinewidth /jo exch def
+    172 jo 548 add 172 178 sub 0.0614 mul add moveto
+    340 jo 548 add 340 178 sub 0.0614 mul add lineto stroke
+} def
+
+/jerseyback {                                % dict -
+    /jd exch def
+    /JB jd /Base get def /JT jd /Trim get def /JD jd /Dark get def /CX jd /CX get def
+    gsave
+    % soft drop shadow on the wall
+    6 -1 1 { /si exch def
+        gsave 10 si 2 mul add -14 si 2.5 mul sub translate
+        Jbody 0.64 si 0.03 mul sub 0.66 si 0.03 mul sub 0.72 si 0.03 mul sub setrgbcolor fill grestore } for
+    % fabric: darker sides, lighter middle, sleeves rolling away
+    gsave Jbody clip newpath
+        CX 190 sub 0 CX 190 add 0
+        [ JB 0.62 shade  JB 0.92 shade  JB 1.06 shade  JB 0.92 shade  JB 0.62 shade ]
+        axialsh shfill
+        CX 320 sub 0 CX 168 sub 0 [ JB 0.55 shade  JB 0.85 shade ] axialsh shfill
+        CX 168 add 0 CX 320 add 0 [ JB 0.85 shade  JB 0.55 shade ] axialsh shfill
+        % mesh knit: fine diagonal hatching a shade darker than the base
+        JB 0.9 shade rgb 0.5 setlinewidth
+        -900 6 1400 { /mx exch def
+            mx 0 moveto mx 900 add 900 lineto stroke
+            mx 900 add 0 moveto mx 900 lineto stroke } for
+        0 100 0 300 [ JB 0.78 shade  JB 1 shade ] axialsh shfill
+    grestore
+
+    % yokes, side panels, sleeve and hem stripes, clipped to the body
+    gsave Jbody clip newpath
+        {
+            JD rgb 62 746 moveto 208 717 lineto 222 688 lineto 62 702 lineto closepath fill
+            JT rgb 1 setlinewidth 62 702 moveto 222 688 lineto stroke
+            JD rgb 150 600 moveto 172 600 lineto 172 120 lineto 150 120 lineto closepath fill
+            JT rgb 1.4 setlinewidth 150 600 moveto 150 120 lineto stroke
+            gsave 172 480 moveto 340 480 lineto 340 720 lineto 172 720 lineto closepath clip newpath
+                14 10 JT Jsleeve  27 10 JD Jsleeve  40 10 JT Jsleeve
+            grestore
+        } Jboth
+        0 setlinecap
+        JT rgb 10 setlinewidth 14 Jhemline stroke
+        JD rgb 10 setlinewidth 27 Jhemline stroke
+        JT rgb 10 setlinewidth 40 Jhemline stroke
+    grestore
+
+    % neck: a view into the inside of the front, then the rib collar
+    JD 0.7 shade rgb
+    Jneckback CX 62 add 744 lineto
+    CX 57 add 758  CX 28 add 768  CX 768 curveto
+    CX 28 sub 768  CX 57 sub 758  CX 62 sub 744 curveto closepath fill
+    1 setlinejoin
+    JT rgb 9 setlinewidth Jneckfront stroke
+    JD rgb 10 setlinewidth Jneckback stroke
+    JT rgb 3 setlinewidth Jneckback stroke
+
+    % size tag sewn inside the back neck, and the yoke's centre seam
+    gsave 0.94 0.94 0.92 setrgbcolor CX 13 sub 700 26 26 rectfill
+        JD rgb 0.5 setlinewidth CX 13 sub 700 26 26 rectstroke
+        /Helvetica-Bold findfont 11 scalefont setfont JD rgb
+        (L) dup stringwidth pop 2 div CX exch sub 708 moveto show
+        JD rgb 0.6 setlinewidth CX 727 moveto CX 726 lineto stroke
+    grestore
+    % armhole seams and hem stitching
+    JB 0.5 shade rgb 1 setlinewidth
+    { 205 716 moveto 190 680 172 630 168 585 curveto stroke } Jboth
+    gsave [ 3 3 ] 0 setdash 0.8 setlinewidth JT rgb 5 Jhemline stroke grestore
+    grestore
+} def
+
+% hanger hook through the neck opening
+/hook {                                      % cx -
+    /hx exch def
+    gsave 1 setlinecap 1 setlinejoin 0.55 0.57 0.62 setrgbcolor 5 setlinewidth
+        hx 728 moveto hx 792 lineto stroke
+        hx 12 add 792 12 180 0 arcn stroke
+        hx 24 add 792 moveto hx 24 add 780 lineto stroke
+    grestore
+} def
+
+% --- backdrop ----------------------------------------------------------------
+gsave clippath clip newpath
+    0 0 0 880 [ [ 0.68 0.7 0.76 ] [ 0.88 0.89 0.93 ] ] axialsh shfill
+grestore
+
+% --- jersey 1: cardinal and gold --------------------------------------------------
+<< /CX 350 /Base [ 0.66 0.09 0.13 ] /Trim [ 0.96 0.78 0.16 ] /Dark [ 0.07 0.07 0.1 ] >> jerseyback
+<< /Name (CLEVELAND STEAMERS) /Number (69) /NameFont /Graduate /NumberFont /Graduate
+   /Rect [ 218 185 482 690 ] /Margin 4 /Tracking 0.05 /NameWidth 0.95 /MaxDominance 14
+   /Fill [ 1 1 1 ] /OutlineWidth 3.4 /Outline [ 0.96 0.78 0.16 ]
+   /Outline2Width 4 /Outline2 [ 0.07 0.07 0.1 ] >> jersey
+350 hook
+
+% --- jersey 2: navy and white ---------------------------------------------------------
+<< /CX 1050 /Base [ 0.07 0.13 0.34 ] /Trim [ 0.97 0.97 0.97 ] /Dark [ 0.03 0.06 0.17 ] >> jerseyback
+<< /Name (PERSONA NON GRATA) /Number (86) /NameFont /Anton /NumberFont /Anton
+   /Rect [ 918 185 1182 690 ] /Margin 4 /Tracking 0.04 /NameWidth 0.95 /MaxDominance 14
+   /Fill [ 0.97 0.78 0.14 ] /OutlineWidth 3.4 /Outline [ 1 1 1 ]
+   /Outline2Width 4 /Outline2 [ 0.03 0.06 0.17 ] >> jersey
+1050 hook

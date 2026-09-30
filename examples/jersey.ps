@@ -9,7 +9,8 @@
 %   row 1  the two jerseys the feature was written for --
 %          `Cleveland Steamers` over 69 (light-garment colours) and
 %          `Persona non grata` over 86 (dark-garment colours)
-%   row 2  reuse: a neutral team with the narrow number (7), one with the
+%   row 2  reuse, with layered outlines / tracking / a block shadow:
+%          a neutral team with the narrow number (7), one with the
 %          double-width (00) and a caption, and the 3-digit (123)
 %   row 3  left: why the arch is placed by glyph midpoint and ink --
 %          artkit's ctextctr (red) vs jerseyarch (black) on the same
@@ -64,9 +65,11 @@ gsave 0.09 0.1 0.13 setrgbcolor 460 640 420 540 rectfill grestore
    /NumberFont /Helvetica-Bold
    /Rect [ 20 330 290 620 ] /Margin 10 /Preset /light
    /Fill [ 0.6 0.08 0.1 ] /Outline [ 0.1 0.1 0.12 ] >> piece
-<< /Name (Lake City Rovers) /Number (00) /Caption (EST. 1998)
+<< /Name (LAKE CITY ROVERS) /Number (00) /Caption (EST. 1998)
    /NameFont /AlfaSlabOne /NumberFont /AlfaSlabOne /CaptionFont /BebasNeue
-   /Rect [ 310 330 590 620 ] /Margin 10 /Preset /light >> piece
+   /Rect [ 310 330 590 620 ] /Margin 10 /Tracking 0.05
+   /Fill [ 0.05 0.1 0.3 ] /OutlineWidth 2 /Outline [ 1 1 1 ]
+   /Outline2Width 2.5 /Outline2 [ 0.8 0.1 0.12 ] >> piece
 << /Name (Riverside) /Number (123) /NameFont /Bungee /NumberFont /Bungee
    /Rect [ 610 330 880 620 ] /Margin 10 /Preset /light
    /Fill [ 0.05 0.35 0.25 ] /Outline [ 0.95 0.75 0.15 ] >> piece
@@ -87,7 +90,8 @@ gsave /Helvetica findfont 10 scalefont setfont 0.2 setgray
 grestore
 
 % --- row 3, right: a wide, short print area -----------------------------
-<< /Name (Northern Lights) /Number (11) /Caption (HOME OPENER)
+<< /Name (NORTHERN LIGHTS) /Number (11) /Caption (HOME OPENER)
    /NameFont /AlfaSlabOne /NumberFont /AlfaSlabOne /CaptionFont /Helvetica-Bold
-   /Rect [ 460 20 880 300 ] /Margin 10 /Preset /light
-   /Fill [ 0.3 0.1 0.45 ] /Outline [ 0.9 0.6 0.1 ] >> piece
+   /Rect [ 460 20 880 300 ] /Margin 10 /Tracking 0.04
+   /Fill [ 0.3 0.1 0.45 ] /Outline [ 0.9 0.6 0.1 ] /OutlineWidth 2
+   /Shadow [ 0.12 0.05 0.2 ] /ShadowOffset [ 4 -4 ] >> piece

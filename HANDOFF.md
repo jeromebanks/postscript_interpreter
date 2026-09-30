@@ -322,6 +322,10 @@ apparel_shirt.ps` + `apparel_second.ps`, `scripts/apparel_export.sh` (finished s
 alpha / SVG without backdrop). Details and the observed pre-fix
 transparency behaviour in NOTES.md. Next in this thread (#155 landed: `/Chewy-Regular`, `/BagelFatOne-Regular`, see docs/groovy_font_choice.md): #147 (the actual
 shirt) is now just a config.
+Also done: issue #167, jersey realism -- `lib/jersey.ps` gained
+`/Outline2`, `/Shadow`, `/Tracking`, `/NameWidth`; `gallery/varsity_backs.ps`
+draws two jersey backs carrying it (the garment is specimen art, not
+library). See NOTES.md for what made it read as a jersey.
 Also done: issue #149, arched jersey layout — `lib/jersey.ps`
 (`@requires: (lib/artkit.ps) run`, tag-migrated): `jerseylayout` /
 `jerseydraw` / `jersey` place an ink-centred, midpoint-tangent arched name

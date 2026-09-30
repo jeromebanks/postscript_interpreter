@@ -56,9 +56,24 @@
 %                      is always shrunk to fit the usable width.
 %   /VAlign /center (default) | /top   where the stack sits when the
 %                      number is width-limited and height is left over.
+%   /NameWidth f       the name's ink may use at most this fraction (0, 1]
+%                      of the usable width (default 1); a real jersey
+%                      back sets a name narrower than the number.
+%   /Tracking f        extra space after every name letter, as a
+%                      fraction of the name size (default 0). Athletic
+%                      names are wide-tracked capitals: try 0.04-0.08.
 %   Colours ([r g b]): /Fill (name + number), /Outline, /CaptionFill.
 %   /OutlineWidth n    outside outline thickness in points (default 0.5%
 %                      of the usable width; 0 = none).
+%   /Outline2 [r g b] and /Outline2Width n   a second, outer band around
+%                      the first (width defaults to /OutlineWidth): the
+%                      layered lettering of real team jerseys -- fill,
+%                      thin accent outline, dark outer outline.
+%   /Shadow [r g b] and /ShadowOffset [dx dy]   a solid block shadow
+%                      behind every part (offset defaults to 0.9 x the
+%                      total outline, down and to the right).
+%                      Every band and the shadow's reach are inside the
+%                      margin: ink + outlines + shadow never cross it.
 %   /Preset /light | /dark   default colours for a light garment (navy
 %                      fill, red outline) or a dark garment (white fill,
 %                      gold outline). Explicit colours override.
@@ -127,6 +142,10 @@
   dup length 3 ne { jersey-option-wrong-type } if
   dup { jyisnum not { jersey-option-wrong-type } if } forall
 } def
+
+% dict key jygd0 -> value or 0
+% @internal
+/jygd0 { 0 jygd } def
 
 % [a b c] -> r g b set as the current colour
 % @internal
@@ -209,7 +228,7 @@
 % @internal
 /jyarch {
   /jymat matrix currentmatrix def
-  /jyA jyname stringwidth pop def
+  /jyA jyname stringwidth pop jyname length jytrk mul add def
   /jymaxrot 0 def
   /jya 0 def
   0 1 jyname length 1 sub {
@@ -225,7 +244,7 @@
       jyc true charpath
       jymat setmatrix
     } if
-    /jya jya jyw add def
+    /jya jya jyw add jytrk add def
   } for
 } def
 
@@ -282,7 +301,7 @@
   3 index jyascii not { jersey-name-must-be-ascii } if
   40 dict begin
   /jyr exch def /jycys exch def /jycxs exch def /jyname exch def
-  /jycx jycxs def /jycy jycys def
+  /jycx jycxs def /jycy jycys def /jytrk 0 def
   % a string with no ink (a tab) only shows up as an empty measurement
   { jycenter } stopped { end jersey-text-has-no-ink } if
   jyconv not { end jersey-does-not-fit } if
@@ -330,11 +349,12 @@
   /jycode 0 def
   /jycx 0 def /jycy 0 def /jycxs 0 def /jycys 0 def
   jynfd jys scalefont setfont
+  /jytrk jytrack jys mul def
   jycenter
   % an arch that cannot be centred is a name far too long for the circle
   jyconv not { /jycode 1 def } if
   jycode 0 eq { jymaxrot jymaxtilt gt { /jycode 1 def } if } if
-  jycode 0 eq { jyNI 2 get jyNI 0 get sub jyW gt { /jycode 2 def } if } if
+  jycode 0 eq { jyNI 2 get jyNI 0 get sub jyWn gt { /jycode 2 def } if } if
   jycode 0 eq {
     % cap height and descent of the name, at this size
     (H) jynfd jys jyink 3 get /jycap exch def
@@ -471,10 +491,26 @@
   /jymax jyo /NameMaxSize jyrh 0.3 mul jygn def
   % the outline grows the ink by its width on every side, so the fit
   % below is for the rectangle inset by it
-  /jyow jyo /OutlineWidth jyrw 0.005 mul jygn def
-  jyow 0 lt jymargin 0 lt or { jersey-option-wrong-type } if
+  /jyow1 jyo /OutlineWidth jyrw 0.005 mul jygn def
+  /jyoutl2 jyo /Outline2 [ 0 0 0 ] jygc def
+  /jyow2 jyo /Outline2 known { jyo /Outline2Width jyow1 jygn } { 0 } ifelse def
+  /jyshc jyo /Shadow [ 0 0 0 ] jygc def
+  /jyhassh jyo /Shadow known def
+  /jyshoff jyo /ShadowOffset known
+    { jyo /ShadowOffset get dup type /arraytype ne { jersey-option-wrong-type } if
+      dup length 2 ne { jersey-option-wrong-type } if
+      dup { jyisnum not { jersey-option-wrong-type } if } forall }
+    { [ jyow1 jyow2 add 0.9 mul  jyow1 jyow2 add 0.9 mul neg ] } ifelse def
+  /jytrack jyo /Tracking 0 jygn def
+  /jynwfrac jyo /NameWidth 1 jygn def
+  jynwfrac 0 le jynwfrac 1 gt or { jersey-option-wrong-type } if
+  jyow1 0 lt jyow2 0 lt or jymargin 0 lt or { jersey-option-wrong-type } if
+  % ink + every outline band + the shadow's reach on any side
+  /jyow jyow1 jyow2 add jyhassh
+    { jyshoff 0 get abs jyshoff 1 get abs 2 copy lt { exch } if pop } { 0 } ifelse add def
   /jyW jyrw jyow 2 mul sub def
   /jyH jyrh jyow 2 mul sub def
+  /jyWn jyW jynwfrac mul def
   jyW 0 le jyH 0 le or { jersey-does-not-fit } if
   jymax jymin lt { jersey-does-not-fit } if
   jymin jyeval
@@ -529,11 +565,15 @@
   /jynumy jynumtop jytop add jyUI 3 get jysN mul 100 div sub def
   /jynumink [ jynumx jyUI 0 get jysN mul 100 div add  jynumy jyUI 1 get jysN mul 100 div add
               jynumx jyUI 2 get jysN mul 100 div add  jynumy jyUI 3 get jysN mul 100 div add ] def
-  /jylay 20 dict def
+  /jylay 30 dict def
   jylay /Rect jyrect put
   jylay /Radius jyr put
   jylay /Gap jygap put
-  jylay /OutlineWidth jyow put
+  jylay /OutlineWidth jyow1 put
+  jylay /Outline2Width jyow2 put
+  jylay /Outline2 jyoutl2 put
+  jylay /Inset jyow put
+  jyhassh { jylay /Shadow jyshc put jylay /ShadowOffset jyshoff put } if
   jylay /Fill jyfill put
   jylay /Outline jyoutl put
   jylay /CaptionFill jycapfill put
@@ -541,7 +581,7 @@
   jylay /MaxTilt jymaxrot put
   jylay /Name <<
     /Text jyname /FontDict jynfd /Size jys /Phi jyphi /Ink jyNA
-    /Tilt jymaxrot >> put
+    /Tilt jymaxrot /Tracking jytrk >> put
   jylay /Number <<
     /Text jynumstr /FontDict jyufd /Size jysN /Origin [ jynumx jynumy ]
     /Ink jynumink >> put
@@ -573,42 +613,65 @@
   1 { jydrawdict } jycall
 } def
 
+% pathproc fillcolor jypaint -
+% Paints the shape the proc builds: shadow (repeated offset strokes, so it
+% is solid), then each outline band outermost first, then the fill. The
+% proc is run afresh for every pass, since a stroke consumes the path and
+% a translate does not move a path that already exists.
+% @internal
+/jypaint {
+  /jypf exch def /jypp exch def
+  jyhassh {
+    0 1 8 { /jysi exch def
+      gsave
+        jyshoff 0 get jysi mul 8 div  jyshoff 1 get jysi mul 8 div  translate
+        newpath jypp jyshc jycolor
+        jyow1 jyow2 add 2 mul setlinewidth gsave stroke grestore fill
+      grestore
+    } for
+  } if
+  jyow2 0 gt { gsave newpath jypp jyoutl2 jycolor jyow1 jyow2 add 2 mul setlinewidth stroke grestore } if
+  jyow1 0 gt { gsave newpath jypp jyoutl jycolor jyow1 2 mul setlinewidth stroke grestore } if
+  newpath jypp jypf jycolor fill
+} def
+
 % @internal
 /jydrawdict {
   dup type /dicttype ne { jersey-not-a-layout } if
   dup /Name known 1 index /Number known and 1 index /Fill known and not
     { jersey-not-a-layout } if
   /jylay exch def
-  /jyow jylay /OutlineWidth get def
+  /jyow1 jylay /OutlineWidth get def
+  /jyow2 jylay /Outline2Width jygd0 def
   /jyoutl jylay /Outline get def
+  /jyoutl2 jylay /Outline2 [ 0 0 0 ] jygd def
+  /jyhassh jylay /Shadow known def
+  jyhassh { /jyshc jylay /Shadow get def /jyshoff jylay /ShadowOffset get def } if
   /jyfill jylay /Fill get def
-  % the outline must not inherit the caller's stroke state (inside our gsave)
+  % the paint must not inherit the caller's stroke state (inside our gsave)
   1 setlinejoin 0 setlinecap [ ] 0 setdash
   % name
   jylay /Name get /jyd exch def
   jyd /FontDict get jyd /Size get scalefont setfont
   /jyname jyd /Text get def
+  /jytrk jyd /Tracking jygd0 def
   /jycx jylay /Center get 0 get def
   /jycy jylay /Center get 1 get def
   /jycxs jycx def /jycys jycy def
   /jyr jylay /Radius get def
   /jyphi jyd /Phi get def
-  newpath jyarch
-  jyow 0 gt { gsave jyoutl jycolor jyow 2 mul setlinewidth stroke grestore } if
-  jyfill jycolor fill
+  { jyarch } jyfill jypaint
   % number
   jylay /Number get /jyd exch def
   jyd /FontDict get jyd /Size get scalefont setfont
-  newpath jyd /Origin get aload pop moveto jyd /Text get true charpath
-  jyow 0 gt { gsave jyoutl jycolor jyow 2 mul setlinewidth stroke grestore } if
-  jyfill jycolor fill
+  /jynstr jyd /Text get def /jyno jyd /Origin get def
+  { jyno aload pop moveto jynstr true charpath } jyfill jypaint
   % caption
   jylay /Caption known {
     jylay /Caption get /jyd exch def
     jyd /FontDict get jyd /Size get scalefont setfont
-    newpath jyd /Origin get aload pop moveto jyd /Text get true charpath
-    jyow 0 gt { gsave jyoutl jycolor jyow 2 mul setlinewidth stroke grestore } if
-    jylay /CaptionFill get jycolor fill
+    /jynstr jyd /Text get def /jyno jyd /Origin get def
+    { jyno aload pop moveto jynstr true charpath } jylay /CaptionFill get jypaint
   } if
 } def
 

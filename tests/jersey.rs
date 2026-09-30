@@ -587,3 +587,109 @@ fn outlines_ignore_the_callers_dash_pattern() {
     let dashed = render(&format!("[ 6 4 ] 0 setdash 2 setlinecap {o} jersey"));
     assert_eq!(plain.gfx().pixmap.data(), dashed.gfx().pixmap.data());
 }
+
+fn painted_extent(o: &str) -> [f64; 4] {
+    painted_bbox(&format!("{o} jersey"))
+}
+
+#[test]
+fn layered_outlines_grow_the_paint_but_stay_inside_the_margin() {
+    let base = opts("Metro Comets", "7", "/OutlineWidth 3 /Outline [ 1 0 0 ]");
+    let two = opts(
+        "Metro Comets",
+        "7",
+        "/OutlineWidth 3 /Outline [ 1 0 0 ] /Outline2Width 5 /Outline2 [ 0 0 1 ]",
+    );
+    // the ink box is the letters' own; the outer band must not change it by more than the inset
+    let (p1, p2) = (painted_extent(&base), painted_extent(&two));
+    assert!(p2[2] - p2[0] >= p1[2] - p1[0] - 6.0, "{p1:?} {p2:?}");
+    for p in [p1, p2] {
+        assert!(
+            p[0] >= 20.0 + 10.0 - 2.0 && p[2] <= 580.0 - 10.0 + 2.0,
+            "{p:?}"
+        );
+        assert!(
+            p[1] >= 20.0 + 10.0 - 2.0 && p[3] <= 680.0 - 10.0 + 2.0,
+            "{p:?}"
+        );
+    }
+    // the second band really is painted (blue pixels exist), and the first still is (red)
+    let it = render(&format!("{two} jersey"));
+    let px = it.gfx().pixmap.pixels().to_vec();
+    assert!(
+        px.iter().any(|p| p.blue() > 200 && p.red() < 60),
+        "outer band"
+    );
+    assert!(
+        px.iter().any(|p| p.red() > 200 && p.blue() < 60),
+        "inner band"
+    );
+}
+
+#[test]
+fn a_shadow_stays_inside_the_margin_and_paints() {
+    let o = opts(
+        "Cleveland Steamers",
+        "69",
+        "/OutlineWidth 3 /Shadow [ 0 0.8 0 ] /ShadowOffset [ 9 -9 ] /NameFont /Helvetica-Bold",
+    );
+    let p = painted_extent(&o);
+    assert!(
+        p[0] >= 29.0 && p[2] <= 571.0 && p[1] >= 29.0 && p[3] <= 671.0,
+        "{p:?}"
+    );
+    let it = render(&format!("{o} jersey"));
+    assert!(
+        it.gfx()
+            .pixmap
+            .pixels()
+            .iter()
+            .any(|q| q.green() > 180 && q.red() < 60),
+        "shadow"
+    );
+}
+
+#[test]
+fn tracking_widens_the_name_and_name_width_narrows_it() {
+    let width = |extra: &str| {
+        let v = nums(&format!(
+            "{} jerseylayout /Name get /Ink get aload pop",
+            opts(
+                "Comets",
+                "7",
+                &format!("/NameMaxSize 40 /Radius 2000 {extra}")
+            )
+        ));
+        v[2] - v[0]
+    };
+    assert!(width("/Tracking 0.3") > width("/Tracking 0") + 20.0);
+    // the fit honours /NameWidth: a fraction of the usable width (540 here)
+    let v = nums(&format!(
+        "{} jerseylayout /Name get /Ink get aload pop",
+        opts(
+            "Cleveland Steamers International",
+            "7",
+            "/NameWidth 0.5 /Radius 2000"
+        )
+    ));
+    assert!(v[2] - v[0] <= 0.5 * 540.0 + 0.5, "{v:?}");
+}
+
+#[test]
+fn new_options_are_validated() {
+    for bad in [
+        "/Outline2Width -2 /Outline2 [ 0 0 0 ]",
+        "/Outline2 [ 0 0 ]",
+        "/Shadow [ 0 0 0 ] /ShadowOffset [ 1 ]",
+        "/Shadow [ 0 0 0 ] /ShadowOffset (x)",
+        "/Tracking (x)",
+        "/NameWidth 0",
+        "/NameWidth 1.5",
+    ] {
+        assert_eq!(
+            err_of(&format!("{} jerseylayout", opts("Metro Comets", "7", bad))),
+            "jersey-option-wrong-type",
+            "{bad}"
+        );
+    }
+}
