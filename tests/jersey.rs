@@ -500,6 +500,7 @@ fn inkless_text_and_zero_radius_do_not_leak_state() {
     for bad in [
         "<< /Name (\\t) /Number (1) /Rect [ 20 20 580 680 ] >> jerseylayout",
         "(A) 100 100 0 jerseyarch",
+        "(\\t) 300 100 300 jerseyarch",
     ] {
         it.run_str(&format!("clear {{ {bad} }} stopped pop clear"))
             .expect("probe");
@@ -517,5 +518,24 @@ fn inkless_text_and_zero_radius_do_not_leak_state() {
             "10.0".into(),
             "(Times-Roman)".into()
         ]
+    );
+}
+
+#[test]
+fn negative_outline_or_margin_and_non_ascii_arch_are_rejected() {
+    assert_eq!(
+        err_of(&format!(
+            "{} jerseylayout",
+            opts("Cleveland Steamers", "69", "/OutlineWidth -40")
+        )),
+        "jersey-option-wrong-type"
+    );
+    assert_eq!(
+        err_of("<< /Name (A) /Number (1) /Rect [ 20 20 580 680 ] /Margin -5 >> jerseylayout"),
+        "jersey-option-wrong-type"
+    );
+    assert_eq!(
+        err_of("(\\303\\251) 300 100 300 jerseyarch"),
+        "jersey-name-must-be-ascii"
     );
 }

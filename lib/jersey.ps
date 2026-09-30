@@ -195,7 +195,7 @@
 /jyink {
   gsave newpath scalefont setfont
   0 0 moveto true charpath jybbox
-  grestore dup null eq { jersey-text-has-no-ink } if
+  grestore dup null eq { pop jersey-text-has-no-ink } if
 } def
 
 % --- the arch ------------------------------------------------------------
@@ -236,12 +236,12 @@
 /jycenter {
   /jyphi 0 def
   3 {
-    gsave newpath jyarch jybbox grestore dup null eq { jersey-text-has-no-ink } if aload pop
+    gsave newpath jyarch jybbox grestore dup null eq { pop jersey-text-has-no-ink } if aload pop
     /jyury exch def /jyurx exch def /jylly exch def /jyllx exch def
     /jyphi jyphi  jyllx jyurx add 2 div jycxs sub  jyr jyury jycys sub add 2 div div
       57.29578 mul add def
   } repeat
-  gsave newpath jyarch jybbox grestore dup null eq { jersey-text-has-no-ink } if /jyNI exch def
+  gsave newpath jyarch jybbox grestore dup null eq { pop jersey-text-has-no-ink } if /jyNI exch def
 } def
 
 % (str) cx cy r jerseyarch -
@@ -260,10 +260,12 @@
     not { jersey-option-wrong-type } if
   dup 0 le { jersey-does-not-fit } if
   3 index jynonspace not { jersey-text-has-no-ink } if
+  3 index jyascii not { jersey-name-must-be-ascii } if
   40 dict begin
   /jyr exch def /jycys exch def /jycxs exch def /jyname exch def
   /jycx jycxs def /jycy jycys def
-  jycenter
+  % a string with no ink (a tab) only shows up as an empty measurement
+  { jycenter } stopped { end jersey-text-has-no-ink } if
   jyarch
   end
 } def
@@ -448,6 +450,7 @@
   % the outline grows the ink by its width on every side, so the fit
   % below is for the rectangle inset by it
   /jyow jyo /OutlineWidth jyrw 0.005 mul jygn def
+  jyow 0 lt jymargin 0 lt or { jersey-option-wrong-type } if
   /jyW jyrw jyow 2 mul sub def
   /jyH jyrh jyow 2 mul sub def
   jyW 0 le jyH 0 le or { jersey-does-not-fit } if
