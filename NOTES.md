@@ -3,6 +3,19 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Wide strokes of tiny curves stay solid (issue #169, 2026-09-30)
+
+tiny-skia's stroker leaves a hollow centre when a small *curved* contour
+(open or closed) is stroked wider than its diameter — `30 60 1.2 0 360 arc
+10 setlinewidth stroke` — though a straight-edged contour of the same size
+is solid. `Gfx::stroke` now builds its raster path with
+`PsPath::to_skia_for_stroke`, which flattens (16 chords per Bézier) only
+subpaths whose bbox is under twice the device line width; larger curves
+still go to the stroker exact. `--svg`/`--pdf` still record the original
+curves — viewers stroke those correctly. No other raster path uses
+tiny-skia's stroker. Regression test: `gfx::tests::wide_stroke_of_tiny_circle_is_solid`
+(every join/cap, with and without `closepath`).
+
 ## Groovy display faces: Chewy + Bagel Fat One (issue #155, 2026-09-29)
 
 Two rounded 60s/70s catalog faces for the shirt's `Real` lettering: Chewy

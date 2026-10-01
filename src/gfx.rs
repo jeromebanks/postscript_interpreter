@@ -277,7 +277,8 @@ impl PsPath {
         pb.finish()
     }
 
-    /// Like `to_skia`, but closed subpaths that are small relative to the
+    /// Like `to_skia`, but subpaths (closed or not — `arc` alone emits no
+    /// `Close`) that are small relative to the
     /// stroke `width` have their curves flattened to polylines first.
     /// tiny-skia's stroker leaves a hollow centre when a tiny closed
     /// *curve* is stroked wider than its diameter (issue #169), though
@@ -301,7 +302,6 @@ impl PsPath {
                 .position(|s| matches!(s, Seg::Move(_)))
                 .map_or(self.segs.len(), |n| i + 1 + n);
             let sub = &self.segs[i..end];
-            let closed = matches!(sub.last(), Some(Seg::Close));
             let has_curve = sub.iter().any(|s| matches!(s, Seg::Curve(..)));
             let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
             for s in sub {
@@ -325,7 +325,7 @@ impl PsPath {
                 }
             }
             let small = (x1 - x0).max(y1 - y0) < 2.0 * width;
-            if closed && has_curve && small {
+            if has_curve && small {
                 let mut cur = DevPoint { x: 0.0, y: 0.0 };
                 for s in sub {
                     match *s {
@@ -1886,18 +1886,35 @@ mod tests {
         (px.red(), px.green(), px.blue())
     }
 
-    /// Issue #169: a tiny closed curve stroked wider than its diameter
-    /// must paint a solid disc, not leave a hollow centre.
+    /// Issue #169: a tiny curve stroked wider than its diameter must
+    /// paint a solid disc, not leave a hollow centre — with or without
+    /// `closepath`, for every join and cap.
     #[test]
     fn wide_stroke_of_tiny_circle_is_solid() {
-        let mut gfx = Gfx::new(60, 60).expect("pixmap");
-        gfx.set_rgb(0.0, 0.0, 0.0);
-        gfx.state_mut().line_width = 10.0;
-        gfx.arc(30.0, 30.0, 1.2, 0.0, 360.0, true).expect("arc");
-        gfx.closepath();
-        gfx.stroke();
-        let px = gfx.pixmap.pixel(30, 30).expect("pixel");
-        assert_eq!((px.red(), px.green(), px.blue()), (0, 0, 0));
+        for close in [false, true] {
+            for join in [LineJoin::Miter, LineJoin::Round, LineJoin::Bevel] {
+                for cap in [LineCap::Butt, LineCap::Round] {
+                    let mut gfx = Gfx::new(60, 60).expect("pixmap");
+                    gfx.set_rgb(0.0, 0.0, 0.0);
+                    gfx.state_mut().line_width = 10.0;
+                    gfx.state_mut().line_join = join;
+                    gfx.state_mut().line_cap = cap;
+                    gfx.arc(30.0, 30.0, 1.2, 0.0, 360.0, true).expect("arc");
+                    if close {
+                        gfx.closepath();
+                    }
+                    gfx.stroke();
+                    for (x, y) in [(30, 30), (29, 29), (31, 31), (29, 31), (31, 29)] {
+                        let px = gfx.pixmap.pixel(x, y).expect("pixel");
+                        assert_eq!(
+                            (px.red(), px.green(), px.blue()),
+                            (0, 0, 0),
+                            "hollow at ({x},{y}) close={close} join={join:?} cap={cap:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
