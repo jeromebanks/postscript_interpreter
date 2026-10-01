@@ -276,6 +276,101 @@ impl PsPath {
         }
         pb.finish()
     }
+
+    /// Like `to_skia`, but closed subpaths that are small relative to the
+    /// stroke `width` have their curves flattened to polylines first.
+    /// tiny-skia's stroker leaves a hollow centre when a tiny closed
+    /// *curve* is stroked wider than its diameter (issue #169), though
+    /// the same width on a straight-edged contour comes out solid.
+    /// Flattening only sub-width contours keeps ordinary strokes on the
+    /// exact curve path; the error from 16 chords per Bézier is far
+    /// below a pixel at that size.
+    fn to_skia_for_stroke(&self, width: f32) -> Option<tiny_skia::Path> {
+        const CHORDS: usize = 16;
+        let mut pb = PathBuilder::new();
+        let mut i = 0;
+        while i < self.segs.len() {
+            if !matches!(self.segs[i], Seg::Move(_)) {
+                // Stray segment with no Move (shouldn't happen); copy as-is.
+                push_seg(&mut pb, &self.segs[i]);
+                i += 1;
+                continue;
+            }
+            let end = self.segs[i + 1..]
+                .iter()
+                .position(|s| matches!(s, Seg::Move(_)))
+                .map_or(self.segs.len(), |n| i + 1 + n);
+            let sub = &self.segs[i..end];
+            let closed = matches!(sub.last(), Some(Seg::Close));
+            let has_curve = sub.iter().any(|s| matches!(s, Seg::Curve(..)));
+            let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+            for s in sub {
+                let pts: &[DevPoint] = match s {
+                    Seg::Move(p) | Seg::Line(p) => std::slice::from_ref(p),
+                    Seg::Curve(..) | Seg::Close => &[],
+                };
+                for p in pts {
+                    x0 = x0.min(p.x);
+                    y0 = y0.min(p.y);
+                    x1 = x1.max(p.x);
+                    y1 = y1.max(p.y);
+                }
+                if let Seg::Curve(a, b, c) = s {
+                    for p in [a, b, c] {
+                        x0 = x0.min(p.x);
+                        y0 = y0.min(p.y);
+                        x1 = x1.max(p.x);
+                        y1 = y1.max(p.y);
+                    }
+                }
+            }
+            let small = (x1 - x0).max(y1 - y0) < 2.0 * width;
+            if closed && has_curve && small {
+                let mut cur = DevPoint { x: 0.0, y: 0.0 };
+                for s in sub {
+                    match *s {
+                        Seg::Move(p) => {
+                            pb.move_to(p.x, p.y);
+                            cur = p;
+                        }
+                        Seg::Line(p) => {
+                            pb.line_to(p.x, p.y);
+                            cur = p;
+                        }
+                        Seg::Curve(c1, c2, p) => {
+                            for k in 1..=CHORDS {
+                                let t = k as f32 / CHORDS as f32;
+                                let u = 1.0 - t;
+                                let (a, b, c, d) =
+                                    (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+                                pb.line_to(
+                                    a * cur.x + b * c1.x + c * c2.x + d * p.x,
+                                    a * cur.y + b * c1.y + c * c2.y + d * p.y,
+                                );
+                            }
+                            cur = p;
+                        }
+                        Seg::Close => pb.close(),
+                    }
+                }
+            } else {
+                for s in sub {
+                    push_seg(&mut pb, s);
+                }
+            }
+            i = end;
+        }
+        pb.finish()
+    }
+}
+
+fn push_seg(pb: &mut PathBuilder, seg: &Seg) {
+    match *seg {
+        Seg::Move(p) => pb.move_to(p.x, p.y),
+        Seg::Line(p) => pb.line_to(p.x, p.y),
+        Seg::Curve(c1, c2, p) => pb.cubic_to(c1.x, c1.y, c2.x, c2.y, p.x, p.y),
+        Seg::Close => pb.close(),
+    }
 }
 
 /// The current color space — what `setcolor` and the dict-form image
@@ -1115,7 +1210,7 @@ impl Gfx {
             self.newpath();
             return;
         }
-        if let Some(path) = self.state.path.to_skia() {
+        if let Some(path) = self.state.path.to_skia_for_stroke(self.device_line_width()) {
             self.prepare_paint();
             let scale = self.ctm_scale();
             let scaled_dash = self.state.dash.as_ref().map(|(pattern, phase)| {
@@ -1789,6 +1884,20 @@ mod tests {
         gfx.fill(FillRule::Winding);
         let px = gfx.pixmap.pixel(4, 4).expect("pixel");
         (px.red(), px.green(), px.blue())
+    }
+
+    /// Issue #169: a tiny closed curve stroked wider than its diameter
+    /// must paint a solid disc, not leave a hollow centre.
+    #[test]
+    fn wide_stroke_of_tiny_circle_is_solid() {
+        let mut gfx = Gfx::new(60, 60).expect("pixmap");
+        gfx.set_rgb(0.0, 0.0, 0.0);
+        gfx.state_mut().line_width = 10.0;
+        gfx.arc(30.0, 30.0, 1.2, 0.0, 360.0, true).expect("arc");
+        gfx.closepath();
+        gfx.stroke();
+        let px = gfx.pixmap.pixel(30, 30).expect("pixel");
+        assert_eq!((px.red(), px.green(), px.blue()), (0, 0, 0));
     }
 
     #[test]
