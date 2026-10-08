@@ -327,11 +327,13 @@ impl PsPath {
             let small = (x1 - x0).max(y1 - y0) < 2.0 * width;
             if has_curve && small {
                 let mut cur = DevPoint { x: 0.0, y: 0.0 };
+                let mut start = cur;
                 for s in sub {
                     match *s {
                         Seg::Move(p) => {
                             pb.move_to(p.x, p.y);
                             cur = p;
+                            start = p;
                         }
                         Seg::Line(p) => {
                             pb.line_to(p.x, p.y);
@@ -350,7 +352,13 @@ impl PsPath {
                             }
                             cur = p;
                         }
-                        Seg::Close => pb.close(),
+                        Seg::Close => {
+                            pb.close();
+                            // closepath resets the current point, so a
+                            // curveto that follows without a moveto
+                            // starts from the subpath start.
+                            cur = start;
+                        }
                     }
                 }
             } else {

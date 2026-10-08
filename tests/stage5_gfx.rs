@@ -337,3 +337,19 @@ fn multiply_darkens_where_normal_replaces() {
     assert_eq!(pixel(&render(&program("Normal")), 50, 50), (0, 0, 255));
     assert_eq!(pixel(&render(&program("Multiply")), 50, 50), BLACK);
 }
+
+#[test]
+fn stroke_flattened_curve_after_closepath_starts_at_subpath_start() {
+    // Issue #169 review: a small subpath is flattened before stroking.
+    // After `closepath` the current point is the subpath start, so a
+    // following `curveto` (no moveto) must flatten from there, not from
+    // the last point before the close -- else its arch rides ~2px high.
+    let it = render(
+        "10 10 moveto 20 10 lineto 20 15 18 18 14 19 curveto closepath \
+         30 40 40 40 40 10 curveto 15.5 setlinewidth stroke",
+    );
+    let top = (0..100u32)
+        .find(|&y| (25..45u32).any(|x| pixel(&it, x, y) != (255, 255, 255)))
+        .expect("something painted");
+    assert!(top >= 59, "arch rides too high (top painted row {top})");
+}
