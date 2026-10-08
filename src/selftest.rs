@@ -188,6 +188,29 @@ impl Report {
 /// replaces operators, and `userdict` is a name bound to a dictionary,
 /// so a proc doing `1 dict begin /userdict 1 dict def` sent the
 /// cleanup to a fake one (Codex review, round 7).
+/// Runs with `systemdict` on top so none of its own names can be
+/// shadowed: moves every userdict entry that hides a systemdict name
+/// into a side dictionary and removes it, for `PRELUDE` to bind against.
+const STASH_SHADOWS: &str = r"
+systemdict begin
+userdict /pscat_st_stash userdict length dict put
+userdict {
+    exch dup systemdict exch known
+    { userdict /pscat_st_stash get 3 1 roll exch put }
+    { pop pop } ifelse
+} forall
+userdict /pscat_st_stash get { pop userdict exch undef } forall
+end
+";
+
+/// Puts back what `STASH_SHADOWS` set aside, then removes the stash.
+const RESTORE_SHADOWS: &str = r"
+systemdict begin
+userdict /pscat_st_stash get { userdict 3 1 roll put } forall
+userdict /pscat_st_stash undef
+end
+";
+
 pub const PRELUDE: &str = r"
 % --- pscat --selftest prelude (injected; not part of any library) ---
 % The failure log. Its *entries* are a VM array and roll back under
@@ -209,6 +232,7 @@ pub const PRELUDE: &str = r"
 %   bytes 0-1  failures recorded      (big-endian, saturating at 65535)
 %   bytes 2-3  assertions run
 %   bytes 4-5  1 while an assertion is in flight, else 0
+%   bytes 6-7  1 once the block body ran to its end (uncaught-stop sentinel)
 //userdict /pscat_st_ctr 8 string put
 
 % offset -> n
@@ -833,9 +857,24 @@ fn run_block(
     // still passed (Codex review, round 5). Only the block itself runs
     // after this point, and a block redefining its own assertions is
     // deliberate sabotage rather than an accident a library can cause.
-    if let Err(e) = interp.run_str(PRELUDE) {
-        let msg = format!("selftest prelude failed: {}", interp.error_report(&e));
-        return Err(setup_failure(interp, msg));
+    //
+    // Order alone doesn't protect the prelude's *operators* though:
+    // `bind` leaves a name that resolves to a procedure unbound, so a
+    // library defining `/eq { pop pop true } def` still changed what
+    // `mustguard`'s `eq` meant (Codex review, round 9). So any userdict
+    // entry shadowing a systemdict name is stashed away while the
+    // prelude is built -- every operator then binds to the real one --
+    // and put back afterwards, so the block still sees the library
+    // exactly as it defined it.
+    for (what, src) in [
+        ("stash", STASH_SHADOWS),
+        ("prelude", PRELUDE),
+        ("restore", RESTORE_SHADOWS),
+    ] {
+        if let Err(e) = interp.run_str(src) {
+            let msg = format!("selftest {what} failed: {}", interp.error_report(&e));
+            return Err(setup_failure(interp, msg));
+        }
     }
 
     // Operands the *library* left behind at load time are not this
@@ -844,7 +883,12 @@ fn run_block(
     // rule the dict-stack check uses.
     let operand_baseline = interp.operand_stack().len();
 
-    let error = match interp.run_source(&block.body) {
+    // A trailing sentinel proves the body ran to its end: an uncaught
+    // `stop` makes `run_source` return Ok with the remaining
+    // assertions silently unrun (Codex review, round 9).
+    let mut body = block.body.clone();
+    body.extend_from_slice(b"\n6 1 pscat_st_ctrput\n");
+    let error = match interp.run_source(&body) {
         Ok(()) => None,
         Err(e) => Some(interp.error_report(&e)),
     };
@@ -922,6 +966,11 @@ fn assertion_count(interp: &Interp) -> usize {
 fn stopped_early(interp: &Interp) -> Option<&'static str> {
     if interp.quit_requested() {
         return Some("the block called `quit`, so any assertions after it never ran");
+    }
+    if counter(interp, 6).unwrap_or(0) == 0 {
+        return Some(
+            "the block stopped before its end (an uncaught `stop`?), so any assertions after it never ran",
+        );
     }
     if counter(interp, 4).unwrap_or(1) != 0 {
         return Some("an assertion was still in flight when the block ended");

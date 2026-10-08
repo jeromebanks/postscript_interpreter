@@ -739,6 +739,50 @@ fn a_library_cannot_disable_the_assertion_vocabulary() {
 }
 
 #[test]
+fn a_library_redefining_an_operator_cannot_change_the_assertions() {
+    // `bind` leaves names that resolve to procedures unbound, so a
+    // library defining `/eq { pop pop true } def` used to make
+    // `mustguard` accept the wrong guard name (Codex review, round 9).
+    let dir = Scratch::new("shadow-op");
+    let file = dir.path().join("shadow.ps");
+    std::fs::write(
+        &file,
+        concat!(
+            "/eq { pop pop true } def\n",
+            "%%SelfTest: shadowed-eq\n",
+            "%   { nonexistent } /expected (wrong guard) mustguard\n",
+            "%%EndSelfTest\n"
+        ),
+    )
+    .expect("write");
+    let out = selftest(&file);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "wrong guard passed:\n{stderr}");
+    assert!(stderr.contains("wrong guard"), "{stderr}");
+}
+
+#[test]
+fn an_uncaught_stop_cannot_truncate_a_block_silently() {
+    // `stop` at top level makes run_source return Ok with the rest of
+    // the block unrun (Codex review, round 9).
+    let dir = Scratch::new("stop");
+    let file = dir.path().join("stop.ps");
+    std::fs::write(
+        &file,
+        concat!(
+            "%%SelfTest: stops-early\n",
+            "%   true (first) mustbe stop false (missed) mustbe\n",
+            "%%EndSelfTest\n"
+        ),
+    )
+    .expect("write");
+    let out = selftest(&file);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "truncated block passed:\n{stderr}");
+    assert!(stderr.contains("stopped before its end"), "{stderr}");
+}
+
+#[test]
 fn discovery_reports_a_parse_error_rather_than_no_blocks() {
     // `--selftest-list` is what scripts/selftest.sh uses to decide
     // which files to check. A malformed file must not read as "no
