@@ -2507,6 +2507,144 @@ fn oil_validation_and_safety() {
     );
 }
 
+// Issue #98: /Pressure must shape the whole composite oil mark (ridges,
+// highlight, shadow), not just the hidden base ribbon.
+fn oil_repro(pressure: &str, path: &str) -> Interp {
+    let mut it = fresh(240, 120);
+    let src = format!(
+        "0.8 0.2 0.1 setrgbcolor 7 srand {path} << /Width 30 /Pitch 4 /Ridges 12 \
+         /RidgeSpread 0.75 /RidgeWidth 4 /WidthJitter 0 /Load 1 /Dropout 0 \
+         /ColorJitter 0 /EdgePickup 0 /Highlight 0.12 /Shadow 0.1 /Jitter 0 \
+         /Pressure {{ {pressure} }} >> pkoil"
+    );
+    it.run_str(&src)
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    it
+}
+
+#[test]
+fn oil_bell_pressure_tapers_the_whole_composite_mark() {
+    let path = "newpath 20 60 moveto 220 60 lineto";
+    let flat = oil_repro("pkflat", path);
+    let bell = oil_repro("pkbell", path);
+    // Near the endpoint the bell profile is almost closed; layers with
+    // fixed offsets/widths used to leave thick flat ends.
+    let (flat_end, bell_end) = (column_height(&flat, 24, 120), column_height(&bell, 24, 120));
+    assert!(
+        flat_end >= 25,
+        "flat stays full width at the end: {flat_end}"
+    );
+    assert!(bell_end <= 8, "bell must taper every layer: {bell_end}");
+    // The middle is unchanged by the profile (bell peaks at 1).
+    let (flat_mid, bell_mid) = (
+        column_height(&flat, 120, 120),
+        column_height(&bell, 120, 120),
+    );
+    assert!(bell_mid + 3 >= flat_mid, "mid {bell_mid} vs {flat_mid}");
+    // And nothing protrudes beyond the base ribbon's own envelope.
+    let mut base = fresh(240, 120);
+    base.run_str("0.8 0.2 0.1 setrgbcolor newpath 20 60 moveto 220 60 lineto << /Width 30 /Pitch 4 /Pressure { pkbell } >> pkribbon")
+        .unwrap();
+    for x in [24, 40, 80, 120, 160, 200, 216] {
+        assert!(
+            column_height(&bell, x, 120) <= column_height(&base, x, 120) + 2,
+            "x={x}: oil {} vs base {}",
+            column_height(&bell, x, 120),
+            column_height(&base, x, 120)
+        );
+    }
+}
+
+#[test]
+fn oil_pressure_progress_is_global_across_broken_ridge_runs() {
+    // Wide ridges plus heavy dropout break each ridge into short dashes.
+    // A dash that restarted its own 0..1 pressure domain would bulge to
+    // full width near the low-pressure ends of a bell profile; every
+    // column must stay inside the base ribbon's own envelope.
+    let src = |pressure: &str, kind: &str| {
+        format!(
+            "0.8 0.2 0.1 setrgbcolor 7 srand newpath 20 60 moveto 220 60 lineto \
+             << /Width 30 /Pitch 4 /Ridges 12 /RidgeWidth 12 /WidthJitter 0 \
+             /Load 0.4 /Dropout 0.8 /ColorJitter 0 /EdgePickup 0 \
+             /Highlight 0.2 /Shadow 0.2 /Pressure {{ {pressure} }} >> {kind}"
+        )
+    };
+    // Wide ridges legitimately poke past the base at full pressure, so
+    // the bound is relative: the bell mark at x may be no taller than
+    // the flat mark scaled by the bell profile at x.
+    let render = |pressure: &str, kind: &str| {
+        let mut it = fresh(240, 120);
+        it.run_str(&src(pressure, kind)).unwrap();
+        it
+    };
+    let (flat, bell) = (render("pkflat", "pkoil"), render("pkbell", "pkoil"));
+    let base = render("pkbell", "pkribbon");
+    for x in (22..220).step_by(2) {
+        let m = column_height(&base, x, 120) as f32 / 30.0;
+        let bound = column_height(&flat, x, 120) as f32 * m + 3.0;
+        assert!(
+            column_height(&bell, x, 120) as f32 <= bound,
+            "x={x}: bell {} vs scaled flat {bound}",
+            column_height(&bell, x, 120),
+        );
+    }
+}
+
+#[test]
+fn oil_single_point_dab_keeps_its_ridges_under_any_pressure() {
+    // A dab has no progress; its ridges ignore /Pressure so a zero-at-
+    // start profile does not erase the pressed cluster (pre-#98 look).
+    let dab = |p: &str| {
+        let it = oil_repro(p, "newpath 120 60 moveto");
+        ink_count(&it)
+    };
+    // Bell zeroes the base dot (Pressure(0)); only the ridge cluster remains.
+    assert!(dab("pkflat") > dab("pkbell"));
+    assert!(
+        dab("pkbell") > 40,
+        "ridge cluster must survive: {}",
+        dab("pkbell")
+    );
+}
+
+#[test]
+fn ghostscript_accepts_oil_pressure() {
+    let gs = std::process::Command::new("gs").arg("-v").output();
+    if gs.is_err() {
+        return;
+    }
+    let src = "(lib/artkit.ps) run (lib/paintkit.ps) run 1 1 1 setrgbcolor clippath fill \
+        0.8 0.2 0.1 setrgbcolor 7 srand newpath 20 60 moveto 220 60 lineto \
+        << /Width 30 /Pitch 4 /Pressure { pkbell } >> pkoil showpage";
+    let dir = std::env::temp_dir().join("pscat_oil_pressure_gs.ps");
+    std::fs::write(&dir, src).unwrap();
+    let out = std::process::Command::new("gs")
+        .args([
+            "-q",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-dNOSAFER",
+            "-sDEVICE=nullpage",
+        ])
+        .arg(&dir)
+        .output()
+        .unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success() && !text.contains("Error:"), "{text}");
+}
+
+#[test]
+fn oil_pressure_runs_per_subpath() {
+    let bell = oil_repro(
+        "pkbell",
+        "newpath 20 30 moveto 120 30 lineto 20 90 moveto 120 90 lineto",
+    );
+    // Second subpath restarts its own 0..1 progress.
+    assert!(column_height(&bell, 24, 120) <= 16);
+    assert!(column_height(&bell, 70, 120) >= 40);
+}
+
 #[test]
 fn spray_degenerate_point_honors_endpoint_bursts() {
     // Codex review, PR #83: a bare moveto reports atend==3 (both first
