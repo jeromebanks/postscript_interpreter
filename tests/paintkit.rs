@@ -7438,3 +7438,15 @@ fn dab_full_charge_never_drops_a_slot() {
     );
     assert!(ink_count(&it) > 20);
 }
+
+#[test]
+fn dab_sample_count_is_bounded_independently_of_the_dab_budget() {
+    let mut it = fresh(200, 200);
+    let err = it
+        .run_str("0 0 0 setrgbcolor newpath 0 0 moveto 100 0 lineto << /Density 0 /Pitch 0.0005 >> pkdab")
+        .expect_err("sample budget");
+    assert!(
+        it.error_report(&err)
+            .contains("pkdab-sample-count-exceeds-safety-limit")
+    );
+}

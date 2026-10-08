@@ -4920,6 +4920,11 @@ systemdict /setalpha known /pwhasalpha exch def
 %   /pkdab-dab-count-exceeds-safety-limit
 %   (an uncapped density on a long spine) mustguard
 %
+%   % Round 2: samples are bounded on their own, not only via dabs.
+%   { newpath 0 0 moveto 100 0 lineto << /Density 0 /Pitch 0.0005 >> pkdab }
+%   /pkdab-sample-count-exceeds-safety-limit
+%   (a tiny pitch at density 0) mustguard
+%
 %   % Charge 1 is full coverage even when frnd lands on exactly 1.0
 %   % (seed 5659, Clump 1, painted nothing before the clamp).
 %   { 0 0 0 setrgbcolor 5659 srand newpath 10 10 moveto
@@ -4992,7 +4997,11 @@ systemdict /setalpha known /pwhasalpha exch def
                 pdae 1 and 1 eq { 1 add } if def
         } ifelse
         pdest 20000 gt { pkdab-dab-count-exceeds-safety-limit } if
+        % The dab budget alone does not bound the stored samples: at
+        % /Density 0 and a tiny /Pitch nothing is painted, yet every stop
+        % is still recorded below.
         /pdcount pdcount 1 add def
+        pdcount 100000 gt { pkdab-sample-count-exceeds-safety-limit } if
     } walkpath
 
     /pdraw pdcount array def
