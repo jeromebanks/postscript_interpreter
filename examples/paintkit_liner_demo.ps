@@ -1,0 +1,145 @@
+%!PS-Adobe-3.0
+%%Title: Paintkit — the liner / detail brush (issue #116)
+%%BoundingBox: 0 0 620 600
+%%EndComments
+
+% Specimen for paintkit's pkliner (lib/paintkit.ps): the fine-detail
+% tool, the marks made last and over everything else.
+%
+% Row 1 is the argument for it existing: the same path drawn with
+% pkliner, pknib and pkribbon. The issue asks for the complement of
+% pknib — a flexible loaded brush against a rigid calligraphic nib — and
+% the visible difference is that the liner's line leaves the centerline
+% it was drawn from. Nothing else in the file does that.
+%
+% Row 2 is the artist's lift (/Taper) and the wander (/Waver); row 3 the
+% paint (/Charge, /Depletion) and the pressed detail dot. Row 4 is what
+% it is for: a bare tree, a grass bank, and a shoreline.
+
+%   pscat --page 620x600 examples/paintkit_liner_demo.ps --png liner.png
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+
+41 srand
+
+1 1 1 setrgbcolor clippath fill
+
+/dmlabel {
+    /dmllabel exch def /dmly exch def /dmlx exch def
+    gsave
+        0.45 0.45 0.45 setrgbcolor
+        /Helvetica findfont 10 scalefont setfont
+        dmlx dmly moveto dmllabel show
+    grestore
+} def
+
+/rule {                                    % x y -   (a shared stroke)
+    /rly exch def /rlx exch def
+    newpath rlx rly moveto rlx 250 add rly 4 add lineto
+} def
+
+0.12 0.10 0.09 setrgbcolor
+
+% --- row 1: why this is not pknib, and not pkribbon --------------------
+20 570 (pkliner -- a loaded soft tip: it wanders off the drawn line) dmlabel
+20 545 rule << /Width 5 /Taper 0.6 /Depletion 0.2 >> pkliner
+
+320 570 (pknib -- a rigid nib: width follows a fixed world angle) dmlabel
+320 545 rule << /Width 5 /Angle 30 >> pknib
+
+20 515 (pkribbon with /pktaper -- an exact, mechanical taper) dmlabel
+20 490 rule << /Width 5 /Pressure { 1 exch sub } >> pkribbon
+
+320 515 (pkliner /Waver 0 -- the same line ruled, for comparison) dmlabel
+320 490 rule << /Width 5 /Taper 0.6 /Waver 0 /Depletion 0.2 >> pkliner
+
+% --- row 2: the lift and the wander ------------------------------------
+20 455 (Taper 0 -- one width the whole way) dmlabel
+20 432 rule << /Width 5 /Taper 0 /Depletion 0 >> pkliner
+
+320 455 (Taper 1 -- whips to a true point) dmlabel
+320 432 rule << /Width 5 /Taper 1 /Depletion 0 >> pkliner
+
+20 402 (Waver 0.3 -- barely off the line) dmlabel
+20 379 rule << /Width 4 /Waver 0.3 /Taper 0.4 /Depletion 0 >> pkliner
+
+320 402 (Waver 3 -- a whipping tip; the wander grows toward the end) dmlabel
+320 379 rule << /Width 4 /Waver 3 /Taper 0.4 /Depletion 0 >> pkliner
+
+% --- row 3: the paint --------------------------------------------------
+20 349 (Depletion 0 -- never runs out) dmlabel
+20 326 rule << /Width 4 /Taper 0 /Depletion 0 >> pkliner
+
+320 349 (Depletion 1 -- breaks into shortening dashes, then stops) dmlabel
+320 326 rule << /Width 4 /Taper 0 /Depletion 1 >> pkliner
+
+20 296 (Charge 0.15 -- barely loaded, so it skips from the start) dmlabel
+20 273 rule << /Width 4 /Taper 0 /Charge 0.15 /Depletion 0 >> pkliner
+
+320 296 (a single-point subpath is a pressed detail dot) dmlabel
+330 12 570 {
+    /ddx exch def
+    newpath ddx 276 moveto << /Width ddx 40 idiv 4 sub >> pkliner
+} for
+
+% --- row 4: what it is for ---------------------------------------------
+20 245 (bare tree, grass bank, shoreline -- every mark is one pkliner call) dmlabel
+
+gsave
+newpath 20 20 moveto 600 20 lineto 600 236 lineto 20 236 lineto closepath clip
+
+% --- the bare tree: a trunk, limbs, and twigs off the limbs
+0.16 0.13 0.12 setrgbcolor
+newpath 150 24 moveto 158 90 146 130 160 196 curveto
+<< /Width 9 /Taper 0.9 /Waver 0.5 /Depletion 0.3 >> pkliner
+
+/limb {                                    % x0 y0 x1 y1 x2 y2 x3 y3 w -
+    /lbw exch def
+    /lby3 exch def /lbx3 exch def
+    /lby2 exch def /lbx2 exch def
+    /lby1 exch def /lbx1 exch def
+    /lby0 exch def /lbx0 exch def
+    newpath lbx0 lby0 moveto lbx1 lby1 lbx2 lby2 lbx3 lby3 curveto
+    << /Width lbw /Taper 0.95 /Waver 1.1 /Depletion 0.45 >> pkliner
+} def
+
+155 118  186 130  208 138  232 172   4.0 limb
+150 150  124 164  106 172   82 206   3.4 limb
+158 168  178 178  190 186  204 214   2.6 limb
+152  92  128  98  114 100   92 116   3.0 limb
+228 168  238 182  242 190  246 210   1.6 limb
+ 88 202   78 212   74 216   66 228   1.4 limb
+200 208  208 216  210 220  214 230   1.2 limb
+
+% --- the grass bank: stems, each its own brush load
+0.20 0.24 0.16 setrgbcolor
+300 9 596 {
+    /gsx exch def
+    newpath
+    gsx 22 moveto
+    gsx 5 add 46  gsx 3 sub 66  gsx 8 add 92 curveto
+    << /Width 2.4 /Taper 1 /Waver 0.6 /Charge 0.85 /Depletion 0.5 >> pkliner
+} for
+
+% --- the shoreline: long dry accents, drawn with the side of the tip
+0.30 0.34 0.40 setrgbcolor
+118 11 200 {
+    /shy exch def
+    newpath
+    300 shy moveto
+    390 shy 4 add  470 shy 2 sub  596 shy 3 add curveto
+    << /Width 2.8 /Taper 0.3 /Waver 0.35 /Charge 0.55 /Depletion 0.8 >> pkliner
+} for
+
+% --- spray off the water: the detail end of the tool, one dab each
+0.34 0.38 0.45 setrgbcolor
+0 1 40 {
+    pop
+    newpath
+    frnd 290 mul 302 add  frnd 88 mul 108 add moveto
+    << /Width frnd 2.2 mul 1 add >> pkliner
+} for
+grestore
+
+showpage

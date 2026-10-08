@@ -598,6 +598,36 @@ would be actively misleading. `/Angle` follows `pktrowel`'s reading —
 brush rotation relative to travel, constant along a curve — not
 `pknib`'s fixed world angle.
 
+`pkliner` (issue #116) is the liner/detail brush — the fine marks made
+last and over everything else: bare branches, trunks, grass stems,
+rigging, shoreline accents. The issue asks for the complement of
+`pknib`, and that difference *is* the design: `pknib` is a rigid nib
+whose width follows a fixed world angle, while a liner is a long soft
+tip that holds far more paint than its width suggests. So the line
+wanders off the centerline it was drawn from, whips from full width to a
+point, and breaks into shortening dashes as the paint runs out.
+
+The wander is the part nothing else in the file does. Every other preset
+varies width or coverage *around* the path the caller drew — `pkribbon`'s
+`/Jitter` roughens the ribbon's own edges, `pkdry`'s bristles ride at
+fixed parallel offsets — but none of them leaves it. At 2pt the
+centerline *is* the mark, which is the whole difference between a
+painted branch and a ruled one.
+
+Its two fades are deliberately independent: `/Taper` is the artist's
+lift and changes width only; `/Charge` and `/Depletion` are the paint and
+change coverage only. Coupling them would be defensible physically and
+would make them inseparable in the artist's hands. The break-up comes
+from a seeded surface "tooth" sampled at *absolute* spacing rather than
+per-stroke, so a 300pt trunk and a 20pt twig don't come out
+self-similar. Because that pool is fixed and emission draws nothing,
+`pkliner` is the only seeded preset here that can promise a constant
+number of random draws per subpath: retuning it re-shapes its own mark
+instead of re-rolling everything drawn after it. A single-point subpath
+presses a detail dot — one dab per `moveto`, and unlike `pkbroad`'s
+pressed footprint it lands regardless of the tooth, because a pressed
+tip makes contact by pressure.
+
 `pkwash` (issue #47) is the watercolor medium, and the one preset here
 that needs something from the interpreter rather than only from
 PostScript: it fills the current path as a *translucent* wash. Two new
