@@ -1311,6 +1311,39 @@ fn dry_deposit_budget_guard_rejects_bristles_times_samples_over_the_limit() {
     );
 }
 
+// Issue #79: a sharp cusp with a huge Width/Pitch ratio makes adjacent
+// dash offsets O(Width) apart, which the Bristles*stops guard never
+// sees; the geometric cusp guard in the counting pass must reject it
+// before any drawing. This is the issue's literal repro.
+#[test]
+fn dry_cusp_with_huge_width_over_pitch_is_rejected_before_drawing() {
+    let mut it = Interp::new();
+    load(&mut it);
+    let err = it
+        .run_str(
+            "newpath 0 0 moveto 1 0 lineto 1 1 lineto \
+             << /Width 100000 /Bristles 2 /Pitch 1 /Load 1 /Dropout 0 >> pkdry",
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, PsError::Undefined(ref n) if n == "pkdry-cusp-resample-count-exceeds-safety-limit"),
+        "got {err}"
+    );
+}
+
+// The same huge Width on a smooth/straight stroke must stay accepted:
+// the guard is geometric, not a static Width/Pitch ratio cap.
+#[test]
+fn dry_large_width_on_straight_stroke_is_not_rejected() {
+    let mut it = Interp::new();
+    load(&mut it);
+    it.run_str(
+        "newpath 0 0 moveto 100 0 lineto \
+         << /Width 100000 /Bristles 2 /Pitch 1 >> pkdry",
+    )
+    .unwrap();
+}
+
 #[test]
 fn dry_deposit_budget_guard_rejects_quickly_even_on_a_huge_path() {
     // Regression test for a Codex-review finding: the budget check

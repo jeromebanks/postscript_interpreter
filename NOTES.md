@@ -465,7 +465,7 @@ plus a seeded wobble, so few passes still distribute around the mark
 instead of piling onto one side and reading as a drop shadow. `/Layers`
 is capped 1..6, which is the only bound `pkwet` adds — total work is up
 to 6× the wrapped proc's own cost including its deposit budget, the
-same shape of nested-cost gap `pkdry` documents (#79). `/Soft 0` takes
+same shape of nested-cost gap `pkdry` had before its #79 cusp guard. `/Soft 0` takes
 no random draw of its own (the displacement draw happens only when
 there is a displacement to make), which is what makes it lay the same
 marks as a plain call — pinned by
@@ -8009,3 +8009,14 @@ input.
 **Next:** paused for the architecture-writeup checkpoint per `INIT.md`.
 Stage 2 (graphics + live window) starts on approval; crate leanings are in
 `ARCHITECTURE.md`.
+
+### Issue #79 — pkdry cusp guard
+
+`pkdry`'s counting pass now also sums a geometry-only bound on the
+distance between adjacent bristle offsets (`2*maxoff*sin(d/2)/Pitch`
+per stop pair, `d` = wrapped tangent change, `maxoff` = 1.15 x half the
+bristle envelope) and raises `pkdry-cusp-resample-count-exceeds-safety-limit`
+past a 60000-sample allowance (x Bristles), before any drawing. Chosen
+over a runtime counter in `pbdashrun` (fires after drawing started) and
+over the static ratio / blanket multiplier rejected in #43. The issue's
+literal repro is rejected in ~0.2s; the demo's worst case measures ~1000.
