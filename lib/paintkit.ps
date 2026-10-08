@@ -36,6 +36,12 @@
 % or coverage around it. See its own header, after `pkbroad`'s, for full
 % docs.
 %
+% `pkdab` (issue #117) is the foliage brush: clustered irregular dabs
+% pounced along a spine, painted as a darker underlayer, a body and
+% lighter highlight dabs from one set of geometry, for bushes and leafy
+% masses. Like `pkspray` it is not built on `pkribbon`. See its own
+% header, at the end of this file, for full docs.
+%
 % `pkspray` (issue #44) is not built on `pkribbon` -- spray is discrete
 % particle deposition, not an offset band -- but it shares the same
 % walkpath-driven shape: seeded particles scattered around each sampled
@@ -109,6 +115,8 @@
 % bristle dash and pkribbon's own body redefines every pk*-prefixed name.
 % pq- (pkliner/dispatch, pqaff, pqoff, pqnrm, pqside, pqemit) -- issue
 % #116, see below.
+% pd- (pkdab/dispatch, pddab) -- issue #117, see below. Not `pdf`, which
+% is a scratch name elsewhere in the library.
 
 % - [bool0 bool1 ...]   (one flag per subpath, in path order: was it
 % closed with an explicit closepath?)
@@ -4779,6 +4787,331 @@ systemdict /setalpha known /pwhasalpha exch def
                 fill
                 grestore
             } if
+        } if
+        grestore
+    } if
+} def
+
+% --- foliage / dab brush (issue #117) ----------------------------------
+% opts pkdab -
+% Clustered, irregular paint deposits -- bushes, leafy masses, clumps of
+% highlight, any vegetation-like texture. The tool is a loaded brush
+% pounced onto the canvas rather than dragged, so there is no ribbon:
+% the current path is a *spine*, and every stop along it seeds a cluster
+% of blobby dabs scattered within /Spread of it. A subpath that is a
+% single point is a standalone clump (/Clump dabs), the usual way to
+% paint one bush or one highlight patch. Closed subpaths are treated as
+% their outline, not filled -- there is no portable in-fill test, so a
+% mass is built by pouncing along a spine through it.
+%
+% Layering is the point of the tool, and all three layers come from ONE
+% set of dab geometry: each dab is generated once (centre, radius,
+% outline) and then painted as a darker underlayer (/Shadow, nudged away
+% from /Light), the body in the caller's colour, and a smaller lighter
+% dab (/Highlight, nudged toward /Light) on the dabs facing the light.
+% Drawing fresh positions per layer would scatter highlights off the mass
+% they are meant to light. /Light is a fixed angle in user space, like
+% pknib's /Angle: foliage is lit by the sun, not by the stroke direction.
+%
+% Determinism: no library seed; reproducible under the caller's own
+% `N srand`. Every dab slot draws a fixed 13 values from the stream
+% whether or not it ends up painted, so /Charge, /Shadow, /Highlight,
+% /Light and /ColorJitter re-shape the mark without re-rolling it. What
+% DOES change the stream is whatever changes the dab count or layout:
+% /Density, /Clump, /Size, /Pitch and the path itself.
+%
+% Density is per one /Size of travel, scaled by each stop's own spacing
+% and carried in an accumulator reset per subpath (pkspray's design), so
+% /Pitch does not change coverage. A hard budget on the total dab count
+% raises pkdab-dab-count-exceeds-safety-limit before anything is painted.
+%
+% Scratch prefix pd- (pkdab, pddab).
+
+% Draws one smooth blobby dab from the record in pdd at (pdcx, pdcy) with
+% mean radius pdr. Seven vertices, each at its own radius factor, joined
+% by quadratic-as-cubic arcs through the edge midpoints so the outline
+% has no corners (a straight 7-gon reads as a gem at any real size).
+% @internal
+/pddab {
+    0 1 6 {
+        /pdk exch def
+        /pdang pdk 360 7 div mul pdd 5 get 360 mul add def
+        /pdrad pdr pdd pdk 6 add get mul def
+        pdpx pdk pdcx pdrad pdang cos mul add put
+        pdpy pdk pdcy pdrad pdang sin mul add put
+    } for
+    pdpx 6 get pdpx 0 get add 2 div
+    pdpy 6 get pdpy 0 get add 2 div moveto
+    0 1 6 {
+        /pdk exch def
+        /pdkp pdk 6 add 7 mod def
+        /pdkn pdk 1 add 7 mod def
+        /pdpkx pdpx pdk get def /pdpky pdpy pdk get def
+        /pdm0x pdpx pdkp get pdpkx add 2 div def
+        /pdm0y pdpy pdkp get pdpky add 2 div def
+        /pdm1x pdpkx pdpx pdkn get add 2 div def
+        /pdm1y pdpky pdpy pdkn get add 2 div def
+        pdm0x pdpkx pdm0x sub 2 mul 3 div add
+        pdm0y pdpky pdm0y sub 2 mul 3 div add
+        pdm1x pdpkx pdm1x sub 2 mul 3 div add
+        pdm1y pdpky pdm1y sub 2 mul 3 div add
+        pdm1x pdm1y curveto
+    } for
+    closepath
+} def
+
+%%SelfTest: pkdab-rejects-malformed-options
+%   { newpath 0 0 moveto 10 0 lineto << /Size 0 >> pkdab }
+%   /pkdab-size-must-be-positive
+%   (/Size 0) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /Size { 5 } >> pkdab }
+%   /pkdab-size-must-not-be-a-procedure
+%   (/Size { 5 }) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /Spread 0 >> pkdab }
+%   /pkdab-spread-must-be-positive
+%   (/Spread 0) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /Density -1 >> pkdab }
+%   /pkdab-density-must-be-non-negative
+%   (/Density -1) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /Clump 0 >> pkdab }
+%   /pkdab-clump-must-be-1-to-400
+%   (/Clump 0) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /Clump 2.5 >> pkdab }
+%   /pkdab-clump-must-be-1-to-400
+%   (/Clump 2.5) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /Irregular 2 >> pkdab }
+%   /pkdab-irregular-must-be-0-to-1
+%   (/Irregular 2) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /Charge 1.5 >> pkdab }
+%   /pkdab-charge-must-be-0-to-1
+%   (/Charge 1.5) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /Shadow -0.1 >> pkdab }
+%   /pkdab-shadow-must-be-0-to-1
+%   (/Shadow -0.1) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /Highlight 2 >> pkdab }
+%   /pkdab-highlight-must-be-0-to-1
+%   (/Highlight 2) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /Pitch 0 >> pkdab }
+%   /pkdab-pitch-must-be-positive
+%   (/Pitch 0) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /ColorJitter 3 >> pkdab }
+%   /pkdab-colorjitter-must-be-0-to-1
+%   (/ColorJitter 3) mustguard
+%
+%   % The documented form must still work.
+%   { newpath 0 0 moveto 10 0 lineto << /Size 4 >> pkdab }
+%   (a plain /Size) mustpass
+%%EndSelfTest
+%
+%%SelfTest: pkdab-enforces-its-dab-budget
+%   % The budget is checked in the counting pass, before any painting.
+%   { newpath 0 0 moveto 100000 0 lineto << /Size 0.5 /Density 500 >> pkdab }
+%   /pkdab-dab-count-exceeds-safety-limit
+%   (an uncapped density on a long spine) mustguard
+%
+%   % Round 2: samples are bounded on their own, not only via dabs.
+%   { newpath 0 0 moveto 100 0 lineto << /Density 0 /Pitch 0.0005 >> pkdab }
+%   /pkdab-sample-count-exceeds-safety-limit
+%   (a tiny pitch at density 0) mustguard
+%
+%   % Charge 1 is full coverage even when frnd lands on exactly 1.0
+%   % (seed 5659, Clump 1, painted nothing before the clamp).
+%   { 0 0 0 setrgbcolor 5659 srand newpath 10 10 moveto
+%     << /Clump 1 /Charge 1 >> pkdab }
+%   (a full charge) mustpass
+%%EndSelfTest
+%
+% @kind: Procedure
+% @summary: A foliage / dab brush: clustered, irregular blobs of paint pounced along the current path (a spine), for bushes, leafy masses and vegetation texture. Each dab is generated once and painted in up to three layers -- a darker underlayer, the body in the current color, and lighter highlight dabs on the lit side -- so highlights always sit on the mass they light. A single-point subpath is a standalone clump. Deterministic under the caller's own srand; bounded by a dab-count budget; respects clip like every other preset.
+% @example: newpath 80 60 moveto 180 90 280 60 380 70 curveto << /Size 9 /Spread 26 /Highlight 0.6 >> pkdab
+% @param: /Size Mean dab radius in points; must be > 0 (default 6)
+% @param: /Spread Radius in points of the cluster scattered around each stop of the path; must be > 0 (default Size*2.5)
+% @param: /Density Mean dabs per one /Size of travel along the path; must be >= 0 (0 paints nothing along lines); bounded by the dab-count budget (default 3)
+% @param: /Clump Dab count for a single-point subpath, whole number 1..400 (default 18)
+% @param: /Irregular 0..1 how far each dab's outline departs from a circle (default 0.5)
+% @param: /Charge 0..1 how much paint the brush is loaded with -- coverage only: the fraction of dabs that land at all (default 0.9)
+% @param: /Shadow 0..1 strength of the darker underlayer pushed away from the light; 0 paints none (default 0.4)
+% @param: /Highlight 0..1 strength and reach of the lighter dabs on the lit side; 0 paints none (default 0.4)
+% @param: /Light Direction the light comes from, in degrees counterclockwise from +x in user space (default 120, up and to the left)
+% @param: /Pitch walkpath sampling pitch for the spine; must be > 0 (default Size, capped at 6)
+% @param: /ColorJitter 0..1 per-dab tint variation around the current color (default 0.08)
+/pkdab {
+    /pdopts exch def
+    /pdsize pdopts /Size 6 pkgetdef def
+    /pdsize load xcheck { pkdab-size-must-not-be-a-procedure } if
+    pdsize 0 le { pkdab-size-must-be-positive } if
+    /pdspread pdopts /Spread pdsize 2.5 mul pkgetdef def
+    /pdspread load xcheck { pkdab-spread-must-not-be-a-procedure } if
+    pdspread 0 le { pkdab-spread-must-be-positive } if
+    /pddens pdopts /Density 3 pkgetdef def
+    /pddens load xcheck { pkdab-density-must-not-be-a-procedure } if
+    pddens 0 lt { pkdab-density-must-be-non-negative } if
+    /pdclump pdopts /Clump 18 pkgetdef def
+    /pdclump load xcheck { pkdab-clump-must-not-be-a-procedure } if
+    pdclump 1 lt pdclump 400 gt or pdclump truncate pdclump ne or
+        { pkdab-clump-must-be-1-to-400 } if
+    /pdirr pdopts /Irregular 0.5 pkgetdef def
+    /pdirr load xcheck { pkdab-irregular-must-not-be-a-procedure } if
+    pdirr 0 lt pdirr 1 gt or { pkdab-irregular-must-be-0-to-1 } if
+    /pdcharge pdopts /Charge 0.9 pkgetdef def
+    /pdcharge load xcheck { pkdab-charge-must-not-be-a-procedure } if
+    pdcharge 0 lt pdcharge 1 gt or { pkdab-charge-must-be-0-to-1 } if
+    /pdshadow pdopts /Shadow 0.4 pkgetdef def
+    /pdshadow load xcheck { pkdab-shadow-must-not-be-a-procedure } if
+    pdshadow 0 lt pdshadow 1 gt or { pkdab-shadow-must-be-0-to-1 } if
+    /pdhl pdopts /Highlight 0.4 pkgetdef def
+    /pdhl load xcheck { pkdab-highlight-must-not-be-a-procedure } if
+    pdhl 0 lt pdhl 1 gt or { pkdab-highlight-must-be-0-to-1 } if
+    /pdlight pdopts /Light 120 pkgetdef def
+    /pdlight load xcheck { pkdab-light-must-not-be-a-procedure } if
+    /pdpitch pdopts /Pitch pdsize dup 6 gt { pop 6 } if pkgetdef def
+    /pdpitch load xcheck { pkdab-pitch-must-not-be-a-procedure } if
+    pdpitch 0 le { pkdab-pitch-must-be-positive } if
+    /pdcj pdopts /ColorJitter 0.08 pkgetdef def
+    /pdcj load xcheck { pkdab-colorjitter-must-not-be-a-procedure } if
+    pdcj 0 lt pdcj 1 gt or { pkdab-colorjitter-must-be-0-to-1 } if
+
+    % Counting pass with the budget check inside the callback. A single
+    % point arrives with sp = 0, so it gets its clump added explicitly.
+    /pdcount 0 def /pdest 0 def
+    pdpitch {
+        /pdae exch def /pdasp exch def pop pop pop pop
+        pdae 3 eq {
+            /pdest pdest pdclump add def
+        } {
+            % The accumulator carries its fraction across stops, so a
+            % whole subpath can round up by at most one dab (the one
+            % guaranteed below), not one per stop.
+            /pdest pdest pddens pdasp mul pdsize div add
+                pdae 1 and 1 eq { 1 add } if def
+        } ifelse
+        pdest 20000 gt { pkdab-dab-count-exceeds-safety-limit } if
+        % The dab budget alone does not bound the stored samples: at
+        % /Density 0 and a tiny /Pitch nothing is painted, yet every stop
+        % is still recorded below.
+        /pdcount pdcount 1 add def
+        pdcount 100000 gt { pkdab-sample-count-exceeds-safety-limit } if
+    } walkpath
+
+    /pdraw pdcount array def
+    /pdci 0 def
+    pdpitch {
+        6 array astore pdraw pdci 3 -1 roll put
+        /pdci pdci 1 add def
+    } walkpath
+
+    pdcount 0 gt {
+        gsave
+        /pdbase [ currentrgbcolor ] def
+        /pdlx pdlight cos def /pdly pdlight sin def
+        /pdpx 7 array def /pdpy 7 array def
+
+        % Generate every dab once.
+        /pddabs pdest ceiling cvi 2 add array def
+        /pdn 0 def
+        /pdacc 0 def
+        0 1 pdcount 1 sub {
+            pdraw exch get
+            dup 0 get /pdx exch def
+            dup 1 get /pdy exch def
+            dup 4 get /pdsp exch def
+            5 get /pdae exch def
+            pdae 3 eq {
+                /pdnd pdclump def
+            } {
+                pdae 1 and 1 eq { /pdacc 0 def /pdgot false def } if
+                /pdacc pdacc pddens pdsp mul pdsize div add def
+                /pdnd pdacc truncate cvi def
+                /pdacc pdacc pdnd sub def
+                % A stroke shorter than Size/Density accumulates under one
+                % dab and would paint nothing at all, which a twig or a
+                % tap of the brush must not do: a non-empty subpath always
+                % lands at least one dab, at its last stop. Density 0 is
+                % the caller asking for no dabs along lines, and stays so.
+                pdnd 0 gt { /pdgot true def } if
+                pdae 2 and 2 eq pdgot not and pddens 0 gt and
+                    { /pdnd 1 def } if
+            } ifelse
+            1 1 pdnd {
+                pop
+                /pdd 14 array def
+                frnd 360 mul /pdsa exch def
+                frnd sqrt pdspread mul /pdsr exch def
+                pdd 0 pdx pdsr pdsa cos mul add put
+                pdd 1 pdy pdsr pdsa sin mul add put
+                pdd 2 frnd 0.8 mul 0.6 add pdsize mul put
+                % frnd can return exactly 1.0, so a bare `lt` would reject some
+                % slots at /Charge 1; the draw is still consumed either way.
+                pdd 3 frnd pdcharge lt pdcharge 1 ge or { 1 } { 0 } ifelse put
+                pdd 4 frnd put
+                pdd 5 frnd put
+                0 1 6 {
+                    6 add pdd exch
+                    1 frnd 0.5 sub pdirr mul 1.3 mul add dup 0.3 lt { pop 0.3 } if
+                    put
+                } for
+                % Lit-side measure, -1..1: where the dab sits in its
+                % cluster relative to the light.
+                pdd 13 pdsr pdsa cos mul pdlx mul pdsr pdsa sin mul pdly mul add
+                    pdspread div put
+                pddabs pdn pdd put
+                /pdn pdn 1 add def
+            } for
+        } for
+
+        % Layer 1: the darker underlayer, nudged away from the light.
+        pdshadow 0 gt {
+            0 1 pdn 1 sub {
+                pddabs exch get /pdd exch def
+                pdd 3 get 1 eq {
+                    /pdr pdd 2 get 1.12 mul def
+                    /pdcx pdd 0 get pdlx pdd 2 get mul 0.35 mul sub def
+                    /pdcy pdd 1 get pdly pdd 2 get mul 0.35 mul sub def
+                    pdbase 1 pdshadow 0.55 mul sub pdcj 0.5 mul pdd 4 get 2 mul 1 sub mul add shade
+                    setrgbcolor
+                    newpath pddab fill
+                } if
+            } for
+        } if
+
+        % Layer 2: the body, in the caller's colour.
+        0 1 pdn 1 sub {
+            pddabs exch get /pdd exch def
+            pdd 3 get 1 eq {
+                /pdr pdd 2 get def
+                /pdcx pdd 0 get def
+                /pdcy pdd 1 get def
+                pdbase 1 pdcj 0.5 mul pdd 4 get 2 mul 1 sub mul add shade
+                setrgbcolor
+                newpath pddab fill
+            } if
+        } for
+
+        % Layer 3: smaller, lighter dabs on the dabs that face the light.
+        pdhl 0 gt {
+            0 1 pdn 1 sub {
+                pddabs exch get /pdd exch def
+                pdd 3 get 1 eq
+                pdd 13 get pdd 4 get 0.5 sub 0.4 mul add 1 pdhl 2 mul sub gt and {
+                    /pdr pdd 2 get 0.55 mul def
+                    /pdcx pdd 0 get pdlx pdd 2 get mul 0.3 mul add def
+                    /pdcy pdd 1 get pdly pdd 2 get mul 0.3 mul add def
+                    pdbase 1 pdhl 0.6 mul add shade
+                    setrgbcolor
+                    newpath pddab fill
+                } if
+            } for
         } if
         grestore
     } if

@@ -154,6 +154,18 @@ Which tool to pick:
   subpath is a pressed dot** — that's your speck, stamen, distant bird,
   sparkle on water. Reach for it over `pknib` whenever the mark should
   look painted rather than penned.
+- **`pkdab`** — foliage/dab brush: bushes, leafy masses, clumps of
+  highlight, any irregular vegetation texture. The path is a **spine**:
+  every stop seeds a cluster of blobby dabs within `/Spread`, at
+  `/Density` per `/Size` of travel (so `/Pitch` doesn't change
+  coverage). One set of dab geometry is painted as a darker underlayer
+  (`/Shadow`), the body in your current colour, and lighter highlight
+  dabs (`/Highlight`) facing `/Light` (a fixed user-space angle, not
+  relative to the stroke), so highlights always sit on the mass they
+  light. A **single-point subpath is a standalone clump** (`/Clump`).
+  For depth, call it several times: dark/large first, light/small last,
+  each on its own tighter spine. It does not know what a bush is — the
+  shape comes from your spines.
 - **`pkwash`** / **`pkpaper`** — watercolor and its ground. The only
   presets needing pscat's `setalpha`; under plain `gs` they fall back
   to flattening against white and overlaps stop mixing.
