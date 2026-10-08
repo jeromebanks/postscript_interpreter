@@ -7419,3 +7419,22 @@ fn ghostscript_accepts_paintkit_dab() {
         "gs rejected examples/paintkit_dab_demo.ps"
     );
 }
+
+/// frnd can return exactly 1.0, so a bare `frnd charge lt` rejected a slot
+/// at /Charge 1. Seed 5659 with a one-dab clump is the reproduction.
+#[test]
+fn dab_full_charge_never_drops_a_slot() {
+    let it = dab_with("0 0 0", "newpath 100 100 moveto", "/Clump 1 /Charge 1");
+    // (23 srand is fixed in dab_with; re-seed to the reproducing seed.)
+    let mut seeded = fresh(400, 200);
+    seeded
+        .run_str(
+            "0 0 0 setrgbcolor 5659 srand newpath 100 100 moveto << /Clump 1 /Charge 1 >> pkdab",
+        )
+        .expect("render");
+    assert!(
+        ink_count(&seeded) > 20,
+        "a full charge dropped its only dab"
+    );
+    assert!(ink_count(&it) > 20);
+}

@@ -4860,6 +4860,73 @@ systemdict /setalpha known /pwhasalpha exch def
     closepath
 } def
 
+%%SelfTest: pkdab-rejects-malformed-options
+%   { newpath 0 0 moveto 10 0 lineto << /Size 0 >> pkdab }
+%   /pkdab-size-must-be-positive
+%   (/Size 0) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /Size { 5 } >> pkdab }
+%   /pkdab-size-must-not-be-a-procedure
+%   (/Size { 5 }) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /Spread 0 >> pkdab }
+%   /pkdab-spread-must-be-positive
+%   (/Spread 0) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /Density -1 >> pkdab }
+%   /pkdab-density-must-be-non-negative
+%   (/Density -1) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /Clump 0 >> pkdab }
+%   /pkdab-clump-must-be-1-to-400
+%   (/Clump 0) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /Clump 2.5 >> pkdab }
+%   /pkdab-clump-must-be-1-to-400
+%   (/Clump 2.5) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /Irregular 2 >> pkdab }
+%   /pkdab-irregular-must-be-0-to-1
+%   (/Irregular 2) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /Charge 1.5 >> pkdab }
+%   /pkdab-charge-must-be-0-to-1
+%   (/Charge 1.5) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /Shadow -0.1 >> pkdab }
+%   /pkdab-shadow-must-be-0-to-1
+%   (/Shadow -0.1) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /Highlight 2 >> pkdab }
+%   /pkdab-highlight-must-be-0-to-1
+%   (/Highlight 2) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /Pitch 0 >> pkdab }
+%   /pkdab-pitch-must-be-positive
+%   (/Pitch 0) mustguard
+%
+%   { newpath 0 0 moveto 10 0 lineto << /ColorJitter 3 >> pkdab }
+%   /pkdab-colorjitter-must-be-0-to-1
+%   (/ColorJitter 3) mustguard
+%
+%   % The documented form must still work.
+%   { newpath 0 0 moveto 10 0 lineto << /Size 4 >> pkdab }
+%   (a plain /Size) mustpass
+%%EndSelfTest
+%
+%%SelfTest: pkdab-enforces-its-dab-budget
+%   % The budget is checked in the counting pass, before any painting.
+%   { newpath 0 0 moveto 100000 0 lineto << /Size 0.5 /Density 500 >> pkdab }
+%   /pkdab-dab-count-exceeds-safety-limit
+%   (an uncapped density on a long spine) mustguard
+%
+%   % Charge 1 is full coverage even when frnd lands on exactly 1.0
+%   % (seed 5659, Clump 1, painted nothing before the clamp).
+%   { 0 0 0 setrgbcolor 5659 srand newpath 10 10 moveto
+%     << /Clump 1 /Charge 1 >> pkdab }
+%   (a full charge) mustpass
+%%EndSelfTest
+%
 % @kind: Procedure
 % @summary: A foliage / dab brush: clustered, irregular blobs of paint pounced along the current path (a spine), for bushes, leafy masses and vegetation texture. Each dab is generated once and painted in up to three layers -- a darker underlayer, the body in the current color, and lighter highlight dabs on the lit side -- so highlights always sit on the mass they light. A single-point subpath is a standalone clump. Deterministic under the caller's own srand; bounded by a dab-count budget; respects clip like every other preset.
 % @example: newpath 80 60 moveto 180 90 280 60 380 70 curveto << /Size 9 /Spread 26 /Highlight 0.6 >> pkdab
@@ -4975,7 +5042,9 @@ systemdict /setalpha known /pwhasalpha exch def
                 pdd 0 pdx pdsr pdsa cos mul add put
                 pdd 1 pdy pdsr pdsa sin mul add put
                 pdd 2 frnd 0.8 mul 0.6 add pdsize mul put
-                pdd 3 frnd pdcharge lt { 1 } { 0 } ifelse put
+                % frnd can return exactly 1.0, so a bare `lt` would reject some
+                % slots at /Charge 1; the draw is still consumed either way.
+                pdd 3 frnd pdcharge lt pdcharge 1 ge or { 1 } { 0 } ifelse put
                 pdd 4 frnd put
                 pdd 5 frnd put
                 0 1 6 {
