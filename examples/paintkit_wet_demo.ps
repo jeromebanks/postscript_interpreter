@@ -1,0 +1,162 @@
+%!PS-Adobe-3.0
+%%Title: Paintkit — wet interaction for soft layered paint (issue #113)
+%%BoundingBox: 0 0 620 560
+%%EndComments
+
+% Specimen for paintkit's pkwet (lib/paintkit.ps): the wet-on-wet
+% softener. It takes a mark-drawing procedure and re-runs it, each pass
+% displaced a little further and mixed a little further toward /Under —
+% the color the artist declares is already on the canvas there — so the
+% mark's core stays solid while its edge grades away into the layer
+% beneath.
+%
+% No alpha is involved, deliberately (pkwet's header explains why), so
+% unlike the watercolor demo this page has no reduced-fidelity path
+% under Ghostscript — nothing here needs an operator gs lacks. The
+% seeded scatter still lands differently there, as it does for every
+% rand-driven preset in the library.
+%
+% The control strip along the bottom is the point of the page: the same
+% call with and without pkwet, and the pairing that matters — pkwet
+% belongs with a broken or particulate brush (pkspray, pkdry, pktrowel
+% at low /Coverage). A solid brush keeps its own hard silhouette and
+% just acquires a halo.
+
+%   pscat --page 620x560 examples/paintkit_wet_demo.ps --png wet.png
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+
+23 srand
+
+/SKYTOP [0.38 0.52 0.78] def
+/SKYLOW [0.86 0.89 0.93] def
+/skyat {                                   % y -> r g b
+    260 div 1 exch sub dup mul dup 1 gt { pop 1 } if
+    /skt exch def
+    SKYTOP SKYLOW skt mix3
+} def
+
+1 1 1 setrgbcolor clippath fill
+
+/dmlabel {
+    /dmllabel exch def /dmly exch def /dmlx exch def
+    gsave
+        0.45 0.45 0.45 setrgbcolor
+        /Helvetica findfont 10 scalefont setfont
+        dmlx dmly moveto dmllabel show
+    grestore
+} def
+
+% ======================================================================
+% The scene: a graded sky, clouds worked wet into it, mist over a ridge
+% ======================================================================
+gsave
+newpath 0 260 moveto 620 260 lineto 620 560 lineto 0 560 lineto closepath clip
+
+260 1 560 {
+    /skyy exch def
+    skyy 260 sub skyat setrgbcolor
+    newpath 0 skyy moveto 620 skyy lineto 620 skyy 1 add lineto 0 skyy 1 add lineto
+    closepath fill
+} for
+
+% Clouds: pkspray is the brush that suits this — particles already have
+% a soft radial falloff, and pkwet grades their edge into the sky.
+/cloud {                                   % x y w soft -
+    /clsoft exch def /clw exch def /cly exch def /clx exch def
+    /clunder [ cly 260 sub skyat ] def
+    0.98 0.98 0.99 setrgbcolor
+    { newpath clx cly moveto
+      clx clw 0.35 mul add cly 16 add
+      clx clw 0.70 mul add cly 12 sub
+      clx clw add cly 8 add curveto
+      << /Nozzle clw 0.16 mul /Density 190 /Falloff 0.85
+         /Speck 3.4 /Overspray 0.4 >> pkspray
+      newpath clx clw 0.25 mul add cly 14 sub moveto
+      clx clw 0.60 mul add cly 4 sub  clx clw 0.85 mul add cly 18 sub
+      clx clw 1.05 mul add cly 8 sub curveto
+      << /Nozzle clw 0.12 mul /Density 190 /Falloff 0.85
+         /Speck 3 /Overspray 0.45 >> pkspray }
+    << /Soft clsoft /Under clunder >> pkwet
+} def
+
+60  470 210 0.9  cloud
+300 505 220 0.85 cloud
+230 420 180 0.95 cloud
+420 445 170 0.8  cloud
+
+% A far ridge, then mist drawn straight over it. The mist is opaque, but
+% a low-/Coverage trowel is full of gaps, so the ridge reads through it
+% without any translucency.
+0.44 0.48 0.58 setrgbcolor
+newpath 0 330 moveto 130 356 270 322 400 348 curveto
+520 332 570 344 620 334 curveto 620 260 lineto 0 260 lineto closepath fill
+
+0.62 0.68 0.76 setrgbcolor
+{ newpath 0 336 moveto 200 316 420 344 620 324 curveto
+  << /Width 34 /Coverage 0.4 /Scrape 0.55 /Viscosity 0.2 /Lanes 18 >> pktrowel }
+<< /Soft 0.9 /Under [0.54 0.59 0.68] >> pkwet
+
+% A nearer treeline under a second, lower bank of mist.
+0.13 0.26 0.20 setrgbcolor
+newpath 0 285 moveto 620 285 lineto
+<< /Width 44 /Bristles 34 /Load 0.92 /Dropout 0.1 >> pkdry
+
+0.74 0.79 0.85 setrgbcolor
+{ newpath 0 280 moveto 200 270 420 288 620 276 curveto
+  << /Width 28 /Coverage 0.35 /Scrape 0.6 /Viscosity 0.15 >> pktrowel }
+<< /Soft 1 /Under [0.68 0.73 0.80] >> pkwet
+grestore
+
+20 240 (wet-on-wet: clouds sprayed into a graded sky, mist over a ridge and a treeline) dmlabel
+
+% ======================================================================
+% The control strip: what pkwet actually changes
+% ======================================================================
+/SKYPATCH [0.52 0.64 0.85] def
+
+% four sky patches to compare the same marks on
+15  40 (no pkwet: pkspray alone) dmlabel
+15  20 (hard specks, no mass)    dmlabel
+168 40 (pkwet + pkspray)         dmlabel
+168 20 (a soft cloud mass)       dmlabel
+321 40 (pkwet + pktrowel)        dmlabel
+321 20 (windblown, broken)       dmlabel
+474 40 (pkwet + pkoil)           dmlabel
+474 20 (solid brush: halo only)  dmlabel
+
+% Each patch is its own clipped cell, so a soft mark's spread can't
+% wander into its neighbour and confuse the comparison.
+/cell {                                    % x proc -
+    /clproc exch def /clx exch def
+    gsave
+        newpath clx 60 moveto clx 131 add 60 lineto
+        clx 131 add 190 lineto clx 190 lineto closepath
+        clip
+        SKYPATCH aload pop setrgbcolor fill
+        0.98 0.98 0.99 setrgbcolor
+        clproc
+    grestore
+} def
+
+15 { newpath 33 118 moveto 71 134 100 106 132 122 curveto
+     << /Nozzle 22 /Density 70 /Falloff 1 /Speck 3 /Overspray 0.45 >> pkspray
+   } cell
+
+168 { { newpath 186 118 moveto 224 134 253 106 285 122 curveto
+        << /Nozzle 22 /Density 70 /Falloff 1 /Speck 3 /Overspray 0.45 >> pkspray }
+      << /Soft 0.9 /Under SKYPATCH >> pkwet
+    } cell
+
+321 { { newpath 339 118 moveto 377 134 406 106 438 122 curveto
+        << /Width 40 /Coverage 0.45 /Scrape 0.5 /Viscosity 0.15 /Lanes 20 >> pktrowel }
+      << /Soft 1 /Spread 24 /Under SKYPATCH >> pkwet
+    } cell
+
+474 { { newpath 492 118 moveto 530 134 559 106 591 122 curveto
+        << /Width 34 /Ridges 10 >> pkoil }
+      << /Soft 1 /Spread 24 /Under SKYPATCH >> pkwet
+    } cell
+
+showpage
