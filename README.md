@@ -152,6 +152,10 @@ cargo run -- --halftone file.ps           # classic 45° halftone dots, like a
                                           # mono laser printer (window/PNG)
 cargo run -- --lint --png out.png file.ps # self-check: blank page? unbalanced
                                           # gsave? stuff left on the stack?
+cargo run -- --lint-strict file.ps        # ...and exit non-zero on any finding
+cargo run -- --selftest lib/paintkit.ps   # run a library's %%SelfTest blocks
+./scripts/selftest.sh                     # every library's blocks, plus strict
+                                          # lint over every rendering driver
 cargo run -- file.ps --sweep-seed 1:12 \  # render 12 seeds, one grid PNG
     --contact-sheet grid.png
 cargo run                                 # terminal REPL (headless canvas)

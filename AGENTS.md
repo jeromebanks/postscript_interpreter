@@ -66,6 +66,11 @@ predates it.
   structured a particular way).
 - Tests live alongside the code they test. Add integration or golden-image
   tests where `INIT.md`'s stages call for demonstrable rendering output.
+- A change to `lib/*.ps` that adds or tightens a *validation guard*
+  belongs in a `%%SelfTest` block in that file, next to the guard —
+  `./scripts/selftest.sh` runs them and `docs/SELFTEST.md` has the
+  convention. Rust stays the right home for anything needing pixel
+  readback or a real `gs`.
 - Keep `README.md` accurate to *current* state, not aspirational state.
   Update it as capabilities land, not just at the end.
 
