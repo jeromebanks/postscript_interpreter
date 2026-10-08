@@ -1,0 +1,107 @@
+%!PS-Adobe-3.0
+%%Title: artkit strict-lint rendering driver (issue #95)
+%%Pages: 8
+%%BoundingBox: 0 0 200 200
+%%SelfTestPage: 200x200
+%%EndComments
+
+% Run with:  pscat --page 200x200 --lint-strict selftest/drivers/artkit.ps
+% (scripts/selftest.sh does this for every driver in this directory.)
+%
+% See selftest/README.md for the two rules every driver keeps: one
+% showpage per independently-checked scenario, and nothing left on the
+% operand/dictionary/gsave stacks. `%%Pages:` above is checked against
+% the pages actually produced, so a deleted showpage fails the run
+% instead of silently merging two scenarios onto one page.
+%
+% artkit's primitives mostly take a caller-supplied procedure and call
+% it once per cell/stop/placement. The failure this catches is the one
+% that looks like success: the primitive runs, returns cleanly, and
+% never calls the procedure at all -- a blank page.
+
+(lib/artkit.ps) run
+
+/ink { 0.1 0.1 0.12 setrgbcolor } def
+
+% --- 1. Turtle geometry ---------------------------------------------
+gsave
+    ink
+    2 setlinewidth
+    newpath 100 100 0 thome
+    1 1 48 { dup fd 89 tr pop } for
+    stroke
+grestore
+showpage
+
+% --- 2. An L-system, drawn -------------------------------------------
+gsave
+    ink
+    newpath 100 20 90 thome
+    (F) << (F) 0 get (F[+F]F[-F]F) >> 3 lsys 4 12 ldraw
+    stroke
+grestore
+showpage
+
+% --- 3. walkpath over a curve ----------------------------------------
+% walkpath's contract is a callback per arc-length stop; a run that
+% yields no stops paints nothing while still returning cleanly.
+gsave
+    ink
+    newpath 20 100 moveto 70 180 130 20 180 100 curveto
+    6 {
+        % x y ang t sp atend -> -   (artkit.ps:267)
+        pop pop pop pop
+        newpath 3 0 360 arc fill
+    } walkpath
+grestore
+showpage
+
+% --- 4. Poisson-ish scatter ------------------------------------------
+gsave
+    ink
+    9 srand
+    20 20 160 160 screct
+        << /Count 60 /Seed 5 /MinSpacing 8 /Tries 20
+           /Mark { pop pop newpath 3 0 360 arc fill } >>
+        scatter
+grestore
+showpage
+
+% --- 5. Grids: hex, triangle, truchet --------------------------------
+gsave
+    ink
+    2 srand
+    10 10 180 180 4 4 {
+        3 dict begin
+            /r exch def /cy exch def /cx exch def
+            newpath cx cy r 0.8 mul hex fill
+        end
+    } hexgrid
+grestore
+showpage
+
+% --- 6. Text on a path ------------------------------------------------
+gsave
+    ink
+    /Helvetica findfont 14 scalefont setfont
+    newpath 15 60 moveto 70 170 130 170 185 60 curveto
+    (artkit runs under strict lint) pathtext
+grestore
+showpage
+
+% --- 7. Hyperbolic tiling ---------------------------------------------
+% The near-collinear-with-origin edge case in horthocircle only arises
+% a few reflection generations deep, so this runs at depth 4 rather
+% than a shallower, faster depth.
+gsave
+    ink
+    100 100 90 7 3 4 { pop 0.35 setgray fill } httile
+grestore
+showpage
+
+% --- 8. A fractal generator + edge polygon ----------------------------
+gsave
+    ink
+    newpath [ 40 40 160 40 100 145 ] /koch fgen 3 edgepoly fill
+grestore
+showpage

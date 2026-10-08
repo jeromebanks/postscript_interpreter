@@ -1,0 +1,126 @@
+%!PS-Adobe-3.0
+%%Title: paintkit strict-lint rendering driver (issue #95)
+%%Pages: 9
+%%BoundingBox: 0 0 200 200
+%%SelfTestPage: 200x200
+%%EndComments
+
+% Run with:  pscat --page 200x200 --lint-strict selftest/drivers/paintkit.ps
+% (scripts/selftest.sh does this for every driver in this directory).
+%
+% This is Phase A mechanism 2 of docs/PS_LIBRARY_COUPLING.md's
+% "Touchpoint 2": a bare lib/*.ps file draws nothing on load, so
+% --lint has nothing to judge without a driver that actually calls
+% into it. Strict lint then fails the process on any finding.
+%
+% Two rules this file has to keep, both load-bearing:
+%
+%   1. ONE showpage PER SCENARIO. --lint's blank-page check is
+%      per-page, so two scenarios sharing a page let the second one's
+%      ink hide whether the first drew anything at all. %%Pages: above
+%      declares the count and lint's page-count check enforces it, so
+%      a deleted showpage fails loudly instead of silently merging two
+%      cases.
+%   2. NOTHING LEFT BEHIND. Strict lint gates all five checks, not
+%      just blank-page: a leaked operand, an unmatched gsave, or an
+%      unmatched begin fails the run too. Every scenario below is
+%      wrapped gsave/grestore and consumes what it pushes.
+%
+% Each scenario is a geometry that once rendered *blank* under a real
+% defect (PR #76, rounds 3 and 4). Blank output is the failure mode
+% that unit tests miss most easily: the call returns cleanly, the page
+% is the right size, and nothing is on it.
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+
+/ink { 0.1 0.1 0.12 setrgbcolor } def
+
+% --- 1. A stroke far shorter than /Pitch, with pointed caps ---------
+% PR #76 round 3: walkpath yields only the two guaranteed end stops
+% for a run this short, and the pointed-cap path collapsed both edges
+% onto the centerline -- a zero-area fill, i.e. a blank page.
+gsave
+    ink
+    newpath 90 100 moveto 110 100 lineto
+    << /Width 14 /StartCap /pointed /EndCap /pointed >> pkribbon
+grestore
+showpage
+
+% --- 2. A stroke whose length is an exact multiple of /Pitch --------
+% Round 4: the final guaranteed stop landed exactly on the last
+% regular pitch stop, and coalescing the duplicate left too few
+% samples to fill anything.
+gsave
+    ink
+    newpath 40 100 moveto 160 100 lineto
+    << /Width 12 /Pitch 6 >> pkribbon
+grestore
+showpage
+
+% --- 3. An undersampled closed path ---------------------------------
+% Round 4: a closed subpath sampled at a pitch coarse relative to its
+% perimeter produced a degenerate ring that filled nothing.
+gsave
+    ink
+    newpath 70 70 moveto 130 70 lineto 130 130 lineto 70 130 lineto closepath
+    << /Width 10 /Pitch 24 >> pkribbon
+grestore
+showpage
+
+% --- 4. Full taper on both ends -------------------------------------
+% /StartTaper and /EndTaper summing to the whole stroke is the
+% legitimate extreme of the documented 0..1 range; it must still leave
+% ink rather than tapering to nothing everywhere.
+gsave
+    ink
+    newpath 30 60 moveto 100 150 170 40 190 120 curveto
+    << /Width 16 /StartTaper 0.5 /EndTaper 0.5 /Pressure { pkbell } >> pkribbon
+grestore
+showpage
+
+% --- 5. pknib: an angled calligraphic nib ---------------------------
+gsave
+    ink
+    newpath 30 40 moveto 90 160 lineto 170 40 lineto
+    << /Width 18 /Angle 35 /MinWidth 0.15 >> pknib
+grestore
+showpage
+
+% --- 6. pkdry: a dry-bristle brush ----------------------------------
+gsave
+    7 srand
+    ink
+    newpath 25 100 moveto 175 100 lineto
+    << /Width 26 /Bristles 12 /Load 0.9 >> pkdry
+grestore
+showpage
+
+% --- 7. pkspray: seeded particle deposition -------------------------
+gsave
+    11 srand
+    ink
+    newpath 30 60 moveto 170 140 lineto
+    << /Nozzle 20 /Density 6 /Speck 2 >> pkspray
+grestore
+showpage
+
+% --- 8. pkoil: layered impasto --------------------------------------
+gsave
+    3 srand
+    ink
+    newpath 30 100 moveto 100 160 lineto 170 100 lineto
+    << /Width 22 >> pkoil
+grestore
+showpage
+
+% --- 9. pkwash: a translucent watercolor wash -----------------------
+% pkwash has a real-compositing path and a fallback path depending on
+% what the interpreter supports; whichever one runs must leave ink.
+gsave
+    5 srand
+    ink
+    newpath 100 100 60 0 360 arc closepath
+    << /Alpha 0.4 /Layers 2 /Wet 6 /Bloom 0.5 /Seed 3 >> pkwash
+grestore
+showpage
