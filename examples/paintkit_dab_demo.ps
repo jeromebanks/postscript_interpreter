@@ -1,0 +1,86 @@
+%!PS-Adobe-3.0
+%%Title: Paintkit — the foliage / dab brush (issue #117)
+%%BoundingBox: 0 0 620 520
+%%EndComments
+
+% Specimen for paintkit's pkdab (lib/paintkit.ps): clustered irregular
+% dabs of paint, for bushes, leafy masses and vegetation texture.
+%
+% Row 1 is the controls: the same spine at different /Density, /Charge and
+% /Irregular. Row 2 is the layering -- dark underlayer, body, and
+% highlights, then all three together, then the light moved around.
+% Row 3 is foliage-like use, composed here from the primitive alone: a
+% bush made of dark-to-light passes, and a hedge. The primitive knows
+% nothing about bushes; the composition is this file's.
+
+%   pscat --page 620x520 examples/paintkit_dab_demo.ps --png dab.png
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+
+7 srand
+
+1 1 1 setrgbcolor clippath fill
+
+/dmlabel {
+    /dmllabel exch def /dmly exch def /dmlx exch def
+    gsave
+        0.45 0.45 0.45 setrgbcolor
+        /Helvetica findfont 10 scalefont setfont
+        dmlx dmly moveto dmllabel show
+    grestore
+} def
+
+/spine {                                   % x y -   (a shared short spine)
+    /spy exch def /spx exch def
+    newpath spx spy moveto spx 70 add spy 14 add spx 140 add spy lineto
+} def
+
+0.22 0.46 0.20 setrgbcolor
+
+% --- row 1: density, charge, irregularity ------------------------------
+20 500 (Density 1 -- sparse) dmlabel
+20 465 spine << /Size 7 /Spread 18 /Density 1 >> pkdab
+220 500 (Density 5 -- dense) dmlabel
+220 465 spine << /Size 7 /Spread 18 /Density 5 >> pkdab
+420 500 (Charge 0.45 -- a dry brush) dmlabel
+420 465 spine << /Size 7 /Spread 18 /Charge 0.45 >> pkdab
+
+20 420 (Irregular 0 -- round) dmlabel
+20 385 spine << /Size 7 /Spread 18 /Irregular 0 >> pkdab
+220 420 (Irregular 1 -- ragged) dmlabel
+220 385 spine << /Size 7 /Spread 18 /Irregular 1 >> pkdab
+420 420 (a pressed clump: one point) dmlabel
+490 385 moveto << /Size 7 /Spread 24 /Clump 26 >> pkdab
+
+% --- row 2: the three layers, and the light ----------------------------
+20 340 (Shadow only) dmlabel
+20 305 spine << /Size 7 /Spread 18 /Shadow 1 /Highlight 0 >> pkdab
+220 340 (Body only) dmlabel
+220 305 spine << /Size 7 /Spread 18 /Shadow 0 /Highlight 0 >> pkdab
+420 340 (Shadow + body + highlight) dmlabel
+420 305 spine << /Size 7 /Spread 18 /Shadow 0.8 /Highlight 0.8 >> pkdab
+
+20 260 (Light 120 -- up and left) dmlabel
+20 225 spine << /Size 7 /Spread 18 /Shadow 0.8 /Highlight 0.8 /Light 120 >> pkdab
+220 260 (Light 0 -- from the right) dmlabel
+220 225 spine << /Size 7 /Spread 18 /Shadow 0.8 /Highlight 0.8 /Light 0 >> pkdab
+420 260 (Light 270 -- from below) dmlabel
+420 225 spine << /Size 7 /Spread 18 /Shadow 0.8 /Highlight 0.8 /Light 270 >> pkdab
+
+% --- row 3: foliage, composed from the primitive ------------------------
+20 180 (A bush: three passes, dark to light, each its own spine) dmlabel
+0.10 0.28 0.14 setrgbcolor
+newpath 40 80 moveto 120 120 200 118 270 80 curveto
+<< /Size 12 /Spread 34 /Density 4 /Shadow 0.5 /Highlight 0 >> pkdab
+0.22 0.46 0.20 setrgbcolor
+newpath 60 100 moveto 130 135 190 135 250 100 curveto
+<< /Size 9 /Spread 26 /Density 4 /Shadow 0.3 /Highlight 0.2 >> pkdab
+0.50 0.66 0.26 setrgbcolor
+newpath 90 125 moveto 140 148 180 148 220 125 curveto
+<< /Size 6 /Spread 18 /Density 4 /Shadow 0 /Highlight 0.8 >> pkdab
+
+320 180 (A hedge: one wide spine, one pass) dmlabel
+0.18 0.40 0.18 setrgbcolor
+newpath 330 105 moveto 585 105 lineto
+<< /Size 10 /Spread 22 /Density 4 /Shadow 0.6 /Highlight 0.7 /Light 100 >> pkdab

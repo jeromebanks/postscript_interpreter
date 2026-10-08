@@ -631,6 +631,24 @@ instead of re-rolling everything drawn after it. A single-point subpath
 presses a detail dot — one dab per `moveto`, and unlike `pkbroad`'s
 pressed footprint it lands regardless of the tooth, because a pressed
 tip makes contact by pressure.
+`pkdab` (issue #117) is the foliage brush: clustered, irregular dabs for
+bushes, leafy masses and vegetation texture. It is a pounce, not a drag,
+so the current path is a *spine* — every stop seeds a cluster of blobby
+dabs within `/Spread` — and a single-point subpath is a standalone clump.
+Density is per `/Size` of travel with a per-subpath accumulator (the
+`pkspray` design), so `/Pitch` doesn't change coverage. Each dab is
+generated once and painted in up to three layers from the same geometry:
+a darker underlayer nudged away from `/Light`, the body in the current
+colour, and smaller lighter dabs on the lit side. Re-deriving positions
+per layer would scatter highlights off the mass they are meant to light.
+`/Light` is a fixed user-space angle, like `pknib`'s `/Angle`, because
+foliage is lit by the sun, not by the stroke direction. Every dab slot
+draws a fixed 13 values whether or not it lands, so `/Charge`, `/Shadow`,
+`/Highlight`, `/Light` and `/ColorJitter` re-shape the mark without
+re-rolling it. Closed paths are not filled (no portable in-fill test); a
+mass is built by pouncing along a spine through it.
+`examples/paintkit_dab_demo.ps` is the specimen.
+
 `pkwet` (issue #113) is the wet-on-wet softener, and the only entry
 point in the file that draws no mark of its own. It takes the caller's
 *mark-drawing procedure* and re-runs it, each pass displaced a little

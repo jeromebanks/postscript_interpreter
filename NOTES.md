@@ -3,6 +3,30 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## `lib/paintkit.ps`: `pkdab`, the foliage / dab brush (issue #117, 2026-10-08)
+
+Child of epic #112. Adds `pkdab` with `/Size` `/Spread` `/Density`
+`/Clump` `/Irregular` `/Charge` `/Shadow` `/Highlight` `/Light` `/Pitch`
+`/ColorJitter`, scratch prefix `pd-`.
+
+Decisions: the path is a spine and each walkpath stop seeds a cluster,
+with density per `/Size` of travel via pkspray's accumulator (a first
+draft that counted dabs per stop would have made `/Pitch` change
+coverage). A single point arrives with `sp = 0`, so it takes an explicit
+`/Clump` count instead of silently painting nothing. Each dab is
+generated once into a record and painted in three layers from it, so
+highlights cannot land off the mass; a fixed 13 draws per dab slot keeps
+the layer/colour/charge knobs from re-rolling the layout. Outlines are
+seven vertices joined through edge midpoints by cubics — a straight
+7-gon reads as a gem. `/Charge` keeps pkbroad/pkliner's meaning
+(coverage only); `/Shadow`/`/Highlight` follow pkoil's names.
+
+Deferred: filling a closed path's interior (no portable in-fill test),
+and per-layer colour control — the underlayer and highlight are
+`shade` of the caller's colour, and a distinct highlight hue is done by
+a second `pkdab` call. `pkdab` is the foliage piece for #118's landscape
+specimen. Specimen: `examples/paintkit_dab_demo.ps`.
+
 ## `pkoil`: /Pressure now shapes ridges, highlight and shadow (issue #98, 2026-10-08)
 
 `pkoil` used to forward `/Pressure` only to the base ribbon, so constant-width

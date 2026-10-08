@@ -6993,3 +6993,379 @@ fn wet_re_propagates_an_exit_without_inventing_or_hiding_one() {
         it.error_report(&e)
     );
 }
+
+// --- pkdab: the foliage / dab brush (issue #117) ----------------------
+//
+// What the tool is defined by: clustered irregular dabs; one set of
+// geometry painted in up to three layers; coverage that belongs to the
+// path, not to /Pitch; and a fixed draw count per dab slot, so the
+// layer and colour knobs re-shape the mark without re-rolling it.
+
+const DAB_PATH: &str = "newpath 60 100 moveto 340 100 lineto";
+
+fn dab_with(colour: &str, path: &str, opts: &str) -> Interp {
+    let mut it = fresh(400, 200);
+    it.run_str(&format!(
+        "{colour} setrgbcolor 23 srand {path} << {opts} >> pkdab"
+    ))
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    it
+}
+
+fn dab(opts: &str) -> Interp {
+    dab_with("0 0 0", DAB_PATH, opts)
+}
+
+/// Pixels that differ from the white page at all -- unlike `ink_count`,
+/// this still sees a highlight lighter than the ink threshold.
+fn painted_count(it: &Interp) -> usize {
+    it.gfx()
+        .pixmap
+        .pixels()
+        .iter()
+        .filter(|&&p| luma(p) < 250.0)
+        .count()
+}
+
+fn dab_pixels(it: &Interp) -> Vec<u8> {
+    region_pixels(it, 0, 400, 0, 200)
+}
+
+/// Pixels whose luminance sits in a narrow band: the flat interior of a
+/// layer painted in one known colour. The anti-aliased fringe between a
+/// layer and the page spreads over the whole range, so extremes would
+/// not do, but a flat colour piles up in one bin.
+fn band_count(it: &Interp, lo: f32, hi: f32) -> usize {
+    it.gfx()
+        .pixmap
+        .pixels()
+        .iter()
+        .filter(|&&p| (lo..=hi).contains(&luma(p)))
+        .count()
+}
+
+#[test]
+fn dab_paints_clustered_marks_around_the_path() {
+    let it = dab("/Size 6 /Spread 20");
+    assert!(
+        ink_count(&it) > 1500,
+        "the dabs must mark: {}",
+        ink_count(&it)
+    );
+    // Dabs scatter on both sides of the spine, not just along it.
+    let above = (0..100)
+        .any(|y| (40..360).any(|x| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0)));
+    let below = (101..200)
+        .any(|y| (40..360).any(|x| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0)));
+    assert!(above && below, "a cluster should surround its spine");
+}
+
+#[test]
+fn dab_ink_stays_within_spread_plus_dab_radius() {
+    let it = dab("/Size 6 /Spread 20");
+    // Spread + the largest dab (Size*1.4 * 1.12 underlayer, irregular
+    // vertices up to ~1.65x) comfortably bounds this.
+    let reach = 20.0 + 6.0 * 1.4 * 1.65 * 1.12 + 4.0;
+    let rows: Vec<u32> = (0..200)
+        .filter(|&y| (0..400).any(|x| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0)))
+        .collect();
+    let (ymin, ymax) = (*rows.first().unwrap() as f32, *rows.last().unwrap() as f32);
+    assert!(
+        100.0 - ymin <= reach && ymax - 100.0 <= reach,
+        "ink strayed: {ymin}..{ymax}"
+    );
+}
+
+#[test]
+fn dab_is_deterministic_and_seed_sensitive() {
+    let a = dab_pixels(&dab("/Size 6"));
+    let b = dab_pixels(&dab("/Size 6"));
+    assert_eq!(a, b, "same seed, same pixels");
+    let mut it = fresh(400, 200);
+    it.run_str(&format!(
+        "0 0 0 setrgbcolor 24 srand {DAB_PATH} << /Size 6 >> pkdab"
+    ))
+    .expect("render");
+    assert_ne!(a, dab_pixels(&it), "a different seed must differ");
+}
+
+#[test]
+fn dab_charge_scales_coverage() {
+    assert_eq!(
+        ink_count(&dab("/Charge 0")),
+        0,
+        "an empty brush paints nothing"
+    );
+    let half = ink_count(&dab("/Charge 0.5"));
+    let full = ink_count(&dab("/Charge 1"));
+    assert!(
+        full > half && half > 0,
+        "charge should scale coverage: {half} vs {full}"
+    );
+}
+
+#[test]
+fn dab_coverage_follows_the_path_not_the_pitch() {
+    let fine = ink_count(&dab("/Size 6 /Pitch 2"));
+    let coarse = ink_count(&dab("/Size 6 /Pitch 24"));
+    let ratio = fine as f64 / coarse as f64;
+    assert!(
+        (0.7..1.4).contains(&ratio),
+        "pitch changed coverage: {fine} vs {coarse}"
+    );
+}
+
+#[test]
+fn dab_density_scales_coverage() {
+    let sparse = ink_count(&dab("/Size 5 /Spread 5 /Density 0.5"));
+    let dense = ink_count(&dab("/Size 5 /Spread 5 /Density 4"));
+    assert!(dense > sparse * 2, "density: {sparse} -> {dense}");
+    assert_eq!(
+        ink_count(&dab("/Density 0")),
+        0,
+        "density 0 paints nothing along a line"
+    );
+}
+
+#[test]
+fn dab_layers_darken_and_lighten_around_the_body_colour() {
+    // Base grey 0.5: shadow k = 1 - 0.55 -> 0.225 (luma ~57), highlight
+    // k = 1.6 -> 0.8 (luma ~204).
+    let plain = dab_with(
+        "0.5 0.5 0.5",
+        DAB_PATH,
+        "/Shadow 0 /Highlight 0 /ColorJitter 0",
+    );
+    let layered = dab_with(
+        "0.5 0.5 0.5",
+        DAB_PATH,
+        "/Shadow 1 /Highlight 1 /ColorJitter 0",
+    );
+    assert!(
+        band_count(&layered, 54.0, 60.0) > band_count(&plain, 54.0, 60.0) + 200,
+        "no shadow layer"
+    );
+    assert!(
+        band_count(&layered, 201.0, 207.0) > band_count(&plain, 201.0, 207.0) + 100,
+        "no highlight layer"
+    );
+    assert!(
+        band_count(&plain, 124.0, 131.0) > 1000,
+        "the body is the caller's colour"
+    );
+}
+
+#[test]
+fn dab_highlights_sit_on_the_painted_mass() {
+    // Highlight dabs are derived from the body dabs' own geometry, so
+    // enabling them can only add lighter pixels inside or at the rim of
+    // what the body already covers: total inked area barely moves.
+    let off = painted_count(&dab_with("0.5 0.5 0.5", DAB_PATH, "/Shadow 0 /Highlight 0"));
+    let on = painted_count(&dab_with("0.5 0.5 0.5", DAB_PATH, "/Shadow 0 /Highlight 1"));
+    let drift = (on as f64 - off as f64).abs() / off as f64;
+    assert!(
+        drift < 0.12,
+        "highlights strayed off the mass: {off} -> {on}"
+    );
+}
+
+#[test]
+fn dab_layer_knobs_do_not_reroll_the_body() {
+    // /Shadow 0 /Highlight 0 leaves only the body layer. The body layer
+    // of a layered render must be identical wherever no other layer
+    // paints, which the dab count (and so the draw stream) pins: the
+    // fully charged ink footprint is the same with and without layers
+    // up to the rim the layers add.
+    let body = dab_pixels(&dab("/Shadow 0 /Highlight 0 /ColorJitter 0"));
+    let again = dab_pixels(&dab("/Shadow 0 /Highlight 0 /ColorJitter 0.9"));
+    // Colour jitter shifts tint but draws the same stream, so the
+    // silhouette (alpha channel) is identical.
+    let alpha = |v: &Vec<u8>| v.chunks(4).map(|c| c[3]).collect::<Vec<_>>();
+    assert_eq!(
+        alpha(&body),
+        alpha(&again),
+        "ColorJitter re-rolled the layout"
+    );
+}
+
+#[test]
+fn dab_light_moves_the_underlayer_and_highlights() {
+    let a = dab_pixels(&dab_with("0.5 0.5 0.5", DAB_PATH, "/Light 0"));
+    let b = dab_pixels(&dab_with("0.5 0.5 0.5", DAB_PATH, "/Light 180"));
+    assert_ne!(a, b, "the light direction must matter");
+}
+
+#[test]
+fn dab_single_point_is_a_bounded_clump() {
+    let it = dab_with(
+        "0 0 0",
+        "newpath 200 100 moveto",
+        "/Size 6 /Spread 20 /Clump 20",
+    );
+    let ink = ink_count(&it);
+    assert!(ink > 300, "a point must paint a clump: {ink}");
+    let (x0, x1) = ink_x_bounds(&it, 400, 200).expect("ink");
+    assert!(
+        x0 >= 200 - 70 && x1 <= 200 + 70,
+        "clump strayed: {x0}..{x1}"
+    );
+}
+
+#[test]
+fn dab_empty_path_is_a_no_op_but_a_bad_dict_still_fails() {
+    let mut it = fresh(100, 100);
+    it.run_str("0 0 0 setrgbcolor newpath << /Size 6 >> pkdab")
+        .expect("empty path");
+    assert_eq!(ink_count(&it), 0);
+    let mut bad = Interp::new();
+    load(&mut bad);
+    let err = bad
+        .run_str("newpath << /Size -1 >> pkdab")
+        .expect_err("must reject");
+    assert!(
+        bad.error_report(&err)
+            .contains("pkdab-size-must-be-positive")
+    );
+}
+
+#[test]
+fn dab_rejects_malformed_options() {
+    let cases = [
+        ("/Size 0", "pkdab-size-must-be-positive"),
+        ("/Size { 5 }", "pkdab-size-must-not-be-a-procedure"),
+        ("/Spread 0", "pkdab-spread-must-be-positive"),
+        ("/Density -1", "pkdab-density-must-be-non-negative"),
+        ("/Clump 0", "pkdab-clump-must-be-1-to-400"),
+        ("/Clump 2.5", "pkdab-clump-must-be-1-to-400"),
+        ("/Irregular 2", "pkdab-irregular-must-be-0-to-1"),
+        ("/Charge 1.5", "pkdab-charge-must-be-0-to-1"),
+        ("/Shadow -0.1", "pkdab-shadow-must-be-0-to-1"),
+        ("/Highlight 2", "pkdab-highlight-must-be-0-to-1"),
+        ("/Pitch 0", "pkdab-pitch-must-be-positive"),
+        ("/ColorJitter 3", "pkdab-colorjitter-must-be-0-to-1"),
+        ("/Light { 1 }", "pkdab-light-must-not-be-a-procedure"),
+    ];
+    for (opts, name) in cases {
+        let mut it = Interp::new();
+        load(&mut it);
+        let err = it
+            .run_str(&format!(
+                "newpath 0 0 moveto 10 0 lineto << {opts} >> pkdab"
+            ))
+            .expect_err(opts);
+        assert!(
+            it.error_report(&err).contains(name),
+            "{opts}: {}",
+            it.error_report(&err)
+        );
+    }
+}
+
+#[test]
+fn dab_budget_fires_before_anything_is_painted() {
+    let mut it = fresh(200, 200);
+    let err = it
+        .run_str("0 0 0 setrgbcolor newpath 0 0 moveto 100000 0 lineto << /Size 0.5 /Density 500 >> pkdab")
+        .expect_err("budget");
+    assert!(
+        it.error_report(&err)
+            .contains("pkdab-dab-count-exceeds-safety-limit")
+    );
+    assert_eq!(
+        ink_count(&it),
+        0,
+        "nothing may paint before the budget check"
+    );
+}
+
+#[test]
+fn dab_preserves_the_callers_path_and_colour() {
+    let mut it = fresh(400, 200);
+    it.run_str(&format!(
+        "0.2 0.4 0.6 setrgbcolor {DAB_PATH} << /Size 6 >> pkdab \
+         currentrgbcolor 3 array astore /c exch def \
+         flattenpath pathbbox /y1 exch def /x1 exch def /y0 exch def /x0 exch def"
+    ))
+    .expect("render");
+    it.run_str(
+        "c 0 get 0.2 sub abs 0.001 lt c 1 get 0.4 sub abs 0.001 lt and \
+                x0 60 sub abs 0.5 lt and x1 340 sub abs 0.5 lt and \
+                { } { dab-state-clobbered } ifelse",
+    )
+    .expect("colour and path survive");
+}
+
+#[test]
+fn dab_composes_with_other_presets() {
+    let mut it = fresh(400, 200);
+    it.run_str(&format!(
+        "0 0 0 setrgbcolor 5 srand {DAB_PATH} << /Size 6 >> pkdab \
+         newpath 60 150 moveto 340 150 lineto << /Width 6 >> pkoil \
+         newpath 60 40 moveto 340 40 lineto << /Width 6 >> pkribbon"
+    ))
+    .expect("pkdab must not clobber the scratch names of its neighbours");
+    assert!(ink_count(&it) > 3000);
+}
+
+#[test]
+fn dab_advertises_exactly_its_tested_parameters() {
+    let src = std::fs::read_to_string("lib/paintkit.ps").expect("read paintkit");
+    let start = src
+        .find("% @example: newpath 80 60 moveto 180 90 280 60 380 70 curveto")
+        .expect("pkdab tags");
+    let end = src[start..].find("\n/pkdab ").expect("pkdab def") + start;
+    let mut advertised: Vec<String> = src[start..end]
+        .lines()
+        .filter_map(|l| l.strip_prefix("% @param: /"))
+        .map(|l| l.split_whitespace().next().unwrap_or("").to_string())
+        .collect();
+    advertised.sort();
+    let mut expected = vec![
+        "Charge",
+        "Clump",
+        "ColorJitter",
+        "Density",
+        "Highlight",
+        "Irregular",
+        "Light",
+        "Pitch",
+        "Shadow",
+        "Size",
+        "Spread",
+    ];
+    expected.sort();
+    assert_eq!(
+        advertised, expected,
+        "pkdab's advertised parameters drifted from the tested set"
+    );
+}
+
+#[test]
+fn ghostscript_accepts_paintkit_dab() {
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let status = std::process::Command::new("gs")
+        .args([
+            "-dNOSAFER",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g620x520",
+            "-r72",
+            "-o/dev/null",
+            "examples/paintkit_dab_demo.ps",
+        ])
+        .status()
+        .expect("run gs");
+    assert!(
+        status.success(),
+        "gs rejected examples/paintkit_dab_demo.ps"
+    );
+}
