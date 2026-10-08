@@ -996,6 +996,18 @@
 % strokes add ~0, so pkdry's defaults and large-Width smooth strokes
 % are unaffected.
 %
+%%SelfTest: pkdry-cusp-guard-rejects-reversals-but-not-straight-strokes
+%   % Issue #79: a sharp cusp at a huge Width/Pitch ratio is rejected
+%   % in the counting pass; the same Width on a straight stroke is not.
+%   { newpath 0 0 moveto 1 0 lineto 1 1 lineto
+%     << /Width 100000 /Bristles 2 /Pitch 1 /Load 1 /Dropout 0 >> pkdry }
+%   /pkdry-cusp-resample-count-exceeds-safety-limit
+%   (a right-angle cusp at Width/Pitch = 100000) mustguard
+%   { newpath 0 0 moveto 100 0 lineto
+%     << /Width 100000 /Bristles 2 /Pitch 1 >> pkdry }
+%   (a huge Width on a straight stroke) mustpass
+%%EndSelfTest
+%
 % Scratch prefix pb- (pkdry/pbdashrun) -- deliberately distinct from
 % pk-/pn-, see the file header.
 % @kind: Procedure
