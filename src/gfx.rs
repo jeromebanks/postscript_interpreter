@@ -319,6 +319,15 @@ impl PsPath {
             }
             return None;
         }
+        // All four corners present isn't enough: a "bowtie"
+        // (20,20 → 80,80 → 80,20 → 20,80) visits them too. Every edge
+        // must be axis-aligned, i.e. change exactly one coordinate.
+        for i in 0..4 {
+            let (p, q) = (pts[i], pts[(i + 1) % 4]);
+            if ((p.x - q.x).abs() < EPS) == ((p.y - q.y).abs() < EPS) {
+                return None;
+            }
+        }
         Some((x0, y0, x1, y1))
     }
 
@@ -1682,6 +1691,7 @@ impl Gfx {
             Some(c) => {
                 let page = (self.pixmap.width() as f32, self.pixmap.height() as f32);
                 self.state.path = match Self::chain_rect_intersection(&c.node, page) {
+                    Some((x0, y0, x1, y1)) if x1 <= x0 || y1 <= y0 => PsPath::default(),
                     Some((x0, y0, x1, y1)) => Self::rect_path(x0, y0, x1, y1),
                     None => Self::mask_boundary_path(&c.mask),
                 };
@@ -1711,11 +1721,8 @@ impl Gfx {
             y1 = y1.min(ry1);
             cur = n.parent.as_deref();
         }
-        // Disjoint rects intersect to nothing; collapse rather than
-        // report an inverted box (mirrors `clip`'s own "empty path
-        // clips everything away" — the mask is already all-zero).
-        x1 = x1.max(x0);
-        y1 = y1.max(y0);
+        // May be empty or inverted (disjoint rects); the caller turns
+        // that into an empty path.
         Some((x0, y0, x1, y1))
     }
 

@@ -191,6 +191,35 @@ fn clippath_traces_a_non_rectangular_nested_clip() {
 }
 
 #[test]
+fn clippath_does_not_mistake_a_bowtie_for_a_rectangle() {
+    // A self-intersecting 4-point path visits all four rectangle
+    // corners but isn't one; it must take the mask trace, so the
+    // clipped-out top wedge is not part of the reported path.
+    let it = render(
+        "newpath 0 0 100 100 rectclip newpath \
+         20 20 moveto 80 80 lineto 80 20 lineto 20 80 lineto closepath clip newpath \
+         clippath initclip 0 setgray fill",
+    );
+    assert_eq!(
+        pixel(&it, 50, 30),
+        (255, 255, 255),
+        "top wedge is clipped out"
+    );
+    assert_eq!(pixel(&it, 65, 50), (0, 0, 0), "right triangle is inside");
+}
+
+#[test]
+fn clippath_of_disjoint_rect_clips_is_empty() {
+    assert_eq!(
+        eval_err(
+            "newpath 100 100 200 200 rectclip newpath 150 150 100 100 rectclip \
+             0 0 1 1 rectclip clippath pathbbox"
+        ),
+        PsError::NoCurrentPoint
+    );
+}
+
+#[test]
 fn clippath_traces_a_diagonal_nested_clip() {
     // A 45°-rotated diamond nested with an axis-aligned rect exercises
     // the boundary tracer's diagonal-touch ("checkerboard") handling —
