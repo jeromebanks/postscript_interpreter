@@ -3,6 +3,20 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## `pkoil`: /Pressure now shapes ridges, highlight and shadow (issue #98, 2026-10-08)
+
+`pkoil` used to forward `/Pressure` only to the base ribbon, so constant-width
+ridge layers left thick flat ends under a tapering profile. `porad` (the
+ridge/highlight/shadow dash emitter) now scales each stop's lateral offset
+by `Pressure(t)` and renders each dash through a nested `pkribbon` whose
+`/Pressure` (`porpress`) remaps the ribbon's local 0..1 into the dash's slice
+`[porT0, porT1]` of the stop's *subpath* progress (walkpath's `t`, which
+restarts per subpath) -- otherwise every dash would get its own fresh 0..1
+domain. Negative pressure is clamped to 0 for the offset only. A single-point
+dab uses `Pressure(0)`, same as `pkribbon`'s dot, so a bell profile makes a
+dab vanish. Constant pressure leaves output unchanged. Tests:
+`oil_bell_pressure_*`, `oil_pressure_*` in `tests/paintkit.rs`.
+
 ## Groovy display faces: Chewy + Bagel Fat One (issue #155, 2026-09-29)
 
 Two rounded 60s/70s catalog faces for the shirt's `Real` lettering: Chewy

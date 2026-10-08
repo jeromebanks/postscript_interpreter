@@ -1570,6 +1570,14 @@
 % A single-point subpath scatters ridges isotropically around the point
 % so a dab reads as a pressed impasto cluster, not a line.
 %
+% /Pressure shapes the whole composite mark, not just the base: each
+% ridge/highlight/shadow dash scales both its lateral offset and its
+% width by Pressure(t), with t the stop's progress through its own
+% *subpath* (walkpath's t), so a zero-pressure end collapses every layer
+% onto the centerline. Dashes remap their local ribbon t back into that
+% subpath progress rather than restarting at 0. A single-point dab has
+% no progress; like pkribbon's dot it uses Pressure(0).
+%
 % Layering order (documented, deterministic):
 %  1. Base load ribbon at current color (full Width)
 %  2. Bristle ridges (Ridges thin ribbons, each broken by Markov)
@@ -1592,7 +1600,23 @@
     dup 1 ge { pop true } { dup 0 le { pop false } { frnd exch lt } ifelse } ifelse
 } def
 
+% Pressure proc handed to each nested pkribbon call. The nested ribbon
+% sees only its own run's polyline, so its t restarts at 0 for every
+% dash; remap it into the run's slice [porT0, porT1] of the *subpath's*
+% progress (walkpath's t) before consulting the caller's /Pressure, or
+% every short dash would get a fresh 0..1 pressure domain.
+% t -> mult
+% @internal
+/porpress { porT1 porT0 sub mul porT0 add poPressure } def
+
+% -
+% @internal
+/porbr { << /Width porw /Jitter poJitter /Pitch poPitch /Pressure /porpress load >> pkribbon } def
+
 % pooff porw porunstart porunend porad -
+% Offsets are scaled by the caller's /Pressure at each stop, and the
+% nested ribbon's width by the same profile (via porpress), so a ridge
+% never protrudes past the envelope the base ribbon is drawing.
 % @internal
 /porad {
     /porend exch def /porstart exch def /porw exch def /poroff exch def
@@ -1602,13 +1626,14 @@
     /poradi porstart def
     {
         poradi porend gt { exit } if
-        poraw poradi get dup 0 get /porpx exch def dup 1 get /porpy exch def dup 2 get /porpang exch def 4 get /porsp exch def
+        poraw poradi get dup 0 get /porpx exch def dup 1 get /porpy exch def dup 2 get /porpang exch def dup 3 get /porpt exch def 4 get /porsp exch def
+        /pormul porpt poPressure dup 0 lt { pop 0 } if def
         porsingle {
-            /porex porpx poroff pkjit add def
-            /porey porpy poroff pkjit add def
+            /porex porpx poroff pormul mul pkjit add def
+            /porey porpy poroff pormul mul pkjit add def
         } {
-            /porex porpx porpang 90 add cos poroff mul add def
-            /porey porpy porpang 90 add sin poroff mul add def
+            /porex porpx porpang 90 add cos poroff mul pormul mul add def
+            /porey porpy porpang 90 add sin poroff mul pormul mul add def
         } ifelse
         poradi porstart gt {
             porstate {
@@ -1618,14 +1643,15 @@
             } ifelse
         } if
         porstate {
-            porwasoff { newpath porex porey moveto } { porex porey lineto } ifelse
+            porwasoff { /porT0 porpt def newpath porex porey moveto } { porex porey lineto } ifelse
+            /porT1 porpt def
         } {
-            porwasoff not { << /Width porw /Jitter poJitter /Pitch poPitch >> pkribbon } if
+            porwasoff not { porbr } if
         } ifelse
         /porwasoff porstate not def
         /poradi poradi 1 add def
     } loop
-    porstate { << /Width porw /Jitter poJitter /Pitch poPitch >> pkribbon } if
+    porstate { porbr } if
 } def
 
 % @kind: Procedure
@@ -1643,7 +1669,7 @@
 % @param: /EdgePickup 0..1 darker pickup at the envelope edges (default 0.15)
 % @param: /Highlight 0..1 restrained highlight strength on one side (default 0.12)
 % @param: /Shadow 0..1 restrained shadow strength on the opposite side (default 0.10)
-% @param: /Pressure {t -> mult} proc over normalized path progress, forwarded to the base ribbon (default { pkflat })
+% @param: /Pressure {t -> mult} proc over normalized path progress; shapes the base ribbon, bristle ridges, highlight and shadow alike (default { pkflat })
 % @param: /Jitter Seeded edge displacement amount, forwarded to each dash's pkribbon Jitter (default 0)
 /pkoil {
     /poopts exch def

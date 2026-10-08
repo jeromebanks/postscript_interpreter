@@ -2507,6 +2507,79 @@ fn oil_validation_and_safety() {
     );
 }
 
+// Issue #98: /Pressure must shape the whole composite oil mark (ridges,
+// highlight, shadow), not just the hidden base ribbon.
+fn oil_repro(pressure: &str, path: &str) -> Interp {
+    let mut it = fresh(240, 120);
+    let src = format!(
+        "0.8 0.2 0.1 setrgbcolor 7 srand {path} << /Width 30 /Pitch 4 /Ridges 12 \
+         /RidgeSpread 0.75 /RidgeWidth 4 /WidthJitter 0 /Load 1 /Dropout 0 \
+         /ColorJitter 0 /EdgePickup 0 /Highlight 0.12 /Shadow 0.1 /Jitter 0 \
+         /Pressure {{ {pressure} }} >> pkoil"
+    );
+    it.run_str(&src)
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    it
+}
+
+#[test]
+fn oil_bell_pressure_tapers_the_whole_composite_mark() {
+    let path = "newpath 20 60 moveto 220 60 lineto";
+    let flat = oil_repro("pkflat", path);
+    let bell = oil_repro("pkbell", path);
+    // Near the endpoint the bell profile is almost closed; layers with
+    // fixed offsets/widths used to leave thick flat ends.
+    let (flat_end, bell_end) = (column_height(&flat, 24, 120), column_height(&bell, 24, 120));
+    assert!(
+        flat_end >= 25,
+        "flat stays full width at the end: {flat_end}"
+    );
+    assert!(bell_end <= 8, "bell must taper every layer: {bell_end}");
+    // The middle is unchanged by the profile (bell peaks at 1).
+    let (flat_mid, bell_mid) = (
+        column_height(&flat, 120, 120),
+        column_height(&bell, 120, 120),
+    );
+    assert!(bell_mid + 3 >= flat_mid, "mid {bell_mid} vs {flat_mid}");
+    // And nothing protrudes beyond the base ribbon's own envelope.
+    let mut base = fresh(240, 120);
+    base.run_str("0.8 0.2 0.1 setrgbcolor newpath 20 60 moveto 220 60 lineto << /Width 30 /Pitch 4 /Pressure { pkbell } >> pkribbon")
+        .unwrap();
+    for x in [24, 40, 80, 120, 160, 200, 216] {
+        assert!(
+            column_height(&bell, x, 120) <= column_height(&base, x, 120) + 2,
+            "x={x}: oil {} vs base {}",
+            column_height(&bell, x, 120),
+            column_height(&base, x, 120)
+        );
+    }
+}
+
+#[test]
+fn oil_pressure_progress_is_global_across_broken_ridge_runs() {
+    // Heavy dropout breaks the ridges into short dashes. Every dash must
+    // still follow the subpath-wide profile: the far (low-pressure) end
+    // stays narrow rather than each dash re-expanding to full width.
+    let mut it = fresh(240, 120);
+    it.run_str("0.8 0.2 0.1 setrgbcolor 7 srand newpath 20 60 moveto 220 60 lineto << /Width 30 /Pitch 4 /Ridges 12 /Load 0.3 /Dropout 0.9 /Highlight 0.2 /Shadow 0.2 /Pressure { pktaper } >> pkoil")
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let start = column_height(&it, 30, 120);
+    let end = column_height(&it, 210, 120);
+    assert!(start <= 12, "taper starts narrow: {start}");
+    assert!(end >= 20, "taper ends wide: {end}");
+}
+
+#[test]
+fn oil_pressure_runs_per_subpath() {
+    let bell = oil_repro(
+        "pkbell",
+        "newpath 20 30 moveto 120 30 lineto 20 90 moveto 120 90 lineto",
+    );
+    // Second subpath restarts its own 0..1 progress.
+    assert!(column_height(&bell, 24, 120) <= 16);
+    assert!(column_height(&bell, 70, 120) >= 40);
+}
+
 #[test]
 fn spray_degenerate_point_honors_endpoint_bursts() {
     // Codex review, PR #83: a bare moveto reports atend==3 (both first
