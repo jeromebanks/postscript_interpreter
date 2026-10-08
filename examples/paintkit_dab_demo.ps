@@ -33,7 +33,8 @@
 
 /spine {                                   % x y -   (a shared short spine)
     /spy exch def /spx exch def
-    newpath spx spy moveto spx 70 add spy 14 add spx 140 add spy lineto
+    newpath spx spy moveto
+    spx 45 add spy 22 add spx 95 add spy 22 add spx 140 add spy curveto
 } def
 
 0.22 0.46 0.20 setrgbcolor
@@ -51,7 +52,7 @@
 220 420 (Irregular 1 -- ragged) dmlabel
 220 385 spine << /Size 7 /Spread 18 /Irregular 1 >> pkdab
 420 420 (a pressed clump: one point) dmlabel
-490 385 moveto << /Size 7 /Spread 24 /Clump 26 >> pkdab
+newpath 490 385 moveto << /Size 7 /Spread 24 /Clump 26 >> pkdab
 
 % --- row 2: the three layers, and the light ----------------------------
 20 340 (Shadow only) dmlabel

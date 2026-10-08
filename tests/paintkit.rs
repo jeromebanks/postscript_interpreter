@@ -7169,23 +7169,73 @@ fn dab_highlights_sit_on_the_painted_mass() {
     );
 }
 
+/// The next `rand` after a pkdab call: equal across two runs exactly when
+/// the call consumed the same number of draws from the stream.
+fn dab_stream_after(opts: &str, path: &str) -> String {
+    let mut it = fresh(400, 200);
+    it.run_str(&format!(
+        "0 0 0 setrgbcolor 23 srand {path} << {opts} >> pkdab rand"
+    ))
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    it.operand_stack()
+        .last()
+        .map(|o| o.repr())
+        .expect("a rand value")
+}
+
 #[test]
-fn dab_layer_knobs_do_not_reroll_the_body() {
-    // /Shadow 0 /Highlight 0 leaves only the body layer. The body layer
-    // of a layered render must be identical wherever no other layer
-    // paints, which the dab count (and so the draw stream) pins: the
-    // fully charged ink footprint is the same with and without layers
-    // up to the rim the layers add.
-    let body = dab_pixels(&dab("/Shadow 0 /Highlight 0 /ColorJitter 0"));
-    let again = dab_pixels(&dab("/Shadow 0 /Highlight 0 /ColorJitter 0.9"));
-    // Colour jitter shifts tint but draws the same stream, so the
-    // silhouette (alpha channel) is identical.
-    let alpha = |v: &Vec<u8>| v.chunks(4).map(|c| c[3]).collect::<Vec<_>>();
-    assert_eq!(
-        alpha(&body),
-        alpha(&again),
-        "ColorJitter re-rolled the layout"
+fn dab_layout_knobs_leave_the_random_stream_alone() {
+    let base = dab_stream_after("/Size 6", DAB_PATH);
+    for knob in [
+        "/Charge 0.2",
+        "/Shadow 0",
+        "/Highlight 1",
+        "/Light 45",
+        "/ColorJitter 0.9",
+        "/Irregular 1",
+        "/Spread 40",
+    ] {
+        assert_eq!(
+            dab_stream_after(&format!("/Size 6 {knob}"), DAB_PATH),
+            base,
+            "{knob} changed how many draws pkdab takes"
+        );
+    }
+    // ...and the knobs documented as changing the layout do.
+    assert_ne!(dab_stream_after("/Size 6 /Density 6", DAB_PATH), base);
+}
+
+#[test]
+fn dab_short_strokes_and_taps_still_land() {
+    // Shorter than Size/Density: accumulates under one dab, must not vanish.
+    let twig = dab_with("0 0 0", "newpath 100 100 moveto 101 100 lineto", "/Size 6");
+    assert!(ink_count(&twig) > 40, "a 1pt stroke painted nothing");
+    // No extent at all: a tap, routed to the clump.
+    let tap = dab_with(
+        "0 0 0",
+        "newpath 100 100 moveto 100 100 lineto",
+        "/Size 6 /Clump 12",
     );
+    assert!(
+        ink_count(&tap) > 200,
+        "a zero-extent stroke painted nothing"
+    );
+    // Density 0 is the caller asking for none along lines.
+    let none = dab_with(
+        "0 0 0",
+        "newpath 100 100 moveto 101 100 lineto",
+        "/Density 0",
+    );
+    assert_eq!(ink_count(&none), 0);
+}
+
+#[test]
+fn dab_tiny_pitch_does_not_trip_the_budget_by_itself() {
+    let mut it = fresh(400, 200);
+    it.run_str(&format!(
+        "0 0 0 setrgbcolor {DAB_PATH} << /Size 6 /Pitch 0.01 /Density 0 >> pkdab"
+    ))
+    .expect("density 0 on a finely sampled spine is not a budget problem");
 }
 
 #[test]

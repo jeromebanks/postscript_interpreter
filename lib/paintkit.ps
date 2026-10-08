@@ -4918,7 +4918,11 @@ systemdict /setalpha known /pwhasalpha exch def
         pdae 3 eq {
             /pdest pdest pdclump add def
         } {
-            /pdest pdest pddens pdasp mul pdsize div add 1 add def
+            % The accumulator carries its fraction across stops, so a
+            % whole subpath can round up by at most one dab (the one
+            % guaranteed below), not one per stop.
+            /pdest pdest pddens pdasp mul pdsize div add
+                pdae 1 and 1 eq { 1 add } if def
         } ifelse
         pdest 20000 gt { pkdab-dab-count-exceeds-safety-limit } if
         /pdcount pdcount 1 add def
@@ -4948,14 +4952,22 @@ systemdict /setalpha known /pwhasalpha exch def
             dup 4 get /pdsp exch def
             5 get /pdae exch def
             pdae 3 eq {
-                /pdk pdclump def
+                /pdnd pdclump def
             } {
-                pdae 1 and 1 eq { /pdacc 0 def } if
+                pdae 1 and 1 eq { /pdacc 0 def /pdgot false def } if
                 /pdacc pdacc pddens pdsp mul pdsize div add def
-                /pdk pdacc truncate cvi def
-                /pdacc pdacc pdk sub def
+                /pdnd pdacc truncate cvi def
+                /pdacc pdacc pdnd sub def
+                % A stroke shorter than Size/Density accumulates under one
+                % dab and would paint nothing at all, which a twig or a
+                % tap of the brush must not do: a non-empty subpath always
+                % lands at least one dab, at its last stop. Density 0 is
+                % the caller asking for no dabs along lines, and stays so.
+                pdnd 0 gt { /pdgot true def } if
+                pdae 2 and 2 eq pdgot not and pddens 0 gt and
+                    { /pdnd 1 def } if
             } ifelse
-            1 1 pdk {
+            1 1 pdnd {
                 pop
                 /pdd 14 array def
                 frnd 360 mul /pdsa exch def
