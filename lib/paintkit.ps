@@ -986,30 +986,27 @@
 % proportionally -- see NOTES.md's issue #43 entry for the full
 % figures.
 %
-% Known residual gap, not closed here (issue #79): the deposit budget
-% above bounds `Bristles * stops`, not the cost of each dash's own
-% *nested* pkribbon call, which re-walks that dash's offset polyline at
-% /Pitch. That nested cost normally tracks the corresponding centerline
-% segment's own length closely -- but at a sharp cusp (a near-180
-% degree tangent reversal between two adjacent walkpath stops), the two
-% stops' perpendicular offsets (each up to Width/2*Spread from the
-% centerline) can end up O(Width) apart even though the centerline
-% stops themselves were close together, and re-walking that one segment
-% at /Pitch then costs O(Width/Pitch) nested samples the outer guard
-% never sees (Codex review, PR #78 round 3; repro in issue #79). Two
-% fixes were evaluated and rejected: a blanket worst-case multiplier on
-% the deposit budget rejects pkdry's own *default* settings on the
-% demo's flourish (~373000 against the 150000 budget); a static
-% (Width*Spread)/Pitch ratio cap, independent of the path's actual
-% geometry, rejects legitimate smooth large-Width strokes that never
-% approach a real cusp. Both point at the same root cause -- walkpath's
-% contract is one global, uniform pitch across the whole path, with no
-% way to sample finely along a genuine curve while sampling coarsely
-% across a single cusp-induced jump -- which needs its own per-segment-
-% adaptive design, not a quick patch. Triggering this needs a /Width//
-% Pitch ratio in the thousands *plus* a genuine cusp, three orders of
-% magnitude past anything in examples/paintkit_dry_demo.ps or realistic
-% use.
+% Cusp guard (issue #79): the stop budget above doesn't see the cost of
+% each dash's nested pkribbon call, which re-walks its offset polyline
+% at /Pitch -- at a near-180 degree tangent reversal adjacent stops'
+% offsets can be O(Width) apart. The counting pass therefore also sums
+% a geometric bound on every adjacent-offset distance (see the comment
+% there) and raises `pkdry-cusp-resample-count-exceeds-safety-limit`
+% past a 60000-sample allowance, before any drawing. Straight and smooth
+% strokes add ~0, so pkdry's defaults and large-Width smooth strokes
+% are unaffected.
+%
+%%SelfTest: pkdry-cusp-guard-rejects-reversals-but-not-straight-strokes
+%   % Issue #79: a sharp cusp at a huge Width/Pitch ratio is rejected
+%   % in the counting pass; the same Width on a straight stroke is not.
+%   { newpath 0 0 moveto 1 0 lineto 1 1 lineto
+%     << /Width 100000 /Bristles 2 /Pitch 1 /Load 1 /Dropout 0 >> pkdry }
+%   /pkdry-cusp-resample-count-exceeds-safety-limit
+%   (a right-angle cusp at Width/Pitch = 100000) mustguard
+%   { newpath 0 0 moveto 100 0 lineto
+%     << /Width 100000 /Bristles 2 /Pitch 1 >> pkdry }
+%   (a huge Width on a straight stroke) mustpass
+%%EndSelfTest
 %
 % Scratch prefix pb- (pkdry/pbdashrun) -- deliberately distinct from
 % pk-/pn-, see the file header.
@@ -1104,12 +1101,37 @@
     % /Pitch on a long (~1500-unit) stroke, while still rejecting a
     % custom /Pitch fine enough to multiply that out by another order
     % of magnitude.
+    %
+    % Cusp guard (issue #79), same counting pass and so also before any
+    % drawing: a dash's nested pkribbon re-walks its offset polyline at
+    % /Pitch, and between two adjacent stops whose tangents differ by
+    % d degrees the offset points can sit up to 2*maxoff*sin(d/2)
+    % apart (maxoff = the widest a bristle's offset can get: its slot
+    % in the envelope plus pkjit's 0.15*halfspread, so 1.15*halfspread).
+    % That bound is geometry only -- it doesn't depend on the random
+    % draws -- and smooth or straight stretches contribute almost
+    % nothing, so only a real near-reversal of direction costs.
+    % Accumulated in nested samples over Bristles and checked against a
+    % dedicated 60000 allowance on top of the 150000 stop budget.
+    /pbmaxoff pbwidth 0.5 mul pbspread mul 1.15 mul def
+    /pbcextra 0 def
+    /pbcprev 0 def
     /pbcount 0 def
     pbpitch {
-        pop pop pop pop pop pop
+        /pbcae exch def pop pop /pbcang exch def pop pop
         /pbcount pbcount 1 add def
         pbbristles pbcount mul 150000 gt
             { pkdry-deposit-count-exceeds-safety-limit } if
+        pbcae 1 and 1 ne {
+            /pbcd pbcang pbcprev sub abs def
+            pbcd 180 gt { /pbcd 360 pbcd sub def } if
+            /pbcextra
+                pbcextra pbmaxoff 2 mul pbcd 2 div sin mul pbpitch div add
+            def
+            pbbristles pbcextra mul 60000 gt
+                { pkdry-cusp-resample-count-exceeds-safety-limit } if
+        } if
+        /pbcprev pbcang def
     } walkpath
     /pbn pbcount def
 
@@ -1685,7 +1707,8 @@
 % the counting walk, not after). The per-ridge dash calls reuse
 % poPitch for their own nested pkribbon resampling, so the budget
 % accounts for outer stops only, not multiplied nested cost — same
-% scope as pkdry's own limit and its documented #79 residual gap.
+% scope as pkdry's outer limit (pkdry's nested cost is bounded
+% separately by its issue #79 cusp guard; pkoil has no equivalent).
 %
 % Scratch prefix po- (pkoil/poroll/porad) — deliberately distinct from
 % pk-/pn-/pb-/pz-, since pkoil calls pkribbon and would clobber pk*
