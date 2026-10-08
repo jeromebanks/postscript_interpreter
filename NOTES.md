@@ -13,8 +13,8 @@ by `Pressure(t)` and renders each dash through a nested `pkribbon` whose
 `[porT0, porT1]` of the stop's *subpath* progress (walkpath's `t`, which
 restarts per subpath) -- otherwise every dash would get its own fresh 0..1
 domain. Negative pressure is clamped to 0 for the offset only. A single-point
-dab uses `Pressure(0)`, same as `pkribbon`'s dot, so a bell profile makes a
-dab vanish. Constant pressure leaves output unchanged. Tests:
+dab's ridges ignore `/Pressure` (full strength, preserving the pressed
+cluster); only the base dot follows `Pressure(0)` like `pkribbon`'s dot. Constant pressure leaves output unchanged. Tests:
 `oil_bell_pressure_*`, `oil_pressure_*` in `tests/paintkit.rs`.
 
 ## Groovy display faces: Chewy + Bagel Fat One (issue #155, 2026-09-29)

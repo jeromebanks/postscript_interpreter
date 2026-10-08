@@ -1576,7 +1576,8 @@
 % *subpath* (walkpath's t), so a zero-pressure end collapses every layer
 % onto the centerline. Dashes remap their local ribbon t back into that
 % subpath progress rather than restarting at 0. A single-point dab has
-% no progress; like pkribbon's dot it uses Pressure(0).
+% no progress, so its ridges ignore /Pressure (full strength, the
+% pre-#98 pressed-cluster look); only the base dot follows Pressure(0).
 %
 % Layering order (documented, deterministic):
 %  1. Base load ribbon at current color (full Width)
@@ -1607,7 +1608,7 @@
 % every short dash would get a fresh 0..1 pressure domain.
 % t -> mult
 % @internal
-/porpress { porT1 porT0 sub mul porT0 add poPressure } def
+/porpress { porsingle { pop 1 } { porT1 porT0 sub mul porT0 add poPressure } ifelse } def
 
 % -
 % @internal
@@ -1627,7 +1628,7 @@
     {
         poradi porend gt { exit } if
         poraw poradi get dup 0 get /porpx exch def dup 1 get /porpy exch def dup 2 get /porpang exch def dup 3 get /porpt exch def 4 get /porsp exch def
-        /pormul porpt poPressure dup 0 lt { pop 0 } if def
+        /pormul porsingle { 1 } { porpt poPressure dup 0 lt { pop 0 } if } ifelse def
         porsingle {
             /porex porpx poroff pormul mul pkjit add def
             /porey porpy poroff pormul mul pkjit add def
