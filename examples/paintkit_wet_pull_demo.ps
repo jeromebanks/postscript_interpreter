@@ -1,0 +1,270 @@
+%!PS-Adobe-3.0
+%%Title: Paintkit — directional wet: pulled reflections, lifted mist, sweeps (issue #181)
+%%BoundingBox: 0 0 780 640
+%%EndComments
+
+% Specimen for pkwet's directional mode (lib/paintkit.ps). Plain pkwet
+% softens a mark by re-running it with each pass displaced a little
+% further and mixed a little further toward /Under, scattered all
+% round the mark. /Direction lines those passes up instead, so the same
+% wrapper becomes the three directional blends a wet-on-wet landscape
+% is built from:
+%
+%   the pull-down  a reflection dragged straight down with a dry brush
+%                  (/Direction 270 /OneSided true)
+%   the lift       a mountain's foot tapped and lifted into haze
+%                  (/Direction 90 /OneSided true)
+%   the sweep      a sky softened with long horizontal strokes
+%                  (/Direction 0, both ways)
+%
+% Top row: one small mirrored scene three times -- the reflection left
+% sharp, pulled down, and pulled down then grazed across. Bottom row:
+% a mountain foot under today's isotropic wet mist and under a lift,
+% and a criss-cross sky before and after a sweep.
+%
+% Two rules this page follows, and every directional call needs:
+%
+%   * The wrapped procedure paints in the color it inherits. pkwet
+%     grades a pass by setting a mixed color *before* the procedure
+%     runs, so a procedure that sets its own color draws every pass at
+%     full strength and the pull comes out as hard echoes. A scene of
+%     several colors is wrapped element by element, each with the
+%     /Under that really is beneath it.
+%   * /Direction is measured in the user space pkwet is called in.
+%     Each reflected element here puts the mirror *inside* its
+%     procedure, so 270 is down the page; call pkwet from inside a
+%     `1 -1 scale` and 270 would point up.
+%
+% No alpha anywhere, so Ghostscript renders the same page (its rand
+% stream differs, so the marks fall differently).
+%
+%   pscat --page 780x640 examples/paintkit_wet_pull_demo.ps --png pull.png
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+
+181 srand
+
+/pdset { aload pop setrgbcolor } def
+
+/pdSKYTOP  [0.36 0.50 0.74] def
+/pdSKYLOW  [0.93 0.88 0.80] def
+/pdRANGE   [0.36 0.38 0.54] def
+/pdSNOW    [0.98 0.97 0.95] def
+/pdTREES   [0.12 0.22 0.20] def
+/pdWATER   [0.44 0.54 0.66] def
+/pdMIST    [0.86 0.86 0.88] def
+
+1 1 1 setrgbcolor clippath fill
+
+/pdlabel {                                 % x y string -
+    /pdls exch def /pdly exch def /pdlx exch def
+    gsave
+        0.4 0.4 0.4 setrgbcolor
+        /Helvetica findfont 10 scalefont setfont
+        pdlx pdly moveto pdls show
+    grestore
+} def
+
+% ======================================================================
+% The scene, in panel-local coordinates: 240 wide, waterline at 150
+% ======================================================================
+/pdW 240 def
+/pdWL 150 def
+
+% y -> r g b   the sky at height y above the waterline
+/pdskyat { pdWL sub 170 div 0 max 1 min /pdst exch def pdSKYLOW pdSKYTOP pdst 0.8 exp mix3 } def
+
+/pdPTS [ -10 196  30 228  62 262  84 248  112 290  140 254  170 236
+         196 258  226 230  250 214 ] def
+/pdrangepath {
+    newpath -10 pdWL moveto
+    0 2 pdPTS length 1 sub { pdPTS exch 2 getinterval aload pop lineto } for
+    250 pdWL lineto closepath
+} def
+
+% Each element seeds itself, so the mirrored copy matches mark for mark,
+% and none sets a color: the caller does, so pkwet can grade it.
+/pdrange { pdrangepath fill } def
+/pdsnow {
+    3 srand
+    gsave pdrangepath clip
+    [ 62 262  112 290  196 258 ] /pdpk exch def
+    0 2 4 {
+        /pdk exch def
+        /pdpx pdpk pdk get def /pdpy pdpk pdk 1 add get def
+        0 1 3 {
+            /pdj exch def
+            newpath pdpx pdj 5 mul sub 2 add pdpy pdj 4 mul sub moveto
+            pdpx pdj 9 mul sub 6 sub pdpy 34 sub pdj 6 mul sub lineto
+            << /Width 14 pdj 2 mul sub /Angle 12 /Coverage 0.8 /Viscosity 0.7
+               /Scrape 0.35 /Drag 0.5 >> pktrowel
+        } for
+    } for
+    grestore
+} def
+/pdtrees {
+    4 srand
+    gsave
+        newpath -10 pdWL moveto
+        -10 4 250 { dup 3.1 mul sin 5 mul 14 add pdWL add lineto } for
+        250 pdWL lineto closepath fill
+    grestore
+    newpath -10 pdWL 14 add moveto
+    -10 4 250 { dup 3.1 mul sin 5 mul 14 add pdWL add lineto } for
+    << /Size 2 /Spread 4 /Density 4 /Shadow 0.3 /Highlight 0.08 /Irregular 1 >> pkdab
+    0 1 9 {
+        /pdk exch def
+        /pdx pdk 23 mul 9 add 6 jit add def
+        newpath pdx pdWL 12 add moveto pdx pdWL 30 add 8 chance add lineto
+        << /Width 5 /Bristles 10 /Splay 0.9 /Load 0.9 /Ragged 0.5 /Flick 0.9 >> pkfan
+    } for
+} def
+
+/pdmirror { 0 pdWL 2 mul translate 1 -1 scale } def
+
+/pdsky {
+    pdWL 2 320 { /pdy exch def pdy pdskyat setrgbcolor 0 pdy pdW 2.5 rectfill } for
+} def
+/pdwater {
+    pdWL -2 0 {
+        /pdy exch def
+        [ pdWL pdy sub pdWL add pdskyat ] 0.82 shade setrgbcolor
+        0 pdy pdW 2.5 rectfill
+    } for
+} def
+
+% the dry scene above the waterline, identical in every panel
+/pdabove {
+    pdsky
+    pdRANGE pdset pdrange
+    pdSNOW pdset pdsnow
+    pdTREES pdset pdtrees
+} def
+
+% wrapper-proc opts-or-null -   reflects each element through `wrap`,
+% which is either a plain exec (sharp) or a pkwet call
+/pdreflect {
+    /pdwrap exch def
+    [ pdRANGE 0.8 shade ] pdset
+    { gsave pdmirror pdrange grestore } [ pdWATER aload pop ] pdwrap
+    [ pdSNOW 0.82 shade ] pdset
+    { gsave pdmirror pdsnow grestore } [ pdRANGE 0.8 shade ] pdwrap
+    [ pdTREES 0.8 shade ] pdset
+    % beneath the reflected trees is the reflected range, not open water
+    { gsave pdmirror pdtrees grestore } [ pdRANGE 0.8 shade ] pdwrap
+} def
+
+/pdpanel {                                 % x y wrap label -
+    /pdlab exch def /pdwr exch def /pdpy0 exch def /pdpx0 exch def
+    gsave
+        pdpx0 pdpy0 translate
+        newpath 0 0 pdW 320 rectclip
+        pdabove
+        gsave
+            0 0 pdW pdWL rectclip
+            pdwater
+            pdwr load pdreflect
+            % the light line where the shore meets its reflection
+            [ pdWL pdskyat ] 1.1 shade setrgbcolor
+            0 pdWL 2 sub pdW 1.2 rectfill
+        grestore
+    grestore
+    pdpx0 pdpy0 14 sub pdlab pdlabel
+} def
+
+% the three treatments: proc under-array -
+/pdsharp { pop exec } def
+/pdpull {
+    /pdu exch def
+    << /Direction 270 /OneSided true /Stretch 10 /Spread 22
+       /Pickup 0.8 /Under pdu >> pkwet
+} def
+/pdpullgraze {
+    /pdu2 exch def
+    /pdgp exch def
+    { /pdgp load pdu2 pdpull }
+    << /Direction 0 /Stretch 6 /Layers 3 /Spread 6 /Pickup 0.5 /Under pdu2 >> pkwet
+} def
+
+20  300 /pdsharp     (reflection left sharp) pdpanel
+270 300 /pdpull      (pulled down: /Direction 270 /OneSided true) pdpanel
+520 300 /pdpullgraze (pulled down, then grazed across) pdpanel
+
+% ======================================================================
+% Bottom row: a mountain foot dissolved into mist, and a swept sky
+% ======================================================================
+/pdH2 230 def
+/pdMPTS [ -10 120  40 150  80 196  110 176  150 214  190 168  250 140 ] def
+/pdfoot {                                  % wrap-proc label x -
+    /pdfx exch def /pdflab exch def /pdfw exch def
+    gsave
+        pdfx 30 translate
+        newpath 0 0 pdW pdH2 rectclip
+        0 2 pdH2 { /pdy exch def pdy 150 add pdskyat setrgbcolor 0 pdy pdW 2.5 rectfill } for
+        pdRANGE pdset
+        newpath -10 0 moveto
+        0 2 pdMPTS length 1 sub { pdMPTS exch 2 getinterval aload pop lineto } for
+        250 0 lineto closepath fill
+        % the haze the foot stands in, then a band of fine spray mist
+        % tapped along the foot -- particulate, like the gallery's mist,
+        % so the passes break up instead of stacking into stripes
+        pdMIST pdset 0 0 pdW 22 rectfill
+        11 srand
+        /pdmark {
+            0 1 2 {
+                /pdk exch def
+                newpath -20 24 pdk 6 mul add moveto
+                80 30 pdk 6 mul add 160 18 pdk 6 mul add 260 26 pdk 6 mul add curveto
+                << /Nozzle 10 /Density 160 /Falloff 1 /Speck 1 /Speckle 0.6
+                   /Overspray 0.6 >> pkspray
+            } for
+        } def
+        /pdmark load pdfw load exec
+    grestore
+    pdfx 16 pdflab pdlabel
+} def
+
+/pdmistwet  { << /Soft 1 /Under pdRANGE >> pkwet } def
+/pdmistlift {
+    << /Direction 90 /OneSided true /Stretch 8 /Spread 46 /Pickup 0.9
+       /Under pdRANGE >> pkwet
+} def
+
+/pdmistwet  (mist, isotropic wet: a halo) 20 pdfoot
+/pdmistlift (mist lifted: /Direction 90 /OneSided true) 270 pdfoot
+
+% A criss-cross sky block-in, left half as laid, right half swept.
+gsave
+    520 30 translate
+    newpath 0 0 pdW pdH2 rectclip
+    0 2 pdH2 { /pdy exch def pdy 150 add pdskyat setrgbcolor 0 pdy pdW 2.5 rectfill } for
+    0 1 1 {
+        /pdhalf exch def
+        gsave
+            pdhalf 120 mul 0 120 pdH2 rectclip
+            12 srand
+            0 1 40 {
+                pop
+                /pdx 280 chance 30 sub def
+                /pdy pdH2 20 add chance 10 sub def
+                /pdd 1 2 chance 2 mul sub def
+                /pdsc [ pdy 150 add pdskyat ] def
+                [ pdsc aload pop ] 1.0 8 jit 100 div add shade setrgbcolor
+                /pdstroke {
+                    newpath pdx pdy moveto pdx 44 add pdy 26 pdd mul add lineto
+                    << /Width 22 /Charge 0.8 /Depletion 0.7 /Edge 0.3 >> pkbroad
+                } def
+                pdhalf 0 eq
+                    { pdstroke }
+                    { /pdstroke load
+                      << /Direction 0 /Stretch 10 /Spread 30 /Pickup 0.9 /Under pdsc >> pkwet }
+                ifelse
+            } for
+        grestore
+    } for
+    0.4 0.4 0.4 setrgbcolor 120 0 0.6 pdH2 rectfill
+grestore
+520 16 (sky: as laid  |  swept: /Direction 0) pdlabel
+
+showpage

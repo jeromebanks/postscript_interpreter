@@ -3912,10 +3912,16 @@
     /pqSoft pqopts /Soft 0.6 pkgetdef def
     /pqSoft load xcheck { pkwet-soft-must-not-be-a-procedure } if
     pqSoft 0 lt pqSoft 1 gt or { pkwet-soft-must-be-0-to-1 } if
+    % Directional mode (issue #181) is keyed off whether /Direction is
+    % *present*, so a call that never names it takes exactly the path it
+    % always did: same defaults, same 1..6 cap, same plan loop, same
+    % draws. It is decided first because it sets the /Layers cap.
+    /pqdir pqopts /Direction known def
     /pqLayers pqopts /Layers pqSoft 5 mul round cvi 1 add pkgetdef def
     /pqLayers load xcheck { pkwet-layers-must-not-be-a-procedure } if
-    pqLayers 1 lt pqLayers 6 gt or pqLayers truncate pqLayers ne or
-        { pkwet-layers-must-be-1-to-6 } if
+    pqLayers 1 lt pqLayers pqdir { 16 } { 6 } ifelse gt or
+    pqLayers truncate pqLayers ne or
+        { pqdir { pkwet-layers-must-be-1-to-16 } { pkwet-layers-must-be-1-to-6 } ifelse } if
     % `/Layers 3.0` clears the whole-number check above and is a
     % perfectly reasonable thing for a caller to compute, but it is still
     % a real, and `real array` raises typecheck in both pscat and
@@ -3938,14 +3944,71 @@
             { pkwet-under-components-must-be-numbers } if
         dup 0 lt exch 1 gt or { pkwet-under-components-must-be-0-to-1 } if
     } for
+    % /Stretch and /OneSided only mean anything along a direction; given
+    % without one they are rejected rather than silently ignored, since
+    % an artist who wrote them expected a pull and would otherwise get a
+    % plain halo with no hint why.
+    pqdir {
+        /pqDirection pqopts /Direction get def
+        /pqDirection load xcheck { pkwet-direction-must-not-be-a-procedure } if
+        /pqDirection load type dup /integertype ne exch /realtype ne and
+            { pkwet-direction-must-be-a-number } if
+        /pqStretch pqopts /Stretch 8 pkgetdef def
+        /pqStretch load xcheck { pkwet-stretch-must-not-be-a-procedure } if
+        /pqStretch load type dup /integertype ne exch /realtype ne and
+            { pkwet-stretch-must-be-a-number } if
+        pqStretch 1 lt { pkwet-stretch-must-be-at-least-1 } if
+        /pqOneSided pqopts /OneSided false pkgetdef def
+        /pqOneSided load type /booleantype ne { pkwet-onesided-must-be-a-boolean } if
+        % Every pass is an identical copy of the mark (a procedure that
+        % reseeds, as every reflected element must, draws the same marks
+        % each time), and lined up along one axis those copies read as
+        % stepped echoes once they sit more than about 2pt apart --
+        % measured on a pulled treeline at 6 layers over 22pt, where the
+        % crest repeated as distinct bands. So a directional call's
+        % *default* depth is whatever keeps the step under 2pt, which is
+        % why its cap is 16 rather than 6. Only the default: an explicit
+        % /Layers is honored as given, and a single-layer call (/Soft 0)
+        % stays the plain call it is everywhere else.
+        pqopts /Layers known not pqLayers 1 gt and {
+            /pqLayers pqLayers pqSpread 2 div ceiling cvi 1 add max 16 min def
+        } if
+    } {
+        pqopts /Stretch known { pkwet-stretch-needs-a-direction } if
+        pqopts /OneSided known { pkwet-onesided-needs-a-direction } if
+    } ifelse
     pqdnow 1 add pqdset
     % Roll the depth back *before* signalling. A caller that catches this
     % with `stopped` would otherwise be left with pqdepth stuck above the
     % limit, so one rejected nested call would poison every later
     % top-level pkwet until the library was reloaded (Codex review).
     pqdnow 8 gt { pqdnow 1 sub pqdset pkwet-nesting-too-deep } if
-    userdict /pqframes get pqdnow 2 array put
+    % The pass budget (issue #181). Nesting multiplies: every pass of an
+    % outer call runs the inner call's every pass, so the wrapped mark's
+    % cost is the *product* of /Layers down the chain. Directional mode
+    % raised the per-call cap to 16 and its headline use, pulling a
+    % reflection down and then grazing it across, is a nest by design --
+    % over a reflection that is already a second copy of the scene. So a
+    % chain with any directional call in it may multiply its innermost
+    % mark at most 64 times (a full pull, 16, grazed 4 ways), checked
+    % here, before any of this call's draws. Purely isotropic chains are
+    % left as they always were, under the 1..6-per-call and depth-8 caps.
+    % Each frame records its own running product and flag, so the parent
+    % is read off its frame rather than a counter that would need
+    % unwinding -- the depth machinery below already restores which frame
+    % is live. Depth 1 has no parent; slot 0 is never written.
+    pqdnow 1 gt
+        { userdict /pqframes get pqdnow 1 sub get dup 2 get exch 3 get }
+        { 1 false }
+    ifelse
+    pqdir or /pqchaindir exch def
+    pqLayers mul /pqchain exch def
+    pqchaindir pqchain 64 gt and
+        { pqdnow 1 sub pqdset pkwet-too-many-passes } if
+    userdict /pqframes get pqdnow 4 array put
     pqmyframe 1 /pqproc load put
+    pqmyframe 2 pqchain put
+    pqmyframe 3 pqchaindir put
     /pqbase [ currentrgbcolor ] def
     % Plan every pass before running any of them, so that none of pkwet's
     % own randomness is interleaved with the wrapped proc's -- otherwise
@@ -3973,8 +4036,24 @@
             % is a property of /Layers, which is allowed to change
             % consumption, and is what keeps /Soft 0 free.
             pqf 0 gt {
-                /pqang pqi 137.5 mul 40 pkjit add def
-                pqang cos pqmag mul  pqang sin pqmag mul
+                pqdir {
+                    % Along the direction, deterministically: the
+                    % outermost pass reaches the full /Spread, which is
+                    % what makes a pull read as a pull rather than a
+                    % scatter. Across it, a seeded wobble /Stretch times
+                    % narrower -- the one draw, so a directional call
+                    % consumes the stream exactly as an isotropic one.
+                    % Two-sided passes alternate by index, so the sweep
+                    % goes both ways at every depth.
+                    /pqalong pqOneSided pqi 2 mod 1 eq or
+                        { pqmag } { pqmag neg } ifelse def
+                    /pqacross pqmag pqStretch div pkjit def
+                    pqalong pqDirection cos mul pqacross pqDirection sin mul sub
+                    pqalong pqDirection sin mul pqacross pqDirection cos mul add
+                } {
+                    /pqang pqi 137.5 mul 40 pkjit add def
+                    pqang cos pqmag mul  pqang sin pqmag mul
+                } ifelse
             } { 0 0 } ifelse
             % The core pass carries no color at all -- a 2-element plan
             % entry rather than a 5-element one. Its pickup mix is the
