@@ -692,6 +692,35 @@ side by side, along with a sky, clouds and two banks of mist. A
 low-`/Coverage` mark is full of gaps, so mist laid on with one lets a
 treeline read straight through it without any translucency at all.
 
+With `/Direction` (issue #181) the same wrapper does the *directional*
+wet-on-wet blends: the passes line up along one axis instead of
+scattering round the mark, each a fixed step further along it with a
+seeded wobble `/Stretch` times narrower across it. `/OneSided true`
+keeps them all on one side, so `/Direction 270` drags a reflection down
+the way a dry brush does, and `/Direction 90` lifts a mountain's foot
+into haze; two-sided, `/Direction 0` sweeps a sky across. No pixel
+readback is needed: the wrapper already re-runs the mark, so it re-runs
+it along a line.
+
+```postscript
+{ gsave 0 2 WL mul translate 1 -1 scale  reflected-range  grestore }
+<< /Direction 270 /OneSided true /Spread 22 /Under [0.44 0.54 0.66] >> pkwet
+```
+
+The wrapped procedure has to paint in the color it inherits (grading
+sets the color before each pass), so a scene is wrapped element by
+element, and `/Direction` is measured in the user space pkwet is called
+in — keep a reflection's mirror inside the procedure. A directional
+call defaults to enough layers to keep the passes within 2pt of each
+other (up to 16), because identical copies further apart read as
+stepped echoes, so with `/Layers` left to default, `/Spread` also sets
+the depth and re-rolls what follows; pin `/Layers` while tuning. Any
+nest with a directional call in it may multiply its innermost
+procedure at most 64 times — enough to pull a reflection down and then
+graze it across. `examples/paintkit_wet_pull_demo.ps` shows a
+reflection sharp, pulled and pulled-then-grazed, a mountain foot under
+plain wet mist and under a lift, and a sky before and after a sweep.
+
 All of these come together in the gallery piece *Alpine Lake*
 (`gallery/alpine_lake.ps`, issue #118), a full wet-on-wet landscape
 painted from paintkit's brushes alone. It has a criss-cross `pkbroad`

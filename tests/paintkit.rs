@@ -6994,6 +6994,366 @@ fn wet_re_propagates_an_exit_without_inventing_or_hiding_one() {
     );
 }
 
+// --- pkwet's directional mode (issue #181) ----------------------------
+//
+// /Direction lines pkwet's passes up along one axis instead of
+// scattering them round the mark: the pull-down, the lift and the
+// sweep. What these pin: the passes really go one way (or both), the
+// cross-axis wobble really narrows with /Stretch, the random stream is
+// consumed exactly as an isotropic call consumes it, the default depth
+// keeps the steps fine, and the pass budget bounds a nest -- without
+// touching any call that never names /Direction.
+
+/// Ink rows (pixmap y, top = 0) in the given band of a 400x200 page.
+fn ink_rows_in(it: &Interp, rows: std::ops::Range<u32>) -> usize {
+    rows.map(|y| {
+        (0..400)
+            .filter(|&x| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+            .count()
+    })
+    .sum()
+}
+
+/// A thin black ribbon along user y = 100, so device rows 95..105.
+const PULL_MARK: &str = "newpath 60 100 moveto 340 100 lineto << /Width 8 >> pkribbon";
+
+fn pulled(opts: &str) -> Interp {
+    let mut it = fresh(400, 200);
+    it.run_str(&format!(
+        "0 0 0 setrgbcolor 11 srand {{ {PULL_MARK} }} << {opts} >> pkwet"
+    ))
+    .unwrap_or_else(|e| panic!("{opts}: {}", it.error_report(&e)));
+    it
+}
+
+/// The pull-down is the point of the issue: a one-sided pull toward 270
+/// leaves ink below the mark and none above it, and 90 is its mirror.
+#[test]
+fn wet_one_sided_pull_lands_on_one_side_only() {
+    let opts = "/Spread 40 /Pickup 0.4 /OneSided true";
+    let down = pulled(&format!("/Direction 270 {opts}"));
+    // user y < 90 is device rows > 110; user y > 110 is rows < 90
+    let (below, above) = (ink_rows_in(&down, 112..150), ink_rows_in(&down, 50..88));
+    assert!(below > 2000, "a pull down should leave ink below: {below}");
+    assert_eq!(above, 0, "a one-sided pull down must leave nothing above");
+    let up = pulled(&format!("/Direction 90 {opts}"));
+    let (below, above) = (ink_rows_in(&up, 112..150), ink_rows_in(&up, 50..88));
+    assert!(above > 2000, "a lift should leave ink above: {above}");
+    assert_eq!(below, 0, "a one-sided lift must leave nothing below");
+}
+
+/// Without /OneSided the passes alternate sides: a sweep goes both ways.
+#[test]
+fn wet_two_sided_direction_sweeps_both_ways() {
+    let it = pulled("/Direction 90 /Spread 40 /Pickup 0.4 /Layers 6");
+    let (below, above) = (ink_rows_in(&it, 112..150), ink_rows_in(&it, 50..88));
+    assert!(
+        below > 1000 && above > 1000,
+        "a two-sided pull should reach both sides: below {below} above {above}"
+    );
+}
+
+/// The outermost pass of a two-sided call is on the + side at any depth
+/// parity -- at /Layers 3 it is the only pass at the full /Spread, so
+/// full reach shows up above the mark and not below it.
+#[test]
+fn wet_two_sided_outermost_pass_is_on_the_plus_side_at_odd_depth() {
+    // Spread 40, Layers 3: outermost at +40 (user y 140, rows ~56..64),
+    // the middle pass at -20 (user y 80, rows ~116..124).
+    let it = pulled("/Direction 90 /Spread 40 /Pickup 0.4 /Layers 3 /Stretch 40");
+    let (plus, minus) = (ink_rows_in(&it, 52..68), ink_rows_in(&it, 132..148));
+    assert!(
+        plus > 1000,
+        "the outermost pass should reach +Spread: {plus}"
+    );
+    assert_eq!(
+        minus, 0,
+        "nothing should reach -Spread at Layers 3: {minus}"
+    );
+}
+
+/// /Stretch is the anisotropy: the cross-axis wobble is the along-axis
+/// reach divided by it. A horizontal sweep of a horizontal mark at
+/// /Stretch 1 wanders well off the line; at /Stretch 40 it stays on it.
+#[test]
+fn wet_stretch_narrows_the_cross_axis_spread() {
+    let off_line = |stretch: u32| {
+        let it = pulled(&format!(
+            "/Direction 0 /Stretch {stretch} /Spread 40 /Pickup 0.4 /Layers 6"
+        ));
+        ink_rows_in(&it, 0..90) + ink_rows_in(&it, 111..200)
+    };
+    let (loose, tight) = (off_line(1), off_line(40));
+    assert!(
+        loose > 1000,
+        "Stretch 1 should wander off the line: {loose}"
+    );
+    assert_eq!(tight, 0, "Stretch 40 should keep a sweep on its line");
+}
+
+/// The outer passes are still graded toward /Under, as in isotropic
+/// mode -- a pull is a soft edge, not a hard duplicate.
+#[test]
+fn wet_directional_outer_passes_carry_the_declared_under_color() {
+    let mut it = fresh(400, 200);
+    it.run_str(&format!(
+        "0 0 0 setrgbcolor 11 srand {{ {PULL_MARK} }} \
+         << /Direction 270 /OneSided true /Spread 40 /Pickup 0.9 /Under [1 0 0] >> pkwet"
+    ))
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let reddish = it
+        .gfx()
+        .pixmap
+        .pixels()
+        .iter()
+        .filter(|&&p| p.red() as i32 - p.green() as i32 > 60 && p.red() > 90)
+        .count();
+    assert!(
+        reddish > 1000,
+        "a pull's outer passes should carry /Under's hue, got {reddish}"
+    );
+}
+
+/// A directional call takes exactly one draw per non-core pass, like an
+/// isotropic one, so *at a fixed /Layers* switching /Direction on, or
+/// turning /Direction, /Stretch, /OneSided or /Spread, never re-rolls
+/// anything drawn afterwards. (With /Layers defaulted, a directional
+/// call's depth follows /Spread, which does change consumption -- see
+/// `wet_directional_default_depth_keeps_the_steps_fine`.)
+#[test]
+fn wet_direction_keys_do_not_change_random_consumption() {
+    let downstream_mark = |opts: &str| {
+        let mut it = fresh(400, 240);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 11 srand \
+             {{ newpath 60 140 moveto 340 140 lineto << /Width 24 >> pkribbon }} \
+             << /Layers 4 /Spread 10 {opts} >> pkwet \
+             0 0 0 setrgbcolor newpath 20 frnd 340 mul add 20 moveto 0 12 rlineto \
+             6 setlinewidth stroke"
+        ))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+        (0..400)
+            .find(|&x| {
+                (205..225).any(|y| it.gfx().pixmap.pixel(x, y).is_some_and(|p| luma(p) < 180.0))
+            })
+            .expect("marker drawn")
+    };
+    let isotropic = downstream_mark("");
+    for opts in [
+        "/Direction 270",
+        "/Direction 0 /Stretch 1",
+        "/Direction 45.5 /Stretch 30 /OneSided true",
+        "/Direction 270 /Spread 40",
+    ] {
+        assert_eq!(
+            downstream_mark(opts),
+            isotropic,
+            "{opts} consumed the caller's stream differently from an isotropic call"
+        );
+    }
+}
+
+/// Lined-up identical copies read as stepped echoes past ~2pt apart, so
+/// a directional call's *default* depth keeps the step at or under 2pt
+/// (up to its cap of 16). An explicit /Layers is honored, and a
+/// single-layer call stays a single pass.
+#[test]
+fn wet_directional_default_depth_keeps_the_steps_fine() {
+    let passes = |opts: &str| {
+        let mut it = fresh(200, 120);
+        it.run_str(&format!(
+            "0 0 0 setrgbcolor 5 srand /n 0 def {{ /n n 1 add def }} << {opts} >> pkwet n"
+        ))
+        .unwrap_or_else(|e| panic!("{opts}: {}", it.error_report(&e)));
+        it.operand_stack().last().expect("n").repr().to_string()
+    };
+    // Soft 0.6 alone would give 4; a 22pt one-sided pull needs
+    // ceil(22/2)+1 = 12, and a two-sided sweep twice as fine, ceil(12)+1.
+    assert_eq!(passes("/Direction 270 /Spread 22 /OneSided true"), "12");
+    assert_eq!(passes("/Direction 0 /Spread 12"), "13");
+    assert_eq!(passes("/Direction 270 /Spread 80"), "16", "capped at 16");
+    // an absurd /Spread must clamp, not rangecheck in cvi
+    assert_eq!(passes("/Direction 270 /Spread 1e30"), "16");
+    assert_eq!(passes("/Direction 270 /Spread 22 /Layers 3"), "3");
+    assert_eq!(passes("/Direction 270 /Soft 0 /Spread 22"), "1");
+    // ...and none of that reaches an isotropic call.
+    assert_eq!(passes("/Spread 22"), "4");
+}
+
+/// The step that reads as an echo is between neighbours on the *same
+/// side*, and a two-sided sweep alternates sides -- so its default depth
+/// has to be twice as fine (Codex review, round 2: /Spread 12 at 7
+/// layers put a sweep's copies 4pt apart on each side). Measured from
+/// the passes' actual translations, not their count.
+#[test]
+fn wet_directional_default_depth_keeps_same_side_steps_within_2pt() {
+    let offsets = |opts: &str| -> Vec<f64> {
+        let mut it = fresh(200, 120);
+        it.run_str(&format!(
+            "/xs [] def {{ /xs [ xs aload pop matrix currentmatrix 4 get ] def }} \
+             << {opts} >> pkwet xs aload pop"
+        ))
+        .unwrap_or_else(|e| panic!("{opts}: {}", it.error_report(&e)));
+        it.operand_stack()
+            .iter()
+            .map(|o| o.repr().parse::<f64>().expect("a number"))
+            .collect()
+    };
+    for opts in [
+        "/Direction 0 /Spread 12",
+        "/Direction 0 /Spread 12 /OneSided true",
+        "/Direction 0 /Spread 22 /OneSided true",
+    ] {
+        let xs = offsets(opts);
+        for side in [1.0, -1.0] {
+            // the core (0) plus every pass on this side, in order
+            let mut mine: Vec<f64> = xs.iter().copied().filter(|x| x * side >= 0.0).collect();
+            mine.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
+            for w in mine.windows(2) {
+                assert!(
+                    w[1] - w[0] <= 2.0 + 1e-6,
+                    "{opts}: same-side passes {} and {} are more than 2pt apart (all: {xs:?})",
+                    w[0],
+                    w[1]
+                );
+            }
+        }
+    }
+}
+
+/// /Soft 0 is the plain call in directional mode too.
+#[test]
+fn wet_directional_soft_zero_is_identical_to_calling_the_proc() {
+    let wrapped = pixels(&pulled("/Soft 0 /Direction 270 /OneSided true"));
+    let mut plain = fresh(400, 200);
+    plain
+        .run_str(&format!("0 0 0 setrgbcolor 11 srand {PULL_MARK}"))
+        .unwrap_or_else(|e| panic!("{}", plain.error_report(&e)));
+    assert_eq!(wrapped, pixels(&plain));
+}
+
+/// The pass budget: a chain containing a directional call may multiply
+/// its innermost mark at most 64 times. The rejection comes before any
+/// pass runs, and rolls the depth back so it cannot poison later calls.
+#[test]
+fn wet_directional_nest_is_bounded_by_the_pass_budget() {
+    // Like every guard here, the rejection is an undefined name, so the
+    // guard's own name is $error's /command.
+    let mut it = fresh(200, 120);
+    it.run_str(
+        "/n 0 def \
+         { { { /n n 1 add def } << /Direction 0 /Layers 16 >> pkwet } \
+           << /Direction 270 /Layers 5 >> pkwet } stopped \
+         $error /command get n userdict /pqdepth get",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let st: Vec<String> = it
+        .operand_stack()
+        .iter()
+        .map(|o| o.repr().to_string())
+        .collect();
+    let n = st.len();
+    assert_eq!(st[n - 4], "true", "the over-budget nest should raise");
+    assert!(
+        st[n - 3].contains("pkwet-too-many-passes"),
+        "expected pkwet-too-many-passes, got {}",
+        st[n - 3]
+    );
+    // The outer call's first pass ran its proc (the inner call), which
+    // was rejected before running any of its own passes.
+    assert_eq!(st[n - 2], "0", "no inner pass may run once over budget");
+    assert_eq!(st[n - 1], "0", "the rejection must roll the depth back");
+
+    // A pull grazed across -- the specimen's nest -- fits.
+    let mut it = fresh(200, 120);
+    it.run_str(
+        "/n 0 def \
+         { { /n n 1 add def } << /Direction 270 /Layers 16 >> pkwet } \
+         << /Direction 0 /Layers 4 >> pkwet n",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(it.operand_stack().last().expect("n").repr(), "64");
+}
+
+/// The budget is scoped to chains with a directional call in them, so
+/// a purely isotropic nest that works today still works.
+#[test]
+fn wet_isotropic_nests_are_not_subject_to_the_pass_budget() {
+    let mut it = fresh(200, 120);
+    it.run_str(
+        "/n 0 def \
+         { { { /n n 1 add def } << /Layers 6 >> pkwet } << /Layers 6 >> pkwet } \
+         << /Layers 6 >> pkwet n",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    assert_eq!(it.operand_stack().last().expect("n").repr(), "216");
+}
+
+/// Directional mode shares the frame machinery, so a caught error inside
+/// a nested directional call still unwinds depth and graphics state.
+#[test]
+fn wet_directional_caught_error_unwinds_like_the_isotropic_one() {
+    let mut it = fresh(300, 200);
+    it.run_str(
+        "0.2 0.4 0.8 setrgbcolor 5 srand /seen 0 def matrix currentmatrix \
+         { { { nosuchname } << /Direction 270 /OneSided true /Layers 3 >> pkwet } \
+           stopped { /seen seen 1 add def } if \
+           newpath 60 100 moveto 240 100 lineto << /Width 12 >> pkribbon } \
+         << /Direction 0 /Layers 2 >> pkwet \
+         matrix currentmatrix seen userdict /pqdepth get",
+    )
+    .unwrap_or_else(|e| panic!("the outer call must survive: {}", it.error_report(&e)));
+    let st: Vec<String> = it
+        .operand_stack()
+        .iter()
+        .map(|o| o.repr().to_string())
+        .collect();
+    assert_eq!(st[0], st[1], "the CTM must come back");
+    assert_eq!(st[2], "2", "both outer passes should run and catch");
+    assert_eq!(st[3], "0", "the depth must come back to 0");
+    let (r, g, b) = it.gfx().rgb();
+    assert!(
+        (r - 0.2).abs() < 1e-6 && (g - 0.4).abs() < 1e-6 && (b - 0.8).abs() < 1e-6,
+        "the caller's color must survive, got {r} {g} {b}"
+    );
+}
+
+// The directional option guards and the pass budget's rejection live
+// in `%%SelfTest` blocks beside pkwet in lib/paintkit.ps (AGENTS.md:
+// guards belong next to the guard). What stays here needs pixels, pass
+// counts or a real `gs`.
+
+#[test]
+fn ghostscript_accepts_the_directional_wet_demo() {
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let out = std::process::Command::new("gs")
+        .args([
+            "-dNOSAFER",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g780x640",
+            "-r72",
+            "-o/dev/null",
+            "examples/paintkit_wet_pull_demo.ps",
+        ])
+        .output()
+        .expect("run gs");
+    assert!(
+        out.status.success() && !String::from_utf8_lossy(&out.stdout).contains("Error"),
+        "gs rejected examples/paintkit_wet_pull_demo.ps: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
 // --- pkdab: the foliage / dab brush (issue #117) ----------------------
 //
 // What the tool is defined by: clustered irregular dabs; one set of

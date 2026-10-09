@@ -191,6 +191,17 @@ Which tool to pick:
   — the gaps do it, no transparency needed. Uses no alpha, so unlike
   `pkwash` it behaves the same under plain `gs`.
 
+  `/Direction` (degrees) lines the passes up along one axis instead of
+  scattering them: a reflection pulled down (`/Direction 270 /OneSided
+  true`), a mountain foot lifted into mist (`90`, one-sided), a sky
+  swept across (`0`, both ways); `/Stretch` sets how narrow it stays
+  across the axis. Two rules: the wrapped proc must paint in the color
+  it *inherits* (wrap a scene element by element, each with the
+  `/Under` really beneath it), and the direction is in the user space
+  you call pkwet in — put a reflection's `1 -1 scale` *inside* the proc
+  so 270 is down the page. `examples/paintkit_wet_pull_demo.ps` shows
+  all three.
+
 (A fuller paintkit tour, and an audit of the parameter docs, is issue
 #99 — this section is the short orientation, not that sweep.)
 
