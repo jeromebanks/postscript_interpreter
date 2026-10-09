@@ -7167,8 +7167,10 @@ fn wet_directional_default_depth_keeps_the_steps_fine() {
         .unwrap_or_else(|e| panic!("{opts}: {}", it.error_report(&e)));
         it.operand_stack().last().expect("n").repr().to_string()
     };
-    // Soft 0.6 alone would give 4; a 22pt pull needs ceil(22/2)+1 = 12.
-    assert_eq!(passes("/Direction 270 /Spread 22"), "12");
+    // Soft 0.6 alone would give 4; a 22pt one-sided pull needs
+    // ceil(22/2)+1 = 12, and a two-sided sweep twice as fine, ceil(12)+1.
+    assert_eq!(passes("/Direction 270 /Spread 22 /OneSided true"), "12");
+    assert_eq!(passes("/Direction 0 /Spread 12"), "13");
     assert_eq!(passes("/Direction 270 /Spread 80"), "16", "capped at 16");
     // an absurd /Spread must clamp, not rangecheck in cvi
     assert_eq!(passes("/Direction 270 /Spread 1e30"), "16");
@@ -7176,6 +7178,47 @@ fn wet_directional_default_depth_keeps_the_steps_fine() {
     assert_eq!(passes("/Direction 270 /Soft 0 /Spread 22"), "1");
     // ...and none of that reaches an isotropic call.
     assert_eq!(passes("/Spread 22"), "4");
+}
+
+/// The step that reads as an echo is between neighbours on the *same
+/// side*, and a two-sided sweep alternates sides -- so its default depth
+/// has to be twice as fine (Codex review, round 2: /Spread 12 at 7
+/// layers put a sweep's copies 4pt apart on each side). Measured from
+/// the passes' actual translations, not their count.
+#[test]
+fn wet_directional_default_depth_keeps_same_side_steps_within_2pt() {
+    let offsets = |opts: &str| -> Vec<f64> {
+        let mut it = fresh(200, 120);
+        it.run_str(&format!(
+            "/xs [] def {{ /xs [ xs aload pop matrix currentmatrix 4 get ] def }} \
+             << {opts} >> pkwet xs aload pop"
+        ))
+        .unwrap_or_else(|e| panic!("{opts}: {}", it.error_report(&e)));
+        it.operand_stack()
+            .iter()
+            .map(|o| o.repr().parse::<f64>().expect("a number"))
+            .collect()
+    };
+    for opts in [
+        "/Direction 0 /Spread 12",
+        "/Direction 0 /Spread 12 /OneSided true",
+        "/Direction 0 /Spread 22 /OneSided true",
+    ] {
+        let xs = offsets(opts);
+        for side in [1.0, -1.0] {
+            // the core (0) plus every pass on this side, in order
+            let mut mine: Vec<f64> = xs.iter().copied().filter(|x| x * side >= 0.0).collect();
+            mine.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
+            for w in mine.windows(2) {
+                assert!(
+                    w[1] - w[0] <= 2.0 + 1e-6,
+                    "{opts}: same-side passes {} and {} are more than 2pt apart (all: {xs:?})",
+                    w[0],
+                    w[1]
+                );
+            }
+        }
+    }
 }
 
 /// /Soft 0 is the plain call in directional mode too.

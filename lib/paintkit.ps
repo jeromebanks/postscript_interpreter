@@ -3842,8 +3842,10 @@
 % and identical copies lined up along one axis read as stepped echoes
 % once they sit more than about 2pt apart (measured: a pulled treeline
 % at 6 layers over 22pt repeated its crest as distinct bands). So a
-% directional call's default /Layers is whatever keeps the step at or
-% under 2pt, capped at 16, and its /Layers cap is 16 rather than 6. An
+% directional call's default /Layers is whatever keeps the step between
+% same-side neighbours at or under 2pt -- ceil(Spread/2)+1 one-sided,
+% ceil(Spread)+1 two-sided, since alternating sides doubles each side's
+% step -- capped at 16, and its /Layers cap is 16 rather than 6. An
 % explicit /Layers is honored, and /Soft 0 is still the one plain pass.
 %
 % Cost, directional. A pull is up to 16x its procedure, and pulling a
@@ -4047,7 +4049,7 @@
 % @param: /Soft 0..1 master softness; supplies the defaults for Layers and Spread. 0 is a single undisplaced pass that marks the page exactly as calling the proc directly would, random stream included; the procedure still runs inside a gsave, so a path or graphics state it leaves behind does not survive the call (default 0.6)
 % @param: /Under [r g b] the color already on the canvas that this mark settles into; the outermost pass is nearly this color (default [1 1 1])
 % @param: /Pickup 0..1 how far the outermost pass mixes toward Under; lower keeps the mark's own color out to its edge (default 0.85)
-% @param: /Layers Passes to draw, outermost first; must be a whole number, hard cap 1..6, or 1..16 with /Direction (default 1 + round(Soft*5); with /Direction, raised to keep passes at most 2pt apart, up to 16)
+% @param: /Layers Passes to draw, outermost first; must be a whole number, hard cap 1..6, or 1..16 with /Direction (default 1 + round(Soft*5); with /Direction, raised to keep same-side passes at most 2pt apart, up to 16)
 % @param: /Spread How far in points the outermost pass is displaced from the true path; inert at Layers 1, which has only a core pass (default Soft*14)
 % @param: /Direction Degrees, in the user space pkwet is called in: lines the passes up along this axis instead of scattering them, for a pulled-down reflection (270), a lifted mist (90) or a swept sky (0). The procedure must paint in the color it inherits. A chain of nested calls containing a directional one may multiply its innermost procedure at most 64 times. Without an explicit /Layers its depth follows /Spread, so pin /Layers while tuning /Spread (default absent: isotropic)
 % @param: /Stretch With /Direction only: along-to-across ratio, at least 1; the cross-axis wobble is the along-axis reach divided by this (default 8)
@@ -4116,12 +4118,21 @@
         % measured on a pulled treeline at 6 layers over 22pt, where the
         % crest repeated as distinct bands. So a directional call's
         % *default* depth is whatever keeps the step under 2pt, which is
-        % why its cap is 16 rather than 6. Only the default: an explicit
-        % /Layers is honored as given, and a single-layer call (/Soft 0)
-        % stays the plain call it is everywhere else.
+        % why its cap is 16 rather than 6. The step that matters is
+        % between neighbours on the *same side*: one-sided, that is
+        % Spread/(L-1); two-sided, passes alternate sides, so each side
+        % gets every other offset and its step is twice that (Codex
+        % review: /Spread 12 at 7 layers put a sweep's copies 4pt apart).
+        % Past the cap -- a one-sided Spread over 30, a two-sided one over
+        % 15 -- the step grows; pin /Layers lower and /Spread shorter, or
+        % accept it. Only the default: an explicit /Layers is honored as
+        % given, and a single-layer call (/Soft 0) stays the plain call it
+        % is everywhere else.
         pqopts /Layers known not pqLayers 1 gt and {
             % clamped before cvi, which raises rangecheck on a huge real
-            /pqLayers pqLayers pqSpread 2 div ceiling 15 min cvi 1 add max def
+            /pqLayers pqLayers
+                pqSpread pqOneSided { 2 } { 1 } ifelse div ceiling 15 min cvi 1 add
+            max def
         } if
     } {
         pqopts /Stretch known { pkwet-stretch-needs-a-direction } if

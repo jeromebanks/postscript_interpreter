@@ -43,8 +43,12 @@ Decisions:
   draws *identical* copies and copies lined up 4pt apart read as echoes
   (the advisor predicted this before any code was written). A bigger
   `/Stretch` doesn't help. Finer steps do, so directional calls default
-  to ceil(Spread/2)+1 layers, capped at 16. An explicit `/Layers` is
-  honoured, and `/Soft 0` is still a single plain pass.
+  to ceil(Spread/2)+1 layers one-sided and ceil(Spread)+1 two-sided,
+  capped at 16. Two-sided passes alternate sides, so each side gets
+  every other offset and its step doubles. Codex round 2 caught the
+  first version using the one-sided formula for both: `/Spread 12`
+  swept with copies 4pt apart. An explicit `/Layers` is honoured, and
+  `/Soft 0` is still a single plain pass.
 - **Pass budget, scoped to directional chains.** Nesting multiplies
   cost, and pull-then-graze is a nest by design. Any chain containing a
   directional call may multiply its innermost procedure at most 64
