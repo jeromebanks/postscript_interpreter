@@ -849,10 +849,10 @@ static ENTRIES: &[Entry] = &[
     entry!(
         "jit",
         CapabilityKind::Procedure,
-        "Random integer jitter, seeded by srand.",
+        "Random jitter, seeded by srand. An integer j gives an integer; a real j gives a real.",
         &[],
         ARTKIT,
-        "j jit -> int  (-j..j)",
+        "j jit -> int or real  (-j..j)",
         LIB
     ),
     entry!(

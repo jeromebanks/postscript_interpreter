@@ -45,9 +45,11 @@ Decisions:
 
 Missing abstractions and gotchas found while composing. Candidates
 for follow-ups, not fixed here:
-- artkit's `jit` is integer-only (it goes through `mod`), so
-  `1.5 jit` is a typecheck. The piece defines a real-valued `lkj`.
-  `jit` could accept reals, or at least say so in its docs.
+- artkit's `jit` was integer-only (it goes through `mod`), so
+  `1.5 jit` was a typecheck. Resolved in #177: `jit` now dispatches on
+  type. Integer j keeps its exact `chance` draws (every seeded integer
+  piece renders byte-identically), and real j scales one `frnd` draw.
+  The piece's own `lkj` is now redundant but left as is.
 - `pkspray` clouds need a speck of about 1pt. At 2–3pt the particles
   never fuse, and a cloud or mist reads as static. Worth a line in
   pkspray's guidance.

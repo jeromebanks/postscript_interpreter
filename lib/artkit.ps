@@ -51,7 +51,15 @@
 % high bits — successive low bits correlate (the marquee.ps finding).
 
 /chance { rand 8192 idiv exch mod } def          % n -> 0..n-1
-/jit { dup 2 mul 1 add chance exch sub } def     % j -> -j..j
+% An integer j draws through `chance` (mod), exactly as it always has, so
+% every seeded integer piece is byte-identical. A real j can't go through
+% `mod`, so it scales one `frnd` draw instead: same -j..j range, real result.
+/jit {
+    dup type /integertype eq
+    { dup 2 mul 1 add chance exch sub }
+    { dup 2 mul frnd mul exch sub }
+    ifelse
+} def                                            % j -> -j..j
 /frnd { rand 8192 idiv 262143 and 262143 div } def  % -> 0.0..1.0
 /oneof { dup length chance get } def             % array -> element
 
