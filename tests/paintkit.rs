@@ -7275,50 +7275,10 @@ fn wet_directional_caught_error_unwinds_like_the_isotropic_one() {
     );
 }
 
-#[test]
-fn wet_directional_validation_guards() {
-    fn err(src: &str) -> String {
-        let mut it = fresh(120, 120);
-        let e = it.run_str(src).unwrap_err();
-        it.error_report(&e).to_string()
-    }
-    let m = "{ newpath 10 10 moveto 100 10 lineto << /Width 10 >> pkribbon }";
-    for (opts, want) in [
-        ("/Direction (down)", "pkwet-direction-must-be-a-number"),
-        (
-            "/Direction { 270 }",
-            "pkwet-direction-must-not-be-a-procedure",
-        ),
-        (
-            "/Direction 270 /Stretch 0.5",
-            "pkwet-stretch-must-be-at-least-1",
-        ),
-        (
-            "/Direction 270 /Stretch (x)",
-            "pkwet-stretch-must-be-a-number",
-        ),
-        (
-            "/Direction 270 /Stretch { 4 }",
-            "pkwet-stretch-must-not-be-a-procedure",
-        ),
-        (
-            "/Direction 270 /OneSided 1",
-            "pkwet-onesided-must-be-a-boolean",
-        ),
-        ("/Stretch 4", "pkwet-stretch-needs-a-direction"),
-        ("/OneSided true", "pkwet-onesided-needs-a-direction"),
-        ("/Direction 270 /Layers 17", "pkwet-layers-must-be-1-to-16"),
-        ("/Direction 270 /Layers 2.5", "pkwet-layers-must-be-1-to-16"),
-        // the isotropic cap is unchanged
-        ("/Layers 7", "pkwet-layers-must-be-1-to-6"),
-    ] {
-        let report = err(&format!("{m} << {opts} >> pkwet"));
-        assert!(
-            report.contains(want),
-            "expected {want} for {opts}, got {report}"
-        );
-    }
-}
+// The directional option guards and the pass budget's rejection live
+// in `%%SelfTest` blocks beside pkwet in lib/paintkit.ps (AGENTS.md:
+// guards belong next to the guard). What stays here needs pixels, pass
+// counts or a real `gs`.
 
 #[test]
 fn ghostscript_accepts_the_directional_wet_demo() {

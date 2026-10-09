@@ -3969,6 +3969,78 @@
 % @internal
 /pqmyframe { userdict /pqframes get pqdnow get } def
 
+%%SelfTest: pkwet-rejects-malformed-directional-options
+%   { { } << /Direction (down) >> pkwet }
+%   /pkwet-direction-must-be-a-number
+%   (/Direction as a string) mustguard
+%
+%   { { } << /Direction { 270 } >> pkwet }
+%   /pkwet-direction-must-not-be-a-procedure
+%   (/Direction { 270 }) mustguard
+%
+%   { { } << /Direction 270 /Stretch 0.5 >> pkwet }
+%   /pkwet-stretch-must-be-at-least-1
+%   (/Stretch 0.5) mustguard
+%
+%   { { } << /Direction 270 /Stretch (x) >> pkwet }
+%   /pkwet-stretch-must-be-a-number
+%   (/Stretch as a string) mustguard
+%
+%   { { } << /Direction 270 /Stretch { 4 } >> pkwet }
+%   /pkwet-stretch-must-not-be-a-procedure
+%   (/Stretch { 4 }) mustguard
+%
+%   { { } << /Direction 270 /OneSided 1 >> pkwet }
+%   /pkwet-onesided-must-be-a-boolean
+%   (/OneSided 1) mustguard
+%
+%   % Directional keys without a direction are rejected, not ignored.
+%   { { } << /Stretch 4 >> pkwet }
+%   /pkwet-stretch-needs-a-direction
+%   (/Stretch without /Direction) mustguard
+%
+%   { { } << /OneSided true >> pkwet }
+%   /pkwet-onesided-needs-a-direction
+%   (/OneSided without /Direction) mustguard
+%
+%   % The directional cap is 16; the isotropic one is still 6.
+%   { { } << /Direction 270 /Layers 17 >> pkwet }
+%   /pkwet-layers-must-be-1-to-16
+%   (/Layers 17 with /Direction) mustguard
+%
+%   { { } << /Layers 7 >> pkwet }
+%   /pkwet-layers-must-be-1-to-6
+%   (/Layers 7 without /Direction) mustguard
+%
+%   { { } << /Direction 270 /Layers 16 >> pkwet }
+%   (/Layers 16 with /Direction) mustpass
+%
+%   % An absurd /Spread clamps the default depth instead of overflowing cvi.
+%   { { } << /Direction 270 /Spread 1e30 >> pkwet }
+%   (/Spread 1e30 with /Direction) mustpass
+%%EndSelfTest
+%
+%%SelfTest: pkwet-bounds-a-directional-nest
+%   % 16 x 5 = 80 runs of the innermost procedure is over the 64 budget.
+%   { { { } << /Direction 0 /Layers 16 >> pkwet } << /Direction 270 /Layers 5 >> pkwet }
+%   /pkwet-too-many-passes
+%   (a 16-layer pull nested five ways) mustguard
+%
+%   % ...and the rejection rolls the depth back, so it cannot poison
+%   % later calls.
+%   { { { } << /Direction 0 /Layers 16 >> pkwet } << /Direction 270 /Layers 5 >> pkwet }
+%   stopped pop userdict /pqdepth get 0 eq
+%   (the depth after a rejected nest) mustbe
+%
+%   % A pull grazed four ways is exactly the budget.
+%   { { { } << /Direction 270 /Layers 16 >> pkwet } << /Direction 0 /Layers 4 >> pkwet }
+%   (a 16-layer pull grazed four ways) mustpass
+%
+%   % Purely isotropic chains are not budgeted.
+%   { { { { } << /Layers 6 >> pkwet } << /Layers 6 >> pkwet } << /Layers 6 >> pkwet }
+%   (a 6x6x6 isotropic nest) mustpass
+%%EndSelfTest
+%
 % @kind: Procedure
 % @summary: Runs a mark-drawing procedure several times, each pass displaced further and mixed further toward a declared backdrop color, so the mark's core stays solid while its edge grades away into the layer beneath. The wet-on-wet softener for skies, clouds, mist and distant forms; works with every stroke preset in this file. The procedure must build its own path: a path constructed before the call cannot be displaced, because PostScript paths are in device space once built, so every pass would land on the same geometry and nothing would soften. Pair it with a broken or particulate brush (pkspray, pkdry, pktrowel at low Coverage) -- a solid brush keeps its own hard silhouette and only gains a halo. With /Direction the passes line up along one axis instead: a reflection pulled down, a mountain foot lifted into mist, a sky swept across. Uses no alpha, so unlike pkwash it needs no Ghostscript fallback.
 % @example: { newpath 40 120 moveto 260 150 lineto << /Width 40 >> pkribbon } << /Soft 0.7 /Under [0.62 0.72 0.86] >> pkwet
