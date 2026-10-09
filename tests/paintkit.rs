@@ -7810,3 +7810,667 @@ fn dab_sample_count_is_bounded_independently_of_the_dab_budget() {
             .contains("pkdab-sample-count-exceeds-safety-limit")
     );
 }
+
+// ---------------------------------------------------------------------------
+// Brush motions (issue #184): pkcrisscross, pkscumblein, pkscumble, pktap,
+// pkpull, pkzigzag. Path builders, so most of these read the *path* they
+// leave rather than pixels; the composition tests then paint it.
+// ---------------------------------------------------------------------------
+
+/// One path segment as `pathforall` reports it: 0 move, 1 line, 2 curve (end
+/// point only), 3 close (coordinates are meaningless).
+type Seg = (i32, f64, f64);
+
+const DUMP_PATH: &str = "[ { 0 3 1 roll } { 1 3 1 roll } \
+     { pop pop pop pop 2 3 1 roll } { 3 0 0 } pathforall ]";
+
+fn motion_segs(code: &str) -> Vec<Seg> {
+    let mut it = fresh(400, 200);
+    it.run_str(&format!("{code} {DUMP_PATH}"))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    parse_segs(&it)
+}
+
+fn parse_segs(it: &Interp) -> Vec<Seg> {
+    let repr = it
+        .operand_stack()
+        .last()
+        .map(|o| o.repr())
+        .expect("a path dump");
+    let nums: Vec<f64> = repr
+        .trim_matches(|c| c == '[' || c == ']')
+        .split_whitespace()
+        .map(|t| t.parse().unwrap_or_else(|_| panic!("number: {t}")))
+        .collect();
+    nums.chunks(3).map(|c| (c[0] as i32, c[1], c[2])).collect()
+}
+
+/// The strokes of a path made only of two-point open subpaths.
+fn strokes(segs: &[Seg]) -> Vec<((f64, f64), (f64, f64))> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < segs.len() {
+        assert_eq!(segs[i].0, 0, "a stroke starts with a moveto: {segs:?}");
+        assert!(
+            i + 1 < segs.len() && segs[i + 1].0 == 1,
+            "a stroke is moveto + lineto: {segs:?}"
+        );
+        out.push(((segs[i].1, segs[i].2), (segs[i + 1].1, segs[i + 1].2)));
+        i += 2;
+    }
+    out
+}
+
+fn heading(s: &((f64, f64), (f64, f64))) -> f64 {
+    (s.1.1 - s.0.1).atan2(s.1.0 - s.0.0).to_degrees()
+}
+
+fn stroke_len(s: &((f64, f64), (f64, f64))) -> f64 {
+    ((s.1.0 - s.0.0).powi(2) + (s.1.1 - s.0.1).powi(2)).sqrt()
+}
+
+const SPINE: &str = "newpath 0 100 moveto 100 100 lineto";
+
+#[test]
+fn crisscross_runs_at_two_mirrored_headings() {
+    let segs = motion_segs(
+        "5 srand 0 0 200 100 screct \
+         << /Count 60 /Length 20 /LengthJitter 0 /Angle 30 /Spread 0 >> pkcrisscross",
+    );
+    let s = strokes(&segs);
+    assert!(s.len() > 40, "got {} strokes", s.len());
+    let (mut up, mut down) = (0, 0);
+    for st in &s {
+        assert!(
+            (stroke_len(st) - 20.0).abs() < 1e-3,
+            "length {}",
+            stroke_len(st)
+        );
+        let h = heading(st);
+        if (h - 30.0).abs() < 1e-3 {
+            up += 1;
+        } else if (h + 30.0).abs() < 1e-3 {
+            down += 1;
+        } else {
+            panic!("heading {h} is neither +30 nor -30");
+        }
+    }
+    assert!(up > 10 && down > 10, "up {up} down {down}: not an X");
+}
+
+#[test]
+fn crisscross_count_tracks_the_requested_count() {
+    let n = strokes(&motion_segs(
+        "5 srand 0 0 300 120 screct << /Count 100 >> pkcrisscross",
+    ))
+    .len();
+    assert!((80..=140).contains(&n), "asked for about 100, got {n}");
+    // A non-rectangular region keeps about Count too, because the grid is
+    // sized from the region's area and not its bounding box.
+    let tri = strokes(&motion_segs(
+        "5 srand newpath 0 0 moveto 300 0 lineto 0 150 lineto closepath scpath \
+         << /Count 100 >> pkcrisscross",
+    ))
+    .len();
+    assert!((60..=150).contains(&tri), "asked for about 100, got {tri}");
+}
+
+#[test]
+fn crisscross_stays_inside_a_path_region() {
+    // Triangle 0,0 - 300,0 - 0,150: x/300 + y/150 <= 1.
+    let s = strokes(&motion_segs(
+        "5 srand newpath 0 0 moveto 300 0 lineto 0 150 lineto closepath scpath \
+         << /Count 120 /Length 12 >> pkcrisscross",
+    ));
+    assert!(s.len() > 50);
+    for st in &s {
+        let (cx, cy) = ((st.0.0 + st.1.0) / 2.0, (st.0.1 + st.1.1) / 2.0);
+        assert!(
+            cx >= -1e-9 && cy >= -1e-9 && cx / 300.0 + cy / 150.0 <= 1.0 + 1e-9,
+            "stroke centre ({cx}, {cy}) is outside the region"
+        );
+    }
+}
+
+#[test]
+fn motions_replace_the_path_so_a_guide_or_outline_is_never_painted() {
+    // scpath leaves the region's outline as the current path; the motion
+    // must not keep it, or the brush would paint it.
+    let segs = motion_segs(
+        "5 srand newpath 0 0 moveto 300 0 lineto 300 100 lineto closepath scpath \
+         << /Count 30 >> pkcrisscross",
+    );
+    assert!(segs.iter().all(|s| s.0 != 3), "outline survived: closepath");
+    strokes(&segs);
+    for (name, code) in [
+        ("pktap", "<< /Spacing 10 >> pktap"),
+        ("pkpull", "<< /Spacing 10 >> pkpull"),
+    ] {
+        let s = motion_segs(&format!("5 srand {SPINE} {code}"));
+        assert!(s.iter().all(|s| s.0 != 3), "{name}");
+        let st = strokes(&s);
+        // the 100-long guide itself would be a stroke 100 long
+        assert!(
+            st.iter().all(|x| stroke_len(x) < 90.0),
+            "{name} kept the guide"
+        );
+    }
+}
+
+#[test]
+fn crisscross_bow_makes_curves_and_only_when_asked() {
+    let straight = motion_segs("5 srand 0 0 200 100 screct << /Count 20 >> pkcrisscross");
+    assert!(straight.iter().all(|s| s.0 <= 1));
+    let bowed = motion_segs("5 srand 0 0 200 100 screct << /Count 20 /Bow 0.3 >> pkcrisscross");
+    assert!(bowed.iter().filter(|s| s.0 == 2).count() > 10);
+}
+
+#[test]
+fn motions_are_deterministic_and_seed_sensitive() {
+    for code in [
+        "0 0 200 100 screct << /Count 30 >> pkcrisscross",
+        "0 0 200 100 screct << /Count 30 >> pkscumblein",
+        "newpath 0 50 moveto 150 80 lineto << >> pkscumble",
+        "newpath 0 50 moveto 150 80 lineto << >> pktap",
+        "newpath 0 50 moveto 150 80 lineto << >> pkpull",
+        "newpath 0 50 moveto 150 80 lineto << >> pkzigzag",
+    ] {
+        let a = motion_segs(&format!("7 srand {code}"));
+        let b = motion_segs(&format!("7 srand {code}"));
+        let c = motion_segs(&format!("8 srand {code}"));
+        assert!(!a.is_empty(), "{code} built nothing");
+        assert_eq!(a, b, "{code} is not deterministic");
+        assert_ne!(a, c, "{code} ignores the seed");
+    }
+}
+
+fn motion_stream_after(code: &str) -> String {
+    let mut it = fresh(400, 200);
+    it.run_str(&format!("9 srand {code} rand"))
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    it.operand_stack()
+        .last()
+        .map(|o| o.repr())
+        .expect("a rand value")
+}
+
+#[test]
+fn motion_shaping_knobs_leave_the_random_stream_alone() {
+    // A knob that only re-shapes a stroke must not re-roll where the strokes
+    // land, so each slot draws the same number of values whatever it is set to.
+    let region = |opts: &str| format!("0 0 200 100 screct << /Count 30 {opts} >> pkcrisscross");
+    let base = motion_stream_after(&region(""));
+    for knob in [
+        "/Length 60",
+        "/Angle 70",
+        "/Spread 30",
+        "/LengthJitter 1",
+        "/Bow 0.4",
+    ] {
+        assert_eq!(
+            motion_stream_after(&region(knob)),
+            base,
+            "crisscross {knob} changed the draws"
+        );
+    }
+    let circles = |opts: &str| format!("0 0 200 100 screct << /Count 30 {opts} >> pkscumblein");
+    let base = motion_stream_after(&circles(""));
+    for knob in ["/Radius 12", "/RadiusJitter 1", "/Squash 0.3"] {
+        assert_eq!(
+            motion_stream_after(&circles(knob)),
+            base,
+            "scumblein {knob}"
+        );
+    }
+    // /Step fixed: it sets the walk pitch, so it would move the stop count.
+    let spine =
+        |m: &str, opts: &str| format!("newpath 0 50 moveto 150 80 lineto << /Step 6 {opts} >> {m}");
+    for (m, knobs) in [
+        (
+            "pktap",
+            &[
+                "/Length 30",
+                "/Direction 10",
+                "/Lean 60",
+                "/Scatter 9",
+                "/LengthJitter 1",
+            ][..],
+        ),
+        (
+            "pkpull",
+            &[
+                "/Length 80",
+                "/LengthJitter 1",
+                "/Direction 0",
+                "/Lean 40",
+                "/Bow 0.4",
+            ][..],
+        ),
+        ("pkzigzag", &["/Amplitude 20", "/AmpJitter 1"][..]),
+        (
+            "pkscumble",
+            &["/Radius 9", "/RadiusJitter 1", "/Squash 0.4"][..],
+        ),
+    ] {
+        let base = motion_stream_after(&spine(m, ""));
+        for knob in knobs {
+            assert_eq!(motion_stream_after(&spine(m, knob)), base, "{m} {knob}");
+        }
+    }
+}
+
+#[test]
+fn scumblein_makes_closed_squashed_circles() {
+    // One circle, no jitter: a 2r wide, 2r*Squash tall closed loop, centred
+    // inside the region.
+    let segs = motion_segs(
+        "5 srand 0 0 100 100 screct \
+         << /Count 1 /Radius 10 /RadiusJitter 0 /Squash 0.5 >> pkscumblein flattenpath",
+    );
+    assert_eq!(segs.iter().filter(|s| s.0 == 0).count(), 1);
+    assert_eq!(segs.iter().filter(|s| s.0 == 3).count(), 1, "closed");
+    let pts: Vec<_> = segs.iter().filter(|s| s.0 <= 1).collect();
+    let (x0, x1) = pts
+        .iter()
+        .fold((1e9f64, -1e9f64), |a, p| (a.0.min(p.1), a.1.max(p.1)));
+    let (y0, y1) = pts
+        .iter()
+        .fold((1e9f64, -1e9f64), |a, p| (a.0.min(p.2), a.1.max(p.2)));
+    assert!((x1 - x0 - 20.0).abs() < 0.5, "width {}", x1 - x0);
+    assert!((y1 - y0 - 10.0).abs() < 0.5, "height {}", y1 - y0);
+}
+
+#[test]
+fn scumblein_makes_many_circles_in_a_region() {
+    let segs = motion_segs("5 srand 0 0 300 120 screct << /Count 80 /Radius 5 >> pkscumblein");
+    let closed = segs.iter().filter(|s| s.0 == 3).count();
+    assert!((60..=110).contains(&closed), "got {closed} circles");
+    assert_eq!(closed, segs.iter().filter(|s| s.0 == 0).count());
+}
+
+#[test]
+fn motions_restore_the_ctm_colour_and_stack() {
+    let mut it = fresh(400, 200);
+    it.run_str("matrix currentmatrix")
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let before = it.operand_stack().last().map(|o| o.repr()).expect("ctm");
+    it.run_str("clear 0.2 0.4 0.6 setrgbcolor")
+        .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    it.run_str(
+        "5 srand 0 0 200 100 screct << /Count 20 >> pkscumblein \
+         0 0 200 100 screct << /Count 20 >> pkcrisscross \
+         newpath 0 0 moveto 90 0 lineto << >> pkscumble \
+         newpath 0 0 moveto 90 0 lineto << >> pktap \
+         newpath 0 0 moveto 90 0 lineto << >> pkpull \
+         newpath 0 0 moveto 90 0 lineto << >> pkzigzag \
+         matrix currentmatrix currentrgbcolor",
+    )
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    let st: Vec<String> = it.operand_stack().iter().map(|o| o.repr()).collect();
+    assert_eq!(st.len(), 4, "motions leaked operands: {st:?}");
+    assert_eq!(st[0], before, "a motion left the CTM changed");
+    let rgb: Vec<f64> = st[1..].iter().map(|s| s.parse().expect("number")).collect();
+    assert!(
+        (rgb[0] - 0.2).abs() < 0.01 && (rgb[1] - 0.4).abs() < 0.01 && (rgb[2] - 0.6).abs() < 0.01
+    );
+    assert_eq!(ink_count(&it), 0, "a motion painted");
+}
+
+#[test]
+fn scumble_loops_overlap_until_the_step_opens_them() {
+    // The chain's x only ever advances when the step outruns the loop's
+    // backward swing (Step > 2*pi*Radius); inside that it doubles back.
+    let backtracks = |opts: &str| {
+        let segs = motion_segs(&format!(
+            "5 srand newpath 0 100 moveto 200 100 lineto << /RadiusJitter 0 {opts} >> pkscumble"
+        ));
+        segs.windows(2).filter(|w| w[1].1 < w[0].1 - 1e-9).count()
+    };
+    assert!(backtracks("/Radius 5 /Step 8") > 20, "tight loops overlap");
+    assert_eq!(
+        backtracks("/Radius 2 /Step 20"),
+        0,
+        "a wide step opens the loop"
+    );
+}
+
+#[test]
+fn scumble_chains_stay_within_a_radius_of_the_spine() {
+    let segs = motion_segs(
+        "5 srand newpath 0 100 moveto 200 100 lineto \
+         << /Radius 6 /RadiusJitter 0.5 /Squash 0.5 >> pkscumble",
+    );
+    assert_eq!(segs.iter().filter(|s| s.0 == 0).count(), 1, "one chain");
+    assert!(segs.iter().all(|s| s.0 == 0 || s.0 == 1));
+    for s in &segs {
+        // across the spine: Radius*(1+Jitter)*Squash at most
+        assert!((s.2 - 100.0).abs() <= 6.0 * 1.5 * 0.5 + 1e-6, "y {}", s.2);
+    }
+}
+
+#[test]
+fn scumble_makes_a_circle_from_a_point_and_a_chain_per_subpath() {
+    let circle = motion_segs(
+        "5 srand newpath 50 50 moveto << /Radius 8 /RadiusJitter 0 >> pkscumble flattenpath",
+    );
+    assert_eq!(circle.iter().filter(|s| s.0 == 3).count(), 1, "closed");
+    let xs: Vec<f64> = circle.iter().filter(|s| s.0 <= 1).map(|s| s.1).collect();
+    let w = xs.iter().cloned().fold(-1e9, f64::max) - xs.iter().cloned().fold(1e9, f64::min);
+    assert!((w - 16.0).abs() < 0.1, "diameter {w}");
+    let two = motion_segs(
+        "5 srand newpath 0 0 moveto 80 0 lineto 0 60 moveto 80 60 lineto << >> pkscumble",
+    );
+    assert_eq!(two.iter().filter(|s| s.0 == 0).count(), 2, "one chain each");
+}
+
+#[test]
+fn tap_strokes_follow_direction_length_and_spacing() {
+    let segs = motion_segs(&format!(
+        "5 srand {SPINE} << /Spacing 20 /Length 8 /LengthJitter 0 /Direction 90 \
+           /Lean 0 /Scatter 0 >> pktap"
+    ));
+    let s = strokes(&segs);
+    // stops at 0 20 40 60 80 100: the end lands on a pitch multiple
+    assert_eq!(s.len(), 6, "{s:?}");
+    for (i, st) in s.iter().enumerate() {
+        assert!((st.0.0 - 20.0 * i as f64).abs() < 1e-6 && (st.0.1 - 100.0).abs() < 1e-6);
+        assert!((stroke_len(st) - 8.0).abs() < 1e-6);
+        assert!((heading(st) - 90.0).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn tap_skips_a_trailing_stop_that_would_double_up_the_last_tap() {
+    // 90 long at spacing 40: stops 0, 40, 80, then the guaranteed end at
+    // 90, 10 past the last: a tap there would be a pile-up.
+    let n = |len: &str| {
+        strokes(&motion_segs(&format!(
+            "5 srand newpath 0 0 moveto {len} 0 lineto << /Spacing 40 >> pktap"
+        )))
+        .len()
+    };
+    assert_eq!(n("90"), 3);
+    assert_eq!(n("80"), 3, "an exact multiple keeps its last tap");
+    assert_eq!(n("100"), 4, "past halfway, the end is its own tap");
+}
+
+#[test]
+fn tap_at_zero_length_makes_point_strokes_that_pkdab_reads_as_clumps() {
+    let segs = motion_segs(&format!(
+        "5 srand {SPINE} << /Spacing 25 /Length 0 /Scatter 0 >> pktap"
+    ));
+    let s = strokes(&segs);
+    assert!(s.len() >= 4);
+    assert!(s.iter().all(|st| stroke_len(st) == 0.0), "{s:?}");
+
+    let mut it = fresh(400, 200);
+    it.run_str(&format!(
+        "0 0 0 setrgbcolor 5 srand 20 0 translate 0 -60 translate {SPINE} \
+         << /Spacing 25 /Length 0 /Scatter 0 >> pktap << /Size 3 /Spread 9 /Clump 12 >> pkdab"
+    ))
+    .unwrap_or_else(|e| panic!("{}", it.error_report(&e)));
+    // five clumps of twelve dabs, not five specks
+    assert!(ink_count(&it) > 5 * 150, "ink {}", ink_count(&it));
+}
+
+#[test]
+fn tap_follows_every_subpath() {
+    let s = strokes(&motion_segs(
+        "5 srand newpath 0 0 moveto 40 0 lineto 0 50 moveto 40 50 lineto \
+         << /Spacing 20 /Scatter 0 >> pktap",
+    ));
+    assert_eq!(s.iter().filter(|st| st.0.1 == 0.0).count(), 3);
+    assert_eq!(s.iter().filter(|st| st.0.1 == 50.0).count(), 3);
+}
+
+#[test]
+fn pull_strokes_start_on_the_spine_and_run_the_asked_way() {
+    for (dir, sign) in [(-90.0, -1.0), (90.0, 1.0)] {
+        let s = strokes(&motion_segs(&format!(
+            "5 srand {SPINE} << /Spacing 10 /Wander 0 /Length 30 /LengthJitter 0 \
+               /Direction {dir} /Lean 0 >> pkpull"
+        )));
+        assert_eq!(s.len(), 11);
+        for (i, st) in s.iter().enumerate() {
+            assert!((st.0.0 - 10.0 * i as f64).abs() < 1e-6, "starts on a stop");
+            assert!((st.0.1 - 100.0).abs() < 1e-6, "starts on the spine");
+            assert!((st.1.1 - (100.0 + sign * 30.0)).abs() < 1e-6, "dir {dir}");
+            assert!((st.1.0 - st.0.0).abs() < 1e-6, "straight vertical");
+        }
+    }
+}
+
+#[test]
+fn pull_wander_slides_starts_along_the_spine_only() {
+    let s = strokes(&motion_segs(&format!(
+        "5 srand {SPINE} << /Spacing 10 /Wander 1 >> pkpull"
+    )));
+    let mut moved = 0;
+    for st in &s {
+        assert!((st.0.1 - 100.0).abs() < 1e-6, "left the spine");
+        if (st.0.0 / 10.0 - (st.0.0 / 10.0).round()).abs() > 1e-6 {
+            moved += 1;
+        }
+    }
+    assert!(moved > 4, "wander moved only {moved} starts");
+}
+
+#[test]
+fn pull_bow_curves_and_lean_tilts() {
+    let curved = motion_segs(&format!("5 srand {SPINE} << /Bow 0.3 >> pkpull"));
+    assert!(curved.iter().filter(|s| s.0 == 2).count() > 5);
+    let s = strokes(&motion_segs(&format!(
+        "5 srand {SPINE} << /Lean 20 /Wander 0 >> pkpull"
+    )));
+    let max_dev = s
+        .iter()
+        .map(|st| (heading(st) + 90.0).abs())
+        .fold(0.0, f64::max);
+    assert!(
+        max_dev > 5.0 && max_dev <= 20.0 + 1e-6,
+        "lean spread {max_dev}"
+    );
+}
+
+#[test]
+fn zigzag_alternates_about_a_spine_it_starts_and_ends_on() {
+    let segs = motion_segs(&format!(
+        "5 srand {SPINE} << /Amplitude 5 /Wavelength 20 /AmpJitter 0 /WaveJitter 0 >> pkzigzag"
+    ));
+    assert_eq!(segs.iter().filter(|s| s.0 == 0).count(), 1, "one polyline");
+    // stops every 10: x = 0..100; ends on the spine, interior at +-5
+    assert_eq!(segs.len(), 11);
+    assert!((segs[0].2 - 100.0).abs() < 1e-6 && (segs[10].2 - 100.0).abs() < 1e-6);
+    for (i, s) in segs.iter().enumerate().take(10).skip(1) {
+        assert!((s.1 - 10.0 * i as f64).abs() < 1e-6, "even slots");
+        let want = if i % 2 == 1 { 105.0 } else { 95.0 };
+        assert!((s.2 - want).abs() < 1e-6, "peak {i}: {}", s.2);
+    }
+}
+
+#[test]
+fn zigzag_follows_a_curved_spine_on_its_normal() {
+    // A quarter circle of radius 100: every interior vertex sits Amplitude
+    // off the circle, to alternating sides.
+    let segs = motion_segs(
+        "5 srand newpath 100 0 moveto 0 0 100 0 90 arc \
+         << /Amplitude 4 /Wavelength 30 /AmpJitter 0 /WaveJitter 0 >> pkzigzag",
+    );
+    assert!(segs.len() > 8);
+    let n = segs.len();
+    for (i, s) in segs.iter().enumerate().take(n - 1).skip(1) {
+        let r = (s.1 * s.1 + s.2 * s.2).sqrt();
+        let off = r - 100.0;
+        assert!((off.abs() - 4.0).abs() < 0.2, "vertex {i} off by {off}");
+        if i > 1 {
+            let prev = (segs[i - 1].1.powi(2) + segs[i - 1].2.powi(2)).sqrt() - 100.0;
+            assert!(prev * off < 0.0, "vertex {i} did not alternate");
+        }
+    }
+}
+
+#[test]
+fn zigzag_wave_jitter_moves_vertices_along_the_spine_without_reordering() {
+    let segs = motion_segs(&format!(
+        "5 srand {SPINE} << /WaveJitter 1 /Wavelength 20 >> pkzigzag"
+    ));
+    let xs: Vec<f64> = segs.iter().map(|s| s.1).collect();
+    assert!(xs.windows(2).all(|w| w[1] > w[0]), "reordered: {xs:?}");
+    assert!(
+        xs.iter()
+            .enumerate()
+            .skip(1)
+            .take(xs.len() - 2)
+            .any(|(i, x)| (x - 10.0 * i as f64).abs() > 0.5)
+    );
+}
+
+#[test]
+fn zigzag_a_point_is_one_degenerate_stroke_and_subpaths_stay_apart() {
+    let p = motion_segs("5 srand newpath 30 30 moveto << >> pkzigzag");
+    assert_eq!(p, vec![(0, 30.0, 30.0), (1, 30.0, 30.0)]);
+    let two = motion_segs(
+        "5 srand newpath 0 0 moveto 50 0 lineto 0 40 moveto 50 40 lineto << >> pkzigzag",
+    );
+    assert_eq!(two.iter().filter(|s| s.0 == 0).count(), 2);
+}
+
+#[test]
+fn motions_given_nothing_build_nothing() {
+    for code in [
+        "newpath << >> pkscumble",
+        "newpath << >> pktap",
+        "newpath << >> pkpull",
+        "newpath << >> pkzigzag",
+        // a region with no area (an empty path captured by scpath)
+        "newpath scpath << >> pkcrisscross",
+        "newpath scpath << >> pkscumblein",
+    ] {
+        assert!(motion_segs(code).is_empty(), "{code} built a path");
+    }
+}
+
+#[test]
+fn motions_compose_with_every_stroke_preset() {
+    // Small on purpose: this is a 6 x 6 cross product in a debug build.
+    let motions = [
+        "0 0 360 120 screct << /Count 10 /Length 40 >> pkcrisscross",
+        "0 0 360 120 screct << /Count 8 /Radius 6 >> pkscumblein",
+        "newpath 20 60 moveto 120 70 lineto << /Radius 8 >> pkscumble",
+        "newpath 20 60 moveto 340 80 lineto << /Spacing 40 /Length 8 >> pktap",
+        "newpath 20 100 moveto 340 100 lineto << /Spacing 40 /Length 30 >> pkpull",
+        "newpath 20 60 moveto 340 60 lineto << /Amplitude 8 /Wavelength 40 >> pkzigzag",
+    ];
+    for motion in motions {
+        for brush in ["pkbroad", "pkfan", "pkliner", "pkoil", "pkdab", "pkribbon"] {
+            let mut it = fresh(400, 200);
+            it.run_str(&format!("0 0 0 setrgbcolor 5 srand {motion} << >> {brush}"))
+                .unwrap_or_else(|e| panic!("{motion} -> {brush}: {}", it.error_report(&e)));
+            assert!(ink_count(&it) > 20, "{motion} -> {brush} painted nothing");
+            assert!(it.operand_stack().is_empty(), "{motion} -> {brush} leaked");
+        }
+    }
+}
+
+#[test]
+fn motions_advertise_exactly_their_tested_parameters() {
+    let src = std::fs::read_to_string("lib/paintkit.ps").expect("read paintkit");
+    for (proc_name, expected) in [
+        (
+            "pkcrisscross",
+            &["Angle", "Bow", "Count", "Length", "LengthJitter", "Spread"][..],
+        ),
+        (
+            "pkscumblein",
+            &["Count", "Radius", "RadiusJitter", "Squash"][..],
+        ),
+        (
+            "pkscumble",
+            &["Radius", "RadiusJitter", "Squash", "Step"][..],
+        ),
+        (
+            "pktap",
+            &[
+                "Direction",
+                "Lean",
+                "Length",
+                "LengthJitter",
+                "Scatter",
+                "Spacing",
+            ][..],
+        ),
+        (
+            "pkpull",
+            &[
+                "Bow",
+                "Direction",
+                "Lean",
+                "Length",
+                "LengthJitter",
+                "Spacing",
+                "Wander",
+            ][..],
+        ),
+        (
+            "pkzigzag",
+            &["Amplitude", "AmpJitter", "Wavelength", "WaveJitter"][..],
+        ),
+    ] {
+        let def = src
+            .find(&format!("\n/{proc_name} {{"))
+            .unwrap_or_else(|| panic!("{proc_name} def"));
+        let head = &src[..def];
+        let tags = &head[head.rfind("% @kind").expect("tags")..];
+        let mut advertised: Vec<String> = tags
+            .lines()
+            .filter_map(|l| l.strip_prefix("% @param: /"))
+            .map(|l| l.split_whitespace().next().unwrap_or("").to_string())
+            .collect();
+        advertised.sort();
+        let mut expected: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
+        expected.sort();
+        assert_eq!(
+            advertised, expected,
+            "{proc_name}'s advertised parameters drifted"
+        );
+        // ...and each one is actually read by the proc's body.
+        let body_end = src[def + 1..].find("\n} def").expect("end") + def + 1;
+        let body = &src[def..body_end];
+        for p in &expected {
+            assert!(
+                body.contains(&format!("/{p} ")),
+                "{proc_name} never reads /{p}"
+            );
+        }
+    }
+}
+
+#[test]
+fn ghostscript_accepts_the_motion_specimen() {
+    let gs_ok = std::process::Command::new("gs")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !gs_ok {
+        eprintln!("skipping gs compatibility check: gs not installed");
+        return;
+    }
+    let status = std::process::Command::new("gs")
+        .args([
+            "-dNOSAFER",
+            "-dNOPAUSE",
+            "-dBATCH",
+            "-q",
+            "-sDEVICE=png16m",
+            "-g620x760",
+            "-r72",
+            "-o/dev/null",
+            "examples/paintkit_motion_demo.ps",
+        ])
+        .status()
+        .expect("run gs");
+    assert!(
+        status.success(),
+        "gs rejected examples/paintkit_motion_demo.ps"
+    );
+}

@@ -1,6 +1,6 @@
 %!PS-Adobe-3.0
 %%Title: paintkit strict-lint rendering driver (issue #95)
-%%Pages: 9
+%%Pages: 10
 %%BoundingBox: 0 0 200 200
 %%SelfTestPage: 200x200
 %%EndComments
@@ -122,5 +122,20 @@ gsave
     ink
     newpath 100 100 60 0 360 arc closepath
     << /Alpha 0.4 /Layers 2 /Wet 6 /Bloom 0.5 /Seed 3 >> pkwash
+grestore
+showpage
+
+% --- 10. brush motions: path builders feeding brushes ----------------
+% A motion paints nothing itself, so each is handed to a preset; a page
+% with ink proves both the path it built and that it composed.
+gsave
+    4 srand
+    ink
+    0 0 200 100 screct << /Count 12 /Length 30 >> pkcrisscross << /Width 6 >> pkbroad
+    0 0 200 100 screct << /Count 8 /Radius 8 >> pkscumblein << /Width 3 >> pkoil
+    newpath 20 30 moveto 180 40 lineto << /Radius 6 >> pkscumble << /Width 4 >> pkoil
+    newpath 20 60 moveto 180 60 lineto << /Spacing 12 /Length 8 >> pktap << /Width 4 >> pkfan
+    newpath 20 90 moveto 180 90 lineto << /Spacing 12 >> pkpull << /Width 3 >> pkbroad
+    newpath 20 70 moveto 180 70 lineto << /Wavelength 20 >> pkzigzag << /Width 2 >> pkliner
 grestore
 showpage

@@ -3,6 +3,67 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## `lib/paintkit.ps`: brush motion generators (issue #184, 2026-10-09)
+
+Child of epic #112. paintkit models brush *heads*; this adds the other
+half, the named *motions* of wet-on-wet painting, as path builders:
+`pkcrisscross`, `pkscumblein`, `pkscumble`, `pktap`, `pkpull`,
+`pkzigzag`. Each paints nothing and leaves an ordinary path, so it feeds
+any preset. Specimen: `examples/paintkit_motion_demo.ps` (each motion's
+bare path beside the same path painted with its classic brush).
+
+Decisions:
+- **In paintkit, not artkit.** They read artkit's `frnd`, `walkpath` and
+  regions, but their vocabulary (strokes, pulls, taps) is painterly and
+  they are the input side of the presets in this file. Nothing in artkit
+  has a notion of a brush stroke. (The issue left the placement open.)
+- **One contract: every motion replaces the current path.** The first
+  design appended the region motions to the path, like `ngon`. The
+  advisor caught why that is wrong: `scpath` leaves the region's outline
+  as the current path, so the obvious `scpath <opts> pkcrisscross <opts>
+  pkbroad` would have painted the outline. A single "starts with
+  `newpath`" rule is also easier to document than an append/replace
+  split. The spine motions have to replace anyway (the guide would be
+  painted).
+- **Region motions take artkit's own regions.** `screct`/`scpath` already
+  exist and `scin`/`scarea` already answer the questions, so a cloud is
+  any `scpath`. The grid is a jittered grid sized from the region's
+  *area* (not its bounding box), with `scin` as the filter, so a
+  triangle asked for 100 strokes gets about 100. Cells are capped at
+  40000, which also bounds a hairline band.
+- **A jittered grid, not pure random placement.** Even coverage with no
+  clumps or gaps, which is what a criss-cross sky wants.
+- **Fixed draws per slot.** A crisscross cell draws six values and a
+  circle four, kept or rejected, so a knob that only re-shapes a stroke
+  never re-rolls where the strokes land (pkdab's convention; pinned for
+  every motion by `motion_shaping_knobs_leave_the_random_stream_alone`).
+  The exception is `pkscumble`'s `/Radius`, which moves the default
+  `/Step` and therefore the walk pitch, and with it the stop count.
+- **A bare point does not survive a path.** A `moveto` right after a
+  `moveto` replaces it, in pscat and Ghostscript alike (checked), so a
+  run of point-only subpaths collapses to the last. `pktap /Length 0`
+  therefore emits `x y moveto x y lineto`; `walkpath` reports that as one
+  stop with atend 3, so `pkdab` still reads a clump per tap.
+- **`walkpath`'s guaranteed final stop is handled per motion.** It can
+  land on top of the last regular stop (when the pitch divides the
+  length) or just behind it. `pktap` and `pkpull` skip the end stop when
+  it is under half a spacing from the last one. `pkzigzag` drops the
+  *regular* stop instead, so the line ends on the spine rather than on
+  a peak followed by a jog back to it (a test caught this on the first
+  run). Half a pitch also guarantees a slid vertex cannot pass the end.
+- **Brushes checked against the shapes handed to them.** `pkbroad`,
+  `pkfan`, `pkliner`, `pkoil`, `pkdab`, `pkdry`, `pkspray` and `pkribbon`
+  all accept mixed open, closed and point subpaths. `pknib` is the one
+  that does not (it wants exactly one open subpath), so none is paired
+  with a motion.
+
+Deferred: `gallery/alpine_lake.ps` still hand-writes its criss-cross sky,
+tapped crest, pulled branches and lake pulls. Moving it onto the motions
+would change a committed render for no new capability, so it is left
+for a follow-up. A scumbled cloud with a lit top over a flatter, greyer
+underside is now possible to build (scumble plus `pkwet`) but is not part
+of this issue.
+
 ## `lib/paintkit.ps`: directional `pkwet` — pulls, lifts and sweeps (issue #181, 2026-10-09)
 
 Child of epic #112. `pkwet` gains `/Direction` (degrees), `/Stretch`

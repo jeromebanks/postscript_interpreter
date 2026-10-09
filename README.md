@@ -721,6 +721,41 @@ graze it across. `examples/paintkit_wet_pull_demo.ps` shows a
 reflection sharp, pulled and pulled-then-grazed, a mountain foot under
 plain wet mist and under a lift, and a sky before and after a sweep.
 
+The presets above are brush *heads*; a painting is equally made of
+brush *motions*, and the wet-on-wet vocabulary is mostly named ones.
+Six path builders (issue #184) generate them, from a region or a guide
+line plus a few artistic controls, and paint nothing: they leave an
+ordinary path, so they feed any preset.
+
+| Motion | Input | Builds | Classic brush |
+|---|---|---|---|
+| `pkcrisscross` | region | strokes at two crossing headings | `pkbroad` (sky) |
+| `pkscumblein` | region | many small separate circles | `pkoil` (clouds) |
+| `pkscumble` | the current path | a chain of overlapping loops | `pkdry` (a scrubbed edge) |
+| `pktap` | the current path | short stabs along it | `pkfan`, or `/Length 0` for `pkdab` clumps |
+| `pkpull` | the current path | strokes pulled from it along a direction | `pkbroad` down (reflection), `pkliner` up (grass) |
+| `pkzigzag` | the current path | a zig-zag about it | `pkliner` (water) |
+
+```postscript
+0 0 700 160 screct << /Count 90 /Length 50 /Angle 25 >> pkcrisscross
+<< /Width 30 /Charge 0.7 >> pkbroad                       % a sky block-in
+
+newpath 0 300 moveto 800 300 lineto
+<< /Direction -90 /Length 60 /Spacing 6 >> pkpull
+<< /Width 5 /Charge 0.6 >> pkbroad                        % pulled down from a horizon
+```
+
+The region motions take an artkit region (`screct`, or `scpath` for any
+shape) under their options dict; the line motions read the current path
+as the guide, as `pkdab` does. Every motion *replaces* the current path,
+so a guide, or the outline `scpath` leaves behind, is never painted. They
+draw only from `frnd`, so they are deterministic under the caller's
+`srand`, and each slot draws a fixed number of values, so changing
+`/Length` or `/Angle` does not move where the strokes land. A region
+motion lays a jittered grid sized from the region's area, so even
+coverage is kept and `/Count` stays about right for a non-rectangular
+region. `examples/paintkit_motion_demo.ps` shows each beside its brush.
+
 All of these come together in the gallery piece *Alpine Lake*
 (`gallery/alpine_lake.ps`, issue #118), a full wet-on-wet landscape
 painted from paintkit's brushes alone. It has a criss-cross `pkbroad`
