@@ -5778,17 +5778,23 @@ systemdict /setalpha known /pwhasalpha exch def
     % 24 samples per loop; the walk pitch is one sample's worth of travel.
     msstep 24 div 100000 { pkscumble-sample-count-exceeds-safety-limit } mhcollect
     newpath
-    /msk 0 def
     0 1 mhn 1 sub {
         mhstops exch get aload pop
-        /msatend exch def pop pop /msang exch def /msy exch def /msx exch def
-        msatend 1 and 1 eq { /msk 0 def } if
+        /msatend exch def /mssp exch def pop /msang exch def /msy exch def /msx exch def
+        % Phase follows the distance actually travelled (a loop per /Step), not
+        % the stop count: walkpath's guaranteed end stop can sit on top of the
+        % last regular one or a fraction of a pitch past it, and counting it as
+        % a whole sample added a hook of terminal geometry (Codex round 3).
+        msatend 1 and 1 eq { /mscum 0 def /msloop -1 def } { /mscum mscum mssp add def } ifelse
         % One draw per stop; a new loop radius is taken at each loop start.
         frnd /msd exch def
-        msk 24 mod 0 eq {
-            /msrprev msk 0 eq { -1 } { msrnext } ifelse def
+        /msturn mscum msstep div def
+        msturn floor /msnl exch def
+        msnl msloop gt {
+            /msrprev msloop 0 lt { -1 } { msrnext } ifelse def
             /msrnext msrad 1 msd 2 mul 1 sub msrj mul add mul 0.1 msrad mul max def
             msrprev 0 lt { /msrprev msrnext def } if
+            /msloop msnl def
         } if
         msatend 3 eq {
             % A lone point: one full circle (squashed in the line's frame,
@@ -5801,12 +5807,16 @@ systemdict /setalpha known /pwhasalpha exch def
             } for
             closepath
         } {
-            /msr msrprev msrnext msrprev sub msk 24 mod 24 div mul add def
-            /msph msk 15 mul def
-            msx msang cos msr mul msph cos mul add msang sin neg msr mssq mul mul msph sin mul add
-            msy msang sin msr mul msph cos mul add msang cos msr mssq mul mul msph sin mul add
-            msatend 1 and 1 eq { moveto } { lineto } ifelse
-            /msk msk 1 add def
+            % A stop with no travel since the previous one (the end stop of a
+            % guide whose length is a whole number of pitches) is the same
+            % point again.
+            msatend 1 and 1 eq mssp 0.000001 gt or {
+                /msr msrprev msrnext msrprev sub msturn msnl sub mul add def
+                /msph msturn 360 mul def
+                msx msang cos msr mul msph cos mul add msang sin neg msr mssq mul mul msph sin mul add
+                msy msang sin msr mul msph cos mul add msang cos msr mssq mul mul msph sin mul add
+                msatend 1 and 1 eq { moveto } { lineto } ifelse
+            } if
         } ifelse
     } for
 } def

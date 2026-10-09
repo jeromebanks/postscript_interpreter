@@ -8168,6 +8168,39 @@ fn scumble_loops_overlap_until_the_step_opens_them() {
 }
 
 #[test]
+fn scumble_phase_follows_distance_travelled_not_stop_count() {
+    // Codex round 3. The loop turns once per /Step of travel. A guide whose
+    // length is a whole number of pitches gets a duplicate end stop from
+    // walkpath, and one whose length is not gets a short final interval;
+    // neither may add a whole sample's worth of phase.
+    let last_two = |len: f64| {
+        let segs = motion_segs(&format!(
+            "5 srand newpath 0 0 moveto {len} 0 lineto \
+             << /Radius 5 /Step 6 /RadiusJitter 0 >> pkscumble"
+        ));
+        assert!(segs.iter().all(|s| s.0 <= 1));
+        (segs.len(), segs[segs.len() - 1], segs[segs.len() - 2])
+    };
+    // 6 long, pitch 0.25: 25 stops, the 26th is the duplicate end and is
+    // dropped. One full turn ends back at phase 0, 5 ahead of the end.
+    let (n, last, prev) = last_two(6.0);
+    assert_eq!(n, 25, "the duplicate end stop must not add a point");
+    assert!(
+        (last.1 - 11.0).abs() < 1e-3 && last.2.abs() < 1e-3,
+        "{last:?}"
+    );
+    assert!((prev.1 - last.1).abs() > 1e-3 || (prev.2 - last.2).abs() > 1e-3);
+    // 6.1 long: the end is 0.1 of travel past a whole turn, so 6 degrees on.
+    let (_, last, _) = last_two(6.1);
+    let phase = (6.1f64 / 6.0 * 360.0).to_radians();
+    assert!(
+        (last.1 - (6.1 + 5.0 * phase.cos())).abs() < 1e-3
+            && (last.2 - 5.0 * phase.sin()).abs() < 1e-3,
+        "{last:?}"
+    );
+}
+
+#[test]
 fn scumble_chains_stay_within_a_radius_of_the_spine() {
     let segs = motion_segs(
         "5 srand newpath 0 100 moveto 200 100 lineto \

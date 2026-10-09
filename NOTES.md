@@ -67,6 +67,15 @@ Decisions:
   flattened guide, so a start is on it by construction. The cost is a
   budget of 120000 samples (20000 strokes) and a wander quantised to a
   sixth of the spacing.
+- **`pkscumble`'s phase follows distance, not the stop count.** The
+  first version advanced 15 degrees per stop. `walkpath`'s guaranteed
+  end stop either sits on top of the last regular one (a guide whose
+  length is a whole number of pitches) or a fraction of a pitch past
+  it, and counting it as a whole sample added a hook of terminal
+  geometry (Codex round 3: a 6-long guide at `/Step 6` ended with a
+  stray point at the wrong phase). The phase is now cumulative travel
+  over `/Step`, a zero-travel duplicate stop is not emitted, and the
+  draws per stop are unchanged.
 - **A bowed `pkpull` puts its controls at a third and two thirds of the
   whole stroke.** `pkcrisscross` works from half the stroke, so copying
   its constants into `pkpull` overshot the tip (Codex round 1); both
