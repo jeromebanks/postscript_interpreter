@@ -3804,9 +3804,14 @@
 % only); otherwise passes alternate sides by depth, outermost on the
 % + side, so a sweep goes both ways. The grading toward /Under, the
 % frames, the unwinding and the draws are exactly the isotropic ones:
-% one draw per non-core pass either way, so switching /Direction on or
-% turning any directional knob never re-rolls a later mark. A call
-% that never names /Direction takes the old path unchanged.
+% one draw per non-core pass either way, so *at a fixed /Layers*,
+% switching /Direction on or turning /Direction, /Stretch, /OneSided or
+% /Spread never re-rolls a later mark. With /Layers left to default,
+% though, a directional call's depth follows /Spread (see Depth, below),
+% and a different depth is a different number of passes -- of pkwet's
+% draws and of the wrapped brush's own. Pin /Layers while tuning
+% /Spread. A call that never names /Direction takes the old path
+% unchanged.
 %
 % This is the pull the #118 notes assumed would need pixel readback
 % (#134). For a procedural scene it doesn't: the wrapper already re-runs
@@ -3844,8 +3849,10 @@
 % Cost, directional. A pull is up to 16x its procedure, and pulling a
 % reflection -- itself a second copy of the scene -- then grazing it
 % across is a nest by design. Nesting multiplies, so any chain with a
-% directional call in it is held to 64 runs of its innermost procedure
-% in total (a full 16-layer pull grazed four ways), checked before any
+% directional call in it may multiply its innermost procedure at most
+% 64 times (a full 16-layer pull grazed four ways) -- a bound on the
+% product down one nesting chain, not on total work: a procedure that
+% loops over several inner calls costs each of them. Checked before any
 % of the rejected call's draws: past that, pkwet-too-many-passes, with
 % the depth rolled back like the nesting guard. Purely isotropic chains
 % keep exactly the bounds they always had. The specimen,
@@ -3970,7 +3977,7 @@
 % @param: /Pickup 0..1 how far the outermost pass mixes toward Under; lower keeps the mark's own color out to its edge (default 0.85)
 % @param: /Layers Passes to draw, outermost first; must be a whole number, hard cap 1..6, or 1..16 with /Direction (default 1 + round(Soft*5); with /Direction, raised to keep passes at most 2pt apart, up to 16)
 % @param: /Spread How far in points the outermost pass is displaced from the true path; inert at Layers 1, which has only a core pass (default Soft*14)
-% @param: /Direction Degrees, in the user space pkwet is called in: lines the passes up along this axis instead of scattering them, for a pulled-down reflection (270), a lifted mist (90) or a swept sky (0). The procedure must paint in the color it inherits. A chain of nested calls containing a directional one is capped at 64 runs of the innermost procedure (default absent: isotropic)
+% @param: /Direction Degrees, in the user space pkwet is called in: lines the passes up along this axis instead of scattering them, for a pulled-down reflection (270), a lifted mist (90) or a swept sky (0). The procedure must paint in the color it inherits. A chain of nested calls containing a directional one may multiply its innermost procedure at most 64 times. Without an explicit /Layers its depth follows /Spread, so pin /Layers while tuning /Spread (default absent: isotropic)
 % @param: /Stretch With /Direction only: along-to-across ratio, at least 1; the cross-axis wobble is the along-axis reach divided by this (default 8)
 % @param: /OneSided With /Direction only: true puts every pass on the +Direction side (a pull down, a lift up); false alternates sides, a sweep both ways (default false)
 /pkwet {
@@ -4041,7 +4048,8 @@
         % /Layers is honored as given, and a single-layer call (/Soft 0)
         % stays the plain call it is everywhere else.
         pqopts /Layers known not pqLayers 1 gt and {
-            /pqLayers pqLayers pqSpread 2 div ceiling cvi 1 add max 16 min def
+            % clamped before cvi, which raises rangecheck on a huge real
+            /pqLayers pqLayers pqSpread 2 div ceiling 15 min cvi 1 add max def
         } if
     } {
         pqopts /Stretch known { pkwet-stretch-needs-a-direction } if
@@ -4113,9 +4121,10 @@
                     % scatter. Across it, a seeded wobble /Stretch times
                     % narrower -- the one draw, so a directional call
                     % consumes the stream exactly as an isotropic one.
-                    % Two-sided passes alternate by index, so the sweep
-                    % goes both ways at every depth.
-                    /pqalong pqOneSided pqi 2 mod 1 eq or
+                    % Two-sided passes alternate by distance from the
+                    % outermost, which is always on the + side whatever
+                    % the depth's parity, so the sweep goes both ways.
+                    /pqalong pqOneSided pqLayers 1 sub pqi sub 2 mod 0 eq or
                         { pqmag } { pqmag neg } ifelse def
                     /pqacross pqmag pqStretch div pkjit def
                     pqalong pqDirection cos mul pqacross pqDirection sin mul sub

@@ -24,10 +24,19 @@ Decisions:
   1..6 cap and error names are unchanged.
   `examples/paintkit_wet_demo.ps` and `gallery/alpine_lake.ps` render
   byte-identically before and after (md5 checked).
-- **Same random consumption.** A directional pass takes one draw (the
-  cross-axis wobble), the same as an isotropic pass's angle draw. So
-  turning `/Direction` on, or turning any directional knob, never
-  re-rolls a later mark.
+- **Same random consumption, at a fixed `/Layers`.** A directional pass
+  takes one draw (the cross-axis wobble), the same as an isotropic
+  pass's angle draw. So with `/Layers` pinned, turning `/Direction` on
+  or turning `/Direction`, `/Stretch`, `/OneSided` or `/Spread` never
+  re-rolls a later mark. With `/Layers` left to default, a directional
+  call's depth follows `/Spread`, and more passes means more draws,
+  pkwet's own and the wrapped brush's. Artists should pin `/Layers`
+  while tuning `/Spread` (the advisor caught the original, unqualified
+  claim).
+- **Two-sided passes alternate by distance from the outermost**, so
+  the outermost pass is always on the + side whatever the depth's
+  parity. Keying it off the raw index put it on the − side at odd
+  depths, contradicting the docs (advisor review).
 - **Default depth keeps the steps under 2pt, up to 16 layers.** The
   first prototype used 6 layers over 22pt. The pulled treeline repeated
   its crest as distinct horizontal bands, because a reseeding procedure
@@ -38,8 +47,10 @@ Decisions:
   honoured, and `/Soft 0` is still a single plain pass.
 - **Pass budget, scoped to directional chains.** Nesting multiplies
   cost, and pull-then-graze is a nest by design. Any chain containing a
-  directional call is held to 64 runs of its innermost procedure
-  (`pkwet-too-many-passes`). The check runs before any draw and rolls
+  directional call may multiply its innermost procedure at most 64
+  times (`pkwet-too-many-passes`). That bounds the product down one
+  chain, not total work: a procedure looping over several inner calls
+  pays for each. The check runs before any draw and rolls
   the depth back. Each frame records its own running product, so no new
   counter needs unwinding. Purely isotropic nests keep exactly the
   bounds they had: a 6×6×6 nest still runs, and a test pins it. Making

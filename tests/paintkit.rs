@@ -7053,6 +7053,25 @@ fn wet_two_sided_direction_sweeps_both_ways() {
     );
 }
 
+/// The outermost pass of a two-sided call is on the + side at any depth
+/// parity -- at /Layers 3 it is the only pass at the full /Spread, so
+/// full reach shows up above the mark and not below it.
+#[test]
+fn wet_two_sided_outermost_pass_is_on_the_plus_side_at_odd_depth() {
+    // Spread 40, Layers 3: outermost at +40 (user y 140, rows ~56..64),
+    // the middle pass at -20 (user y 80, rows ~116..124).
+    let it = pulled("/Direction 90 /Spread 40 /Pickup 0.4 /Layers 3 /Stretch 40");
+    let (plus, minus) = (ink_rows_in(&it, 52..68), ink_rows_in(&it, 132..148));
+    assert!(
+        plus > 1000,
+        "the outermost pass should reach +Spread: {plus}"
+    );
+    assert_eq!(
+        minus, 0,
+        "nothing should reach -Spread at Layers 3: {minus}"
+    );
+}
+
 /// /Stretch is the anisotropy: the cross-axis wobble is the along-axis
 /// reach divided by it. A horizontal sweep of a horizontal mark at
 /// /Stretch 1 wanders well off the line; at /Stretch 40 it stays on it.
@@ -7096,8 +7115,11 @@ fn wet_directional_outer_passes_carry_the_declared_under_color() {
 }
 
 /// A directional call takes exactly one draw per non-core pass, like an
-/// isotropic one, so switching /Direction on, or turning /Direction,
-/// /Stretch or /OneSided, never re-rolls anything drawn afterwards.
+/// isotropic one, so *at a fixed /Layers* switching /Direction on, or
+/// turning /Direction, /Stretch, /OneSided or /Spread, never re-rolls
+/// anything drawn afterwards. (With /Layers defaulted, a directional
+/// call's depth follows /Spread, which does change consumption -- see
+/// `wet_directional_default_depth_keeps_the_steps_fine`.)
 #[test]
 fn wet_direction_keys_do_not_change_random_consumption() {
     let downstream_mark = |opts: &str| {
@@ -7121,6 +7143,7 @@ fn wet_direction_keys_do_not_change_random_consumption() {
         "/Direction 270",
         "/Direction 0 /Stretch 1",
         "/Direction 45.5 /Stretch 30 /OneSided true",
+        "/Direction 270 /Spread 40",
     ] {
         assert_eq!(
             downstream_mark(opts),
@@ -7147,6 +7170,8 @@ fn wet_directional_default_depth_keeps_the_steps_fine() {
     // Soft 0.6 alone would give 4; a 22pt pull needs ceil(22/2)+1 = 12.
     assert_eq!(passes("/Direction 270 /Spread 22"), "12");
     assert_eq!(passes("/Direction 270 /Spread 80"), "16", "capped at 16");
+    // an absurd /Spread must clamp, not rangecheck in cvi
+    assert_eq!(passes("/Direction 270 /Spread 1e30"), "16");
     assert_eq!(passes("/Direction 270 /Spread 22 /Layers 3"), "3");
     assert_eq!(passes("/Direction 270 /Soft 0 /Spread 22"), "1");
     // ...and none of that reaches an isotropic call.

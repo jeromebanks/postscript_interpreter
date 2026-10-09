@@ -713,9 +713,11 @@ element, and `/Direction` is measured in the user space pkwet is called
 in — keep a reflection's mirror inside the procedure. A directional
 call defaults to enough layers to keep the passes within 2pt of each
 other (up to 16), because identical copies further apart read as
-stepped echoes, and any nest with a directional call in it is held to
-64 runs of its innermost procedure — enough to pull a reflection down
-and then graze it across. `examples/paintkit_wet_pull_demo.ps` shows a
+stepped echoes, so with `/Layers` left to default, `/Spread` also sets
+the depth and re-rolls what follows; pin `/Layers` while tuning. Any
+nest with a directional call in it may multiply its innermost
+procedure at most 64 times — enough to pull a reflection down and then
+graze it across. `examples/paintkit_wet_pull_demo.ps` shows a
 reflection sharp, pulled and pulled-then-grazed, a mountain foot under
 plain wet mist and under a lift, and a sky before and after a sweep.
 
