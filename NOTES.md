@@ -3,6 +3,77 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## `lib/paintkit.ps`: directional `pkwet` — pulls, lifts and sweeps (issue #181, 2026-10-09)
+
+Child of epic #112. `pkwet` gains `/Direction` (degrees), `/Stretch`
+(along-to-across ratio, ≥ 1, default 8) and `/OneSided` (default
+false). With a direction, each non-core pass sits exactly f·Spread
+along the axis, plus a seeded wobble across it `/Stretch` times
+narrower. One-sided puts every pass on the +Direction side, giving the
+pull-down (270) and the lift (90). Two-sided alternates sides, giving
+the sweep (0). Specimen: `examples/paintkit_wet_pull_demo.ps`, about
+20s in a release build.
+
+Decisions:
+- **Keys on `pkwet`, not a sibling wrapper.** Only the plan computation
+  differs. The frames, the per-pass `stopped`, the depth rollback and
+  the colour grading are shared by construction, so re-entrancy and
+  error unwinding needed no new code. Tests pin both anyway.
+- **Calls without `/Direction` are untouched.** Directional mode is
+  keyed off whether the key is *present*. The old plan loop, defaults,
+  1..6 cap and error names are unchanged.
+  `examples/paintkit_wet_demo.ps` and `gallery/alpine_lake.ps` render
+  byte-identically before and after (md5 checked).
+- **Same random consumption.** A directional pass takes one draw (the
+  cross-axis wobble), the same as an isotropic pass's angle draw. So
+  turning `/Direction` on, or turning any directional knob, never
+  re-rolls a later mark.
+- **Default depth keeps the steps under 2pt, up to 16 layers.** The
+  first prototype used 6 layers over 22pt. The pulled treeline repeated
+  its crest as distinct horizontal bands, because a reseeding procedure
+  draws *identical* copies and copies lined up 4pt apart read as echoes
+  (the advisor predicted this before any code was written). A bigger
+  `/Stretch` doesn't help. Finer steps do, so directional calls default
+  to ceil(Spread/2)+1 layers, capped at 16. An explicit `/Layers` is
+  honoured, and `/Soft 0` is still a single plain pass.
+- **Pass budget, scoped to directional chains.** Nesting multiplies
+  cost, and pull-then-graze is a nest by design. Any chain containing a
+  directional call is held to 64 runs of its innermost procedure
+  (`pkwet-too-many-passes`). The check runs before any draw and rolls
+  the depth back. Each frame records its own running product, so no new
+  counter needs unwinding. Purely isotropic nests keep exactly the
+  bounds they had: a 6×6×6 nest still runs, and a test pins it. Making
+  the budget global would have broken them, against the issue's "today's
+  calls untouched".
+- **`/Stretch` or `/OneSided` without `/Direction` is an error**, not
+  silently ignored.
+
+Gotchas, documented in the header and README:
+- **The wrapped procedure must paint in the colour it inherits.**
+  Grading sets the colour before each pass, so a procedure that sets
+  its own colour (every element of `alpine_lake.ps` does) draws every
+  pass at full strength. A line of those is a hard echo. Scenes are
+  therefore wrapped element by element, and each element's `/Under` is
+  what is really beneath it. In the first render the reflected
+  treeline declared open water as its `/Under`, while the reflected
+  range was what actually sat beneath it, and that left a pale teal
+  fringe.
+- **`/Direction` is in the user space pkwet is called in.** Put the
+  mirror inside the procedure and 270 points down the page. Call pkwet
+  inside `1 -1 scale` and 270 points up.
+- **Opaque core last.** A pull streaks past each mark's edge. It does
+  not smear interior detail under a later solid fill. Wrapping the snow
+  separately from the range is what lets the snow streak down over the
+  reflected range.
+- **Mist wants a particulate brush here too.** A lifted `pkbroad` band
+  came out as horizontal stripes, and a lifted fine `pkspray` dissolves.
+
+Not done: `gallery/alpine_lake.ps` still gets horizontal pulls only.
+Applying this means rewriting its scene elements so they inherit their
+colour, which is the rule above. Its reflection is about half the
+piece's 24s render, and a pull multiplies that. Worth a follow-up issue
+with a fresh 2× still.
+
 ## `lib/artkit.ps`: `jit` takes real arguments (issue #177, 2026-10-09)
 
 `jit` went through `chance` (`mod`), so `1.5 jit` raised a typecheck
@@ -83,6 +154,9 @@ for follow-ups, not fixed here:
 - A wet reflection's vertical pull-down (smearing the mirrored image
   before the horizontal strokes) needs canvas pickup. That is #134's
   territory, so the lake gets horizontal `pkbroad` pulls only.
+  (Superseded: #181's directional `pkwet` does the pull without
+  readback, for procedural scenes. The piece itself isn't converted
+  yet; see that entry.)
 
 Render time is about 35s at 760×560 in a release build, about half of
 it the reflection. The piece is linted clean by hand. It is

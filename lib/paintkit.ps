@@ -3784,6 +3784,73 @@
 % to 6x whatever that proc costs, including its own deposit budget.
 % pkwet adds no budget of its own beyond the 1..6 cap — the same shape
 % of nested-cost gap pkdry documents for its own bristle dashes (#79).
+% Directional calls are the exception, below.
+%
+% Directional mode (issue #181)
+% -----------------------------
+% Several core wet-on-wet moves are blends *along a direction*: a
+% reflection pulled straight down with a dry brush, a mountain's foot
+% tapped and lifted into haze, a sky softened with long horizontal
+% sweeps. /Direction (degrees) lines the passes up along that axis
+% instead of scattering them round the mark:
+%
+%   { ... } << /Direction 270 /OneSided true /Spread 22
+%              /Under [0.44 0.54 0.66] >> pkwet      % pull down
+%
+% Each non-core pass sits f*Spread along the direction -- exactly, so
+% the outermost pass reaches the full /Spread and a pull reads as a
+% pull -- plus a seeded wobble across it, /Stretch times narrower.
+% /OneSided true puts every pass on the +Direction side (down only, up
+% only); otherwise passes alternate sides by depth, outermost on the
+% + side, so a sweep goes both ways. The grading toward /Under, the
+% frames, the unwinding and the draws are exactly the isotropic ones:
+% one draw per non-core pass either way, so switching /Direction on or
+% turning any directional knob never re-rolls a later mark. A call
+% that never names /Direction takes the old path unchanged.
+%
+% This is the pull the #118 notes assumed would need pixel readback
+% (#134). For a procedural scene it doesn't: the wrapper already re-runs
+% the mark, so it can re-run it displaced along a line.
+%
+% Three things a directional call needs that an isotropic one gets away
+% without:
+%
+%   * The procedure must paint in the color it inherits. Grading works
+%     by setting a mixed color *before* the procedure runs; one that
+%     sets its own color (as every element of a gallery scene does)
+%     draws every pass at full strength, and a line of full-strength
+%     copies is a hard echo, not a pull. Wrap a multi-colored scene
+%     element by element, each with the /Under that is really beneath
+%     it -- under a reflected treeline that is the reflected range, not
+%     the open water.
+%   * /Direction is in the user space pkwet is *called* in, since each
+%     pass is a `translate` applied before the procedure runs. Put a
+%     reflection's mirror inside the procedure, `{ gsave 0 2*WL
+%     translate 1 -1 scale ... grestore }`, and 270 is down the page;
+%     call pkwet from inside the `1 -1 scale` and 270 points up.
+%   * The opaque core is laid last, so a pull streaks *past* each mark's
+%     edge -- below a reflected peak, over the water -- rather than
+%     smearing detail under a later solid fill. Wrapping element by
+%     element is also what lets the snow's own pull land over the range.
+%
+% Depth. A procedure that reseeds draws identical marks on every pass,
+% and identical copies lined up along one axis read as stepped echoes
+% once they sit more than about 2pt apart (measured: a pulled treeline
+% at 6 layers over 22pt repeated its crest as distinct bands). So a
+% directional call's default /Layers is whatever keeps the step at or
+% under 2pt, capped at 16, and its /Layers cap is 16 rather than 6. An
+% explicit /Layers is honored, and /Soft 0 is still the one plain pass.
+%
+% Cost, directional. A pull is up to 16x its procedure, and pulling a
+% reflection -- itself a second copy of the scene -- then grazing it
+% across is a nest by design. Nesting multiplies, so any chain with a
+% directional call in it is held to 64 runs of its innermost procedure
+% in total (a full 16-layer pull grazed four ways), checked before any
+% of the rejected call's draws: past that, pkwet-too-many-passes, with
+% the depth rolled back like the nesting guard. Purely isotropic chains
+% keep exactly the bounds they always had. The specimen,
+% examples/paintkit_wet_pull_demo.ps, pulls three reflected elements
+% and grazes them: about 20s for the page in a release build.
 %
 % pkwash is deliberately *not* wrappable: it resets alpha and blend mode
 % itself, by design, so it will not honor a surrounding context. pkwet
@@ -3896,13 +3963,16 @@
 /pqmyframe { userdict /pqframes get pqdnow get } def
 
 % @kind: Procedure
-% @summary: Runs a mark-drawing procedure several times, each pass displaced further and mixed further toward a declared backdrop color, so the mark's core stays solid while its edge grades away into the layer beneath. The wet-on-wet softener for skies, clouds, mist and distant forms; works with every stroke preset in this file. The procedure must build its own path: a path constructed before the call cannot be displaced, because PostScript paths are in device space once built, so every pass would land on the same geometry and nothing would soften. Pair it with a broken or particulate brush (pkspray, pkdry, pktrowel at low Coverage) -- a solid brush keeps its own hard silhouette and only gains a halo. Uses no alpha, so unlike pkwash it needs no Ghostscript fallback.
+% @summary: Runs a mark-drawing procedure several times, each pass displaced further and mixed further toward a declared backdrop color, so the mark's core stays solid while its edge grades away into the layer beneath. The wet-on-wet softener for skies, clouds, mist and distant forms; works with every stroke preset in this file. The procedure must build its own path: a path constructed before the call cannot be displaced, because PostScript paths are in device space once built, so every pass would land on the same geometry and nothing would soften. Pair it with a broken or particulate brush (pkspray, pkdry, pktrowel at low Coverage) -- a solid brush keeps its own hard silhouette and only gains a halo. With /Direction the passes line up along one axis instead: a reflection pulled down, a mountain foot lifted into mist, a sky swept across. Uses no alpha, so unlike pkwash it needs no Ghostscript fallback.
 % @example: { newpath 40 120 moveto 260 150 lineto << /Width 40 >> pkribbon } << /Soft 0.7 /Under [0.62 0.72 0.86] >> pkwet
 % @param: /Soft 0..1 master softness; supplies the defaults for Layers and Spread. 0 is a single undisplaced pass that marks the page exactly as calling the proc directly would, random stream included; the procedure still runs inside a gsave, so a path or graphics state it leaves behind does not survive the call (default 0.6)
 % @param: /Under [r g b] the color already on the canvas that this mark settles into; the outermost pass is nearly this color (default [1 1 1])
 % @param: /Pickup 0..1 how far the outermost pass mixes toward Under; lower keeps the mark's own color out to its edge (default 0.85)
-% @param: /Layers Passes to draw, outermost first; must be a whole number, hard cap 1..6 (default 1 + round(Soft*5))
+% @param: /Layers Passes to draw, outermost first; must be a whole number, hard cap 1..6, or 1..16 with /Direction (default 1 + round(Soft*5); with /Direction, raised to keep passes at most 2pt apart, up to 16)
 % @param: /Spread How far in points the outermost pass is displaced from the true path; inert at Layers 1, which has only a core pass (default Soft*14)
+% @param: /Direction Degrees, in the user space pkwet is called in: lines the passes up along this axis instead of scattering them, for a pulled-down reflection (270), a lifted mist (90) or a swept sky (0). The procedure must paint in the color it inherits. A chain of nested calls containing a directional one is capped at 64 runs of the innermost procedure (default absent: isotropic)
+% @param: /Stretch With /Direction only: along-to-across ratio, at least 1; the cross-axis wobble is the along-axis reach divided by this (default 8)
+% @param: /OneSided With /Direction only: true puts every pass on the +Direction side (a pull down, a lift up); false alternates sides, a sweep both ways (default false)
 /pkwet {
     /pqopts exch def
     /pqproc exch def
