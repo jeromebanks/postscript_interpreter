@@ -8466,7 +8466,7 @@ fn zigzag_alternates_about_a_spine_it_starts_and_ends_on() {
     assert_eq!(segs.len(), 11);
     assert!((segs[0].2 - 100.0).abs() < 1e-6 && (segs[10].2 - 100.0).abs() < 1e-6);
     for (i, s) in segs.iter().enumerate().take(10).skip(1) {
-        assert!((s.1 - 10.0 * i as f64).abs() < 1e-6, "even slots");
+        assert!((s.1 - 10.0 * i as f64).abs() < 1e-3, "even slots");
         let want = if i % 2 == 1 { 105.0 } else { 95.0 };
         assert!((s.2 - want).abs() < 1e-6, "peak {i}: {}", s.2);
     }
@@ -8506,6 +8506,68 @@ fn zigzag_wave_jitter_moves_vertices_along_the_spine_without_reordering() {
             .skip(1)
             .take(xs.len() - 2)
             .any(|(i, x)| (x - 10.0 * i as f64).abs() > 0.5)
+    );
+}
+
+#[test]
+fn zigzag_wave_jitter_never_leaves_a_cornered_or_curved_guide() {
+    // Codex round 4: sliding a vertex along the tangent took it off both legs
+    // of a corner ((98, -1.96) for a 98-corner at /Amplitude 0).
+    for corner in ["100", "98", "93.7"] {
+        for seed in 1..25 {
+            let segs = motion_segs(&format!(
+                "{seed} srand newpath 0 0 moveto {corner} 0 lineto {corner} 100 lineto \
+                 << /Amplitude 0 /Wavelength 20 /WaveJitter 1 /AmpJitter 0 >> pkzigzag"
+            ));
+            assert!(segs.len() > 8);
+            let c: f64 = corner.parse().expect("number");
+            for s in &segs {
+                let (x, y) = (s.1, s.2);
+                let on_leg1 = y.abs() < 1e-3 && (-1e-3..=c + 1e-3).contains(&x);
+                let on_leg2 = (x - c).abs() < 1e-3 && (-1e-3..=100.0 + 1e-3).contains(&y);
+                assert!(
+                    on_leg1 || on_leg2,
+                    "corner {corner} seed {seed}: vertex ({x}, {y}) is off the guide"
+                );
+            }
+        }
+    }
+    // A quarter circle: vertices stay within a chord's sag of it.
+    for seed in 1..10 {
+        let segs = motion_segs(&format!(
+            "{seed} srand newpath 100 0 moveto 0 0 100 0 90 arc \
+             << /Amplitude 0 /Wavelength 20 /WaveJitter 1 /AmpJitter 0 >> pkzigzag"
+        ));
+        assert!(segs.len() > 8);
+        for s in &segs {
+            let r = (s.1 * s.1 + s.2 * s.2).sqrt();
+            assert!((r - 100.0).abs() < 0.3, "seed {seed}: radius {r}");
+        }
+    }
+    // ...and the vertices keep their order along it.
+    let segs = motion_segs(&format!(
+        "3 srand {SPINE} << /Amplitude 0 /WaveJitter 1 /Wavelength 20 >> pkzigzag"
+    ));
+    assert!(segs.windows(2).all(|w| w[1].1 > w[0].1));
+}
+
+#[test]
+fn scumble_survives_a_tiny_user_space_scale() {
+    // Codex round 4: an absolute 1e-6 "no travel" threshold dropped every
+    // stop of a chain whose pitch was below it. The same chain drawn at a
+    // normal scale and a millionfold-shrunk one must have the same shape.
+    let normal = motion_segs(
+        "5 srand newpath 0 0 moveto 6 0 lineto << /Radius 5 /Step 6 /RadiusJitter 0 >> pkscumble",
+    );
+    let tiny = motion_segs(
+        "5 srand 1000000 1000000 scale newpath 0 0 moveto 0.000006 0 lineto \
+         << /Radius 0.000005 /Step 0.000006 /RadiusJitter 0 >> pkscumble",
+    );
+    assert_eq!(normal.len(), 25);
+    assert_eq!(
+        tiny.len(),
+        normal.len(),
+        "the chain collapsed at a tiny scale"
     );
 }
 

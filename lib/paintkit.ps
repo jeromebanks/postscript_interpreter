@@ -5809,8 +5809,10 @@ systemdict /setalpha known /pwhasalpha exch def
         } {
             % A stop with no travel since the previous one (the end stop of a
             % guide whose length is a whole number of pitches) is the same
-            % point again.
-            msatend 1 and 1 eq mssp 0.000001 gt or {
+            % point again. Zero travel is judged against the pitch, not a fixed distance: an
+            % absolute epsilon dropped every stop of a chain drawn at a tiny
+            % user-space scale.
+            msatend 1 and 1 eq mssp msstep 24 div 0.001 mul gt or {
                 /msr msrprev msrnext msrprev sub msturn msnl sub mul add def
                 /msph msturn 360 mul def
                 msx msang cos msr mul msph cos mul add msang sin neg msr mssq mul mul msph sin mul add
@@ -5986,41 +5988,56 @@ systemdict /setalpha known /pwhasalpha exch def
     /mzwj load xcheck { pkzigzag-wavejitter-must-not-be-a-procedure } if
     mzwj 0 lt mzwj 1 gt or { pkzigzag-wavejitter-must-be-0-to-1 } if
 
-    % One stop per half wavelength: each leg runs from one peak to the next.
-    mzwave 2 div 100000 { pkzigzag-point-count-exceeds-safety-limit } mhcollect
+    % The guide is walked at a sixth of a half wavelength and every vertex is
+    % one of those samples, so sliding a vertex (/WaveJitter) moves it along
+    % the guide by whole samples and never off it: sliding along the tangent
+    % left the guide at every corner (Codex round 4). 300000 samples bound
+    % 50000 vertices.
+    /mzn 6 def
+    mzwave 2 div mzn div 300000 { pkzigzag-point-count-exceeds-safety-limit } mhcollect
     newpath
     /mzk 0 def
     0 1 mhn 1 sub {
         /mzi exch def
-        mhstops mzi get aload pop
-        /mzatend exch def pop pop /mzang exch def /mzy exch def /mzx exch def
-        mzatend 1 and 1 eq { /mzk 0 def } if
-        frnd /mzfa exch def frnd /mzfw exch def
-        % When the guaranteed end stop sits right behind a regular one (on
-        % top of it when the pitch divides the length), the regular stop is
-        % dropped: the line ends on the spine, not on a peak that is
-        % immediately followed by a jog back to it. Half a pitch also keeps
-        % a slid stop from ending up past the end.
-        /mzskip false def
-        mzatend 3 and 0 eq mzi 1 add mhn lt and {
-            mhstops mzi 1 add get
-            dup 5 get 2 and 2 eq exch 4 get mzwave 2 div 0.5 mul lt and
-                { /mzskip true def } if
-        } if
-        mzskip not {
-            % The first and last stop sit on the spine itself.
-            mzatend 3 and 0 eq {
-                /mzk mzk 1 add def
-                /mzside mzk 2 mod 1 eq { 1 } { -1 } ifelse def
-                /mzoff mzamp 1 mzfa 2 mul 1 sub mzaj mul add mul mzside mul def
-                /mzslide mzfw 2 mul 1 sub mzwj mul mzwave mul 0.45 mul 2 div def
+        mhstops mzi get /mzst exch def
+        mzst 5 get /mzatend exch def
+        mzatend 1 and 1 eq {
+            % A new subpath: remember where it starts and where it ends.
+            /mzbase mzi def /mzk 0 def
+            /mzend mzi def
+            {
+                mzend mhn 1 sub ge { exit } if
+                mhstops mzend get 5 get 2 and 2 eq { exit } if
+                /mzend mzend 1 add def
+            } loop
+            mzst 0 get mzst 1 get moveto
+            % A lone point is a degenerate stroke, so it still paints.
+            mzatend 2 and 2 eq { mzst 0 get mzst 1 get lineto } if
+        } {
+            mzatend 2 and 2 eq {
+                % The line ends on the spine, not on a peak.
+                mzst 0 get mzst 1 get lineto
             } {
-                /mzoff 0 def /mzslide 0 def
+                % Every sixth sample is a vertex, unless the end is less than
+                % half a leg ahead (the guaranteed end stop can sit on top of
+                % it or just behind it): that one is dropped, so the line does
+                % not end on a peak followed by a jog back to the spine.
+                mzi mzbase sub mzn mod 0 eq
+                mzend mzi sub 1 sub mzwave 2 div mzn div mul
+                    mhstops mzend get 4 get add mzwave 2 div 0.5 mul ge and {
+                    frnd /mzfa exch def frnd /mzfw exch def
+                    /mzk mzk 1 add def
+                    /mzside mzk 2 mod 1 eq { 1 } { -1 } ifelse def
+                    /mzoff mzamp 1 mzfa 2 mul 1 sub mzaj mul add mul mzside mul def
+                    % At most 2 samples either way, a third of a leg, so
+                    % neighbouring vertices keep their order.
+                    mhstops mzi mzfw 2 mul 1 sub mzwj mul 2.7 mul truncate cvi add get
+                    /mzst exch def
+                    mzst 0 get mzst 2 get sin neg mzoff mul add
+                    mzst 1 get mzst 2 get cos mzoff mul add
+                    lineto
+                } if
             } ifelse
-            mzx mzang cos mzslide mul add mzang sin neg mzoff mul add
-            mzy mzang sin mzslide mul add mzang cos mzoff mul add
-            mzatend 1 and 1 eq { moveto } { lineto } ifelse
-            mzatend 3 eq { mzx mzy lineto } if
-        } if
+        } ifelse
     } for
 } def

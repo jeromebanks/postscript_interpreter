@@ -76,6 +76,15 @@ Decisions:
   stray point at the wrong phase). The phase is now cumulative travel
   over `/Step`, a zero-travel duplicate stop is not emitted, and the
   draws per stop are unchanged.
+- **`pkzigzag` takes its vertices from guide samples too.** Its first
+  `/WaveJitter` slid vertices along the tangent and left a cornered
+  guide even at `/Amplitude 0` (Codex round 4), the same defect
+  `pkpull` had. It now walks at a sixth of a half wavelength and every
+  vertex is one of those samples, slid by at most two samples (a third
+  of a leg, so neighbours keep their order), 300000 samples bounding
+  50000 vertices. The no-travel tests in `pkscumble` are judged against
+  the pitch, not a fixed distance: a `1e-6` epsilon dropped every stop
+  of a chain drawn after a `1000000 1000000 scale`.
 - **A bowed `pkpull` puts its controls at a third and two thirds of the
   whole stroke.** `pkcrisscross` works from half the stroke, so copying
   its constants into `pkpull` overshot the tip (Codex round 1); both
