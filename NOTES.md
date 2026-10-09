@@ -29,8 +29,13 @@ Decisions:
   exist and `scin`/`scarea` already answer the questions, so a cloud is
   any `scpath`. The grid is a jittered grid sized from the region's
   *area* (not its bounding box), with `scin` as the filter, so a
-  triangle asked for 100 strokes gets about 100. Cells are capped at
-  40000, which also bounds a hairline band.
+  triangle asked for 100 strokes gets about 100. Rows and columns are
+  rounded *together* from the cell target (rows from the box's aspect,
+  columns to fit); rounding each axis up on its own nearly doubled
+  `/Count` on a thin band (a 700 x 40 band asked for 20 drew 38), and
+  the advisor caught it because the first count tests were near-square.
+  Cells are capped at 40000, which now bounds only a *sparse* region (a
+  thin diagonal sliver, whose box dwarfs its area).
 - **A jittered grid, not pure random placement.** Even coverage with no
   clumps or gaps, which is what a criss-cross sky wants.
 - **Fixed draws per slot.** A crisscross cell draws six values and a

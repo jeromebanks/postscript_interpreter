@@ -5420,25 +5420,30 @@ systemdict /setalpha known /pwhasalpha exch def
 } def
 
 % region count mhgrid -
-% Lays a jittered grid of about `count` cells, sized from the region's area
-% (not its bounding box) so a non-rectangular region still keeps about
-% `count` points. Sets mhreg mhgx0 mhgy0 mhcols mhrows mhcw mhch. A region of
-% zero area leaves a 0 x 0 grid, so the caller's loops do not run.
+% Lays a jittered grid of about `count` kept cells. The cell count is what the
+% *bounding box* needs for `count` to land inside the region, i.e.
+% count * bboxArea / regionArea, so a non-rectangular region still keeps about
+% `count` points. Rows and columns are then rounded together from that target
+% (rows from the box's aspect, columns to fit), not each rounded up on its
+% own, which nearly doubled the count on a thin band. Sets mhreg mhgx0 mhgy0
+% mhcols mhrows mhcw mhch. A region of zero area leaves a 0 x 0 grid, so the
+% caller's loops do not run.
 % @internal
 /mhgrid {
     /mhcount exch def /mhreg exch def
     mhreg /BBox get aload pop
     /mhgy1 exch def /mhgx1 exch def /mhgy0 exch def /mhgx0 exch def
+    /mhbw mhgx1 mhgx0 sub def /mhbh mhgy1 mhgy0 sub def
     /mharea mhreg scarea def
-    mharea 0 gt
+    mharea 0 gt mhbw 0 gt and mhbh 0 gt and
     {
-        /mhside mharea mhcount div sqrt def
-        /mhcols mhgx1 mhgx0 sub mhside div ceiling def
-        /mhrows mhgy1 mhgy0 sub mhside div ceiling def
-        mhcols 1 lt { /mhcols 1 def } if
+        /mhtarget mhcount mhbw mhbh mul mul mharea div def
+        /mhrows mhtarget mhbh mul mhbw div sqrt round def
         mhrows 1 lt { /mhrows 1 def } if
-        /mhcw mhgx1 mhgx0 sub mhcols div def
-        /mhch mhgy1 mhgy0 sub mhrows div def
+        /mhcols mhtarget mhrows div round def
+        mhcols 1 lt { /mhcols 1 def } if
+        /mhcw mhbw mhcols div def
+        /mhch mhbh mhrows div def
     }
     { /mhcols 0 def /mhrows 0 def /mhcw 1 def /mhch 1 def }
     ifelse
@@ -5508,11 +5513,18 @@ systemdict /setalpha known /pwhasalpha exch def
 %   { 0 0 100 100 screct << /Count 5 >> pkcrisscross }
 %   (the documented form) mustpass
 %
-%   % The grid is bounded by cells, not just by /Count: a hairline band is
-%   % mostly empty cells.
-%   { 0 0 1000000 1 screct << /Count 5000 >> pkcrisscross }
+%   % The grid is bounded by cells, not just by /Count: a thin diagonal sliver
+%   % has a bounding box vastly bigger than its area, so keeping /Count
+%   % points in it would take millions of cells.
+%   { newpath 0 0 moveto 10000 10000 lineto 10000 10001 lineto closepath scpath
+%     << /Count 5000 >> pkcrisscross }
 %   /pkcrisscross-too-many-cells
-%   (a hairline band) mustguard
+%   (a thin diagonal sliver) mustguard
+%
+%   { newpath 0 0 moveto 10000 10000 lineto 10000 10001 lineto closepath scpath
+%     << /Count 5000 >> pkscumblein }
+%   /pkscumblein-too-many-cells
+%   (a thin diagonal sliver) mustguard
 %
 %   { 0 0 100 100 screct << /Radius 0 >> pkscumblein }
 %   /pkscumblein-radius-must-be-positive

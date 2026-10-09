@@ -7913,6 +7913,31 @@ fn crisscross_count_tracks_the_requested_count() {
     ))
     .len();
     assert!((60..=150).contains(&tri), "asked for about 100, got {tri}");
+    // Thin bands are the headline use: each axis used to round up on its
+    // own, which nearly doubled the count (a 700 x 40 band asked for 20
+    // drew 38).
+    for (w, h) in [(700, 40), (700, 10), (700, 100), (40, 700), (1000, 1)] {
+        let n = strokes(&motion_segs(&format!(
+            "5 srand 0 0 {w} {h} screct << /Count 20 >> pkcrisscross"
+        )))
+        .len();
+        assert!(
+            (13..=27).contains(&n),
+            "a {w} x {h} band asked for about 20, got {n}"
+        );
+    }
+    let circles = |w: u32, h: u32| {
+        motion_segs(&format!(
+            "5 srand 0 0 {w} {h} screct << /Count 20 >> pkscumblein"
+        ))
+        .iter()
+        .filter(|s| s.0 == 3)
+        .count()
+    };
+    for (w, h) in [(700, 40), (700, 10)] {
+        let n = circles(w, h);
+        assert!((13..=27).contains(&n), "{w} x {h} circles: {n}");
+    }
 }
 
 #[test]
