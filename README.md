@@ -692,6 +692,16 @@ side by side, along with a sky, clouds and two banks of mist. A
 low-`/Coverage` mark is full of gaps, so mist laid on with one lets a
 treeline read straight through it without any translucency at all.
 
+All of these come together in the gallery piece *Alpine Lake*
+(`gallery/alpine_lake.ps`, issue #118), a full wet-on-wet landscape
+painted from paintkit's brushes alone. It has a criss-cross `pkbroad`
+sky, `pkspray` clouds and mist under `pkwet`, and `pktrowel` snow and
+shadow planes on two ranges. A `pkdab`-crested forest sits on the far
+shore, with `pkfan` evergreens, a mirrored reflection and `pkliner`
+details. The reflection is not a second drawing: every scene element
+seeds its own randomness, so the lake re-runs the same procedures
+under `1 -1 scale` and gets the same marks upside down.
+
 `pkwash` (issue #47) is the watercolor medium, and the one preset here
 that needs something from the interpreter rather than only from
 PostScript: it fills the current path as a *translucent* wash. Two new
