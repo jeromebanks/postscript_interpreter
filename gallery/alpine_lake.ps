@@ -1,0 +1,445 @@
+%!PS-Adobe-3.0
+%%Title: Alpine Lake — a wet-on-wet landscape from paintkit's brushes
+%%Creator: pscat — issue #118, the wet-on-wet epic's (#112) capstone
+%%BoundingBox: 0 0 760 560
+%%EndComments
+
+% A snow-capped range over a still lake, painted the way a wet-on-wet
+% landscape actually is: sky first, then each plane of the scene from
+% the farthest forward, each one darker, warmer and harder-edged than
+% the one behind it, with the lake's reflection pulled in last and the
+% foreground bank laid over the shoreline seam.
+%
+% Nothing here is a landscape helper. Every mark is one of the epic's
+% painting tools, and each tool does the job it would on a real easel:
+%
+%   pkbroad  (#115)  the sky's criss-cross block-in, the mist fade up
+%                    each range's foot, the earth of the bank, and the
+%                    horizontal pulls across the lake
+%   pktrowel (#111)  the knife: snow down the lit faces, shadow snow and
+%                    shadow planes down the dark ones
+%   pkwet    (#113)  clouds, mist and the far forest's crest settled
+%                    into the paint beneath them instead of sitting on it
+%   pkfan    (#114)  the evergreens' branch tiers, the spires in the
+%                    far forest
+%   pkdab    (#117)  the far forest's tapped crest, the bushes on the bank
+%   pkliner  (#116)  trunks, grass, and the light lines on the water
+%   pkspray / pkoil  cloud vapour and mist; the lit lip of the bank
+%
+% The reflection is not a separate drawing. Each scene element is a
+% procedure that seeds its own randomness first, so the lake re-runs
+% the exact same procedures under a `1 -1 scale` about the waterline
+% and gets the same mountains and trees, mark for mark, upside down.
+%
+% No setalpha anywhere (pkwash/pkpaper are deliberately not used), so
+% Ghostscript renders the same picture without a fallback path -- only
+% its rand stream differs, so the marks fall differently, and it does
+% not antialias, so fine spray and bristles come out heavier.
+%
+%   pscat --page 760x560 --speed 600 gallery/alpine_lake.ps
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+
+118 srand
+
+% Scratch names are lk-prefixed: paintkit's presets redefine their own
+% pk-/pn-/pb-/pz-/po-/pq-/pd- names on every call, and artkit has its
+% own set, so a piece-level name sharing one of those would be quietly
+% overwritten mid-painting.
+
+/lkW 760 def
+/lkH 560 def
+/lkWL 196 def                                    % the waterline
+
+% ---- palette ---------------------------------------------------------
+
+/lkZENITH  [0.26 0.38 0.60] def
+/lkHORIZ   [0.97 0.87 0.72] def                  % a warm dawn low in the sky
+/lkCLOUD   [0.99 0.97 0.93] def
+/lkFAR     [0.50 0.52 0.68] def                  % far range, blued by air
+/lkNEAR    [0.30 0.33 0.47] def                  % nearer range
+/lkSNOW    [0.99 0.98 0.96] def
+/lkMIST    [0.86 0.86 0.88] def
+/lkLINE    [0.20 0.30 0.32] def                  % far tree line
+/lkPINE    [0.06 0.15 0.11] def
+/lkPINELT  [0.26 0.40 0.21] def
+/lkBANK    [0.12 0.10 0.07] def
+
+% y -> r g b   the sky's color at height y
+/lkskyat {
+    lkWL sub lkH lkWL sub div dup 1 gt { pop 1 } if dup 0 lt { pop 0 } if
+    /lkst exch def
+    lkHORIZ lkZENITH lkst 0.7 exp mix3
+} def
+
+/lkset { aload pop setrgbcolor } def
+
+% x lkj -> -x..x   real-valued, unlike artkit's integer-only jit
+/lkj { frnd 2 mul 1 sub mul } def
+
+% x0 y0 x1 y1 -   a fresh path holding one straight segment
+/lkseg { newpath 4 2 roll moveto lineto } def
+
+% ---- sky -------------------------------------------------------------
+
+/lksky {
+    lkWL 2 lkH {
+        /lky exch def
+        lky lkskyat setrgbcolor
+        0 lky lkW 2.5 rectfill
+    } for
+    % criss-cross block-in: short diagonal strokes a shade off the
+    % sky's own color, so the gradient picks up a brushed surface
+    1 srand
+    0 1 90 {
+        pop
+        /lkx lkW 40 add chance 20 sub def
+        /lky lkWL 40 add lkH lkWL sub 30 sub chance add def
+        /lkd 1 2 chance 2 mul sub def
+        [ lky lkskyat ] 1.0 4 lkj 100 div add shade setrgbcolor
+        lkx lky lkx 50 add lky 32 lkd mul add lkseg
+        << /Width 30 /Charge 0.7 /Depletion 0.8 /Edge 0.3 >> pkbroad
+    } for
+} def
+
+% x y w seed -   a cloud: spray vapour worked wet into the sky behind it
+/lkcloud {
+    srand /lkcw exch def /lkcy exch def /lkcx exch def
+    /lkcunder [ lkcy lkskyat ] def
+    lkCLOUD lkset
+    % overlapping arcs of very fine spray: at a 1pt speck the particles
+    % fuse into a solid core and only the falloff stays granular, which
+    % pkwet then grades into the sky. Coarser specks read as static.
+    { 0 1 4 {
+        /lkk exch def
+        newpath
+        lkcx lkcw lkk mul 0.08 mul add  lkcy lkk 3 mul add moveto
+        lkcx lkcw 0.35 mul add  lkcy lkcw 0.16 mul add 6 lkj add
+        lkcx lkcw 0.7 mul add  lkcy 6 lkj add
+        lkcx lkcw add lkcw lkk mul 0.06 mul sub  lkcy lkk 4 mul sub 4 add curveto
+        << /Nozzle lkcw 0.07 mul /Density 400 /Falloff 0.9 /Speck 1.2
+           /Overspray 0.5 >> pkspray
+      } for }
+    << /Soft 1 /Under lkcunder >> pkwet
+} def
+
+% ---- the ranges ------------------------------------------------------
+
+/lkFARPTS [
+    -10 330   40 362   92 404  130 446  150 432  180 470  214 420
+    252 392   292 414  334 488  360 470  380 482  424 424  466 398
+    506 426   546 462  570 452  604 410  644 392  690 420  730 400
+    770 380
+] def
+
+/lkNEARPTS [
+    -10 262   36 290   80 328  118 304  160 340  204 312  246 282
+    300 300   352 346  384 330  420 362  466 318  520 290  572 306
+    626 340   660 326  700 300  770 276
+] def
+
+% pts -   the silhouette as a closed path down to the waterline
+/lkrangepath {
+    /lkrp exch def
+    newpath -10 lkWL 4 sub moveto
+    0 2 lkrp length 1 sub { lkrp exch 2 getinterval aload pop lineto } for
+    770 lkWL 4 sub lineto closepath
+} def
+
+% x0 y0 x1 y1 blade coverage -    one knife pull
+/lkknife {
+    /lkkc exch def /lkkb exch def
+    lkseg
+    << /Width lkkb /Angle 12 /Coverage lkkc /Viscosity 0.7 /Scrape 0.35
+       /Drag 0.5 /EdgeBuildup 0.15 /ColorJitter 0.03 >> pktrowel
+} def
+
+% x0 y0 x1 y1 -   a knife pull for the shadow planes: a narrow blade,
+% loaded, so overlapping pulls close up into one plane
+/lkknife0 { 12 0.85 lkknife } def
+
+% pts color snowreach seed -
+% One range: the silhouette, a mist fade brushed up from its foot, then
+% the knife. The fade is a stack of broad strokes mixed from the range's
+% color toward the mist, so the foot dissolves rather than ending.
+/lkrange {
+    srand /lkreach exch def /lkrc exch def /lkpts exch def
+    lkrc lkset lkpts lkrangepath fill
+    % the knife: on every peak, snow pulled down the lit (left) face and
+    % a bluer shadow snow down the right, a little steeper than the
+    % slope so it bites into the face. Clipped to the silhouette, which
+    % is what a knife edge gives a real ridge: the paint stops dead
+    % against the sky.
+    gsave lkpts lkrangepath clip
+    1 1 lkpts length 2 idiv 2 sub {
+        /lki exch def
+        /lkpx lkpts lki 2 mul get def
+        /lkpy lkpts lki 2 mul 1 add get def
+        /lkqx lkpts lki 2 mul 2 sub get def
+        /lkqy lkpts lki 2 mul 1 sub get def
+        /lkrx lkpts lki 2 mul 2 add get def
+        /lkry lkpts lki 2 mul 3 add get def
+        lkpy lkqy gt lkpy lkry gt and {
+            /lkh lkpy lkWL sub lkreach mul def
+            % slope direction down each face, per unit of drop
+            /lkls lkpx lkqx sub lkpy lkqy sub div def
+            /lkrs lkrx lkpx sub lkpy lkry sub div def
+            % the shaded face first: a triangle hung off the right ridge
+            % (peak, a point down the ridge, a point low inside the face)
+            % filled with vertical knife pulls, so it reads as a plane
+            % with the blade's texture. A stroke pulled along a shallow
+            % ridge just becomes a bar across the range.
+            /lkd lkpy lkWL sub 0.35 mul def
+            /lkrx2 lkpx lkd lkrs 1.4 min mul add def
+            gsave
+                newpath lkpx lkpy moveto lkrx2 lkpy lkd sub lineto
+                lkpx lkrx2 lkpx sub 0.15 mul add lkpy lkd 1.7 mul sub lineto
+                closepath clip
+                [ lkrc 0.84 shade ] lkset
+                lkpx 6 sub 7 lkrx2 6 add {
+                    /lkx exch def
+                    lkx lkpy 2 add lkx 3 lkj add lkpy lkd 2 mul sub lkknife0
+                } for
+            grestore
+            lkSNOW lkset
+            0 1 4 {
+                /lkk exch def
+                /lkd lkh 0.45 lkk 0.14 mul add mul def
+                lkpx lkk 4 mul sub 2 lkj add  lkpy 2 sub lkk 7 mul sub
+                lkpx lkk 4 mul sub lkd lkls mul 0.7 mul sub  lkpy lkd sub 6 lkj add
+                24 lkk 3 mul sub 0.82 lkk 0.08 mul sub lkknife
+            } for
+            [ lkrc lkSNOW 0.55 mix3 ] lkset
+            0 1 3 {
+                /lkk exch def
+                /lkd lkh 0.4 lkk 0.12 mul add mul def
+                lkpx lkk 3 mul add 3 add  lkpy 3 sub lkk 6 mul sub
+                lkpx lkk 3 mul add lkd lkrs mul 0.7 mul add  lkpy lkd sub 6 lkj add
+                20 0.6 lkknife
+            } for
+        } if
+    } for
+    grestore
+    % last, the mist fade brushed up from the foot over everything,
+    % dissolving the bottoms of the knife work into it
+    gsave
+        lkpts lkrangepath clip
+        lkWL 4 add 5 lkWL 84 add {
+            /lky exch def
+            /lkt lky lkWL sub 80 div def            % 0 at the foot
+            lkMIST lkrc lkt 0.8 exp mix3 setrgbcolor
+            -20 lky 2 lkj add 780 lky 3 lkj add lkseg
+            % the brush carries less paint the higher it goes, so the top
+            % of the fade breaks up over the knife work instead of
+            % covering it with a flat band
+            << /Width 12 /Charge 1 lkt 0.6 mul sub /Depletion 0.25 lkt 0.6 mul add
+               /Edge 0.4 /Grain 10 /ColorJitter 0.02 >> pkbroad
+        } for
+    grestore
+} def
+
+% y under seed -   a band of mist tapped wet into whatever is under it
+/lkmist {
+    srand /lkmu exch def /lkmy exch def
+    lkMIST lkset
+    /lkmd lkmy 300 gt { 260 } { 60 } ifelse def
+    { newpath -20 lkmy moveto 250 lkmy 8 sub 520 lkmy 8 add 780 lkmy 2 sub curveto
+      << /Nozzle 12 /Density lkmd /Falloff 1 /Speck 1 /Speckle 0.6 /Overspray 0.6 >> pkspray }
+    << /Soft 1 /Under lkmu >> pkwet
+} def
+
+% ---- the far tree line ----------------------------------------------
+
+% A forested foothill along the far shore, in two rows. Each row is a
+% filled mass whose crest is tapped in with small dabs -- a distant
+% forest is a fuzzy edge, not a thousand trees -- with a few spires
+% standing up out of the front one. The back row is paler and its
+% crest is softened into the mist; the front row is darker and left
+% crisp, which is what puts air between the two.
+/lkfoothill {                                    % x -> height
+    dup 0.9 mul sin 6 mul exch dup 2.3 mul sin 4 mul exch
+    380 sub abs 380 div 30 mul add add 18 add
+} def
+% k -   a fresh path along the crest of the foothill scaled by k
+/lkcrest {
+    /lkck exch def
+    newpath -10 dup lkfoothill lkck mul lkWL add moveto
+    -4 6 770 { dup lkfoothill lkck mul lkWL add lineto } for
+} def
+% k -   the mass under that crest, down to the waterline
+/lkhillmass {
+    lkcrest 770 lkWL lineto -10 lkWL lineto closepath fill
+} def
+/lktreeline {
+    4 srand
+    /lkbackc [ lkLINE lkMIST 0.4 mix3 ] def
+    lkbackc lkset 0.95 lkhillmass
+    { 0.95 lkcrest
+      % behind this crest is the near range's foot, half faded into mist --
+    % not the mist itself, which would leave a pale rim around the forest
+    << /Size 2.2 /Spread 5 /Density 4 /Shadow 0 /Highlight 0 /Irregular 1 >> pkdab }
+    << /Soft 0.6 /Under [ lkMIST lkNEAR 0.55 mix3 ] >> pkwet
+    lkLINE lkset 0.55 lkhillmass
+    0.55 lkcrest
+    << /Size 2 /Spread 4 /Density 4 /Shadow 0.3 /Highlight 0.08 /Irregular 1 >> pkdab
+    0 1 26 {
+        pop
+        /lkx 760 chance def
+        /lkt lkx lkfoothill 0.55 mul lkWL add def
+        lkx lkt 2 sub lkx lkt 8 add 10 chance add lkseg
+        << /Width 5 /Bristles 10 /Splay 0.9 /Load 0.9 /Ragged 0.5 /Flick 0.9 >> pkfan
+    } for
+    -10 lkWL 2 add 770 lkWL 2 add lkseg
+    << /Width 7 /Charge 0.95 /Depletion 0 /Edge 0.5 >> pkbroad
+} def
+
+% ---- evergreens ------------------------------------------------------
+
+% x y h seed -   one fan-brush pine: a liner trunk, then branch tiers
+% pulled out and down from the trunk, widening toward the base
+/lkpine {
+    srand /lkph exch def /lkpy exch def /lkpx exch def
+    [ lkPINE 0.8 shade ] lkset
+    lkpx lkpy lkpx lkpy lkph add lkseg
+    << /Width lkph 0.03 mul 1 max /Taper 0.95 /Waver 0.3 >> pkliner
+    lkPINE lkset
+    /lkn lkph 7 div cvi 3 max def
+    0 1 lkn {
+        /lkk exch def
+        /lkf lkk lkn div def                     % 0 at the top
+        /lkty lkpy lkph add lkph 0.9 mul lkf mul sub def
+        /lkspan lkph 0.04 mul lkph 0.34 mul lkf mul add def
+        [ -1 1 ] {
+            /lks exch def
+            lkpx lkty
+            lkpx lkspan lks mul add 2 lkj add  lkty lkspan 0.45 mul sub 3 lkj add lkseg
+            << /Width lkph 0.09 mul 3 max /Bristles 18 /Splay 0.8 /Load 0.88
+               /Dropout 0.12 /Ragged 0.45 /Flick 0.7 >> pkfan
+        } forall
+    } for
+    % highlights only on the lit (left) side, and only sparingly
+    lkPINELT lkset
+    1 2 lkn {
+        /lkk exch def
+        /lkf lkk lkn div def
+        /lkty lkpy lkph add lkph 0.9 mul lkf mul sub 2 add def
+        /lkspan lkph 0.04 mul lkph 0.28 mul lkf mul add def
+        lkpx 2 sub lkty  lkpx lkspan sub lkty lkspan 0.4 mul sub lkseg
+        << /Width lkph 0.05 mul 2 max /Bristles 10 /Splay 0.7 /Load 0.5
+           /Dropout 0.4 /Ragged 0.6 >> pkfan
+    } for
+} def
+
+/lkpines {
+    % the far stands are paler and bluer: the same tree, more air
+    /lkPINE0 lkPINE def /lkPINELT0 lkPINELT def
+    /lkPINE [0.18 0.27 0.28] def /lkPINELT [0.32 0.42 0.37] def
+    452 lkWL 40 21 lkpine  468 lkWL 56 22 lkpine  484 lkWL 36 23 lkpine
+    150 lkWL 46 24 lkpine  166 lkWL 34 25 lkpine  560 lkWL 30 26 lkpine
+    /lkPINE lkPINE0 def /lkPINELT lkPINELT0 def
+    610 lkWL 4 sub 140 31 lkpine
+    662 lkWL 8 sub 200 32 lkpine
+    716 lkWL 6 sub 150 33 lkpine
+    44 lkWL 8 sub 180 34 lkpine
+    88 lkWL 4 sub 110 35 lkpine
+} def
+
+% everything above the waterline, which the lake reflects
+/lkscene {
+    lkFARPTS lkFAR 0.36 2 lkrange
+    330 lkFAR 5 lkmist
+    lkNEARPTS lkNEAR 0.22 3 lkrange
+    250 lkNEAR 6 lkmist
+    lktreeline
+    lkpines
+} def
+
+% ---- paint -----------------------------------------------------------
+
+lksky
+130 494 200 11 lkcloud
+430 520 240 12 lkcloud
+590 470 140 13 lkcloud
+lkscene
+
+% The lake. Base color first, then the whole scene again mirrored about
+% the waterline and clipped to the water, then horizontal pulls of the
+% water color over it -- a broad brush that runs out, so the reflection
+% stays visible between the strokes -- and last the liner's light lines.
+gsave
+0 0 lkW lkWL rectclip
+lkWL -2 0 {
+    /lky exch def
+    [ lkWL lky sub lkWL add lkskyat ] 0.84 shade setrgbcolor
+    0 lky lkW 2.5 rectfill
+} for
+gsave
+    0 lkWL 2 mul translate 1 -1 scale
+    lkscene
+grestore
+7 srand
+lkWL 4 sub -11 0 {
+    /lky exch def
+    [ lkWL lky sub lkWL add lkskyat ] 0.84 shade setrgbcolor
+    /lkx 700 chance 100 sub def
+    lkx lky lkx 200 add 160 chance add lky 1.5 lkj add lkseg
+    << /Width 5 /Charge 0.3 /Depletion 0.9 /Edge 0.3 >> pkbroad
+} for
+% light lines on the water, densest just below the far shore
+[ lkSNOW lkWL lkskyat 3 array astore 0.15 mix3 ] lkset
+0 1 13 {
+    pop
+    /lkx 740 chance def
+    /lky lkWL 3 sub 60 chance dup mul 60 div sub def
+    lkx lky lkx 14 add 36 chance add lky 0.6 lkj add lkseg
+    << /Width 1.1 /Taper 0.6 /Waver 0.3 /Charge 0.8 /Depletion 0.6 >> pkliner
+} for
+grestore
+
+% ---- foreground bank -------------------------------------------------
+
+8 srand
+/lkbankpath {
+    newpath -10 -10 moveto -10 120 lineto
+    60 130 150 104 250 88 curveto
+    310 78 340 54 390 36 curveto
+    470 26 560 62 640 82 curveto
+    700 96 740 112 770 120 curveto 770 -10 lineto closepath
+} def
+lkBANK lkset lkbankpath fill
+% brushed earth: broad strokes of browns and dark greens over the mass
+gsave
+    lkbankpath clip
+    0 1 40 {
+        pop
+        [ [0.17 0.13 0.08] [0.09 0.13 0.07] [0.14 0.11 0.07] ] 3 chance get lkset
+        /lkx 760 chance 30 sub def
+        /lky 120 chance def
+        lkx lky lkx 60 add 30 chance add lky lkx 390 sub 0.12 mul add 6 lkj add lkseg
+        << /Width 18 /Charge 0.6 /Depletion 0.9 /Edge 0.2 /Grain 20 >> pkbroad
+    } for
+grestore
+% the lip of the bank catches the light
+[0.42 0.34 0.22] lkset
+newpath 0 116 moveto 80 124 160 100 250 86 curveto
+<< /Width 8 /Ridges 8 /Load 0.5 /Dropout 0.5 /Highlight 0.3 >> pkoil
+
+% bushes along the bank
+[0.15 0.25 0.10] lkset
+newpath 30 124 moveto 110 124 180 100 240 90 curveto
+<< /Size 3.4 /Spread 20 /Density 7 /Highlight 0.6 /Shadow 0.5 /Irregular 0.9 >> pkdab
+newpath 540 66 moveto 620 82 690 100 750 118 curveto
+<< /Size 3 /Spread 18 /Density 7 /Highlight 0.6 /Shadow 0.5 /Irregular 0.9 >> pkdab
+
+% grass stems, the last marks
+0 1 90 {
+    pop
+    [ [0.44 0.48 0.22] [0.30 0.36 0.14] [0.56 0.52 0.30] ] 3 chance get lkset
+    /lkx 760 chance def
+    /lky lkx 390 sub abs 0.2 mul 26 add 34 chance sub def
+    lkx lky lkx 8 lkj add lky 12 add 18 chance add lkseg
+    << /Width 1.5 /Taper 0.95 /Waver 1.4 >> pkliner
+} for
+
+showpage

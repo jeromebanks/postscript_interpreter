@@ -3,6 +3,60 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## Gallery: *Alpine Lake*, the wet-on-wet landscape specimen (issue #118, 2026-10-08)
+
+Capstone of epic #112. `gallery/alpine_lake.ps` paints a snow-capped
+range over a still lake using only artkit and paintkit primitives. No
+library code changed. The piece's header maps each layer to the issue
+whose tool it uses (#111, #113–#117). Scratch prefix is `lk-`, because
+the presets redefine pk-/pn-/pb-/pz-/po-/pq-/pd- names on every call.
+
+Decisions:
+- **Reflection by re-running, not a helper.** Every scene element
+  seeds its own `srand`, so the lake calls the same procedures under
+  `0 2*WL translate 1 -1 scale`, clipped to the water. The upside-down
+  copy matches mark for mark. A `reflect` helper would only wrap those
+  three lines.
+- **No alpha.** `pkpaper` and `pkwash` need `setalpha`, so neither is
+  used. Ghostscript (`gs -dNOSAFER`) renders the same scene without a
+  fallback. Only its rand stream and lack of antialiasing differ. pscat
+  output is byte-identical across runs.
+- **Knife snow is clipped to the range silhouette.** That gives a crisp
+  ridge against the sky. Shadow planes are triangles hung off the right
+  ridge and filled with vertical `pktrowel` pulls. Pulling the knife
+  *along* a shallow ridge just draws a bar across the range: it was
+  tried twice and rendered as stripes.
+- **Mist fade is painted last.** It is a stack of `pkbroad` strokes
+  mixed from the range colour toward mist, with `/Charge` dropping as
+  it rises. It dissolves the bottoms of the knife work instead of
+  covering them with a flat band.
+- **The far forest is a filled mass with a `pkdab`-tapped crest.**
+  Upright `pkfan` strokes at that scale read as pale stripes and
+  doubled the render time.
+
+Missing abstractions and gotchas found while composing. Candidates
+for follow-ups, not fixed here:
+- artkit's `jit` is integer-only (it goes through `mod`), so
+  `1.5 jit` is a typecheck. The piece defines a real-valued `lkj`.
+  `jit` could accept reals, or at least say so in its docs.
+- `pkspray` clouds need a speck of about 1pt. At 2–3pt the particles
+  never fuse, and a cloud or mist reads as static. Worth a line in
+  pkspray's guidance.
+- `pkwet`'s `/Under` must be the colour actually behind the mark. On
+  the far forest, declaring plain mist when the half-faded range sat
+  behind it left a pale rim. This is already documented, but easy to
+  get wrong.
+- There is no "plane" mode for the knife (fill an area with blade
+  pulls). The triangle-clip-and-pull pattern here is the workaround.
+- A wet reflection's vertical pull-down (smearing the mirrored image
+  before the horizontal strokes) needs canvas pickup. That is #134's
+  territory, so the lake gets horizontal `pkbroad` pulls only.
+
+Render time is about 35s at 760×560 in a release build, about half of
+it the reflection. The piece is linted clean by hand. It is
+deliberately not added to `tests/cli.rs`'s lint corpus, because that
+suite runs a debug binary and the cost would land on every CI run.
+
 ## `lib/paintkit.ps`: `pkdab`, the foliage / dab brush (issue #117, 2026-10-08)
 
 Child of epic #112. Adds `pkdab` with `/Size` `/Spread` `/Density`
