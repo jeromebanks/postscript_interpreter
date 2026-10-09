@@ -56,6 +56,38 @@ fn random_helpers_are_seeded_and_in_range() {
     }
 }
 
+/// Integer jit draws are pinned to the values they produced before real
+/// arguments were supported (captured on main, before the change). A
+/// seeded integer piece must render identically, so these must never move.
+#[test]
+fn jit_integer_draws_are_unchanged() {
+    let got = eval("7 srand 10 { 10 jit } repeat");
+    assert_eq!(got, ["-9", "5", "-4", "9", "10", "-8", "4", "7", "9", "-3"]);
+    let got = eval("3 srand 6 { 25 jit } repeat");
+    assert_eq!(got, ["18", "24", "22", "22", "20", "17"]);
+    let got = eval("5 jit type");
+    assert_eq!(got[0], "integertype", "integer jit keeps integer results");
+}
+
+#[test]
+fn jit_accepts_real_arguments() {
+    let got = eval("9 srand 200 { 1.5 jit } repeat");
+    let mut fractional = 0;
+    for v in &got {
+        let f: f64 = v.parse().unwrap();
+        assert!((-1.5..=1.5).contains(&f), "real jit out of range: {f}");
+        if f.fract() != 0.0 {
+            fractional += 1;
+        }
+    }
+    assert!(
+        fractional > 150,
+        "real jit should be real-valued: {fractional}/200"
+    );
+    let got = eval("1.0 jit type");
+    assert_eq!(got[0], "realtype", "real jit keeps a real result");
+}
+
 #[test]
 fn color_helpers_compute() {
     assert_eq!(eval("[1 0 0] [0 0 1] 0.5 mix3"), ["0.5", "0.0", "0.5"]);

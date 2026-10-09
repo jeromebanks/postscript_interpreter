@@ -31,7 +31,8 @@ prefer it over guessing a name from prose below.
 
 ## The toolkit (`(lib/artkit.ps) run` from the repo root)
 
-- **Random**: `n chance` (0..n-1), `j jit` (-j..j), `frnd` (0..1),
+- **Random**: `n chance` (0..n-1), `j jit` (-j..j; integer j gives an
+  integer, real j gives a real, e.g. `1.5 jit`), `frnd` (0..1),
   `arr oneof`. All flow from `srand`.
 - **Palettes**: `/dusk /ember /tide /meadow /carnival /parchment
   /nocturne /stone` — `/name palpick` → r g b; `/name pal` → the

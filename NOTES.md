@@ -3,6 +3,27 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## `lib/artkit.ps`: `jit` takes real arguments (issue #177, 2026-10-09)
+
+`jit` went through `chance` (`mod`), so `1.5 jit` raised a typecheck
+blamed on `mod`. It now dispatches on type. Integer j keeps the exact
+`chance` draws it always made, so every seeded integer piece is
+unchanged. Real j scales one `frnd` draw to the same `-j..j` range,
+returning a real. We chose this over a separate real-valued sibling
+procedure so callers don't have to know which variant to call.
+
+Verified against main, not just against the new code: seeded integer
+draws were captured on main and pinned in `tests/artkit.rs`, and the
+eight `jit`-using pieces (six gallery, two examples) render
+byte-identically before and after. The six gallery stills also
+reproduce byte-for-byte from the README's 2× recipe on main.
+
+Deliberately not changed: the font-local `jit` copies in
+`lib/fonts/stitchwork.ps`, `lib/fonts/confetti.ps`, `lib/handscript.ps`
+and `lib/hangul.ps`, which keep their own formulas. The `lkj` in
+`gallery/alpine_lake.ps` stays too, because `j·(2f−1)` and `2jf−j`
+can differ in the last float bit, so swapping it could move pixels.
+
 ## Gallery: *Alpine Lake*, the wet-on-wet landscape specimen (issue #118, 2026-10-08)
 
 Capstone of epic #112. `gallery/alpine_lake.ps` paints a snow-capped
@@ -45,9 +66,11 @@ Decisions:
 
 Missing abstractions and gotchas found while composing. Candidates
 for follow-ups, not fixed here:
-- artkit's `jit` is integer-only (it goes through `mod`), so
-  `1.5 jit` is a typecheck. The piece defines a real-valued `lkj`.
-  `jit` could accept reals, or at least say so in its docs.
+- artkit's `jit` was integer-only (it goes through `mod`), so
+  `1.5 jit` was a typecheck. Resolved in #177: `jit` now dispatches on
+  type. Integer j keeps its exact `chance` draws (every seeded integer
+  piece renders byte-identically), and real j scales one `frnd` draw.
+  The piece's own `lkj` is now redundant but left as is.
 - `pkspray` clouds need a speck of about 1pt. At 2–3pt the particles
   never fuse, and a cloud or mist reads as static. Worth a line in
   pkspray's guidance.
