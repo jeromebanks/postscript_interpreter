@@ -5439,6 +5439,8 @@ systemdict /setalpha known /pwhasalpha exch def
     {
         /mhtarget mhcount mhbw mhbh mul mul mharea div def
         /mhrows mhtarget mhbh mul mhbw div sqrt round def
+        % A tall, narrow box would otherwise ask for more rows than cells.
+        mhrows mhtarget round gt { /mhrows mhtarget round def } if
         mhrows 1 lt { /mhrows 1 def } if
         /mhcols mhtarget mhrows div round def
         mhcols 1 lt { /mhcols 1 def } if
@@ -5894,14 +5896,34 @@ systemdict /setalpha known /pwhasalpha exch def
     mpspacing 50000 { pkpull-count-exceeds-safety-limit } mhcollect
     newpath
     0 1 mhn 1 sub {
-        mhstops exch get aload pop
+        /mpi exch def
+        mhstops mpi get aload pop
         /mpatend exch def /mpsp exch def pop /mpang exch def /mpy exch def /mpx exch def
         frnd /mpfw exch def frnd /mpfl exch def
         frnd /mpfj exch def frnd /mpfb exch def
         mpatend 3 and 2 eq mpsp mpspacing 0.5 mul lt and not {
+            % Slide the start toward the previous or next stop of the *same*
+            % subpath, never past either end: extrapolating along the tangent
+            % left the guide at both ends and at every corner.
             /mpw mpfw 2 mul 1 sub mpwander mul mpspacing mul 2 div def
-            /mpsx mpx mpang cos mpw mul add def
-            /mpsy mpy mpang sin mpw mul add def
+            /mpt 0 def
+            mpw 0 lt mpatend 1 and 0 eq and mpsp 0 gt and {
+                mhstops mpi 1 sub get /mpnb exch def
+                /mpt mpw neg mpsp div dup 1 gt { pop 1 } if def
+            } if
+            mpw 0 gt mpatend 2 and 0 eq and mpi 1 add mhn lt and {
+                mhstops mpi 1 add get /mpnb exch def
+                mpnb 4 get dup 0 gt
+                    { mpw exch div dup 1 gt { pop 1 } if /mpt exch def }
+                    { pop }
+                ifelse
+            } if
+            mpt 0 gt {
+                /mpsx mpx mpnb 0 get mpx sub mpt mul add def
+                /mpsy mpy mpnb 1 get mpy sub mpt mul add def
+            } {
+                /mpsx mpx def /mpsy mpy def
+            } ifelse
             /mpa mpdir mpfl 2 mul 1 sub mplean mul add def
             /mpl mplen 1 mpfj 2 mul 1 sub mplj mul add mul def
             /mpdx mpa cos mpl mul def /mpdy mpa sin mpl mul def
@@ -5910,10 +5932,12 @@ systemdict /setalpha known /pwhasalpha exch def
                 /mpoff mpbow mpl mul mpfb 0.5 lt { 1 } { -1 } ifelse mul def
                 /mpnx mpa sin neg mpoff mul def
                 /mpny mpa cos mpoff mul def
+                % mpdx/mpdy are the whole stroke, so the controls sit at a third
+                % and two thirds of it, pushed to one side.
+                mpsx mpdx 3 div add mpnx add
+                mpsy mpdy 3 div add mpny add
                 mpsx mpdx 2 mul 3 div add mpnx add
                 mpsy mpdy 2 mul 3 div add mpny add
-                mpsx mpdx 4 mul 3 div add mpnx add
-                mpsy mpdy 4 mul 3 div add mpny add
                 mpsx mpdx add mpsy mpdy add curveto
             } {
                 mpsx mpdx add mpsy mpdy add lineto

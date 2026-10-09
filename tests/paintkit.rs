@@ -7916,7 +7916,15 @@ fn crisscross_count_tracks_the_requested_count() {
     // Thin bands are the headline use: each axis used to round up on its
     // own, which nearly doubled the count (a 700 x 40 band asked for 20
     // drew 38).
-    for (w, h) in [(700, 40), (700, 10), (700, 100), (40, 700), (1000, 1)] {
+    for (w, h) in [
+        (700, 40),
+        (700, 10),
+        (700, 100),
+        (40, 700),
+        (1000, 1),
+        (10, 10000),
+        (10000, 10),
+    ] {
         let n = strokes(&motion_segs(&format!(
             "5 srand 0 0 {w} {h} screct << /Count 20 >> pkcrisscross"
         )))
@@ -7934,7 +7942,7 @@ fn crisscross_count_tracks_the_requested_count() {
         .filter(|s| s.0 == 3)
         .count()
     };
-    for (w, h) in [(700, 40), (700, 10)] {
+    for (w, h) in [(700, 40), (700, 10), (10, 10000)] {
         let n = circles(w, h);
         assert!((13..=27).contains(&n), "{w} x {h} circles: {n}");
     }
@@ -8273,11 +8281,118 @@ fn pull_wander_slides_starts_along_the_spine_only() {
     let mut moved = 0;
     for st in &s {
         assert!((st.0.1 - 100.0).abs() < 1e-6, "left the spine");
+        assert!(
+            (-1e-6..=100.0 + 1e-6).contains(&st.0.0),
+            "start x {} is past an end of the spine",
+            st.0.0
+        );
         if (st.0.0 / 10.0 - (st.0.0 / 10.0).round()).abs() > 1e-6 {
             moved += 1;
         }
     }
     assert!(moved > 4, "wander moved only {moved} starts");
+
+    // The first stroke of a spine starts on it however far Wander slides.
+    for seed in 1..40 {
+        let s = strokes(&motion_segs(&format!(
+            "{seed} srand newpath 0 0 moveto 100 0 lineto << /Spacing 20 /Wander 1 >> pkpull"
+        )));
+        for st in &s {
+            assert!(
+                (-1e-6..=100.0 + 1e-6).contains(&st.0.0),
+                "seed {seed}: start x {} is off the guide",
+                st.0.0
+            );
+        }
+    }
+}
+
+#[test]
+fn pull_wander_follows_a_curved_or_cornered_spine() {
+    // Quarter circle of radius 100: a start slid by the tangent would leave
+    // it by about (slide^2 / 2r); sliding along the spine keeps it on it.
+    let s = strokes(&motion_segs(
+        "5 srand newpath 100 0 moveto 0 0 100 0 90 arc << /Spacing 10 /Wander 1 >> pkpull",
+    ));
+    assert!(s.len() > 10);
+    for st in &s {
+        let r = (st.0.0.powi(2) + st.0.1.powi(2)).sqrt();
+        assert!((r - 100.0).abs() < 0.3, "start at radius {r}");
+    }
+    // A corner: every start is on one of the two legs.
+    let s = strokes(&motion_segs(
+        "5 srand newpath 0 0 moveto 100 0 lineto 100 100 lineto \
+         << /Spacing 10 /Wander 1 >> pkpull",
+    ));
+    for st in &s {
+        let (x, y) = st.0;
+        let on_leg1 = y.abs() < 1e-6 && (-1e-6..=100.0 + 1e-6).contains(&x);
+        let on_leg2 = (x - 100.0).abs() < 1e-6 && (-1e-6..=100.0 + 1e-6).contains(&y);
+        assert!(on_leg1 || on_leg2, "start ({x}, {y}) is off the guide");
+    }
+}
+
+/// Every flattened point of a bowed stroke projects onto its heading within
+/// the stroke's own length: the curve may bend sideways but never overshoots
+/// its tip and turns back.
+fn assert_bowed_strokes_stay_within_their_length(code: &str, length: f64) {
+    let segs = motion_segs(&format!("{code} flattenpath"));
+    let mut pts: Vec<(f64, f64)> = Vec::new();
+    let mut checked = 0;
+    let mut flush = |pts: &mut Vec<(f64, f64)>| {
+        if pts.len() < 3 {
+            pts.clear();
+            return;
+        }
+        let (sx, sy) = pts[0];
+        let (ex, ey) = pts[pts.len() - 1];
+        let (dx, dy) = (ex - sx, ey - sy);
+        let l = (dx * dx + dy * dy).sqrt();
+        assert!((l - length).abs() < 1e-2, "chord {l}, wanted {length}");
+        for &(x, y) in pts.iter() {
+            let along = ((x - sx) * dx + (y - sy) * dy) / l;
+            assert!(
+                (-1e-3..=l + 1e-3).contains(&along),
+                "point ({x}, {y}) projects to {along}, outside 0..{l}"
+            );
+        }
+        checked += 1;
+        pts.clear();
+    };
+    for s in &segs {
+        match s.0 {
+            0 => {
+                flush(&mut pts);
+                pts.push((s.1, s.2));
+            }
+            1 => pts.push((s.1, s.2)),
+            _ => {}
+        }
+    }
+    flush(&mut pts);
+    assert!(checked > 3, "only {checked} curved strokes checked");
+}
+
+#[test]
+fn bowed_pulls_do_not_overshoot_their_tip() {
+    for dir in [0, 90, -90, 37] {
+        assert_bowed_strokes_stay_within_their_length(
+            &format!(
+                "5 srand {SPINE} << /Spacing 10 /Wander 0 /Length 30 /LengthJitter 0 \
+                   /Lean 0 /Direction {dir} /Bow 0.1 >> pkpull"
+            ),
+            30.0,
+        );
+    }
+}
+
+#[test]
+fn bowed_crisscross_strokes_do_not_overshoot_their_tip() {
+    assert_bowed_strokes_stay_within_their_length(
+        "5 srand 0 0 200 100 screct \
+         << /Count 20 /Length 20 /LengthJitter 0 /Spread 0 /Bow 0.2 >> pkcrisscross",
+        20.0,
+    );
 }
 
 #[test]
