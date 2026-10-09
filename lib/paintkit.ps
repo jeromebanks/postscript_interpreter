@@ -5893,37 +5893,45 @@ systemdict /setalpha known /pwhasalpha exch def
     /mpbow load xcheck { pkpull-bow-must-not-be-a-procedure } if
     mpbow 0 lt mpbow 0.5 gt or { pkpull-bow-must-be-0-to-0.5 } if
 
-    mpspacing 50000 { pkpull-count-exceeds-safety-limit } mhcollect
+    % The guide is walked at a sixth of the spacing and every stroke starts
+    % on one of those samples. A sample always lies on the flattened guide,
+    % so a start can slide along it (by whole samples, clamped to the
+    % subpath) without ever cutting a corner or leaving a curve, which
+    % interpolating between the even slots did. 120000 samples bound 20000
+    % strokes.
+    /mpn 6 def
+    mpspacing mpn div 120000 { pkpull-count-exceeds-safety-limit } mhcollect
     newpath
     0 1 mhn 1 sub {
         /mpi exch def
-        mhstops mpi get aload pop
-        /mpatend exch def /mpsp exch def pop /mpang exch def /mpy exch def /mpx exch def
-        frnd /mpfw exch def frnd /mpfl exch def
-        frnd /mpfj exch def frnd /mpfb exch def
-        mpatend 3 and 2 eq mpsp mpspacing 0.5 mul lt and not {
-            % Slide the start toward the previous or next stop of the *same*
-            % subpath, never past either end: extrapolating along the tangent
-            % left the guide at both ends and at every corner.
-            /mpw mpfw 2 mul 1 sub mpwander mul mpspacing mul 2 div def
-            /mpt 0 def
-            mpw 0 lt mpatend 1 and 0 eq and mpsp 0 gt and {
-                mhstops mpi 1 sub get /mpnb exch def
-                /mpt mpw neg mpsp div dup 1 gt { pop 1 } if def
-            } if
-            mpw 0 gt mpatend 2 and 0 eq and mpi 1 add mhn lt and {
-                mhstops mpi 1 add get /mpnb exch def
-                mpnb 4 get dup 0 gt
-                    { mpw exch div dup 1 gt { pop 1 } if /mpt exch def }
-                    { pop }
-                ifelse
-            } if
-            mpt 0 gt {
-                /mpsx mpx mpnb 0 get mpx sub mpt mul add def
-                /mpsy mpy mpnb 1 get mpy sub mpt mul add def
-            } {
-                /mpsx mpx def /mpsy mpy def
-            } ifelse
+        mhstops mpi get 5 get /mpatend exch def
+        mpatend 1 and 1 eq {
+            % A new subpath: remember where it starts and where it ends.
+            /mpbase mpi def
+            /mpend mpi def
+            {
+                mpend mhn 1 sub ge { exit } if
+                mhstops mpend get 5 get 2 and 2 eq { exit } if
+                /mpend mpend 1 add def
+            } loop
+        } if
+        % A slot is every sixth sample from the start, plus the subpath's end
+        % when it is at least half a spacing past the last slot (the end stop
+        % a bare walk adds can sit right on top of the previous one).
+        /mpr mpend mpbase sub mpn mod def
+        mpi mpbase sub mpn mod 0 eq
+        mpi mpend eq mpr 0 gt and
+            { mpr 1 sub mpspacing mpn div mul mhstops mpend get 4 get add
+              mpspacing 0.5 mul ge }
+            { false }
+        ifelse
+        or {
+            frnd /mpfw exch def frnd /mpfl exch def
+            frnd /mpfj exch def frnd /mpfb exch def
+            /mpj mpi mpfw 2 mul 1 sub mpwander mul mpn 2 div mul round cvi add def
+            mpj mpbase lt { /mpj mpbase def } if
+            mpj mpend gt { /mpj mpend def } if
+            mhstops mpj get dup 0 get /mpsx exch def 1 get /mpsy exch def
             /mpa mpdir mpfl 2 mul 1 sub mplean mul add def
             /mpl mplen 1 mpfj 2 mul 1 sub mplj mul add mul def
             /mpdx mpa cos mpl mul def /mpdy mpa sin mpl mul def

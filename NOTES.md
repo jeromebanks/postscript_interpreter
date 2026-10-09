@@ -56,6 +56,21 @@ Decisions:
   *regular* stop instead, so the line ends on the spine rather than on
   a peak followed by a jog back to it (a test caught this on the first
   run). Half a pitch also guarantees a slid vertex cannot pass the end.
+- **`pkpull`'s wandering starts are samples of the guide, not
+  interpolations.** The first versions slid a start along the tangent
+  (it left the guide at both ends and at every corner), then
+  interpolated between the neighbouring even slots (it cut across a
+  corner that fell between two stops, starting a stroke on neither leg;
+  Codex rounds 1 and 2). It now walks the guide at a sixth of the
+  spacing and starts every stroke on one of those samples, shifted by
+  whole samples and clamped to its subpath. A sample always lies on the
+  flattened guide, so a start is on it by construction. The cost is a
+  budget of 120000 samples (20000 strokes) and a wander quantised to a
+  sixth of the spacing.
+- **A bowed `pkpull` puts its controls at a third and two thirds of the
+  whole stroke.** `pkcrisscross` works from half the stroke, so copying
+  its constants into `pkpull` overshot the tip (Codex round 1); both
+  have a test that every flattened point projects inside the stroke.
 - **Brushes checked against the shapes handed to them.** `pkbroad`,
   `pkfan`, `pkliner`, `pkoil`, `pkdab`, `pkdry`, `pkspray` and `pkribbon`
   all accept mixed open, closed and point subpaths. `pknib` is the one

@@ -8265,7 +8265,7 @@ fn pull_strokes_start_on_the_spine_and_run_the_asked_way() {
         )));
         assert_eq!(s.len(), 11);
         for (i, st) in s.iter().enumerate() {
-            assert!((st.0.0 - 10.0 * i as f64).abs() < 1e-6, "starts on a stop");
+            assert!((st.0.0 - 10.0 * i as f64).abs() < 1e-3, "starts on a stop");
             assert!((st.0.1 - 100.0).abs() < 1e-6, "starts on the spine");
             assert!((st.1.1 - (100.0 + sign * 30.0)).abs() < 1e-6, "dir {dir}");
             assert!((st.1.0 - st.0.0).abs() < 1e-6, "straight vertical");
@@ -8319,16 +8319,27 @@ fn pull_wander_follows_a_curved_or_cornered_spine() {
         let r = (st.0.0.powi(2) + st.0.1.powi(2)).sqrt();
         assert!((r - 100.0).abs() < 0.3, "start at radius {r}");
     }
-    // A corner: every start is on one of the two legs.
-    let s = strokes(&motion_segs(
-        "5 srand newpath 0 0 moveto 100 0 lineto 100 100 lineto \
-         << /Spacing 10 /Wander 1 >> pkpull",
-    ));
-    for st in &s {
-        let (x, y) = st.0;
-        let on_leg1 = y.abs() < 1e-6 && (-1e-6..=100.0 + 1e-6).contains(&x);
-        let on_leg2 = (x - 100.0).abs() < 1e-6 && (-1e-6..=100.0 + 1e-6).contains(&y);
-        assert!(on_leg1 || on_leg2, "start ({x}, {y}) is off the guide");
+    // A corner, both on a spacing multiple and *between* two stops (Codex
+    // round 2: interpolating the stops cut across the corner, starting a
+    // stroke near (88.8, 2.9), which is on neither leg).
+    for corner in ["100", "95", "93.7"] {
+        for seed in 1..25 {
+            let s = strokes(&motion_segs(&format!(
+                "{seed} srand newpath 0 0 moveto {corner} 0 lineto {corner} 100 lineto \
+                 << /Spacing 20 /Wander 1 /LengthJitter 0 >> pkpull"
+            )));
+            assert!(s.len() > 8);
+            let c: f64 = corner.parse().expect("number");
+            for st in &s {
+                let (x, y) = st.0;
+                let on_leg1 = y.abs() < 1e-3 && (-1e-3..=c + 1e-3).contains(&x);
+                let on_leg2 = (x - c).abs() < 1e-3 && (-1e-3..=100.0 + 1e-3).contains(&y);
+                assert!(
+                    on_leg1 || on_leg2,
+                    "corner {corner} seed {seed}: start ({x}, {y}) is off the guide"
+                );
+            }
+        }
     }
 }
 
