@@ -30,6 +30,15 @@ Decisions:
   mixed from the range colour toward mist, with `/Charge` dropping as
   it rises. It dissolves the bottoms of the knife work instead of
   covering them with a flat band.
+- **The near evergreens stand on the foreground banks and are not
+  reflected.** They are painted after the lake. In the first version
+  their bases sat on the far waterline, which made them read as giant
+  far-shore trees and left a chevron where each met its own mirror
+  image. Checking real wet-on-wet landscapes (an image search) showed
+  framing trees standing on the near banks. The same check showed a
+  thin light line where the far shore meets its reflection, which the
+  piece now has, and mist as a soft veil, which is why the speckle mist
+  was thinned and its second band dropped.
 - **The far forest is a filled mass with a `pkdab`-tapped crest.**
   Upright `pkfan` strokes at that scale read as pale stripes and
   doubled the render time.

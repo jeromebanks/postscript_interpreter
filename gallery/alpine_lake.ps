@@ -243,7 +243,7 @@
 /lkmist {
     srand /lkmu exch def /lkmy exch def
     lkMIST lkset
-    /lkmd lkmy 300 gt { 260 } { 60 } ifelse def
+    /lkmd lkmy 300 gt { 150 } { 60 } ifelse def
     { newpath -20 lkmy moveto 250 lkmy 8 sub 520 lkmy 8 add 780 lkmy 2 sub curveto
       << /Nozzle 12 /Density lkmd /Falloff 1 /Speck 1 /Speckle 0.6 /Overspray 0.6 >> pkspray }
     << /Soft 1 /Under lkmu >> pkwet
@@ -338,11 +338,19 @@
     452 lkWL 40 21 lkpine  468 lkWL 56 22 lkpine  484 lkWL 36 23 lkpine
     150 lkWL 46 24 lkpine  166 lkWL 34 25 lkpine  560 lkWL 30 26 lkpine
     /lkPINE lkPINE0 def /lkPINELT lkPINELT0 def
-    610 lkWL 4 sub 140 31 lkpine
-    662 lkWL 8 sub 200 32 lkpine
-    716 lkWL 6 sub 150 33 lkpine
-    44 lkWL 8 sub 180 34 lkpine
-    88 lkWL 4 sub 110 35 lkpine
+} def
+
+% The near trees frame the scene from the foreground banks, so they are
+% painted after the lake and are not reflected: the bank in front of
+% them would hide their reflection anyway. Standing them on the far
+% shoreline instead made them read as giants on the far shore, and their
+% lowest tier met its own mirror image at the waterline as a chevron.
+/lknearpines {
+    44 112 250 34 lkpine
+    92 112 180 35 lkpine
+    616 68 190 31 lkpine
+    668 80 280 32 lkpine
+    722 96 220 33 lkpine
 } def
 
 % everything above the waterline, which the lake reflects
@@ -350,7 +358,6 @@
     lkFARPTS lkFAR 0.36 2 lkrange
     330 lkFAR 5 lkmist
     lkNEARPTS lkNEAR 0.22 3 lkrange
-    250 lkNEAR 6 lkmist
     lktreeline
     lkpines
 } def
@@ -395,6 +402,10 @@ lkWL 4 sub -11 0 {
     lkx lky lkx 14 add 36 chance add lky 0.6 lkj add lkseg
     << /Width 1.1 /Taper 0.6 /Waver 0.3 /Charge 0.8 /Depletion 0.6 >> pkliner
 } for
+% the light line where the far shore meets its own reflection
+[ lkWL lkskyat ] 1.12 shade setrgbcolor
+-10 lkWL 3 sub 770 lkWL 3 sub lkseg
+<< /Width 1.6 /Charge 0.9 /Depletion 0.3 /Edge 0.2 >> pkbroad
 grestore
 
 % ---- foreground bank -------------------------------------------------
@@ -424,6 +435,8 @@ grestore
 [0.42 0.34 0.22] lkset
 newpath 0 116 moveto 80 124 160 100 250 86 curveto
 << /Width 8 /Ridges 8 /Load 0.5 /Dropout 0.5 /Highlight 0.3 >> pkoil
+
+lknearpines
 
 % bushes along the bank
 [0.15 0.25 0.10] lkset
