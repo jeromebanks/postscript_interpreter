@@ -202,6 +202,26 @@ Which tool to pick:
   so 270 is down the page. `examples/paintkit_wet_pull_demo.ps` shows
   all three.
 
+- **Brush motions** — `pkcrisscross`, `pkscumblein`, `pkscumble`,
+  `pktap`, `pkpull`, `pkzigzag`. Not brushes: *path builders*, the other
+  half of a painting (the brushes are heads, these are the named wet-on-wet
+  strokes). Each paints nothing and leaves an ordinary path, so it feeds
+  any preset: `0 0 700 160 screct << /Count 90 /Length 50 >> pkcrisscross
+  << /Width 30 >> pkbroad` is a sky block-in. Pairings: criss-cross →
+  `pkbroad` (sky); scumble (`pkscumblein` for circles in a region,
+  `pkscumble` for a chain of loops along a line) → `pkoil` or `pkdry`
+  (clouds, bushes); `pktap` → `pkfan`, or `/Length 0` → `pkdab` (a clump
+  per tap); `pkpull` → `pkbroad` with `/Direction -90` (reflection pulled
+  down from a horizon) or `pkliner` with `/Direction 90` (grass pushed
+  up, `/Bow` for blades); `pkzigzag` → `pkliner` or `pkbroad` (water).
+  Two rules: **every motion replaces the current path** (so a guide, or
+  the outline `scpath` leaves behind, is never painted — one motion, one
+  paint, then build the next); and the region motions take an artkit
+  region (`screct` or `scpath`) as the operand under the dict while the
+  spine motions read the current path as the guide. They draw only from
+  `frnd`, so they are deterministic under your `srand`.
+  `examples/paintkit_motion_demo.ps` shows each beside its brush.
+
 (A fuller paintkit tour, and an audit of the parameter docs, is issue
 #99 — this section is the short orientation, not that sweep.)
 

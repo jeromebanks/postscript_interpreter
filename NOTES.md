@@ -3,6 +3,105 @@
 Newest first. Per `AGENTS.md`, each stage ends with a summary here: what
 was built, tradeoffs made, what's explicitly deferred.
 
+## `lib/paintkit.ps`: brush motion generators (issue #184, 2026-10-09)
+
+Child of epic #112. paintkit models brush *heads*; this adds the other
+half, the named *motions* of wet-on-wet painting, as path builders:
+`pkcrisscross`, `pkscumblein`, `pkscumble`, `pktap`, `pkpull`,
+`pkzigzag`. Each paints nothing and leaves an ordinary path, so it feeds
+any preset. Specimen: `examples/paintkit_motion_demo.ps` (each motion's
+bare path beside the same path painted with its classic brush).
+
+Decisions:
+- **In paintkit, not artkit.** They read artkit's `frnd`, `walkpath` and
+  regions, but their vocabulary (strokes, pulls, taps) is painterly and
+  they are the input side of the presets in this file. Nothing in artkit
+  has a notion of a brush stroke. (The issue left the placement open.)
+- **One contract: every motion replaces the current path.** The first
+  design appended the region motions to the path, like `ngon`. The
+  advisor caught why that is wrong: `scpath` leaves the region's outline
+  as the current path, so the obvious `scpath <opts> pkcrisscross <opts>
+  pkbroad` would have painted the outline. A single "starts with
+  `newpath`" rule is also easier to document than an append/replace
+  split. The spine motions have to replace anyway (the guide would be
+  painted).
+- **Region motions take artkit's own regions.** `screct`/`scpath` already
+  exist and `scin`/`scarea` already answer the questions, so a cloud is
+  any `scpath`. The grid is a jittered grid sized from the region's
+  *area* (not its bounding box), with `scin` as the filter, so a
+  triangle asked for 100 strokes gets about 100. Rows and columns are
+  rounded *together* from the cell target (rows from the box's aspect,
+  columns to fit); rounding each axis up on its own nearly doubled
+  `/Count` on a thin band (a 700 x 40 band asked for 20 drew 38), and
+  the advisor caught it because the first count tests were near-square.
+  Cells are capped at 40000, which now bounds only a *sparse* region (a
+  thin diagonal sliver, whose box dwarfs its area).
+- **A jittered grid, not pure random placement.** Even coverage with no
+  clumps or gaps, which is what a criss-cross sky wants.
+- **Fixed draws per slot.** A crisscross cell draws six values and a
+  circle four, kept or rejected, so a knob that only re-shapes a stroke
+  never re-rolls where the strokes land (pkdab's convention; pinned for
+  every motion by `motion_shaping_knobs_leave_the_random_stream_alone`).
+  The exception is `pkscumble`'s `/Radius`, which moves the default
+  `/Step` and therefore the walk pitch, and with it the stop count.
+- **A bare point does not survive a path.** A `moveto` right after a
+  `moveto` replaces it, in pscat and Ghostscript alike (checked), so a
+  run of point-only subpaths collapses to the last. `pktap /Length 0`
+  therefore emits `x y moveto x y lineto`; `walkpath` reports that as one
+  stop with atend 3, so `pkdab` still reads a clump per tap.
+- **`walkpath`'s guaranteed final stop is handled per motion.** It can
+  land on top of the last regular stop (when the pitch divides the
+  length) or just behind it. `pktap` and `pkpull` skip the end stop when
+  it is under half a spacing from the last one. `pkzigzag` drops the
+  *regular* stop instead, so the line ends on the spine rather than on
+  a peak followed by a jog back to it (a test caught this on the first
+  run). Half a pitch also guarantees a slid vertex cannot pass the end.
+- **`pkpull`'s wandering starts are samples of the guide, not
+  interpolations.** The first versions slid a start along the tangent
+  (it left the guide at both ends and at every corner), then
+  interpolated between the neighbouring even slots (it cut across a
+  corner that fell between two stops, starting a stroke on neither leg;
+  Codex rounds 1 and 2). It now walks the guide at a sixth of the
+  spacing and starts every stroke on one of those samples, shifted by
+  whole samples and clamped to its subpath. A sample always lies on the
+  flattened guide, so a start is on it by construction. The cost is a
+  budget of 120000 samples (20000 strokes) and a wander quantised to a
+  sixth of the spacing.
+- **`pkscumble`'s phase follows distance, not the stop count.** The
+  first version advanced 15 degrees per stop. `walkpath`'s guaranteed
+  end stop either sits on top of the last regular one (a guide whose
+  length is a whole number of pitches) or a fraction of a pitch past
+  it, and counting it as a whole sample added a hook of terminal
+  geometry (Codex round 3: a 6-long guide at `/Step 6` ended with a
+  stray point at the wrong phase). The phase is now cumulative travel
+  over `/Step`, a zero-travel duplicate stop is not emitted, and the
+  draws per stop are unchanged.
+- **`pkzigzag` takes its vertices from guide samples too.** Its first
+  `/WaveJitter` slid vertices along the tangent and left a cornered
+  guide even at `/Amplitude 0` (Codex round 4), the same defect
+  `pkpull` had. It now walks at a sixth of a half wavelength and every
+  vertex is one of those samples, slid by at most two samples (a third
+  of a leg, so neighbours keep their order), 300000 samples bounding
+  50000 vertices. The no-travel tests in `pkscumble` are judged against
+  the pitch, not a fixed distance: a `1e-6` epsilon dropped every stop
+  of a chain drawn after a `1000000 1000000 scale`.
+- **A bowed `pkpull` puts its controls at a third and two thirds of the
+  whole stroke.** `pkcrisscross` works from half the stroke, so copying
+  its constants into `pkpull` overshot the tip (Codex round 1); both
+  have a test that every flattened point projects inside the stroke.
+- **Brushes checked against the shapes handed to them.** `pkbroad`,
+  `pkfan`, `pkliner`, `pkoil`, `pkdab`, `pkdry`, `pkspray` and `pkribbon`
+  all accept mixed open, closed and point subpaths. `pknib` is the one
+  that does not (it wants exactly one open subpath), so none is paired
+  with a motion.
+
+Deferred: `gallery/alpine_lake.ps` still hand-writes its criss-cross sky,
+tapped crest, pulled branches and lake pulls. Moving it onto the motions
+would change a committed render for no new capability, so it is left
+for a follow-up. A scumbled cloud with a lit top over a flatter, greyer
+underside is now possible to build (scumble plus `pkwet`) but is not part
+of this issue.
+
 ## `lib/paintkit.ps`: directional `pkwet` — pulls, lifts and sweeps (issue #181, 2026-10-09)
 
 Child of epic #112. `pkwet` gains `/Direction` (degrees), `/Stretch`

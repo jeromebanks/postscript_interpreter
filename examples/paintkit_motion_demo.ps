@@ -1,0 +1,134 @@
+%!PS-Adobe-3.0
+%%Title: Paintkit — brush motions (issue #184)
+%%BoundingBox: 0 0 620 760
+%%EndComments
+
+% Specimen for paintkit's brush motions (lib/paintkit.ps): path builders
+% for the named strokes of wet-on-wet painting. A brush preset takes a
+% path; a motion makes one. Nothing here paints except the preset each
+% motion is paired with.
+%
+% Every row is one motion. On the left is the bare path it builds, in
+% hairline, so the geometry can be read; on the right the same path (same
+% seed) painted with the brush the motion is classically used with:
+%
+%   pkcrisscross  the sky's block-in                  -> pkbroad
+%   pkscumblein   tiny circles worked into a cloud    -> pkoil
+%   pkscumble     the scrubbed, dry-brushed edge      -> pkdry
+%   pktap         tapped foliage                      -> pkfan
+%   pktap /Length 0  a pounced clump per point        -> pkdab
+%   pkpull (down) a reflection pulled from a horizon  -> pkbroad
+%   pkpull (up)   grass pushed up from a ground line  -> pkliner
+%   pkzigzag      water, laid back and forth          -> pkliner
+%
+% The motions know nothing about skies, clouds or grass: each is a
+% direction, a spacing and a jitter. The composition is this file's.
+
+%   pscat --page 620x760 examples/paintkit_motion_demo.ps --png motion.png
+
+(lib/artkit.ps) run
+(lib/paintkit.ps) run
+
+1 1 1 setrgbcolor clippath fill
+
+/mdlabel {                                 % (text) x y -
+    moveto
+    gsave
+        0.25 0.25 0.25 setrgbcolor
+        /Helvetica findfont 9 scalefont setfont
+        show
+    grestore
+} def
+
+% label seed ground-rgb build paint ry -
+% Runs `build` (which leaves the motion's path) twice with the same seed:
+% once stroked as a hairline on the left, once handed to `paint` on the
+% right. Both panels are 295 x 76 and clipped to themselves.
+/mdrow {
+    /mdry exch def /mdpaint exch def /mdbuild exch def
+    /mdground exch def /mdseed exch def /mdtext exch def
+    [ 10 315 ] {
+        /mdpx exch def
+        gsave
+            mdpx mdry translate
+            0 0 295 76 rectclip
+            mdground aload pop setrgbcolor 0 0 295 76 rectfill
+        grestore
+    } forall
+
+    gsave
+        10 mdry translate
+        0 0 295 76 rectclip
+        mdseed srand
+        mdbuild
+        0.1 0.1 0.1 setrgbcolor 0.5 setlinewidth 1 setlinecap stroke
+    grestore
+    gsave
+        315 mdry translate
+        0 0 295 76 rectclip
+        mdseed srand
+        mdbuild
+        mdpaint
+    grestore
+    mdtext 14 mdry 76 add 3 add mdlabel
+} def
+
+% --- 1. criss-cross over a band: the sky ------------------------------
+(pkcrisscross -> pkbroad) 3 [0.62 0.76 0.92]
+{ 0 0 295 76 screct << /Count 60 /Length 46 /Angle 22 /Spread 5 >> pkcrisscross }
+{ 0.42 0.60 0.84 setrgbcolor << /Width 14 /Charge 0.7 /Depletion 0.8 /Edge 0.3 >> pkbroad }
+660 mdrow
+
+% --- 2. scumble circles in a region: a cloud ---------------------------
+(pkscumblein -> pkoil) 5 [0.50 0.68 0.90]
+{ newpath 30 16 moveto 60 62 120 68 150 48 curveto 190 68 250 58 265 24 curveto
+  200 8 90 6 30 16 curveto closepath
+  scpath << /Count 90 /Radius 6 /Squash 0.7 /RadiusJitter 0.5 >> pkscumblein }
+{ 0.97 0.97 0.99 setrgbcolor << /Width 10 /Ridges 4 /Load 0.8 /Highlight 0.2 >> pkoil }
+572 mdrow
+
+% --- 3. scumble along a line: a dry-brushed edge -----------------------
+(pkscumble -> pkdry) 8 [0.50 0.68 0.90]
+{ newpath 20 34 moveto 100 54 190 14 275 40 curveto
+  << /Radius 8 /Squash 0.7 /RadiusJitter 0.4 >> pkscumble }
+{ 0.98 0.96 0.92 setrgbcolor << /Width 9 /Bristles 16 /Load 0.8 /Dropout 0.25 >> pkdry }
+484 mdrow
+
+% --- 4. tapping along a line: foliage ----------------------------------
+(pktap -> pkfan) 2 [0.80 0.88 0.90]
+{ newpath 20 22 moveto 100 46 200 10 275 34 curveto
+  << /Spacing 5 /Length 12 /Scatter 5 /Lean 25 >> pktap }
+{ 0.16 0.34 0.18 setrgbcolor
+  << /Width 6 /Bristles 12 /Splay 0.8 /Load 0.85 /Ragged 0.5 >> pkfan }
+396 mdrow
+
+% --- 5. tapping as bare points: a clump per tap -------------------------
+(pktap /Length 0 -> pkdab) 2 [0.80 0.88 0.90]
+{ newpath 20 22 moveto 100 46 200 10 275 34 curveto
+  << /Spacing 26 /Length 0 /Scatter 3 >> pktap }
+{ 0.30 0.52 0.22 setrgbcolor
+  << /Size 4 /Spread 11 /Clump 12 /Highlight 0.5 >> pkdab }
+308 mdrow
+
+% --- 6. pull down from a horizon: a reflection -------------------------
+(pkpull /Direction -90 -> pkbroad) 4 [0.55 0.72 0.88]
+{ newpath 0 62 moveto 295 62 lineto
+  << /Direction -90 /Length 50 /LengthJitter 0.6 /Spacing 7 /Lean 4 >> pkpull }
+{ 0.20 0.30 0.46 setrgbcolor << /Width 5 /Charge 0.55 /Depletion 0.9 /Edge 0.25 >> pkbroad }
+220 mdrow
+
+% --- 7. push up from a ground line: grass ------------------------------
+(pkpull /Direction 90 -> pkliner) 6 [0.86 0.90 0.78]
+{ newpath 0 10 moveto 100 18 200 6 295 14 curveto
+  << /Direction 90 /Length 34 /LengthJitter 0.6 /Spacing 3 /Lean 12 /Bow 0.2 >> pkpull }
+{ 0.28 0.46 0.16 setrgbcolor << /Width 1.8 /Taper 0.95 /Waver 0.6 >> pkliner }
+132 mdrow
+
+% --- 8. zig-zag along a line: water --------------------------------------
+(pkzigzag -> pkliner) 9 [0.40 0.58 0.74]
+{ newpath 20 38 moveto 275 38 lineto
+  << /Amplitude 6 /Wavelength 22 /AmpJitter 0.4 /WaveJitter 0.3 >> pkzigzag }
+{ 0.88 0.94 0.98 setrgbcolor << /Width 1.4 /Taper 0.6 /Charge 0.9 >> pkliner }
+44 mdrow
+
+showpage

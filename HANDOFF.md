@@ -694,6 +694,19 @@ renders eight examples in both and compares block-downsampled output).
   and `pt-` for `pktrowel` (issue #111), which is the one preset that
   calls `pkribbon` not at all. Pick a fresh prefix for anything new;
   the file header keeps the list.
+- **paintkit's brush motions (issue #184) are path builders that
+  *replace* the current path, and consecutive `moveto`s collapse.**
+  `pkcrisscross`/`pkscumblein` (region operand) and `pkscumble`/`pktap`/
+  `pkpull`/`pkzigzag` (the current path is the guide) all start with
+  `newpath`, because `scpath` leaves the region's outline as the path and
+  a brush would paint it. A bare point per tap does *not* survive: a
+  `moveto` straight after a `moveto` replaces it, in pscat and in
+  Ghostscript, so a run of point subpaths collapses to the last one. That
+  is why `pktap /Length 0` emits `x y moveto x y lineto` (a zero-length
+  stroke, which `walkpath` reports as one stop with atend 3, so `pkdab`
+  still reads a clump). Scratch prefix `mh-` for the helpers and one
+  letter per motion (`mx` `mc` `ms` `mt` `mp` `mz`); none calls a preset,
+  so none is clobbered by `pkribbon`.
 - **Abutting filled polygons leave an anti-aliased hairline seam.**
   Two shapes sharing an exact edge do not composite to a solid mass —
   `pktrowel`'s blade lanes had to be given an 18% overlap or a

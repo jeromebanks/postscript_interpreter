@@ -42,6 +42,10 @@
 % masses. Like `pkspray` it is not built on `pkribbon`. See its own
 % header, at the end of this file, for full docs.
 %
+% The brush *motions* (issue #184) are not brushes: path builders that make
+% the input a preset takes (criss-cross, scumble, tap, pull, zig-zag). They
+% are the last section of this file.
+%
 % `pkspray` (issue #44) is not built on `pkribbon` -- spray is discrete
 % particle deposition, not an offset band -- but it shares the same
 % walkpath-driven shape: seeded particles scattered around each sampled
@@ -117,6 +121,9 @@
 % #116, see below.
 % pd- (pkdab/dispatch, pddab) -- issue #117, see below. Not `pdf`, which
 % is a scratch name elsewhere in the library.
+% mh-/mx-/mc-/ms-/mt-/mp-/mz- (the brush motion generators: pkcrisscross,
+% pkscumblein, pkscumble, pktap, pkpull, pkzigzag) -- issue #184, see the
+% section at the end of this file. They call no preset.
 
 % - [bool0 bool1 ...]   (one flag per subpath, in path order: was it
 % closed with an explicit closepath?)
@@ -5356,4 +5363,681 @@ systemdict /setalpha known /pwhasalpha exch def
         } if
         grestore
     } if
+} def
+
+% ============================================================================
+% Brush motions (issue #184)
+% ============================================================================
+%
+% The presets above model brush *heads*; a painting is equally made of brush
+% *motions*, and the wet-on-wet vocabulary is mostly named ones. Each
+% generator here builds the path a preset takes as input -- from a region or a
+% guide line plus a few artistic controls -- and paints nothing:
+%
+%   region opts  pkcrisscross   criss-cross X strokes over a band (skies)
+%   region opts  pkscumblein    small separate circles in a region (clouds)
+%   opts         pkscumble      a chain of overlapping loops along a line
+%   opts         pktap          taps / pounces along a line (foliage)
+%   opts         pkpull         pull-down or push-up from a line (reflections,
+%                               grass, a knife's "touch and pull")
+%   opts         pkzigzag       a zig-zag along a line (water, sweeps)
+%
+% They live here rather than in artkit because their vocabulary is painterly
+% (the region motions share artkit's regions, and every motion reads artkit's
+% frnd and walkpath, but nothing in artkit has a notion of a brush stroke) and
+% because they are the input side of the presets in this file.
+%
+% One contract for the whole family:
+%
+% * Each ends with an ordinary path -- moveto/lineto/curveto subpaths, so
+%   `... pkcrisscross << >> pkbroad` just works with any preset except `pknib`
+%   (which wants exactly one open subpath per call).
+% * Each *replaces* the current path (it starts with `newpath`), so a guide
+%   path or a region's outline left behind by `scpath` is never painted by
+%   the brush. The region motions take an artkit region (`screct` or `scpath`)
+%   as their first operand; the spine motions read the current path as their
+%   guide, flattened, then replace it with the motion path.
+% * None paints or touches colour, and all draw only from `frnd`, so they are
+%   deterministic under the caller's own `srand`. Every slot draws a fixed
+%   number of values, so a knob that only re-shapes a stroke (length, angle,
+%   amplitude) does not re-roll where the strokes land.
+% * Each is bounded by a work budget, rejected by a self-documenting guard.
+%
+% A subpath that ends where it starts is still *open* (no closepath) unless it
+% is a circle from `pkscumblein`, which is closed.
+%
+% Scratch prefixes: mh- (shared helpers), mx- (pkcrisscross), mc- (pkscumblein),
+% ms- (pkscumble), mt- (pktap), mp- (pkpull), mz- (pkzigzag). None calls a
+% preset, so no pk*-prefixed name is clobbered.
+
+% region -> bool   is this a region dict (artkit's screct / scpath)?
+% @internal
+/mhisregion {
+    dup type /dicttype eq
+        { dup /BBox known exch /Kind known and }
+        { pop false }
+    ifelse
+} def
+
+% region count mhgrid -
+% Lays a jittered grid of about `count` kept cells. The cell count is what the
+% *bounding box* needs for `count` to land inside the region, i.e.
+% count * bboxArea / regionArea, so a non-rectangular region still keeps about
+% `count` points. Rows and columns are then rounded together from that target
+% (rows from the box's aspect, columns to fit), not each rounded up on its
+% own, which nearly doubled the count on a thin band. Sets mhreg mhgx0 mhgy0
+% mhcols mhrows mhcw mhch. A region of zero area leaves a 0 x 0 grid, so the
+% caller's loops do not run.
+% @internal
+/mhgrid {
+    /mhcount exch def /mhreg exch def
+    mhreg /BBox get aload pop
+    /mhgy1 exch def /mhgx1 exch def /mhgy0 exch def /mhgx0 exch def
+    /mhbw mhgx1 mhgx0 sub def /mhbh mhgy1 mhgy0 sub def
+    /mharea mhreg scarea def
+    mharea 0 gt mhbw 0 gt and mhbh 0 gt and
+    {
+        /mhtarget mhcount mhbw mhbh mul mul mharea div def
+        /mhrows mhtarget mhbh mul mhbw div sqrt round def
+        % A tall, narrow box would otherwise ask for more rows than cells.
+        mhrows mhtarget round gt { /mhrows mhtarget round def } if
+        mhrows 1 lt { /mhrows 1 def } if
+        /mhcols mhtarget mhrows div round def
+        mhcols 1 lt { /mhcols 1 def } if
+        /mhcw mhbw mhcols div def
+        /mhch mhbh mhrows div def
+    }
+    { /mhcols 0 def /mhrows 0 def /mhcw 1 def /mhch 1 def }
+    ifelse
+} def
+
+% pitch cap {guard} mhcollect -
+% Walks the current path (flattened) and stores every stop as
+% [x y ang t sp atend] in mhstops, its length in mhn. Counts first, with the
+% budget check inside the callback so an absurd pitch fails fast instead of
+% after storing millions of stops; then fills a preallocated array (walkpath's
+% proc must consume all six operands every call, see its header). `guard` is a
+% procedure that raises the caller's own named guard.
+% @internal
+/mhcollect {
+    /mhguard exch def /mhcap exch def /mhpitch exch def
+    /mhn 0 def
+    mhpitch {
+        pop pop pop pop pop pop
+        /mhn mhn 1 add def
+        mhn mhcap gt { mhguard } if
+    } walkpath
+    /mhstops mhn array def
+    /mhi 0 def
+    mhpitch {
+        6 array astore mhstops mhi 3 -1 roll put
+        /mhi mhi 1 add def
+    } walkpath
+} def
+
+%%SelfTest: motion-region-and-budget-guards
+%   { 0 0 100 100 screct << /Count 0 >> pkcrisscross }
+%   /pkcrisscross-count-must-be-1-to-5000
+%   (/Count 0) mustguard
+%
+%   { 0 0 100 100 screct << /Count 2.5 >> pkcrisscross }
+%   /pkcrisscross-count-must-be-1-to-5000
+%   (/Count 2.5) mustguard
+%
+%   { 0 0 100 100 screct << /Count { 5 } >> pkcrisscross }
+%   /pkcrisscross-count-must-not-be-a-procedure
+%   (/Count { 5 }) mustguard
+%
+%   { 0 0 100 100 screct << /Length 0 >> pkcrisscross }
+%   /pkcrisscross-length-must-be-positive
+%   (/Length 0) mustguard
+%
+%   { 0 0 100 100 screct << /Angle 91 >> pkcrisscross }
+%   /pkcrisscross-angle-must-be-0-to-90
+%   (/Angle 91) mustguard
+%
+%   { 0 0 100 100 screct << /Spread -1 >> pkcrisscross }
+%   /pkcrisscross-spread-must-be-non-negative
+%   (/Spread -1) mustguard
+%
+%   { 0 0 100 100 screct << /LengthJitter 2 >> pkcrisscross }
+%   /pkcrisscross-lengthjitter-must-be-0-to-1
+%   (/LengthJitter 2) mustguard
+%
+%   { 0 0 100 100 screct << /Bow 0.9 >> pkcrisscross }
+%   /pkcrisscross-bow-must-be-0-to-0.5
+%   (/Bow 0.9) mustguard
+%
+%   { 7 << /Count 5 >> pkcrisscross }
+%   /pkcrisscross-needs-a-region
+%   (a number as the region) mustguard
+%
+%   { 0 0 100 100 screct << /Count 5 >> pkcrisscross }
+%   (the documented form) mustpass
+%
+%   % The grid is bounded by cells, not just by /Count: a thin diagonal sliver
+%   % has a bounding box vastly bigger than its area, so keeping /Count
+%   % points in it would take millions of cells.
+%   { newpath 0 0 moveto 10000 10000 lineto 10000 10001 lineto closepath scpath
+%     << /Count 5000 >> pkcrisscross }
+%   /pkcrisscross-too-many-cells
+%   (a thin diagonal sliver) mustguard
+%
+%   { newpath 0 0 moveto 10000 10000 lineto 10000 10001 lineto closepath scpath
+%     << /Count 5000 >> pkscumblein }
+%   /pkscumblein-too-many-cells
+%   (a thin diagonal sliver) mustguard
+%
+%   { 0 0 100 100 screct << /Radius 0 >> pkscumblein }
+%   /pkscumblein-radius-must-be-positive
+%   (/Radius 0) mustguard
+%
+%   { 0 0 100 100 screct << /Squash 0 >> pkscumblein }
+%   /pkscumblein-squash-must-be-0-exclusive-to-1
+%   (/Squash 0) mustguard
+%
+%   { 0 0 100 100 screct << /Count 9999 >> pkscumblein }
+%   /pkscumblein-count-must-be-1-to-5000
+%   (/Count 9999) mustguard
+%
+%   { 0 0 100 100 screct << /RadiusJitter -1 >> pkscumblein }
+%   /pkscumblein-radiusjitter-must-be-0-to-1
+%   (/RadiusJitter -1) mustguard
+%
+%   { << >> << >> pkscumblein }
+%   /pkscumblein-needs-a-region
+%   (a dict as the region) mustguard
+%%EndSelfTest
+%
+%%SelfTest: motion-spine-guards
+%   { newpath 0 0 moveto 50 0 lineto << /Radius 0 >> pkscumble }
+%   /pkscumble-radius-must-be-positive
+%   (/Radius 0) mustguard
+%
+%   { newpath 0 0 moveto 50 0 lineto << /Step 0 >> pkscumble }
+%   /pkscumble-step-must-be-positive
+%   (/Step 0) mustguard
+%
+%   { newpath 0 0 moveto 50 0 lineto << /Squash 2 >> pkscumble }
+%   /pkscumble-squash-must-be-0-exclusive-to-1
+%   (/Squash 2) mustguard
+%
+%   { newpath 0 0 moveto 100000 0 lineto << /Radius 1 /Step 0.2 >> pkscumble }
+%   /pkscumble-sample-count-exceeds-safety-limit
+%   (a tiny step on a long line) mustguard
+%
+%   { newpath 0 0 moveto 50 0 lineto << /Spacing 0 >> pktap }
+%   /pktap-spacing-must-be-positive
+%   (/Spacing 0) mustguard
+%
+%   { newpath 0 0 moveto 50 0 lineto << /Length -1 >> pktap }
+%   /pktap-length-must-be-non-negative
+%   (/Length -1) mustguard
+%
+%   { newpath 0 0 moveto 50 0 lineto << /Scatter -1 >> pktap }
+%   /pktap-scatter-must-be-non-negative
+%   (/Scatter -1) mustguard
+%
+%   { newpath 0 0 moveto 50 0 lineto << /Lean { 3 } >> pktap }
+%   /pktap-lean-must-not-be-a-procedure
+%   (/Lean { 3 }) mustguard
+%
+%   { newpath 0 0 moveto 100000 0 lineto << /Spacing 0.1 >> pktap }
+%   /pktap-count-exceeds-safety-limit
+%   (a tiny spacing on a long line) mustguard
+%
+%   { newpath 0 0 moveto 50 0 lineto << /Length 0 >> pkpull }
+%   /pkpull-length-must-be-positive
+%   (/Length 0) mustguard
+%
+%   { newpath 0 0 moveto 50 0 lineto << /Spacing -3 >> pkpull }
+%   /pkpull-spacing-must-be-positive
+%   (/Spacing -3) mustguard
+%
+%   { newpath 0 0 moveto 50 0 lineto << /Wander 2 >> pkpull }
+%   /pkpull-wander-must-be-0-to-1
+%   (/Wander 2) mustguard
+%
+%   { newpath 0 0 moveto 50 0 lineto << /Bow 1 >> pkpull }
+%   /pkpull-bow-must-be-0-to-0.5
+%   (/Bow 1) mustguard
+%
+%   { newpath 0 0 moveto 100000 0 lineto << /Spacing 0.1 >> pkpull }
+%   /pkpull-count-exceeds-safety-limit
+%   (a tiny spacing on a long line) mustguard
+%
+%   { newpath 0 0 moveto 50 0 lineto << /Amplitude -1 >> pkzigzag }
+%   /pkzigzag-amplitude-must-be-non-negative
+%   (/Amplitude -1) mustguard
+%
+%   { newpath 0 0 moveto 50 0 lineto << /Wavelength 0 >> pkzigzag }
+%   /pkzigzag-wavelength-must-be-positive
+%   (/Wavelength 0) mustguard
+%
+%   { newpath 0 0 moveto 50 0 lineto << /WaveJitter 3 >> pkzigzag }
+%   /pkzigzag-wavejitter-must-be-0-to-1
+%   (/WaveJitter 3) mustguard
+%
+%   { newpath 0 0 moveto 100000 0 lineto << /Wavelength 0.2 >> pkzigzag }
+%   /pkzigzag-point-count-exceeds-safety-limit
+%   (a tiny wavelength on a long line) mustguard
+%
+%   % Every spine motion accepts the documented form and an empty path.
+%   { newpath 0 0 moveto 50 0 lineto << >> pkscumble
+%     newpath 0 0 moveto 50 0 lineto << >> pktap
+%     newpath 0 0 moveto 50 0 lineto << >> pkpull
+%     newpath 0 0 moveto 50 0 lineto << >> pkzigzag
+%     newpath << >> pkzigzag }
+%   (every spine motion with defaults, and an empty path) mustpass
+%%EndSelfTest
+%
+% @kind: Procedure
+% @summary: A criss-cross brush motion: short strokes at two crossing headings scattered evenly over a region (artkit's screct or scpath), the sky block-in of wet-on-wet painting. Builds a path of straight or bowed strokes and paints nothing, so it composes with any preset: `region opts pkcrisscross << >> pkbroad`. Replaces the current path. A jittered grid keeps coverage even; deterministic under the caller's own srand with a fixed number of draws per cell.
+% @example: 40 300 520 160 screct << /Count 90 /Length 50 /Angle 25 >> pkcrisscross << /Width 30 /Charge 0.7 >> pkbroad
+% @param: /Count About how many strokes to lay down, whole number 1..5000; a non-rectangular region keeps about this many (default 40)
+% @param: /Length Mean stroke length in points; must be > 0 (default 30)
+% @param: /Angle Half-opening of the X: strokes run at +Angle and -Angle from the x axis, in degrees 0..90 (default 35)
+% @param: /Spread Random scatter of each stroke's heading, in degrees; must be >= 0 (default 6)
+% @param: /LengthJitter 0..1 how far each stroke's length varies around /Length (default 0.3)
+% @param: /Bow 0..0.5 sideways bend of each stroke as a fraction of its length; 0 is straight (default 0)
+/pkcrisscross {
+    /mxopts exch def /mxreg exch def
+    mxreg mhisregion not { pkcrisscross-needs-a-region } if
+    /mxcount mxopts /Count 40 pkgetdef def
+    /mxcount load xcheck { pkcrisscross-count-must-not-be-a-procedure } if
+    mxcount 1 lt mxcount 5000 gt or mxcount truncate mxcount ne or
+        { pkcrisscross-count-must-be-1-to-5000 } if
+    /mxlen mxopts /Length 30 pkgetdef def
+    /mxlen load xcheck { pkcrisscross-length-must-not-be-a-procedure } if
+    mxlen 0 le { pkcrisscross-length-must-be-positive } if
+    /mxangle mxopts /Angle 35 pkgetdef def
+    /mxangle load xcheck { pkcrisscross-angle-must-not-be-a-procedure } if
+    mxangle 0 lt mxangle 90 gt or { pkcrisscross-angle-must-be-0-to-90 } if
+    /mxspread mxopts /Spread 6 pkgetdef def
+    /mxspread load xcheck { pkcrisscross-spread-must-not-be-a-procedure } if
+    mxspread 0 lt { pkcrisscross-spread-must-be-non-negative } if
+    /mxlj mxopts /LengthJitter 0.3 pkgetdef def
+    /mxlj load xcheck { pkcrisscross-lengthjitter-must-not-be-a-procedure } if
+    mxlj 0 lt mxlj 1 gt or { pkcrisscross-lengthjitter-must-be-0-to-1 } if
+    /mxbow mxopts /Bow 0 pkgetdef def
+    /mxbow load xcheck { pkcrisscross-bow-must-not-be-a-procedure } if
+    mxbow 0 lt mxbow 0.5 gt or { pkcrisscross-bow-must-be-0-to-0.5 } if
+
+    mxreg mxcount mhgrid
+    mhcols mhrows mul 40000 gt { pkcrisscross-too-many-cells } if
+    newpath
+    0 1 mhrows cvi 1 sub {
+        /mxr exch def
+        0 1 mhcols cvi 1 sub {
+            /mxc exch def
+            % Six draws per cell whether or not the cell is kept.
+            frnd /mxfx exch def frnd /mxfy exch def
+            frnd /mxfam exch def frnd /mxfa exch def
+            frnd /mxfl exch def frnd /mxfb exch def
+            /mxx mhgx0 mxc mxfx add mhcw mul add def
+            /mxy mhgy0 mxr mxfy add mhch mul add def
+            mxx mxy mhreg scin {
+                /mxang mxangle mxfam 0.5 lt { 1 } { -1 } ifelse mul
+                    mxfa 2 mul 1 sub mxspread mul add def
+                /mxhl mxlen 1 mxfl 2 mul 1 sub mxlj mul add mul 2 div def
+                /mxdx mxang cos mxhl mul def
+                /mxdy mxang sin mxhl mul def
+                /mxsx mxx mxdx sub def /mxsy mxy mxdy sub def
+                /mxex mxx mxdx add def /mxey mxy mxdy add def
+                mxbow 0 gt {
+                    % Controls a third and two thirds along, pushed to one side.
+                    /mxoff mxbow mxlen mul mxfb 0.5 lt { 1 } { -1 } ifelse mul def
+                    /mxnx mxang sin neg mxoff mul def
+                    /mxny mxang cos mxoff mul def
+                    mxsx mxsy moveto
+                    mxsx mxdx 2 mul 3 div add mxnx add
+                    mxsy mxdy 2 mul 3 div add mxny add
+                    mxsx mxdx 4 mul 3 div add mxnx add
+                    mxsy mxdy 4 mul 3 div add mxny add
+                    mxex mxey curveto
+                } {
+                    mxsx mxsy moveto mxex mxey lineto
+                } ifelse
+            } if
+        } for
+    } for
+} def
+
+% @kind: Procedure
+% @summary: A scumbling brush motion in a region (artkit's screct or scpath): many small separate circles scattered evenly, the tiny-circles stroke of clouds and bushes. Builds closed circle (or squashed ellipse) subpaths and paints nothing, so it composes with any preset: `region opts pkscumblein << >> pkoil`. Replaces the current path. For a connected chain of overlapping loops along a line use pkscumble.
+% @example: newpath 200 440 moveto 300 470 400 470 520 430 curveto scpath << /Count 80 /Radius 7 /Squash 0.6 >> pkscumblein << /Width 8 >> pkoil
+% @param: /Count About how many circles to lay down, whole number 1..5000; a non-rectangular region keeps about this many (default 60)
+% @param: /Radius Mean circle radius in points; must be > 0 (default 4)
+% @param: /RadiusJitter 0..1 how far each circle's radius varies around /Radius (default 0.4)
+% @param: /Squash Vertical radius as a fraction of the horizontal one, > 0 and <= 1; 1 is a circle, smaller flattens a cloud's underside (default 1)
+/pkscumblein {
+    /mcopts exch def /mcreg exch def
+    mcreg mhisregion not { pkscumblein-needs-a-region } if
+    /mccount mcopts /Count 60 pkgetdef def
+    /mccount load xcheck { pkscumblein-count-must-not-be-a-procedure } if
+    mccount 1 lt mccount 5000 gt or mccount truncate mccount ne or
+        { pkscumblein-count-must-be-1-to-5000 } if
+    /mcrad mcopts /Radius 4 pkgetdef def
+    /mcrad load xcheck { pkscumblein-radius-must-not-be-a-procedure } if
+    mcrad 0 le { pkscumblein-radius-must-be-positive } if
+    /mcrj mcopts /RadiusJitter 0.4 pkgetdef def
+    /mcrj load xcheck { pkscumblein-radiusjitter-must-not-be-a-procedure } if
+    mcrj 0 lt mcrj 1 gt or { pkscumblein-radiusjitter-must-be-0-to-1 } if
+    /mcsq mcopts /Squash 1 pkgetdef def
+    /mcsq load xcheck { pkscumblein-squash-must-not-be-a-procedure } if
+    mcsq 0 le mcsq 1 gt or { pkscumblein-squash-must-be-0-exclusive-to-1 } if
+
+    mcreg mccount mhgrid
+    mhcols mhrows mul 40000 gt { pkscumblein-too-many-cells } if
+    newpath
+    /mcm matrix currentmatrix def
+    0 1 mhrows cvi 1 sub {
+        /mcr exch def
+        0 1 mhcols cvi 1 sub {
+            /mcc exch def
+            frnd /mcfx exch def frnd /mcfy exch def
+            frnd /mcfr exch def frnd /mcph exch def
+            /mcx mhgx0 mcc mcfx add mhcw mul add def
+            /mcy mhgy0 mcr mcfy add mhch mul add def
+            mcx mcy mcreg scin {
+                /mcrr mcrad 1 mcfr 2 mul 1 sub mcrj mul add mul 0.1 mcrad mul max def
+                /mcpa mcph 360 mul def
+                % Build in a translated, squashed space, then put the matrix
+                % back: only the path survives, in device space.
+                mcx mcy translate 1 mcsq scale
+                mcrr mcpa cos mul mcrr mcpa sin mul moveto
+                0 0 mcrr mcpa mcpa 360 add arc closepath
+                mcm setmatrix
+            } if
+        } for
+    } for
+} def
+
+% @kind: Procedure
+% @summary: A scumbling brush motion along a line: the current path is read as a spine and replaced with one continuous chain of overlapping loops per subpath, the circular scrubbing stroke that builds clouds and bushes. Builds a path and paints nothing, so it composes with any preset: `opts pkscumble << >> pkoil`. A one-point subpath becomes a single circle. Deterministic under the caller's own srand.
+% @example: newpath 120 430 moveto 300 470 480 450 600 430 curveto << /Radius 9 /Squash 0.7 >> pkscumble << /Width 8 >> pkoil
+% @param: /Radius Mean loop radius in points; must be > 0 (default 4)
+% @param: /Step Distance the loop advances along the spine per full turn, in points; must be > 0. Loops overlap while it is under 2*pi*Radius, and open into a wave beyond (default 1.6*Radius)
+% @param: /RadiusJitter 0..1 how far each loop's radius varies around /Radius; blended smoothly between loops (default 0.3)
+% @param: /Squash Radius across the line as a fraction of the radius along it, > 0 and <= 1 (default 1)
+/pkscumble {
+    /msopts exch def
+    /msrad msopts /Radius 4 pkgetdef def
+    /msrad load xcheck { pkscumble-radius-must-not-be-a-procedure } if
+    msrad 0 le { pkscumble-radius-must-be-positive } if
+    /msstep msopts /Step msrad 1.6 mul pkgetdef def
+    /msstep load xcheck { pkscumble-step-must-not-be-a-procedure } if
+    msstep 0 le { pkscumble-step-must-be-positive } if
+    /msrj msopts /RadiusJitter 0.3 pkgetdef def
+    /msrj load xcheck { pkscumble-radiusjitter-must-not-be-a-procedure } if
+    msrj 0 lt msrj 1 gt or { pkscumble-radiusjitter-must-be-0-to-1 } if
+    /mssq msopts /Squash 1 pkgetdef def
+    /mssq load xcheck { pkscumble-squash-must-not-be-a-procedure } if
+    mssq 0 le mssq 1 gt or { pkscumble-squash-must-be-0-exclusive-to-1 } if
+
+    % 24 samples per loop; the walk pitch is one sample's worth of travel.
+    msstep 24 div 100000 { pkscumble-sample-count-exceeds-safety-limit } mhcollect
+    newpath
+    0 1 mhn 1 sub {
+        mhstops exch get aload pop
+        /msatend exch def /mssp exch def pop /msang exch def /msy exch def /msx exch def
+        % Phase follows the distance actually travelled (a loop per /Step), not
+        % the stop count: walkpath's guaranteed end stop can sit on top of the
+        % last regular one or a fraction of a pitch past it, and counting it as
+        % a whole sample added a hook of terminal geometry (Codex round 3).
+        msatend 1 and 1 eq { /mscum 0 def /msloop -1 def } { /mscum mscum mssp add def } ifelse
+        % One draw per stop; a new loop radius is taken at each loop start.
+        frnd /msd exch def
+        /msturn mscum msstep div def
+        msturn floor /msnl exch def
+        msnl msloop gt {
+            /msrprev msloop 0 lt { -1 } { msrnext } ifelse def
+            /msrnext msrad 1 msd 2 mul 1 sub msrj mul add mul 0.1 msrad mul max def
+            msrprev 0 lt { /msrprev msrnext def } if
+            /msloop msnl def
+        } if
+        msatend 3 eq {
+            % A lone point: one full circle (squashed in the line's frame,
+            % which for a point is the x axis).
+            0 1 24 {
+                15 mul /msph exch def
+                msx msrnext msph cos mul add
+                msy msrnext mssq mul msph sin mul add
+                msph 0 eq { moveto } { lineto } ifelse
+            } for
+            closepath
+        } {
+            % A stop with no travel since the previous one (the end stop of a
+            % guide whose length is a whole number of pitches) is the same
+            % point again. Zero travel is judged against the pitch, not a fixed distance: an
+            % absolute epsilon dropped every stop of a chain drawn at a tiny
+            % user-space scale.
+            msatend 1 and 1 eq mssp msstep 24 div 0.001 mul gt or {
+                /msr msrprev msrnext msrprev sub msturn msnl sub mul add def
+                /msph msturn 360 mul def
+                msx msang cos msr mul msph cos mul add msang sin neg msr mssq mul mul msph sin mul add
+                msy msang sin msr mul msph cos mul add msang cos msr mssq mul mul msph sin mul add
+                msatend 1 and 1 eq { moveto } { lineto } ifelse
+            } if
+        } ifelse
+    } for
+} def
+
+% @kind: Procedure
+% @summary: A tapping / pouncing brush motion along a line: the current path is read as a spine and replaced with short stabs scattered along it, the foliage and distant-forest stroke. Each tap is a tiny two-point stroke, so it paints with any preset: `opts pktap << >> pkfan`; at /Length 0 each tap is a zero-length stroke that pkdab reads as one clump. Deterministic under the caller's own srand.
+% @example: newpath 40 300 moveto 200 330 400 300 600 320 curveto << /Spacing 5 /Length 8 /Scatter 4 >> pktap << /Width 5 /Bristles 10 >> pkfan
+% @param: /Spacing Mean distance between taps along the spine, in points; must be > 0 (default 8)
+% @param: /Length Length of each stab in points; must be >= 0 (default 6)
+% @param: /Direction Heading of each stab in degrees counterclockwise from +x, in user space (default 90, straight up)
+% @param: /Lean Random lean of each stab around /Direction, in degrees; must be >= 0 (default 15)
+% @param: /Scatter Random offset of each tap from the spine, in points; must be >= 0 (default 3)
+% @param: /LengthJitter 0..1 how far each stab's length varies around /Length (default 0.5)
+/pktap {
+    /mtopts exch def
+    /mtspacing mtopts /Spacing 8 pkgetdef def
+    /mtspacing load xcheck { pktap-spacing-must-not-be-a-procedure } if
+    mtspacing 0 le { pktap-spacing-must-be-positive } if
+    /mtlen mtopts /Length 6 pkgetdef def
+    /mtlen load xcheck { pktap-length-must-not-be-a-procedure } if
+    mtlen 0 lt { pktap-length-must-be-non-negative } if
+    /mtdir mtopts /Direction 90 pkgetdef def
+    /mtdir load xcheck { pktap-direction-must-not-be-a-procedure } if
+    /mtlean mtopts /Lean 15 pkgetdef def
+    /mtlean load xcheck { pktap-lean-must-not-be-a-procedure } if
+    mtlean 0 lt { pktap-lean-must-be-non-negative } if
+    /mtscat mtopts /Scatter 3 pkgetdef def
+    /mtscat load xcheck { pktap-scatter-must-not-be-a-procedure } if
+    mtscat 0 lt { pktap-scatter-must-be-non-negative } if
+    /mtlj mtopts /LengthJitter 0.5 pkgetdef def
+    /mtlj load xcheck { pktap-lengthjitter-must-not-be-a-procedure } if
+    mtlj 0 lt mtlj 1 gt or { pktap-lengthjitter-must-be-0-to-1 } if
+
+    mtspacing 50000 { pktap-count-exceeds-safety-limit } mhcollect
+    newpath
+    0 1 mhn 1 sub {
+        mhstops exch get aload pop
+        /mtatend exch def /mtsp exch def pop pop /mty exch def /mtx exch def
+        frnd /mtfx exch def frnd /mtfy exch def
+        frnd /mtfl exch def frnd /mtfj exch def
+        % The walk's guaranteed final stop can sit right on top of the
+        % previous one; a tap there would just double it up.
+        mtatend 3 and 2 eq mtsp mtspacing 0.5 mul lt and not {
+            /mtpx mtx mtfx 2 mul 1 sub mtscat mul add def
+            /mtpy mty mtfy 2 mul 1 sub mtscat mul add def
+            /mta mtdir mtfl 2 mul 1 sub mtlean mul add def
+            /mtl mtlen 1 mtfj 2 mul 1 sub mtlj mul add mul def
+            mtpx mtpy moveto
+            mtpx mta cos mtl mul add mtpy mta sin mtl mul add lineto
+        } if
+    } for
+} def
+
+% @kind: Procedure
+% @summary: A pull brush motion from a line: the current path is read as a spine and replaced with strokes that start on it and are pulled along a fixed direction -- down from a horizon for reflections, up from a ground line for grass, down a ridge for a knife's "touch and pull" highlights. Builds a path and paints nothing, so it composes with any preset: `opts pkpull << >> pkliner`. Deterministic under the caller's own srand.
+% @example: newpath 0 300 moveto 800 300 lineto << /Direction -90 /Length 60 /Spacing 6 >> pkpull << /Width 5 /Charge 0.6 >> pkbroad
+% @param: /Length Mean stroke length in points; must be > 0 (default 30)
+% @param: /LengthJitter 0..1 how far each stroke's length varies around /Length (default 0.5)
+% @param: /Spacing Mean distance between stroke starts along the spine, in points; must be > 0 (default 4)
+% @param: /Wander 0..1 how far a start slides along the spine from its even slot, as a fraction of /Spacing (default 0.5)
+% @param: /Direction Heading of every pull in degrees counterclockwise from +x, in user space: -90 pulls down, 90 pushes up (default -90)
+% @param: /Lean Random lean of each pull around /Direction, in degrees; must be >= 0 (default 6)
+% @param: /Bow 0..0.5 sideways bend of each pull as a fraction of its length, to either side at random; 0 is straight (default 0)
+/pkpull {
+    /mpopts exch def
+    /mplen mpopts /Length 30 pkgetdef def
+    /mplen load xcheck { pkpull-length-must-not-be-a-procedure } if
+    mplen 0 le { pkpull-length-must-be-positive } if
+    /mplj mpopts /LengthJitter 0.5 pkgetdef def
+    /mplj load xcheck { pkpull-lengthjitter-must-not-be-a-procedure } if
+    mplj 0 lt mplj 1 gt or { pkpull-lengthjitter-must-be-0-to-1 } if
+    /mpspacing mpopts /Spacing 4 pkgetdef def
+    /mpspacing load xcheck { pkpull-spacing-must-not-be-a-procedure } if
+    mpspacing 0 le { pkpull-spacing-must-be-positive } if
+    /mpwander mpopts /Wander 0.5 pkgetdef def
+    /mpwander load xcheck { pkpull-wander-must-not-be-a-procedure } if
+    mpwander 0 lt mpwander 1 gt or { pkpull-wander-must-be-0-to-1 } if
+    /mpdir mpopts /Direction -90 pkgetdef def
+    /mpdir load xcheck { pkpull-direction-must-not-be-a-procedure } if
+    /mplean mpopts /Lean 6 pkgetdef def
+    /mplean load xcheck { pkpull-lean-must-not-be-a-procedure } if
+    mplean 0 lt { pkpull-lean-must-be-non-negative } if
+    /mpbow mpopts /Bow 0 pkgetdef def
+    /mpbow load xcheck { pkpull-bow-must-not-be-a-procedure } if
+    mpbow 0 lt mpbow 0.5 gt or { pkpull-bow-must-be-0-to-0.5 } if
+
+    % The guide is walked at a sixth of the spacing and every stroke starts
+    % on one of those samples. A sample always lies on the flattened guide,
+    % so a start can slide along it (by whole samples, clamped to the
+    % subpath) without ever cutting a corner or leaving a curve, which
+    % interpolating between the even slots did. 120000 samples bound 20000
+    % strokes.
+    /mpn 6 def
+    mpspacing mpn div 120000 { pkpull-count-exceeds-safety-limit } mhcollect
+    newpath
+    0 1 mhn 1 sub {
+        /mpi exch def
+        mhstops mpi get 5 get /mpatend exch def
+        mpatend 1 and 1 eq {
+            % A new subpath: remember where it starts and where it ends.
+            /mpbase mpi def
+            /mpend mpi def
+            {
+                mpend mhn 1 sub ge { exit } if
+                mhstops mpend get 5 get 2 and 2 eq { exit } if
+                /mpend mpend 1 add def
+            } loop
+        } if
+        % A slot is every sixth sample from the start, plus the subpath's end
+        % when it is at least half a spacing past the last slot (the end stop
+        % a bare walk adds can sit right on top of the previous one).
+        /mpr mpend mpbase sub mpn mod def
+        mpi mpbase sub mpn mod 0 eq
+        mpi mpend eq mpr 0 gt and
+            { mpr 1 sub mpspacing mpn div mul mhstops mpend get 4 get add
+              mpspacing 0.5 mul ge }
+            { false }
+        ifelse
+        or {
+            frnd /mpfw exch def frnd /mpfl exch def
+            frnd /mpfj exch def frnd /mpfb exch def
+            /mpj mpi mpfw 2 mul 1 sub mpwander mul mpn 2 div mul round cvi add def
+            mpj mpbase lt { /mpj mpbase def } if
+            mpj mpend gt { /mpj mpend def } if
+            mhstops mpj get dup 0 get /mpsx exch def 1 get /mpsy exch def
+            /mpa mpdir mpfl 2 mul 1 sub mplean mul add def
+            /mpl mplen 1 mpfj 2 mul 1 sub mplj mul add mul def
+            /mpdx mpa cos mpl mul def /mpdy mpa sin mpl mul def
+            mpsx mpsy moveto
+            mpbow 0 gt {
+                /mpoff mpbow mpl mul mpfb 0.5 lt { 1 } { -1 } ifelse mul def
+                /mpnx mpa sin neg mpoff mul def
+                /mpny mpa cos mpoff mul def
+                % mpdx/mpdy are the whole stroke, so the controls sit at a third
+                % and two thirds of it, pushed to one side.
+                mpsx mpdx 3 div add mpnx add
+                mpsy mpdy 3 div add mpny add
+                mpsx mpdx 2 mul 3 div add mpnx add
+                mpsy mpdy 2 mul 3 div add mpny add
+                mpsx mpdx add mpsy mpdy add curveto
+            } {
+                mpsx mpdx add mpsy mpdy add lineto
+            } ifelse
+        } if
+    } for
+} def
+
+% @kind: Procedure
+% @summary: A zig-zag brush motion along a line: the current path is read as a spine and replaced with one polyline per subpath that alternates to either side of it, the back-and-forth stroke of water and sweeps. It starts and ends on the spine. Builds a path and paints nothing, so it composes with any preset: `opts pkzigzag << >> pkbroad`. Deterministic under the caller's own srand.
+% @example: newpath 40 200 moveto 760 200 lineto << /Amplitude 5 /Wavelength 24 >> pkzigzag << /Width 3 /Charge 0.8 >> pkliner
+% @param: /Amplitude Distance of each peak from the spine, in points; must be >= 0 (default 6)
+% @param: /Wavelength Distance along the spine for one full back-and-forth, in points; must be > 0 (default 18)
+% @param: /AmpJitter 0..1 how far each peak's height varies around /Amplitude (default 0.3)
+% @param: /WaveJitter 0..1 how far each peak slides along the spine from its even slot (default 0.2)
+/pkzigzag {
+    /mzopts exch def
+    /mzamp mzopts /Amplitude 6 pkgetdef def
+    /mzamp load xcheck { pkzigzag-amplitude-must-not-be-a-procedure } if
+    mzamp 0 lt { pkzigzag-amplitude-must-be-non-negative } if
+    /mzwave mzopts /Wavelength 18 pkgetdef def
+    /mzwave load xcheck { pkzigzag-wavelength-must-not-be-a-procedure } if
+    mzwave 0 le { pkzigzag-wavelength-must-be-positive } if
+    /mzaj mzopts /AmpJitter 0.3 pkgetdef def
+    /mzaj load xcheck { pkzigzag-ampjitter-must-not-be-a-procedure } if
+    mzaj 0 lt mzaj 1 gt or { pkzigzag-ampjitter-must-be-0-to-1 } if
+    /mzwj mzopts /WaveJitter 0.2 pkgetdef def
+    /mzwj load xcheck { pkzigzag-wavejitter-must-not-be-a-procedure } if
+    mzwj 0 lt mzwj 1 gt or { pkzigzag-wavejitter-must-be-0-to-1 } if
+
+    % The guide is walked at a sixth of a half wavelength and every vertex is
+    % one of those samples, so sliding a vertex (/WaveJitter) moves it along
+    % the guide by whole samples and never off it: sliding along the tangent
+    % left the guide at every corner (Codex round 4). 300000 samples bound
+    % 50000 vertices.
+    /mzn 6 def
+    mzwave 2 div mzn div 300000 { pkzigzag-point-count-exceeds-safety-limit } mhcollect
+    newpath
+    /mzk 0 def
+    0 1 mhn 1 sub {
+        /mzi exch def
+        mhstops mzi get /mzst exch def
+        mzst 5 get /mzatend exch def
+        mzatend 1 and 1 eq {
+            % A new subpath: remember where it starts and where it ends.
+            /mzbase mzi def /mzk 0 def
+            /mzend mzi def
+            {
+                mzend mhn 1 sub ge { exit } if
+                mhstops mzend get 5 get 2 and 2 eq { exit } if
+                /mzend mzend 1 add def
+            } loop
+            mzst 0 get mzst 1 get moveto
+            % A lone point is a degenerate stroke, so it still paints.
+            mzatend 2 and 2 eq { mzst 0 get mzst 1 get lineto } if
+        } {
+            mzatend 2 and 2 eq {
+                % The line ends on the spine, not on a peak.
+                mzst 0 get mzst 1 get lineto
+            } {
+                % Every sixth sample is a vertex, unless the end is less than
+                % half a leg ahead (the guaranteed end stop can sit on top of
+                % it or just behind it): that one is dropped, so the line does
+                % not end on a peak followed by a jog back to the spine.
+                mzi mzbase sub mzn mod 0 eq
+                mzend mzi sub 1 sub mzwave 2 div mzn div mul
+                    mhstops mzend get 4 get add mzwave 2 div 0.5 mul ge and {
+                    frnd /mzfa exch def frnd /mzfw exch def
+                    /mzk mzk 1 add def
+                    /mzside mzk 2 mod 1 eq { 1 } { -1 } ifelse def
+                    /mzoff mzamp 1 mzfa 2 mul 1 sub mzaj mul add mul mzside mul def
+                    % At most 2 samples either way, a third of a leg, so
+                    % neighbouring vertices keep their order.
+                    mhstops mzi mzfw 2 mul 1 sub mzwj mul 2.7 mul truncate cvi add get
+                    /mzst exch def
+                    mzst 0 get mzst 2 get sin neg mzoff mul add
+                    mzst 1 get mzst 2 get cos mzoff mul add
+                    lineto
+                } if
+            } ifelse
+        } ifelse
+    } for
 } def
