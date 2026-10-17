@@ -17,7 +17,12 @@
 # CI and release automation
 /.github/workflows/         @jeromebanks
 /scripts/package_release.sh @jeromebanks
-/scripts/release.sh         @jeromebanks   # forward: #602 (publishing pipeline)
+/scripts/release.sh         @jeromebanks
+/scripts/release_stages.py  @jeromebanks
+/scripts/check_workflows.py @jeromebanks
+/cliff.toml                 @jeromebanks
+/about.toml                 @jeromebanks
+/about.hbs                  @jeromebanks
 
 # Build and dependency manifests (build.rs runs arbitrary code at build time)
 /Cargo.toml                 @jeromebanks

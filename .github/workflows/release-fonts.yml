@@ -11,9 +11,10 @@
 # packs, is a dry run: it stops there and uploads the packs as a
 # workflow artifact.
 #
-# Publishing happens only for a pushed fonts-* tag, and only once the
-# repository variable FONTS_RELEASE_ENABLED is 'true' (set by #602 when
-# it creates the protected `release` environment). Tags and their
+# Publishing happens only for a pushed fonts-* tag, only once the
+# repository variable FONTS_RELEASE_ENABLED is 'true', and only after the
+# owner approves the protected `release` environment (the same one the
+# interpreter release uses; docs/dev/RELEASING.md, "One-time setup"). Tags and their
 # assets are immutable: the publish job refuses a tag that already has
 # a release, so a fix is always a new tag.
 name: release-fonts
@@ -51,12 +52,16 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master; toolchain below
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Resolve the tag
         id: tag
         env:
@@ -97,7 +102,7 @@ jobs:
             cat dist/fonts/SHA256SUMS
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: font-packs-${{ steps.tag.outputs.tag }}
           path: dist/fonts/
@@ -111,7 +116,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: font-packs-${{ needs.build.outputs.tag }}
           path: dist/fonts

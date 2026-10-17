@@ -84,31 +84,52 @@ More on the less obvious ones:
 
 ## Installing pscat without the repo
 
-You don't need a git checkout or a Rust toolchain just to *use* pscat.
-`scripts/package_release.sh` builds `pscat` and `pscat-mcp` and bundles them
-with their runtime assets (`lib/`, `fonts/catalog/`)
-into a standalone directory. The handwriting, typewriter and photo-etching
-tools are subcommands of `pscat` itself (`pscat handwrite`, `pscat typewrite`,
-`pscat photo-etch`), so they come with the binary. CI does this automatically and attaches the
-result to a
+You don't need a git checkout or a Rust toolchain just to *use* pscat. Each
 [GitHub Release](https://github.com/jeromebanks/postscript_interpreter/releases)
-whenever a version tag is pushed (`.github/workflows/release.yml`).
+carries a ready-built archive per platform, made by
+`scripts/package_release.sh` in the release workflow
+(`.github/workflows/release.yml`):
+
+| Platform | Archive |
+|---|---|
+| macOS, Apple silicon | `pscat-<version>-aarch64-apple-darwin.tar.gz` |
+| macOS, Intel | `pscat-<version>-x86_64-apple-darwin.tar.gz` |
+| Linux x86_64 (static, headless) | `pscat-<version>-x86_64-unknown-linux-musl.tar.gz` |
+| Linux ARM64 (static, headless) | `pscat-<version>-aarch64-unknown-linux-musl.tar.gz` |
+| Windows x86_64 | `pscat-<version>-x86_64-pc-windows-msvc.zip` |
+
+Each holds `pscat` and `pscat-mcp`, their runtime libraries (`lib/`), the
+licences (`LICENSE-MIT`, `LICENSE-APACHE`, `LICENSE-OFL`,
+`THIRD_PARTY_NOTICES.md`) and the licences of the Rust libraries linked into
+the binaries (`THIRD_PARTY_LICENSES.html`). `SHA256SUMS` on the release lists
+every archive's checksum. The handwriting, typewriter and photo-etching tools
+are subcommands of `pscat` itself (`pscat handwrite`, `pscat typewrite`,
+`pscat photo-etch`), so they come with the binary.
 
 To use one:
 
 ```sh
-tar xzf pscat-<version>-<os>-<arch>.tar.gz
-export PATH="$PWD/pscat-<version>-<os>-<arch>:$PATH"
+shasum -a 256 -c SHA256SUMS --ignore-missing     # optional: check the download
+tar xzf pscat-<version>-<target>.tar.gz
+export PATH="$PWD/pscat-<version>-<target>:$PATH"
 pscat --png out.png some_file.ps
+pscat fonts install                               # the font catalog, as font packs
 ```
 
-`fonts/catalog/` resolves automatically as long as it stays next to the
-`pscat` binary. That is the point of the bundle layout. The libraries
-(`lib/artkit.ps` and the rest) are also compiled into the binary, so a
-bare `pscat` binary, or one from `cargo install`, runs them with nothing on
-disk. (`cargo install pscat --no-default-features` builds a headless pscat
-without the live window; see [pscat as a Rust library](library.md#supported-builds).) If you move the binary away from the bundle, set `PSCAT_HOME` to
-wherever the bundle ended up.
+The Linux archives are fully static (musl), so they run on any distribution,
+but they are **headless**: they render to PNG, SVG and PDF and have no live
+window, because a static binary cannot load the system's X11/Wayland
+libraries. For the window on Linux, build from source.
+
+`lib/` resolves automatically as long as it stays next to the `pscat` binary.
+That is the point of the bundle layout. The libraries (`lib/artkit.ps` and the
+rest) are also compiled into the binary, so a bare `pscat` binary, or one from
+`cargo install`, runs them with nothing on disk. (`cargo install pscat
+--no-default-features` builds a headless pscat without the live window; see
+[pscat as a Rust library](library.md#supported-builds).) If you move the binary
+away from the bundle, set `PSCAT_HOME` to wherever the bundle ended up. The
+font catalog is not in the archive: `pscat fonts install` downloads it as font
+packs ([Fonts](fonts.md#font-packs-the-catalog-outside-a-checkout)).
 
 ### Where pscat finds its files
 

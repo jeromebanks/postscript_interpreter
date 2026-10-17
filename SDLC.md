@@ -20,6 +20,10 @@ merge_button:
   merge_commit: false
   rebase_merge: false
   delete_branch_on_merge: true
+release:
+  process_doc: docs/dev/RELEASING.md
+  environment: release
+  tag_pattern: "v*"
 ---
 
 # SDLC — postscript_interpreter
@@ -109,6 +113,30 @@ repo whose agents open PRs under the owner's own account cannot satisfy (see
 the `required_approving_review_count` pitfall in the `sdlcify` skill), so
 `required_pull_request_reviews.require_code_owner_reviews` stays `false` and
 CODEOWNERS only requests the owner's review.
+
+## Release lifecycle
+
+Releases follow `docs/dev/RELEASING.md` (`release.process_doc`). In outline:
+
+1. **Release PR.** `scripts/release.sh X.Y.Z` branches `release/vX.Y.Z` from
+   an up-to-date `main`, bumps every manifest version, prepends the
+   `CHANGELOG.md` section (git-cliff), and opens the PR. It goes through the
+   lifecycle above like any PR. It touches CODEOWNERS paths, so the owner
+   merges it.
+2. **Tag.** The owner pushes `vX.Y.Z` (`release.tag_pattern`) on the merge
+   commit. A tag ruleset makes release tags immutable.
+3. **Pipeline.** `.github/workflows/release.yml` verifies and builds, then
+   creates a draft release. Publishing waits in the protected `release`
+   environment (`release.environment`) for the owner's approval, the only
+   recurring manual step. Only that environment can obtain publishing
+   credentials (trusted publishing over OIDC). Pull-request CI cannot.
+4. **Resume, never overwrite.** Each publishing stage skips an identical
+   artifact and halts on a different one. A failed release is resumed by
+   re-running its failed jobs.
+5. **Hotfix.** A `fix/` PR into `main`, then a patch release. Releases are cut
+   from `main` only.
+6. **Yank or deprecate, never delete.** `cargo yank`, a "Deprecated" note on
+   the GitHub Release, `npm deprecate`. The fix ships as a new version.
 
 ## Labels
 

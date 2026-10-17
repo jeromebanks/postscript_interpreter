@@ -1,0 +1,24 @@
+# cargo-about (issue #602): the dependency licence notices bundled into every
+# release archive as THIRD_PARTY_LICENSES.html. scripts/package_release.sh runs
+#   cargo about generate --all-features --fail about.hbs -o THIRD_PARTY_LICENSES.html
+# The accepted list mirrors deny.toml's [licenses] allow list (which CI's `deny`
+# job enforces), plus OFL-1.1 for pscat's own embedded fonts. A dependency under
+# any other licence fails the generate step, so the archive can never ship
+# without its notice.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Zlib",
+    "Unicode-3.0",
+    "ISC",
+    "0BSD",
+    "Unlicense",
+    "OFL-1.1",
+]
+# Only what ends up in a shipped binary: no dev-dependencies (tests, benches).
+ignore-dev-dependencies = true
+# Build scripts and proc macros run at build time and are not distributed.
+ignore-build-dependencies = true

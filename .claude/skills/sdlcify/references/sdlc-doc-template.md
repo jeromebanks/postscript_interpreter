@@ -37,6 +37,10 @@ merge_button:
   merge_commit: false
   rebase_merge: false
   delete_branch_on_merge: true
+release:                     # optional; absent means no release section
+  process_doc: <path to the release procedure>
+  environment: <protected deployment environment that publishes>
+  tag_pattern: "v*"
 ---
 
 # SDLC — <repo name>
@@ -133,6 +137,33 @@ repo whose agents open PRs under the owner's own account cannot satisfy (see
 the `required_approving_review_count` pitfall in the `sdlcify` skill), so
 `required_pull_request_reviews.require_code_owner_reviews` stays `false` and
 CODEOWNERS only requests the owner's review.
+
+<!-- Include this section only when the `release` frontmatter key is set.
+Fill <process_doc>, <environment>, <tag_pattern> from it. Added in #602. -->
+## Release lifecycle
+
+Releases follow `<process_doc>` (`release.process_doc`). In outline:
+
+1. **Release PR.** A release script branches from an up-to-date
+   `<default_branch>`, bumps every manifest version, updates the changelog,
+   and opens the PR. It goes through the lifecycle above like any PR. (When
+   `merge_policy.owner_merge_file` covers the manifests, the owner merges it.)
+2. **Tag.** The owner pushes a `<tag_pattern>` tag (`release.tag_pattern`) on
+   the merge commit. A tag ruleset makes release tags immutable.
+3. **Pipeline.** The release workflow verifies and builds, then creates a
+   draft release. Publishing waits in the protected `<environment>`
+   environment (`release.environment`) for the owner's approval, the only
+   recurring manual step. Only that environment can obtain publishing
+   credentials (trusted publishing over OIDC). Pull-request CI cannot.
+4. **Resume, never overwrite.** Each publishing stage skips an identical
+   artifact and halts on a different one. A failed release is resumed by
+   re-running its failed jobs.
+5. **Hotfix.** A `fix/` PR into `<default_branch>`, then a patch release.
+6. **Yank or deprecate, never delete.** The fix ships as a new version.
+
+sdlcify only documents this. It does not create the environment, the tag
+ruleset or the registry trusted publishers; `<process_doc>` lists those as
+owner steps.
 
 ## Labels
 

@@ -18,6 +18,7 @@ on it with them. For conventions start with [`AGENTS.md`](../../AGENTS.md) and
 |---|---|
 | [`VM.md`](VM.md) | How `save` and `restore` work, and the rules for mutating arrays and dictionaries. |
 | [`FONTS.md`](FONTS.md) | The font machinery: Type 3 programs, Type 1 parsing and the runtime catalog. |
+| [`RELEASING.md`](RELEASING.md) | Interpreter releases: `scripts/release.sh`, the tag-driven pipeline, safe resume, the owner's one-time setup, the release checklist, hotfixes and yanking. |
 | [`RELEASING-FONTS.md`](RELEASING-FONTS.md) | The font-pack release train: pack formats, cutting a `fonts-*` release, pinning a pscat release to it. |
 | [`CAPABILITIES.md`](CAPABILITIES.md) | The machine-readable art catalog that `pscat --capabilities` prints. |
 | [`PS_LIBRARY_COUPLING.md`](PS_LIBRARY_COUPLING.md) | What a PostScript-only change must touch, and how that list was shortened. |

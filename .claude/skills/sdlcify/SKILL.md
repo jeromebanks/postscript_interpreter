@@ -136,6 +136,13 @@ GitHub setting: sdlcify never turns on `require_code_owner_reviews`, because
 that needs a required approval, and the next paragraph says why that bricks a
 single-identity repo. (Added in #603.)
 
+**`release`** (optional frontmatter mapping: `process_doc`, `environment`,
+`tag_pattern`; absent means no release section) is read, not asked. When set,
+`SDLC.md` carries the "Release lifecycle" section from the template, which
+points at `process_doc` for the procedure. sdlcify only writes that prose: it
+never creates the deployment environment, tag rulesets or registry trusted
+publishers. Those are owner steps listed in `process_doc`. (Added in #602.)
+
 **Never set `required_approving_review_count` to anything but `0`
 without asking first.** A solo-maintainer repo where the agent opens
 PRs under the owner's own credentials cannot satisfy a ≥1-approval

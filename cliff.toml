@@ -1,0 +1,52 @@
+# git-cliff configuration for CHANGELOG.md (issue #602). scripts/release.sh
+# runs it in the release PR:
+#   git cliff --unreleased --tag vX.Y.Z --prepend CHANGELOG.md
+# The commits are this repo's squash-merged PR titles ("area: what changed
+# (#123)"), not Conventional Commits, so they are grouped by their leading
+# area word. Polish the wording in the release PR if needed; the file is
+# meant to be read.
+
+[changelog]
+header = """
+# Changelog
+
+All notable changes to pscat, newest first. Each entry is a merged pull
+request. Versions follow semantic versioning; before 1.0 a minor release
+may change the library API, a patch release does not (docs/STABILITY.md).
+Font packs have their own `fonts-YYYY.MM` releases and are not listed here.
+
+"""
+body = """
+{% if version -%}
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else -%}
+## [Unreleased]
+{% endif -%}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits %}
+- {{ commit.message | split(pat="\n") | first | trim }}\
+{% endfor %}
+{% endfor %}\n
+"""
+trim = true
+footer = ""
+
+[git]
+conventional_commits = false
+filter_unconventional = false
+split_commits = false
+protect_breaking_commits = false
+# Interpreter releases only: fonts-* tags are a separate train.
+tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+topo_order = false
+sort_commits = "newest"
+commit_parsers = [
+    { message = "^release: [0-9]+\\.[0-9]+\\.[0-9]+", skip = true },
+    { message = "^Merge ", skip = true },
+    { message = "(?i)^(fix|[a-z0-9_/-]+: fix)", group = "<!-- 1 -->Fixes" },
+    { message = "(?i)^(gallery|site|art|examples?)[:( ]", group = "<!-- 3 -->Gallery and site" },
+    { message = "(?i)^(docs?|readme|notes)[:( ]", group = "<!-- 4 -->Documentation" },
+    { message = "(?i)^(ci|release|build|deps|sdlc|skills?|work-issue|chore|test|tests)[:( ]", group = "<!-- 5 -->Build, CI and release" },
+    { message = ".*", group = "<!-- 2 -->Features and changes" },
+]

@@ -38,10 +38,13 @@ change.
 
 ## Cutting a font release
 
-Needs #602's protected `release` environment and the repository
-variable `FONTS_RELEASE_ENABLED=true`. Until then, tag pushes build and
-smoke-test but do not publish, and the dry run below is the whole
-process.
+Needs the protected `release` environment and the repository variable
+`FONTS_RELEASE_ENABLED=true`, both owner steps in
+[`RELEASING.md`](RELEASING.md#one-time-setup-owner) (steps 1 and 4). Until
+then, tag pushes build and smoke-test but do not publish, and the dry run
+below is the whole process. The publish job runs in the `release`
+environment, so it waits for the owner's approval like an interpreter
+release.
 
 1. Dry run: Actions → release-fonts → Run workflow, or any PR touching
    the packs. Download the `font-packs-*` artifact if you want to look
@@ -73,9 +76,11 @@ install` always fetches the same bytes:
 
 While `PINNED_INDEX` is `None` (every build until the first font
 release), a plain `pscat fonts install` tells the user to choose
-`--version` or `--from`. It never falls back to `latest`. Do not cut an
-interpreter release with `None`: its users would have no reproducible
-default (#616 tracks a guard).
+`--version` or `--from`. It never falls back to `latest`. An interpreter
+release with `None` is refused (#616): `scripts/release.sh` will not open the
+release PR, and the release workflow's `verify` job fails a `v*` tag whose
+`PINNED_INDEX` is `None` or whose pinned `font-index.json` does not hash to
+the pinned SHA-256 (`python3 scripts/release_stages.py check-pin`).
 
 ## Transport
 

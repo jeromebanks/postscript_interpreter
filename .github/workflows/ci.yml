@@ -73,11 +73,12 @@ jobs:
         # below silently miss it.
         shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master; toolchain below
         with:
+          toolchain: stable
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
       # No separate `cargo build`: clippy type-checks every target, and the
@@ -159,16 +160,18 @@ jobs:
         working-directory: head
     steps:
       - name: Check out HEAD
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: head
       - name: Check out merge base
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: base
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master; toolchain below
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: |
             head -> target
@@ -250,8 +253,10 @@ jobs:
       # Windows (#601): check out LF files, as in cross-platform below.
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master; toolchain below
+        with:
+          toolchain: stable
       - name: Clean install and render outside the checkout
         run: ./scripts/clean_install_test.sh
 
@@ -284,9 +289,11 @@ jobs:
       # repo is LF everywhere, so check it out as it is.
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master; toolchain below
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: PS-native self-checks
         env:
           PSCAT_PROFILE: ci
@@ -302,17 +309,17 @@ jobs:
   msrv:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Read rust-version from Cargo.toml
         id: msrv
         run: |
           v=$(sed -n 's/^rust-version *= *"\([0-9.]*\)".*/\1/p' Cargo.toml | head -1)
           test -n "$v" || { echo "no rust-version in Cargo.toml" >&2; exit 1; }
           echo "version=$v" >> "$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master; toolchain below
         with:
           toolchain: ${{ steps.msrv.outputs.version }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo check --all-targets --locked
 
   # `cargo package --list` against the licence allowlist, and a publish dry
@@ -322,7 +329,7 @@ jobs:
   packaging:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - name: Does this change touch packaging?
@@ -341,9 +348,11 @@ jobs:
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "No packaging paths changed; skipping." >> "$GITHUB_STEP_SUMMARY"
           fi
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master; toolchain below
+        with:
+          toolchain: stable
         if: steps.touch.outputs.run == 'true'
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         if: steps.touch.outputs.run == 'true'
       - name: Package file list matches the licence allowlist
         if: steps.touch.outputs.run == 'true'
@@ -373,11 +382,12 @@ jobs:
     steps:
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master; toolchain below
         with:
+          toolchain: stable
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Clippy without default features
         run: cargo clippy --all-targets --no-default-features -- -D warnings
       - name: Tests without default features
@@ -392,9 +402,11 @@ jobs:
   docs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master; toolchain below
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: rustdoc with the docs.rs flags
         env:
           RUSTDOCFLAGS: --cfg docsrs -D warnings
@@ -420,12 +432,14 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master; toolchain below
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
         with:
           tool: cargo-semver-checks
       - name: Public API against the PR base
@@ -462,17 +476,39 @@ jobs:
   licences:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Checker tests
         run: python3 scripts/test_check_licences.py
       - name: Font catalog and asset manifest
         run: python3 scripts/check_licences.py all
 
+  # The release pipeline's own checks (issue #602), no Rust build: the
+  # workflow policy (actions pinned to SHAs; OIDC tokens and secrets only in
+  # the protected `release` environment, so PR CI cannot obtain publishing
+  # credentials), the stage engine's publish/resume/halt tests against fake
+  # registries, and scripts/release.sh in a scratch clone (needs git-cliff
+  # and the full history for the changelog).
+  release-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
+        with:
+          tool: git-cliff
+      - name: Workflow policy
+        run: |
+          python3 scripts/check_workflows.py
+          python3 scripts/test_check_workflows.py
+      - name: Release stages and release.sh
+        run: python3 scripts/test_release_stages.py
+
   # Dependency licences and security advisories (deny.toml).
   deny:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
         with:
           command: check licenses advisories bans sources

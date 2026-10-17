@@ -26,7 +26,14 @@ done, unplanned/post-roadmap: Stage 21, standalone installability —
 serves a copy of `lib/**/*.ps` compiled into the binary, and a release
 build has no checkout heuristics),
 `scripts/package_release.sh`, and `.github/workflows/release.yml`,
-so pscat can be installed and run without a git checkout (since #599
+so pscat can be installed and run without a git checkout (since #602
+the tag-driven release pipeline: `scripts/release.sh X.Y.Z` opens the
+release PR, a pushed `vX.Y.Z` tag builds five platform archives and the
+crate, drafts the GitHub Release and publishes from the approval-gated
+`release` environment; every publishing stage in
+`scripts/release_stages.py` skips an identical artifact and halts on a
+different one, so a failed release resumes by re-running; procedure and
+owner setup in `docs/dev/RELEASING.md`) (since #599
 the font catalog reaches installs as downloadable font packs on their
 own `fonts-YYYY.MM` release train: `src/fontpacks/`, `pscat fonts
 install`, `.github/workflows/release-fonts.yml`,
@@ -996,6 +1003,15 @@ renders eight examples in both and compares block-downsampled output).
 
 ## Gotchas for the next implementer
 
+- **Workflows: every action is pinned to a commit SHA, and only the
+  `release` environment may hold `id-token: write`** (#602).
+  `python3 scripts/check_workflows.py` (CI's `release-policy` job) fails a
+  `uses: x@v4` or an OIDC grant anywhere else (the Pages deploy is the one
+  allowed exception). Resolve a new pin with
+  `gh api repos/OWNER/REPO/commits/TAG --jq .sha`, and write the tag in a
+  comment. The release archives are named by target triple
+  (`pscat-X.Y.Z-aarch64-apple-darwin.tar.gz`), and the Linux musl ones are
+  headless (`docs/dev/RELEASING.md`, "Platforms").
 - **A release `pscat` reads its compiled-in `lib/`, not the checkout's,
   unless it runs from the checkout root** (#598). `(lib/x.ps) run`
   tries `$PSCAT_LIB`, `$PSCAT_HOME`, the cwd, the user data dir and the

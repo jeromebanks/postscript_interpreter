@@ -1,30 +1,429 @@
-# Build a standalone pscat bundle (scripts/package_release.sh) and
-# publish it as a GitHub Release whenever a version tag is pushed —
-# so teammates can install pscat without a git checkout or cargo.
-# Tag like: git tag v0.5.0 && git push origin v0.5.0
+# The interpreter release pipeline (issue #602). The procedure, the owner's
+# one-time setup and the recovery playbook are docs/dev/RELEASING.md.
 #
-# macOS-only for now, matching the only platform this has actually
-# been built/tested on; add runners to the matrix below if/when
-# Linux or Windows teammates need a native bundle too.
+# Trigger: push the tag vX.Y.Z on the merged release PR's commit
+# (scripts/release.sh opens that PR). Stages, reversible first:
+#
+#   verify     build and test the release commit; the release gates (pinned
+#              font index, quality gate, MCP Inspector, licences, crate
+#              acceptance, semver against crates.io once there is a baseline);
+#              cargo-about notices; the .crate
+#   binaries   macOS arm64/x86_64, Linux musl x86_64/aarch64, Windows x86_64
+#   assemble   SHA256SUMS and release-manifest.json (commit + digests); the
+#              resume/mismatch rehearsal against fake registries; a read-only
+#              plan against the real registries
+#   draft      a draft GitHub Release with the archives          (real only)
+#   publish    environment `release` (owner approval): crates.io, npm when
+#              npm/package.json exists, publish the GitHub Release, check
+#              the plugin manifests                               (real only)
+#
+# Every stage checks its registry first: skip on an identical artifact,
+# halt (exit 3) on a different or unverifiable one, never overwrite
+# (scripts/release_stages.py). A failed run is resumed with "Re-run failed
+# jobs"; finished stages skip.
+#
+# Real vs dry run: only a pushed v* tag (and re-runs of that run) can reach
+# `draft` and `publish`, and only once the repository variable
+# RELEASE_ENABLED is 'true'. A pull request touching the pipeline, or a
+# manual "Run workflow", is a dry run: everything up to `assemble`, with the
+# rehearsal. Publishing credentials exist only inside the `release`
+# environment's job (crates.io trusted publishing over OIDC; `id-token:
+# write` appears nowhere else, which scripts/check_workflows.py enforces).
+# Actions are pinned to commit SHAs.
 name: release
 
 on:
   push:
     tags: ["v*.*.*"]
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or commit to rehearse (always a dry run; a real release starts only from a pushed v* tag)"
+        required: false
+        default: ""
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "scripts/release_stages.py"
+      - "scripts/test_release_stages.py"
+      - "scripts/release.sh"
+      - "scripts/package_release.sh"
+      - "cliff.toml"
+      - "about.toml"
+      - "about.hbs"
+      - "Cargo.toml"
+      - "Cargo.lock"
 
-permissions:
-  contents: write
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # One exact toolchain for every job that builds or packages. cargo's
+  # normalized Cargo.toml inside the .crate changes between cargo releases,
+  # so `verify` and `publish` must package with the same cargo for the
+  # byte-equality fast path (the content check still matches across
+  # versions). Bump deliberately; the bootstrap publish in RELEASING.md uses
+  # this version too.
+  RELEASE_TOOLCHAIN: "1.96.1"
 
 jobs:
-  package:
-    runs-on: macos-latest
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      real: ${{ steps.what.outputs.real }}
+      tag: ${{ steps.what.outputs.tag }}
+      version: ${{ steps.what.outputs.version }}
+      commit: ${{ steps.what.outputs.commit }}
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: ./scripts/package_release.sh
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          files: dist/*.tar.gz
-          generate_release_notes: true
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Real release or dry run?
+        id: what
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION=$(python3 -c 'import sys; sys.path.insert(0, "scripts"); import release_stages as r; print(r.cargo_version())')
+          COMMIT=$(git rev-parse HEAD)
+          if [ "$EVENT" = push ] && [ "$REF_TYPE" = tag ]; then
+            REAL=true
+            TAG="$REF_NAME"
+            if [ "$TAG" != "v$VERSION" ]; then
+              echo "::error::tag $TAG does not match Cargo.toml's version $VERSION"
+              exit 1
+            fi
+            git fetch --no-tags origin main
+            if ! git merge-base --is-ancestor "$COMMIT" origin/main; then
+              echo "::error::$TAG ($COMMIT) is not on main; tag the merged release PR's commit"
+              exit 1
+            fi
+          else
+            REAL=false
+            TAG="v$VERSION"
+          fi
+          {
+            echo "real=$REAL"; echo "tag=$TAG"; echo "version=$VERSION"; echo "commit=$COMMIT"
+          } >> "$GITHUB_OUTPUT"
+          echo "### ${TAG} at ${COMMIT}: $([ "$REAL" = true ] && echo 'real release' || echo 'dry run')" >> "$GITHUB_STEP_SUMMARY"
+      - name: Pinned font index (#616)
+        env:
+          REAL: ${{ steps.what.outputs.real }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! python3 scripts/release_stages.py check-pin; then
+            if [ "$REAL" = true ]; then
+              echo "::error::PINNED_INDEX is None. Publish the first fonts-* release and pin it before an interpreter release (docs/dev/RELEASING-FONTS.md)."
+              exit 1
+            fi
+            echo "::warning::PINNED_INDEX is None; a real release would stop here."
+            exit 0
+          fi
+          read -r TAG SHA < <(python3 -c 'import sys; sys.path.insert(0, "scripts"); import release_stages as r; print(*r.pinned_index())')
+          D=$(mktemp -d)
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern font-index.json --dir "$D"
+          GOT=$(sha256sum "$D/font-index.json" | cut -d' ' -f1)
+          if [ "$GOT" != "$SHA" ]; then
+            echo "::error::font-index.json of $TAG has SHA-256 $GOT; pinned.rs says $SHA"
+            exit 1
+          fi
+          echo "pinned $TAG verified against its release"
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master; toolchain below
+        with:
+          toolchain: ${{ env.RELEASE_TOOLCHAIN }}
+          components: clippy, rustfmt
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
+        with:
+          tool: cargo-about,cargo-semver-checks
+      # The gate, the MCP checks and the crate acceptance run in ci.yml and
+      # mcp.yml on every pull request, so a pull request's dry run skips them
+      # here; a real release (and a manual dry run) runs them on the exact
+      # commit being released.
+      - name: Quality gate
+        if: github.event_name != 'pull_request'
+        env:
+          PSCAT_PROFILE: ci
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets -- -D warnings
+          ./scripts/selftest.sh
+          cargo test --profile ci
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: github.event_name != 'pull_request'
+        with:
+          node-version: 22
+      - name: MCP Inspector check (#568)
+        if: github.event_name != 'pull_request'
+        run: |
+          cargo build --profile ci --bin pscat --bin pscat-mcp
+          ./scripts/mcp_inspector_check.sh target/ci/pscat-mcp
+      - name: Crate acceptance (scripts/check_package.sh)
+        if: github.event_name != 'pull_request'
+        run: ./scripts/check_package.sh
+      - name: Licences
+        run: |
+          python3 scripts/check_licences.py all
+          python3 scripts/check_licences.py package
+      - name: Release scripts and workflow policy
+        run: |
+          python3 scripts/check_workflows.py
+          python3 scripts/test_release_stages.py
+      - name: Semver against the published baseline
+        if: github.event_name != 'pull_request'
+        run: |
+          # Blocking once pscat is on crates.io (after 0.6.0): pre-1.0 a
+          # minor bump may break the API, a patch bump may not.
+          STATUS=$(curl -s -o /dev/null -w '%{http_code}' -A "pscat-release (github.com/$GITHUB_REPOSITORY)" https://crates.io/api/v1/crates/pscat)
+          case "$STATUS" in
+            200) cargo semver-checks check-release ;;
+            404) echo "pscat is not on crates.io yet: no baseline, nothing to compare" | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "::error::crates.io answered $STATUS"; exit 1 ;;
+          esac
+      - name: Dependency notices (cargo-about)
+        run: |
+          mkdir -p release-inputs
+          cargo about generate --locked --all-features --fail about.hbs -o release-inputs/THIRD_PARTY_LICENSES.html
+      - name: Package the crate
+        env:
+          VERSION: ${{ steps.what.outputs.version }}
+        run: |
+          # No --allow-dirty: the .crate must come from the clean commit, so
+          # its .cargo_vcs_info.json records that commit (the provenance the
+          # crates stage checks).
+          cargo package --locked --no-verify
+          cp "target/package/pscat-$VERSION.crate" release-inputs/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-inputs
+          path: release-inputs/
+          if-no-files-found: error
+
+  binaries:
+    needs: verify
+    name: binaries (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          # Cross-built on the arm64 runner (GitHub is retiring its Intel
+          # macOS images). The bundle check runs it under Rosetta when the
+          # runner has it, and says so when it cannot.
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          # Static musl binaries are headless (--no-default-features): a
+          # static binary cannot dlopen the system's X11/Wayland libraries,
+          # so the live window could never open. See RELEASING.md.
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            flags: --no-default-features
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            flags: --no-default-features
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+      # Exactly the commit `verify` checked (release-manifest.json records it).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master; toolchain below
+        with:
+          toolchain: ${{ env.RELEASE_TOOLCHAIN }}
+          targets: ${{ matrix.target }}
+      - name: musl tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-inputs
+          path: release-inputs
+      - name: Build and check the archive
+        env:
+          TARGET: ${{ matrix.target }}
+          FLAGS: ${{ matrix.flags }}
+        run: |
+          # shellcheck disable=SC2086 # FLAGS is empty or one flag
+          ./scripts/package_release.sh --target "$TARGET" $FLAGS \
+            --notices release-inputs/THIRD_PARTY_LICENSES.html --out dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  assemble:
+    needs: [verify, binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Exactly the commit `verify` checked (release-manifest.json records it).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: binary-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-inputs
+          path: release-inputs
+      - name: Checksums and release manifest
+        env:
+          TAG: ${{ needs.verify.outputs.tag }}
+          COMMIT: ${{ needs.verify.outputs.commit }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          python3 scripts/release_stages.py manifest --tag "$TAG" --commit "$COMMIT" \
+            --dist dist --crate "release-inputs/pscat-$VERSION.crate"
+          N=$(ls dist/*.tar.gz dist/*.zip | wc -l)
+          [ "$N" -eq 5 ] || { echo "::error::expected 5 archives, found $N"; exit 1; }
+          { echo '### SHA256SUMS'; echo '```'; cat dist/SHA256SUMS; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      # The acceptance scenarios on this run's real artifacts, against fake
+      # registries: end-to-end, partial failure then resume, mismatch halts.
+      - name: Rehearse publish, resume and halt (fake registries)
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          python3 scripts/release_stages.py rehearse --dist dist --crate "release-inputs/pscat-$VERSION.crate" | tee rehearsal.txt
+          { echo '### Rehearsal (fake registries)'; echo '```'; cat rehearsal.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      # Read-only: what each stage would do against the real registries. A
+      # real release stops here on a mismatch, before anything is created.
+      # (This token cannot see drafts; the draft job's can.)
+      - name: Plan against the real registries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REAL: ${{ needs.verify.outputs.real }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set +e
+          python3 scripts/release_stages.py run --plan --dist dist --crate "release-inputs/pscat-$VERSION.crate" \
+            --stage draft --stage crates --stage npm --stage publish --stage plugin --report-dir plan
+          STATUS=$?
+          set -e
+          if [ "$REAL" = true ] && [ "$STATUS" -ne 0 ]; then exit "$STATUS"; fi
+          echo "plan exit status $STATUS (informational in a dry run)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-dist
+          path: dist/
+          if-no-files-found: error
+
+  draft:
+    needs: [verify, assemble]
+    if: needs.verify.outputs.real == 'true' && vars.RELEASE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Exactly the commit `verify` checked (release-manifest.json records it).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-dist
+          path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-inputs
+          path: release-inputs
+      - name: Draft GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          python3 scripts/release_stages.py run --dist dist --crate "release-inputs/pscat-$VERSION.crate" \
+            --stage draft --report-dir report
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: release-report-draft-${{ github.run_attempt }}
+          path: report/
+          if-no-files-found: ignore
+
+  publish:
+    needs: [verify, draft]
+    if: needs.verify.outputs.real == 'true' && vars.RELEASE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    # Owner approval happens here, once per attempt. The draft above is
+    # already up for review when the approval is requested.
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      # Exactly the commit `verify` checked (release-manifest.json records it).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master; toolchain below
+        with:
+          toolchain: ${{ env.RELEASE_TOOLCHAIN }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-dist
+          path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-inputs
+          path: release-inputs
+      # crates.io trusted publishing: a short-lived token for this job only,
+      # revoked when the job ends. Needs the trusted publisher configured on
+      # crates.io (RELEASING.md, "One-time setup").
+      - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1
+        id: crates-auth
+      # The npm channel turns on when npm/package.json exists (#566); npm
+      # trusted publishing needs npm >= 11.5, which Node 24 ships.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: hashFiles('npm/package.json') != ''
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Publish (crates.io, npm, GitHub Release, plugin check)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-auth.outputs.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          python3 scripts/release_stages.py run --dist dist --crate "release-inputs/pscat-$VERSION.crate" \
+            --stage draft --stage crates --stage npm --stage publish --stage plugin --report-dir report
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: release-report-${{ github.run_attempt }}
+          path: report/
+          if-no-files-found: ignore

@@ -1,0 +1,54 @@
+name: Release
+description: Track one pscat interpreter release (maintainers). The procedure is docs/dev/RELEASING.md.
+title: "release: X.Y.Z"
+labels: ["release"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The version to release, X.Y.Z. Before 1.0 a minor version may break the library API, a patch may not (docs/STABILITY.md).
+      placeholder: 0.6.0
+    validations:
+      required: true
+  - type: input
+    id: fonts
+    attributes:
+      label: Pinned font index
+      description: The fonts-* tag src/fontpacks/pinned.rs pins for this release.
+      placeholder: fonts-2026.10
+    validations:
+      required: true
+  - type: checkboxes
+    id: before
+    attributes:
+      label: Before tagging
+      options:
+        - label: The fonts-* release is published and src/fontpacks/pinned.rs pins it (#616)
+        - label: "`scripts/release.sh X.Y.Z` opened the release PR; CI is green, including `semver`"
+        - label: The MCP safety tests (tests/mcp.rs) and the mcp workflow's Inspector check pass
+        - label: README's install section lists only the channels this release ships
+        - label: SECURITY.md, THIRD_PARTY_NOTICES.md and docs/STABILITY.md are accurate
+        - label: CHANGELOG.md reads well; the owner merged the release PR
+  - type: checkboxes
+    id: publish
+    attributes:
+      label: Publishing
+      options:
+        - label: "Tag pushed: `git tag -a vX.Y.Z -m \"pscat X.Y.Z\" && git push origin vX.Y.Z`"
+        - label: The draft GitHub Release looks right (five archives, SHA256SUMS, release-manifest.json, notes)
+        - label: "First release only: crates.io bootstrap publish from the tag, trusted publisher configured (RELEASING.md, step 6)"
+        - label: The release environment approved; the publish job's report says every stage published or skipped
+  - type: checkboxes
+    id: after
+    attributes:
+      label: After publishing
+      options:
+        - label: crates.io shows the version and docs.rs built it
+        - label: The outsider install smoke test passes (RELEASING.md)
+        - label: The release report (run artifact) is linked below
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: The release run link, anything that halted and how it was reconciled.
